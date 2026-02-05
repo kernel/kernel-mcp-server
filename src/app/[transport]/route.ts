@@ -1037,7 +1037,11 @@ Based on your issue "${issue_description}", start with:
           responseText += `\n\n## SSH Port Forwarding\n\nRun this command in a terminal:\n\n\`\`\`bash\n${sshCommand}\n\`\`\`\n\nPrerequisites: [Kernel CLI](https://kernel.sh/docs/reference/cli) and [websocat](https://github.com/vi/websocat) (\`brew install websocat\` on macOS).`;
 
           if (remotePort) {
-            responseText += `\n\nOnce the tunnel is connected, use execute_playwright_code to navigate the browser to http://localhost:${remotePort}`;
+            responseText += `\n\nThis forwards the user's local port to port ${remotePort} inside the browser VM. Once the user has the tunnel running, use execute_playwright_code to navigate the browser to http://localhost:${remotePort}`;
+          }
+
+          if (localPort) {
+            responseText += `\n\nThis forwards port ${localPort} from the browser VM to the user's local machine. Once the user has the tunnel running, services inside the VM are accessible locally at localhost:${localPort}`;
           }
 
           responseText += `\n\nNote: SSH connections alone don't count as browser activity. Set an appropriate timeout or keep the live view open to prevent cleanup.`;
