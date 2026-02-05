@@ -1645,6 +1645,253 @@ The profile and all its associated authentication data have been permanently rem
       }
     },
   );
+
+  // Create Browser Tunnel Tool - for connecting local dev servers to cloud browsers
+  server.tool(
+    "create_browser_tunnel",
+    "Create a Kernel browser session with SSH tunnel capability, allowing you to connect a local development server to the cloud browser. This is essential for AI coding workflows where you need to preview local code changes in a real browser. The tool creates a browser session and sets up a tunnel server that accepts incoming connections from your local machine. After calling this tool, run the provided tunnel command locally to expose your dev server (e.g., localhost:3000) to the cloud browser.",
+    {
+      local_port: z
+        .number()
+        .describe(
+          "The local port your development server is running on (e.g., 3000 for a typical React/Next.js app, 5173 for Vite, 8080 for other servers). This port will be accessible from the cloud browser.",
+        )
+        .default(3000),
+      browser_port: z
+        .number()
+        .describe(
+          "The port inside the browser VM where your local server will be accessible. Defaults to the same as local_port. The browser can access your dev server at localhost:<browser_port>.",
+        )
+        .optional(),
+      timeout_seconds: z
+        .number()
+        .describe(
+          "Session timeout in seconds. Defaults to 1800 (30 minutes) for development sessions. Maximum is 86400 (24 hours).",
+        )
+        .default(1800),
+      headless: z
+        .boolean()
+        .describe(
+          "If true, runs browser without GUI (faster but no live view). Defaults to false so you can see the browser.",
+        )
+        .default(false),
+      stealth: z
+        .boolean()
+        .describe(
+          "If true, enables stealth mode to avoid bot detection. Useful for testing on sites with anti-automation.",
+        )
+        .default(true),
+      session_id: z
+        .string()
+        .describe(
+          "Optional: Use an existing browser session instead of creating a new one. If provided, the tunnel will be set up on this existing session.",
+        )
+        .optional(),
+    },
+    async (
+      {
+        local_port,
+        browser_port,
+        timeout_seconds,
+        headless,
+        stealth,
+        session_id,
+      },
+      extra,
+    ) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+      const targetBrowserPort = browser_port || local_port;
+
+      try {
+        let browser;
+
+        // Use existing browser or create a new one
+        if (session_id) {
+          browser = await client.browsers.retrieve(session_id);
+          if (!browser) {
+            throw new Error(`Browser session "${session_id}" not found`);
+          }
+        } else {
+          browser = await client.browsers.create({
+            headless,
+            stealth,
+            timeout_seconds,
+          });
+
+          if (!browser || !browser.session_id) {
+            throw new Error("Failed to create browser session");
+          }
+        }
+
+        // Install and start bore tunnel server inside the browser VM
+        // bore is a simple, modern tunneling tool that's easy to use
+        const installResult = await client.browsers.process.exec(
+          browser.session_id,
+          {
+            command: "bash",
+            args: [
+              "-c",
+              `
+              # Check if bore is already installed
+              if ! command -v bore &> /dev/null; then
+                # Download and install bore
+                curl -sSL https://github.com/ekzhang/bore/releases/download/v0.5.2/bore-v0.5.2-x86_64-unknown-linux-musl.tar.gz | tar -xzf - -C /tmp
+                chmod +x /tmp/bore
+                mv /tmp/bore /usr/local/bin/bore 2>/dev/null || sudo mv /tmp/bore /usr/local/bin/bore 2>/dev/null || cp /tmp/bore /home/kernel/bore
+              fi
+              echo "bore installed successfully"
+              `,
+            ],
+            timeout_sec: 60,
+            as_root: true,
+          },
+        );
+
+        // Check installation result
+        const installStdout = installResult.stdout_b64
+          ? Buffer.from(installResult.stdout_b64, "base64").toString("utf-8")
+          : "";
+        const installStderr = installResult.stderr_b64
+          ? Buffer.from(installResult.stderr_b64, "base64").toString("utf-8")
+          : "";
+
+        // Start bore server in the background to accept incoming tunnel connections
+        // The bore server listens for incoming tunnel clients
+        const boreServerPort = 7835; // bore's default control port
+        const spawnResult = await client.browsers.process.spawn(
+          browser.session_id,
+          {
+            command: "bash",
+            args: [
+              "-c",
+              `
+              # Kill any existing bore server
+              pkill -f "bore server" 2>/dev/null || true
+              sleep 1
+              # Start bore server
+              /usr/local/bin/bore server --min-port ${targetBrowserPort} --max-port ${targetBrowserPort + 100} 2>&1 &
+              echo "bore server started"
+              `,
+            ],
+            timeout_sec: 300, // Keep running for 5 minutes before timeout
+            as_root: true,
+          },
+        );
+
+        // Give the server a moment to start
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+
+        // Extract the browser VM's connection info from the CDP WebSocket URL
+        // The CDP URL format is usually: wss://<session-id>.browsers.onkernel.com/...
+        let tunnelHost = "";
+        try {
+          const cdpUrl = new URL(browser.cdp_ws_url);
+          tunnelHost = cdpUrl.hostname;
+        } catch {
+          tunnelHost = "Unable to determine tunnel host";
+        }
+
+        // Generate connection instructions
+        const tunnelCommand = `bore local ${local_port} --to ${tunnelHost} --port ${targetBrowserPort}`;
+        const sshTunnelCommand = `ssh -R ${targetBrowserPort}:localhost:${local_port} kernel@${tunnelHost}`;
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `# Browser Tunnel Session Created
+
+## Session Details
+- **Session ID:** ${browser.session_id}
+- **Status:** Ready for tunnel connection
+- **Timeout:** ${timeout_seconds} seconds
+- **Stealth Mode:** ${stealth}
+- **Headless:** ${headless}
+
+## Browser Access
+- **Live View URL:** ${browser.browser_live_view_url || "N/A (headless mode)"}
+- **CDP WebSocket:** ${browser.cdp_ws_url}
+
+## Tunnel Configuration
+- **Local Port (your dev server):** ${local_port}
+- **Browser Port (accessible in browser):** ${targetBrowserPort}
+- **Tunnel Host:** ${tunnelHost}
+
+## How to Connect Your Local Dev Server
+
+### Option 1: Using bore (Recommended)
+Install bore locally if you haven't:
+\`\`\`bash
+# macOS
+brew install bore-cli
+
+# Linux/Windows (with cargo)
+cargo install bore-cli
+
+# Or download from: https://github.com/ekzhang/bore/releases
+\`\`\`
+
+Then run:
+\`\`\`bash
+${tunnelCommand}
+\`\`\`
+
+### Option 2: Using SSH (if bore isn't available)
+\`\`\`bash
+${sshTunnelCommand}
+\`\`\`
+
+### Option 3: Using cloudflared
+If you have cloudflared installed:
+\`\`\`bash
+cloudflared tunnel --url http://localhost:${local_port}
+\`\`\`
+Then navigate to the generated URL in the cloud browser.
+
+## After Connecting
+Once the tunnel is established, your local dev server will be accessible inside the cloud browser at:
+\`\`\`
+http://localhost:${targetBrowserPort}
+\`\`\`
+
+You can then use execute_playwright_code or other browser automation tools to interact with your local application!
+
+## Example Workflow
+\`\`\`javascript
+// Navigate to your local dev server in the cloud browser
+await page.goto('http://localhost:${targetBrowserPort}');
+// Now you can interact with your local app!
+\`\`\`
+
+## Installation Output
+${installStdout || "(No output)"}
+${installStderr ? `\nWarnings/Errors:\n${installStderr}` : ""}
+`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error creating browser tunnel: ${error instanceof Error ? error.message : String(error)}
+
+## Troubleshooting
+1. Ensure you have a valid Kernel API key
+2. Check if you have available browser session quota
+3. Try creating a regular browser first with create_browser to verify connectivity
+`,
+            },
+          ],
+        };
+      }
+    },
+  );
 });
 
 async function handleAuthenticatedRequest(req: NextRequest): Promise<Response> {
