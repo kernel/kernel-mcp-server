@@ -1031,7 +1031,16 @@ Based on your issue "${issue_description}", start with:
           if (remote_forward) sshParts.push(`-R ${remote_forward}`);
           const sshCommand = sshParts.join(" ");
 
-          responseText += `\n\n## SSH Port Forwarding\n\nRun this command in a terminal:\n\n\`\`\`bash\n${sshCommand}\n\`\`\`\n\nPrerequisites: [Kernel CLI](https://kernel.sh/docs/reference/cli) and [websocat](https://github.com/vi/websocat) (\`brew install websocat\` on macOS).\n\nNote: SSH connections alone don't count as browser activity. Set an appropriate timeout or keep the live view open to prevent cleanup.`;
+          const remotePort = remote_forward ? remote_forward.split(":")[0] : null;
+          const localPort = local_forward ? local_forward.split(":")[0] : null;
+
+          responseText += `\n\n## SSH Port Forwarding\n\nRun this command in a terminal:\n\n\`\`\`bash\n${sshCommand}\n\`\`\`\n\nPrerequisites: [Kernel CLI](https://kernel.sh/docs/reference/cli) and [websocat](https://github.com/vi/websocat) (\`brew install websocat\` on macOS).`;
+
+          if (remotePort) {
+            responseText += `\n\nOnce the tunnel is connected, use execute_playwright_code to navigate the browser to http://localhost:${remotePort}`;
+          }
+
+          responseText += `\n\nNote: SSH connections alone don't count as browser activity. Set an appropriate timeout or keep the live view open to prevent cleanup.`;
         }
 
         return {
