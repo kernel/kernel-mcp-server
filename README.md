@@ -54,15 +54,15 @@ kernel mcp install --target <target>
 
 ### Supported Targets
 
-| Target | Command |
-|--------|---------|
-| Cursor | `kernel mcp install --target cursor` |
-| Claude Desktop | `kernel mcp install --target claude` |
-| Claude Code | `kernel mcp install --target claude-code` |
-| VS Code | `kernel mcp install --target vscode` |
-| Windsurf | `kernel mcp install --target windsurf` |
-| Zed | `kernel mcp install --target zed` |
-| Goose | `kernel mcp install --target goose` |
+| Target         | Command                                   |
+| -------------- | ----------------------------------------- |
+| Cursor         | `kernel mcp install --target cursor`      |
+| Claude Desktop | `kernel mcp install --target claude`      |
+| Claude Code    | `kernel mcp install --target claude-code` |
+| VS Code        | `kernel mcp install --target vscode`      |
+| Windsurf       | `kernel mcp install --target windsurf`    |
+| Zed            | `kernel mcp install --target zed`         |
+| Goose          | `kernel mcp install --target goose`       |
 
 The CLI automatically locates your tool's config file and adds the Kernel MCP server configuration.
 
@@ -122,9 +122,9 @@ Add the following to your `~/.config/opencode/opencode.jsonc`:
   "mcp": {
     "kernel": {
       "type": "remote",
-      "url": "https://mcp.onkernel.com/mcp"
-    }
-  }
+      "url": "https://mcp.onkernel.com/mcp",
+    },
+  },
 }
 ```
 
@@ -265,6 +265,7 @@ Configure these values wherever the tool expects MCP server settings.
 - `delete_browser` - Terminate a browser session
 - `execute_playwright_code` - Execute Playwright/TypeScript code in a fresh browser session with automatic video replay and cleanup
 - `take_screenshot` - Capture a screenshot of the current browser page, optionally specifying a region
+- `create_browser_tunnel` - Create a browser session with SSH tunnel capability to connect a local dev server to the cloud browser
 
 ### Profile Management
 
@@ -340,8 +341,19 @@ Assistant: Perfect! I'll close the browser session and save your profile.
 ```
 Human: [Attaches debug-browser-session prompt with session_id and issue_description]
        Help me debug this browser session.
-Assistant: [Follows the debugging guide from the prompt: uses Kernel CLI to check session status, 
+Assistant: [Follows the debugging guide from the prompt: uses Kernel CLI to check session status,
             read VM logs, test network connectivity, and diagnose issues]
+```
+
+### Connect local dev server to cloud browser
+
+This is perfect for AI coding workflows where you need to preview local changes in a real browser:
+
+```
+Human: I'm working on a React app running on localhost:3000. I want to test it in a cloud browser.
+Assistant: I'll create a browser tunnel session for you.
+[Uses create_browser_tunnel tool with local_port: 3000]
+Returns: Session ID, live view URL, and tunnel connection command.
 ```
 
 ## 🤝 Contributing

@@ -118,15 +118,17 @@ const handler = createMcpHandler((server) => {
 
     if (uriString === "browsers://") {
       // List all browsers
-      const browsers = await client.browsers.list();
+      const browsersPage = await client.browsers.list();
+      const items = browsersPage.getPaginatedItems();
       return {
         contents: [
           {
             uri: "browsers://",
             mimeType: "application/json",
-            text: browsers
-              ? JSON.stringify(browsers, null, 2)
-              : "No browsers found",
+            text:
+              items.length > 0
+                ? JSON.stringify(items, null, 2)
+                : "No browsers found",
           },
         ],
       };
@@ -163,21 +165,25 @@ const handler = createMcpHandler((server) => {
 
     if (uriString === "apps://") {
       // List all apps
-      const apps = await client.apps.list();
+      const appsPage = await client.apps.list();
+      const items = appsPage.getPaginatedItems();
       return {
         contents: [
           {
             uri: "apps://",
             mimeType: "application/json",
-            text: apps ? JSON.stringify(apps, null, 2) : "No apps found",
+            text:
+              items.length > 0
+                ? JSON.stringify(items, null, 2)
+                : "No apps found",
           },
         ],
       };
     } else if (uriString.startsWith("apps://")) {
       // Get specific app by name
       const appName = uriString.replace("apps://", "");
-      const apps = await client.apps.list();
-      const app = apps?.find((a) => a.app_name === appName);
+      const appsPage = await client.apps.list({ app_name: appName });
+      const app = appsPage.getPaginatedItems()[0];
 
       if (!app) {
         throw new Error(`App "${appName}" not found`);
@@ -589,8 +595,18 @@ Based on your issue "${issue_description}", start with:
           'Filter results to show only apps with this exact version label (e.g., "v1.0.0", "latest")',
         )
         .optional(),
+      limit: z
+        .number()
+        .describe(
+          "Maximum number of results to return per page. Defaults to 50.",
+        )
+        .optional(),
+      offset: z
+        .number()
+        .describe("Number of results to skip for pagination. Defaults to 0.")
+        .optional(),
     },
-    async ({ app_name, version }, extra) => {
+    async ({ app_name, version, limit, offset }, extra) => {
       if (!extra.authInfo) {
         throw new Error("Authentication required");
       }
@@ -598,16 +614,31 @@ Based on your issue "${issue_description}", start with:
       const client = createKernelClient(extra.authInfo.token);
 
       try {
-        const apps = await client.apps.list({
-          ...(app_name && { app_name: app_name }),
-          ...(version && { version: version }),
+        const page = await client.apps.list({
+          ...(app_name && { app_name }),
+          ...(version && { version }),
+          ...(limit !== undefined && { limit }),
+          ...(offset !== undefined && { offset }),
         });
+
+        const items = page.getPaginatedItems();
 
         return {
           content: [
             {
               type: "text",
-              text: apps ? JSON.stringify(apps, null, 2) : "No apps found",
+              text:
+                items.length > 0
+                  ? JSON.stringify(
+                      {
+                        items,
+                        has_more: page.has_more,
+                        next_offset: page.next_offset,
+                      },
+                      null,
+                      2,
+                    )
+                  : "No apps found",
             },
           ],
         };
@@ -792,7 +823,7 @@ Based on your issue "${issue_description}", start with:
   // Create Browser Tool
   server.tool(
     "create_browser",
-    "Launch a new browser session in the Kernel platform. This creates a managed browser instance that can be used for web automation, testing, or interactive browsing. The browser runs in a secure sandbox environment and can be configured with various options like headless mode, stealth mode, and session recording.",
+    "Launch a new browser session in the Kernel platform. This creates a managed browser instance that can be used for web automation, testing, or interactive browsing. The browser runs in a secure sandbox environment and can be configured with various options like headless mode, stealth mode, profiles, proxies, viewports, extensions, and SSH port forwarding. To expose a local dev server to the browser, use the remote_forward parameter (e.g., '3000:localhost:3000').",
     {
       headless: z
         .boolean()
@@ -824,16 +855,91 @@ Based on your issue "${issue_description}", start with:
           "ID of an existing profile to load into this browser session. The profile will load all saved cookies, logins, and session data. Cannot be used with profile_name.",
         )
         .optional(),
+      save_profile_changes: z
+        .boolean()
+        .describe(
+          "If true, save changes made during the session (cookies, logins, etc.) back to the profile when the session ends. Only applies when a profile is loaded via profile_name or profile_id. Defaults to false.",
+        )
+        .optional(),
+      proxy_id: z
+        .string()
+        .describe(
+          "ID of a proxy to associate with this browser session. The proxy must belong to your organization. Use this for residential, ISP, or datacenter proxy routing.",
+        )
+        .optional(),
+      kiosk_mode: z
+        .boolean()
+        .describe(
+          "If true, launches the browser in kiosk mode which hides the address bar and tabs in live view. Useful for presenting a cleaner browsing experience.",
+        )
+        .optional(),
+      viewport_width: z
+        .number()
+        .describe(
+          "Browser window width in pixels. Must be used together with viewport_height. Supported resolutions: 2560x1440, 1920x1080, 1920x1200, 1440x900, 1280x800, 1024x768, 1200x800. Defaults to 1920.",
+        )
+        .optional(),
+      viewport_height: z
+        .number()
+        .describe(
+          "Browser window height in pixels. Must be used together with viewport_width. Supported resolutions: 2560x1440, 1920x1080, 1920x1200, 1440x900, 1280x800, 1024x768, 1200x800. Defaults to 1080.",
+        )
+        .optional(),
+      viewport_refresh_rate: z
+        .number()
+        .describe(
+          "Display refresh rate in Hz. If omitted, automatically determined from resolution. Higher resolutions use lower refresh rates (e.g., 2560x1440@10, 1920x1080@25, 1280x800@60).",
+        )
+        .optional(),
+      extension_id: z
+        .string()
+        .describe(
+          "ID of a browser extension to load into the session. The extension must have been previously uploaded to Kernel.",
+        )
+        .optional(),
+      extension_name: z
+        .string()
+        .describe(
+          "Name of a browser extension to load into the session (instead of extension_id). The extension must have been previously uploaded to Kernel.",
+        )
+        .optional(),
+      local_forward: z
+        .string()
+        .describe(
+          "Set up SSH local port forwarding (like ssh -L). Format: localport:host:remoteport. Forwards a port on your local machine to a port on the browser VM. Example: '5432:localhost:5432' to access a DB running in the VM. Requires the Kernel CLI and websocat to be installed locally.",
+        )
+        .optional(),
+      remote_forward: z
+        .string()
+        .describe(
+          "Set up SSH remote port forwarding (like ssh -R). Format: remoteport:host:localport. Exposes a local dev server to the browser VM. Example: '3000:localhost:3000' to make your local dev server accessible at localhost:3000 inside the browser. Requires the Kernel CLI and websocat to be installed locally.",
+        )
+        .optional(),
     },
     async (
-      { headless, stealth, timeout_seconds, profile_name, profile_id },
+      {
+        headless,
+        stealth,
+        timeout_seconds,
+        profile_name,
+        profile_id,
+        save_profile_changes,
+        proxy_id,
+        kiosk_mode,
+        viewport_width,
+        viewport_height,
+        viewport_refresh_rate,
+        extension_id,
+        extension_name,
+        local_forward,
+        remote_forward,
+      },
       extra,
     ) => {
       if (!extra.authInfo) {
         throw new Error("Authentication required");
       }
 
-      // Validate that only one of profile_name or profile_id is provided
       if (profile_name && profile_id) {
         return {
           content: [
@@ -845,31 +951,112 @@ Based on your issue "${issue_description}", start with:
         };
       }
 
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        const kernelBrowser = await client.browsers.create({
-          ...(headless && { headless: headless }),
-          ...(stealth && { stealth: stealth }),
-          ...(timeout_seconds && { timeout_seconds: timeout_seconds }),
-          ...((profile_name || profile_id) && {
-            profile: {
-              ...(profile_name && { name: profile_name }),
-              ...(profile_id && { id: profile_id }),
-              save_changes: false,
-            },
-          }),
-        });
-
+      if (extension_id && extension_name) {
         return {
           content: [
             {
               type: "text",
-              text: kernelBrowser
-                ? JSON.stringify(kernelBrowser, null, 2)
-                : "Failed to create browser session",
+              text: "Error: Cannot specify both extension_id and extension_name. Please provide only one.",
             },
           ],
+        };
+      }
+
+      if (
+        (viewport_width && !viewport_height) ||
+        (!viewport_width && viewport_height)
+      ) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Error: Both viewport_width and viewport_height must be provided together.",
+            },
+          ],
+        };
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        const createParams: Record<string, unknown> = {};
+
+        if (headless !== undefined) createParams.headless = headless;
+        if (stealth !== undefined) createParams.stealth = stealth;
+        if (timeout_seconds !== undefined)
+          createParams.timeout_seconds = timeout_seconds;
+        if (kiosk_mode !== undefined) createParams.kiosk_mode = kiosk_mode;
+        if (proxy_id) createParams.proxy_id = proxy_id;
+
+        if (profile_name || profile_id) {
+          createParams.profile = {
+            ...(profile_name && { name: profile_name }),
+            ...(profile_id && { id: profile_id }),
+            ...(save_profile_changes !== undefined && {
+              save_changes: save_profile_changes,
+            }),
+          };
+        }
+
+        if (viewport_width && viewport_height) {
+          createParams.viewport = {
+            width: viewport_width,
+            height: viewport_height,
+            ...(viewport_refresh_rate && {
+              refresh_rate: viewport_refresh_rate,
+            }),
+          };
+        }
+
+        if (extension_id || extension_name) {
+          createParams.extensions = [
+            {
+              ...(extension_id && { id: extension_id }),
+              ...(extension_name && { name: extension_name }),
+            },
+          ];
+        }
+
+        const kernelBrowser = await client.browsers.create(
+          createParams as Parameters<typeof client.browsers.create>[0],
+        );
+
+        if (!kernelBrowser) {
+          return {
+            content: [
+              { type: "text", text: "Failed to create browser session" },
+            ],
+          };
+        }
+
+        let responseText = JSON.stringify(kernelBrowser, null, 2);
+
+        if (local_forward || remote_forward) {
+          const sshParts = ["kernel browsers ssh", kernelBrowser.session_id];
+          if (local_forward) sshParts.push(`-L ${local_forward}`);
+          if (remote_forward) sshParts.push(`-R ${remote_forward}`);
+          const sshCommand = sshParts.join(" ");
+
+          const remotePort = remote_forward
+            ? remote_forward.split(":")[0]
+            : null;
+          const localPort = local_forward ? local_forward.split(":")[0] : null;
+
+          responseText += `\n\n## SSH Port Forwarding\n\nRun this command in a terminal:\n\n\`\`\`bash\n${sshCommand}\n\`\`\`\n\nPrerequisites: [Kernel CLI](https://kernel.sh/docs/reference/cli) and [websocat](https://github.com/vi/websocat) (\`brew install websocat\` on macOS).`;
+
+          if (remotePort) {
+            responseText += `\n\nThis forwards the user's local port to port ${remotePort} inside the browser VM. Once the user has the tunnel running, use execute_playwright_code to navigate the browser to http://localhost:${remotePort}`;
+          }
+
+          if (localPort) {
+            responseText += `\n\nThis forwards port ${localPort} from the browser VM to the user's local machine. Once the user has the tunnel running, services inside the VM are accessible locally at localhost:${localPort}`;
+          }
+
+          responseText += `\n\nNote: SSH connections alone don't count as browser activity. Set an appropriate timeout or keep the live view open to prevent cleanup.`;
+        }
+
+        return {
+          content: [{ type: "text", text: responseText }],
         };
       } catch (error) {
         return {
@@ -887,9 +1074,26 @@ Based on your issue "${issue_description}", start with:
   // List Browsers Tool
   server.tool(
     "list_browsers",
-    "Retrieve a list of all currently active browser sessions in the Kernel platform. This shows you which browsers are running, their session IDs, creation times, and basic configuration. Use this to discover existing browser sessions before creating new ones or to audit current browser usage.",
-    {},
-    async (_args, extra) => {
+    "Retrieve a list of browser sessions in the Kernel platform. This shows you which browsers are running, their session IDs, creation times, and basic configuration. Use this to discover existing browser sessions before creating new ones or to audit current browser usage.",
+    {
+      status: z
+        .enum(["active", "deleted", "all"])
+        .describe(
+          'Filter sessions by status. "active" returns only active sessions (default), "deleted" returns only soft-deleted sessions, "all" returns both.',
+        )
+        .optional(),
+      limit: z
+        .number()
+        .describe(
+          "Maximum number of results to return per page. Defaults to 50.",
+        )
+        .optional(),
+      offset: z
+        .number()
+        .describe("Number of results to skip for pagination. Defaults to 0.")
+        .optional(),
+    },
+    async ({ status, limit, offset }, extra) => {
       if (!extra.authInfo) {
         throw new Error("Authentication required");
       }
@@ -897,28 +1101,36 @@ Based on your issue "${issue_description}", start with:
       const client = createKernelClient(extra.authInfo.token);
 
       try {
-        const browsers = await client.browsers.list();
+        const page = await client.browsers.list({
+          ...(status && { status }),
+          ...(limit !== undefined && { limit }),
+          ...(offset !== undefined && { offset }),
+        });
 
-        if (!browsers || browsers.length === 0) {
+        const items = page.getPaginatedItems().map((browser) => ({
+          ...browser,
+          cdp_ws_url: undefined,
+        }));
+
+        if (items.length === 0) {
           return {
-            content: [
-              {
-                type: "text",
-                text: "No browsers found",
-              },
-            ],
+            content: [{ type: "text", text: "No browsers found" }],
           };
         }
-
-        const browsersWithoutCdpWsUrl = browsers.map((browser) => {
-          return { ...browser, cdp_ws_url: undefined };
-        });
 
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify(browsersWithoutCdpWsUrl, null, 2),
+              text: JSON.stringify(
+                {
+                  items,
+                  has_more: page.has_more,
+                  next_offset: page.next_offset,
+                },
+                null,
+                2,
+              ),
             },
           ],
         };
@@ -1024,15 +1236,26 @@ Based on your issue "${issue_description}", start with:
   // List Deployments Tool
   server.tool(
     "list_deployments",
-    "Retrieve a comprehensive list of all deployments in the Kernel platform, with optional filtering by app name. This provides an overview of deployment history, current status, and allows you to track the deployment lifecycle of your apps. Use this to monitor deployment activity or find specific deployments.",
+    "Retrieve a list of deployments in the Kernel platform, with optional filtering by app name. This provides an overview of deployment history, current status, and allows you to track the deployment lifecycle of your apps. Use this to monitor deployment activity or find specific deployments.",
     {
       app_name: z
         .string()
         .describe(
           'Filter results to show only deployments for this specific app name (e.g., "my-web-scraper")',
-        ),
+        )
+        .optional(),
+      limit: z
+        .number()
+        .describe(
+          "Maximum number of results to return per page. Defaults to 50.",
+        )
+        .optional(),
+      offset: z
+        .number()
+        .describe("Number of results to skip for pagination. Defaults to 0.")
+        .optional(),
     },
-    async ({ app_name }, extra) => {
+    async ({ app_name, limit, offset }, extra) => {
       if (!extra.authInfo) {
         throw new Error("Authentication required");
       }
@@ -1040,17 +1263,30 @@ Based on your issue "${issue_description}", start with:
       const client = createKernelClient(extra.authInfo.token);
 
       try {
-        const deployments = await client.deployments.list({
-          ...(app_name && { app_name: app_name }),
+        const page = await client.deployments.list({
+          ...(app_name && { app_name }),
+          ...(limit !== undefined && { limit }),
+          ...(offset !== undefined && { offset }),
         });
+
+        const items = page.getPaginatedItems();
 
         return {
           content: [
             {
               type: "text",
-              text: deployments
-                ? JSON.stringify(deployments, null, 2)
-                : "No deployments found",
+              text:
+                items.length > 0
+                  ? JSON.stringify(
+                      {
+                        items,
+                        has_more: page.has_more,
+                        next_offset: page.next_offset,
+                      },
+                      null,
+                      2,
+                    )
+                  : "No deployments found",
             },
           ],
         };
@@ -1223,23 +1459,7 @@ The profile will load all saved cookies, logins, and session data into new brows
               type: "text",
               text:
                 profiles && profiles.length > 0
-                  ? `📋 **Available Profiles (${profiles.length}):**
-
-${profiles
-  .map(
-    (profile, index) =>
-      `${index + 1}. **${profile.name || "Unnamed"}**
-   - ID: ${profile.id}
-   - Created: ${new Date(profile.created_at).toLocaleString()}
-   - Last Used: ${profile.last_used_at ? new Date(profile.last_used_at).toLocaleString() : "Never"}
-   - Last Updated: ${profile.updated_at ? new Date(profile.updated_at).toLocaleString() : "Never"}
-`,
-  )
-  .join("\n")}
-
-💡 **Usage:**
-- Use profile names in create_browser with the profile parameter
-- Set save_changes: true to modify profiles, false for read-only mode`
+                  ? JSON.stringify(profiles, null, 2)
                   : "No profiles found. Use setup_profile to create your first profile!",
             },
           ],
