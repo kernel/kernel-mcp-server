@@ -8,7 +8,7 @@
         "@clerk/nextjs": "^6.32.0",
         "@clerk/themes": "^2.4.19",
         "@mcp-ui/server": "^5.10.0",
-        "@onkernel/sdk": "^0.17.0",
+        "@onkernel/sdk": "^0.30.0",
         "@types/jsonwebtoken": "^9.0.10",
         "@types/redis": "^4.0.11",
         "@vercel/mcp-adapter": "^1.0.0",
@@ -141,7 +141,7 @@
 
     "@next/swc-win32-x64-msvc": ["@next/swc-win32-x64-msvc@16.0.10", "", { "os": "win32", "cpu": "x64" }, "sha512-E+njfCoFLb01RAFEnGZn6ERoOqhK1Gl3Lfz1Kjnj0Ulfu7oJbuMyvBKNj/bw8XZnenHDASlygTjZICQW+rYW1Q=="],
 
-    "@onkernel/sdk": ["@onkernel/sdk@0.17.0", "", {}, "sha512-vP3bySkwD9irsaEyVBaKP04QjLKCJWQ69ONjtYkTUoopqcbNQirqQxwgouA64EzmTN5ruUv3ibrYyM1DksYAzQ=="],
+    "@onkernel/sdk": ["@onkernel/sdk@0.30.0", "", {}, "sha512-f8yCCpkr12kvTi9TugiVPvhTUD/JnvbHs0AZDVcqd1P3giASyKVEhCwJM7rn2FmCYjkx8bcDeGuk4EQbTJNNIQ=="],
 
     "@redis/bloom": ["@redis/bloom@5.6.0", "", { "peerDependencies": { "@redis/client": "^5.6.0" } }, "sha512-l13/d6BaZDJzogzZJEphIeZ8J0hpQpjkMiozomTm6nJiMNYkoPsNOBOOQua4QsG0fFjyPmLMDJFPAp5FBQtTXg=="],
 

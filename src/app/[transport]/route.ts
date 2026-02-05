@@ -176,8 +176,8 @@ const handler = createMcpHandler((server) => {
     } else if (uriString.startsWith("apps://")) {
       // Get specific app by name
       const appName = uriString.replace("apps://", "");
-      const apps = await client.apps.list();
-      const app = apps?.find((a) => a.app_name === appName);
+      const appsPage = await client.apps.list();
+      const app = appsPage.getPaginatedItems().find((a) => a.app_name === appName);
 
       if (!app) {
         throw new Error(`App "${appName}" not found`);
@@ -589,8 +589,16 @@ Based on your issue "${issue_description}", start with:
           'Filter results to show only apps with this exact version label (e.g., "v1.0.0", "latest")',
         )
         .optional(),
+      limit: z
+        .number()
+        .describe("Maximum number of results to return per page. Defaults to 50.")
+        .optional(),
+      offset: z
+        .number()
+        .describe("Number of results to skip for pagination. Defaults to 0.")
+        .optional(),
     },
-    async ({ app_name, version }, extra) => {
+    async ({ app_name, version, limit, offset }, extra) => {
       if (!extra.authInfo) {
         throw new Error("Authentication required");
       }
@@ -598,16 +606,30 @@ Based on your issue "${issue_description}", start with:
       const client = createKernelClient(extra.authInfo.token);
 
       try {
-        const apps = await client.apps.list({
-          ...(app_name && { app_name: app_name }),
-          ...(version && { version: version }),
+        const page = await client.apps.list({
+          ...(app_name && { app_name }),
+          ...(version && { version }),
+          ...(limit !== undefined && { limit }),
+          ...(offset !== undefined && { offset }),
         });
+
+        const items = page.getPaginatedItems();
 
         return {
           content: [
             {
               type: "text",
-              text: apps ? JSON.stringify(apps, null, 2) : "No apps found",
+              text: items.length > 0
+                ? JSON.stringify(
+                    {
+                      items,
+                      has_more: page.has_more,
+                      next_offset: page.next_offset,
+                    },
+                    null,
+                    2,
+                  )
+                : "No apps found",
             },
           ],
         };
@@ -792,7 +814,7 @@ Based on your issue "${issue_description}", start with:
   // Create Browser Tool
   server.tool(
     "create_browser",
-    "Launch a new browser session in the Kernel platform. This creates a managed browser instance that can be used for web automation, testing, or interactive browsing. The browser runs in a secure sandbox environment and can be configured with various options like headless mode, stealth mode, and session recording.",
+    "Launch a new browser session in the Kernel platform. This creates a managed browser instance that can be used for web automation, testing, or interactive browsing. The browser runs in a secure sandbox environment and can be configured with various options like headless mode, stealth mode, profiles, proxies, viewports, extensions, and SSH port forwarding. To expose a local dev server to the browser, use the remote_forward parameter (e.g., '3000:localhost:3000').",
     {
       headless: z
         .boolean()
@@ -824,16 +846,91 @@ Based on your issue "${issue_description}", start with:
           "ID of an existing profile to load into this browser session. The profile will load all saved cookies, logins, and session data. Cannot be used with profile_name.",
         )
         .optional(),
+      save_profile_changes: z
+        .boolean()
+        .describe(
+          "If true, save changes made during the session (cookies, logins, etc.) back to the profile when the session ends. Only applies when a profile is loaded via profile_name or profile_id. Defaults to false.",
+        )
+        .optional(),
+      proxy_id: z
+        .string()
+        .describe(
+          "ID of a proxy to associate with this browser session. The proxy must belong to your organization. Use this for residential, ISP, or datacenter proxy routing.",
+        )
+        .optional(),
+      kiosk_mode: z
+        .boolean()
+        .describe(
+          "If true, launches the browser in kiosk mode which hides the address bar and tabs in live view. Useful for presenting a cleaner browsing experience.",
+        )
+        .optional(),
+      viewport_width: z
+        .number()
+        .describe(
+          "Browser window width in pixels. Must be used together with viewport_height. Supported resolutions: 2560x1440, 1920x1080, 1920x1200, 1440x900, 1280x800, 1024x768, 1200x800. Defaults to 1920.",
+        )
+        .optional(),
+      viewport_height: z
+        .number()
+        .describe(
+          "Browser window height in pixels. Must be used together with viewport_width. Supported resolutions: 2560x1440, 1920x1080, 1920x1200, 1440x900, 1280x800, 1024x768, 1200x800. Defaults to 1080.",
+        )
+        .optional(),
+      viewport_refresh_rate: z
+        .number()
+        .describe(
+          "Display refresh rate in Hz. If omitted, automatically determined from resolution. Higher resolutions use lower refresh rates (e.g., 2560x1440@10, 1920x1080@25, 1280x800@60).",
+        )
+        .optional(),
+      extension_id: z
+        .string()
+        .describe(
+          "ID of a browser extension to load into the session. The extension must have been previously uploaded to Kernel.",
+        )
+        .optional(),
+      extension_name: z
+        .string()
+        .describe(
+          "Name of a browser extension to load into the session (instead of extension_id). The extension must have been previously uploaded to Kernel.",
+        )
+        .optional(),
+      local_forward: z
+        .string()
+        .describe(
+          "Set up SSH local port forwarding (like ssh -L). Format: localport:host:remoteport. Forwards a port on your local machine to a port on the browser VM. Example: '5432:localhost:5432' to access a DB running in the VM. Requires the Kernel CLI and websocat to be installed locally.",
+        )
+        .optional(),
+      remote_forward: z
+        .string()
+        .describe(
+          "Set up SSH remote port forwarding (like ssh -R). Format: remoteport:host:localport. Exposes a local dev server to the browser VM. Example: '3000:localhost:3000' to make your local dev server accessible at localhost:3000 inside the browser. Requires the Kernel CLI and websocat to be installed locally.",
+        )
+        .optional(),
     },
     async (
-      { headless, stealth, timeout_seconds, profile_name, profile_id },
+      {
+        headless,
+        stealth,
+        timeout_seconds,
+        profile_name,
+        profile_id,
+        save_profile_changes,
+        proxy_id,
+        kiosk_mode,
+        viewport_width,
+        viewport_height,
+        viewport_refresh_rate,
+        extension_id,
+        extension_name,
+        local_forward,
+        remote_forward,
+      },
       extra,
     ) => {
       if (!extra.authInfo) {
         throw new Error("Authentication required");
       }
 
-      // Validate that only one of profile_name or profile_id is provided
       if (profile_name && profile_id) {
         return {
           content: [
@@ -845,31 +942,100 @@ Based on your issue "${issue_description}", start with:
         };
       }
 
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        const kernelBrowser = await client.browsers.create({
-          ...(headless && { headless: headless }),
-          ...(stealth && { stealth: stealth }),
-          ...(timeout_seconds && { timeout_seconds: timeout_seconds }),
-          ...((profile_name || profile_id) && {
-            profile: {
-              ...(profile_name && { name: profile_name }),
-              ...(profile_id && { id: profile_id }),
-              save_changes: false,
-            },
-          }),
-        });
-
+      if (extension_id && extension_name) {
         return {
           content: [
             {
               type: "text",
-              text: kernelBrowser
-                ? JSON.stringify(kernelBrowser, null, 2)
-                : "Failed to create browser session",
+              text: "Error: Cannot specify both extension_id and extension_name. Please provide only one.",
             },
           ],
+        };
+      }
+
+      if (
+        (viewport_width && !viewport_height) ||
+        (!viewport_width && viewport_height)
+      ) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Error: Both viewport_width and viewport_height must be provided together.",
+            },
+          ],
+        };
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        const createParams: Record<string, unknown> = {};
+
+        if (headless !== undefined) createParams.headless = headless;
+        if (stealth !== undefined) createParams.stealth = stealth;
+        if (timeout_seconds !== undefined)
+          createParams.timeout_seconds = timeout_seconds;
+        if (kiosk_mode !== undefined) createParams.kiosk_mode = kiosk_mode;
+        if (proxy_id) createParams.proxy_id = proxy_id;
+
+        if (profile_name || profile_id) {
+          createParams.profile = {
+            ...(profile_name && { name: profile_name }),
+            ...(profile_id && { id: profile_id }),
+            ...(save_profile_changes !== undefined && {
+              save_changes: save_profile_changes,
+            }),
+          };
+        }
+
+        if (viewport_width && viewport_height) {
+          createParams.viewport = {
+            width: viewport_width,
+            height: viewport_height,
+            ...(viewport_refresh_rate && {
+              refresh_rate: viewport_refresh_rate,
+            }),
+          };
+        }
+
+        if (extension_id || extension_name) {
+          createParams.extensions = [
+            {
+              ...(extension_id && { id: extension_id }),
+              ...(extension_name && { name: extension_name }),
+            },
+          ];
+        }
+
+        const kernelBrowser = await client.browsers.create(
+          createParams as Parameters<typeof client.browsers.create>[0],
+        );
+
+        if (!kernelBrowser) {
+          return {
+            content: [
+              { type: "text", text: "Failed to create browser session" },
+            ],
+          };
+        }
+
+        let responseText = JSON.stringify(kernelBrowser, null, 2);
+
+        if (local_forward || remote_forward) {
+          const sshParts = [
+            "kernel browsers ssh",
+            kernelBrowser.session_id,
+          ];
+          if (local_forward) sshParts.push(`-L ${local_forward}`);
+          if (remote_forward) sshParts.push(`-R ${remote_forward}`);
+          const sshCommand = sshParts.join(" ");
+
+          responseText += `\n\n## SSH Port Forwarding\n\nRun this command in a terminal:\n\n\`\`\`bash\n${sshCommand}\n\`\`\`\n\nPrerequisites: [Kernel CLI](https://kernel.sh/docs/reference/cli) and [websocat](https://github.com/vi/websocat) (\`brew install websocat\` on macOS).\n\nNote: SSH connections alone don't count as browser activity. Set an appropriate timeout or keep the live view open to prevent cleanup.`;
+        }
+
+        return {
+          content: [{ type: "text", text: responseText }],
         };
       } catch (error) {
         return {
@@ -887,9 +1053,24 @@ Based on your issue "${issue_description}", start with:
   // List Browsers Tool
   server.tool(
     "list_browsers",
-    "Retrieve a list of all currently active browser sessions in the Kernel platform. This shows you which browsers are running, their session IDs, creation times, and basic configuration. Use this to discover existing browser sessions before creating new ones or to audit current browser usage.",
-    {},
-    async (_args, extra) => {
+    "Retrieve a list of browser sessions in the Kernel platform. This shows you which browsers are running, their session IDs, creation times, and basic configuration. Use this to discover existing browser sessions before creating new ones or to audit current browser usage.",
+    {
+      status: z
+        .enum(["active", "deleted", "all"])
+        .describe(
+          'Filter sessions by status. "active" returns only active sessions (default), "deleted" returns only soft-deleted sessions, "all" returns both.',
+        )
+        .optional(),
+      limit: z
+        .number()
+        .describe("Maximum number of results to return per page. Defaults to 50.")
+        .optional(),
+      offset: z
+        .number()
+        .describe("Number of results to skip for pagination. Defaults to 0.")
+        .optional(),
+    },
+    async ({ status, limit, offset }, extra) => {
       if (!extra.authInfo) {
         throw new Error("Authentication required");
       }
@@ -897,28 +1078,36 @@ Based on your issue "${issue_description}", start with:
       const client = createKernelClient(extra.authInfo.token);
 
       try {
-        const browsers = await client.browsers.list();
+        const page = await client.browsers.list({
+          ...(status && { status }),
+          ...(limit !== undefined && { limit }),
+          ...(offset !== undefined && { offset }),
+        });
 
-        if (!browsers || browsers.length === 0) {
+        const items = page.getPaginatedItems().map((browser) => ({
+          ...browser,
+          cdp_ws_url: undefined,
+        }));
+
+        if (items.length === 0) {
           return {
-            content: [
-              {
-                type: "text",
-                text: "No browsers found",
-              },
-            ],
+            content: [{ type: "text", text: "No browsers found" }],
           };
         }
-
-        const browsersWithoutCdpWsUrl = browsers.map((browser) => {
-          return { ...browser, cdp_ws_url: undefined };
-        });
 
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify(browsersWithoutCdpWsUrl, null, 2),
+              text: JSON.stringify(
+                {
+                  items,
+                  has_more: page.has_more,
+                  next_offset: page.next_offset,
+                },
+                null,
+                2,
+              ),
             },
           ],
         };
@@ -1024,15 +1213,24 @@ Based on your issue "${issue_description}", start with:
   // List Deployments Tool
   server.tool(
     "list_deployments",
-    "Retrieve a comprehensive list of all deployments in the Kernel platform, with optional filtering by app name. This provides an overview of deployment history, current status, and allows you to track the deployment lifecycle of your apps. Use this to monitor deployment activity or find specific deployments.",
+    "Retrieve a list of deployments in the Kernel platform, with optional filtering by app name. This provides an overview of deployment history, current status, and allows you to track the deployment lifecycle of your apps. Use this to monitor deployment activity or find specific deployments.",
     {
       app_name: z
         .string()
         .describe(
           'Filter results to show only deployments for this specific app name (e.g., "my-web-scraper")',
-        ),
+        )
+        .optional(),
+      limit: z
+        .number()
+        .describe("Maximum number of results to return per page. Defaults to 50.")
+        .optional(),
+      offset: z
+        .number()
+        .describe("Number of results to skip for pagination. Defaults to 0.")
+        .optional(),
     },
-    async ({ app_name }, extra) => {
+    async ({ app_name, limit, offset }, extra) => {
       if (!extra.authInfo) {
         throw new Error("Authentication required");
       }
@@ -1040,16 +1238,28 @@ Based on your issue "${issue_description}", start with:
       const client = createKernelClient(extra.authInfo.token);
 
       try {
-        const deployments = await client.deployments.list({
-          ...(app_name && { app_name: app_name }),
+        const page = await client.deployments.list({
+          ...(app_name && { app_name }),
+          ...(limit !== undefined && { limit }),
+          ...(offset !== undefined && { offset }),
         });
+
+        const items = page.getPaginatedItems();
 
         return {
           content: [
             {
               type: "text",
-              text: deployments
-                ? JSON.stringify(deployments, null, 2)
+              text: items.length > 0
+                ? JSON.stringify(
+                    {
+                      items,
+                      has_more: page.has_more,
+                      next_offset: page.next_offset,
+                    },
+                    null,
+                    2,
+                  )
                 : "No deployments found",
             },
           ],
@@ -1223,23 +1433,7 @@ The profile will load all saved cookies, logins, and session data into new brows
               type: "text",
               text:
                 profiles && profiles.length > 0
-                  ? `📋 **Available Profiles (${profiles.length}):**
-
-${profiles
-  .map(
-    (profile, index) =>
-      `${index + 1}. **${profile.name || "Unnamed"}**
-   - ID: ${profile.id}
-   - Created: ${new Date(profile.created_at).toLocaleString()}
-   - Last Used: ${profile.last_used_at ? new Date(profile.last_used_at).toLocaleString() : "Never"}
-   - Last Updated: ${profile.updated_at ? new Date(profile.updated_at).toLocaleString() : "Never"}
-`,
-  )
-  .join("\n")}
-
-💡 **Usage:**
-- Use profile names in create_browser with the profile parameter
-- Set save_changes: true to modify profiles, false for read-only mode`
+                  ? JSON.stringify(profiles, null, 2)
                   : "No profiles found. Use setup_profile to create your first profile!",
             },
           ],
@@ -1646,252 +1840,6 @@ The profile and all its associated authentication data have been permanently rem
     },
   );
 
-  // Create Browser Tunnel Tool - for connecting local dev servers to cloud browsers
-  server.tool(
-    "create_browser_tunnel",
-    "Create a Kernel browser session with SSH tunnel capability, allowing you to connect a local development server to the cloud browser. This is essential for AI coding workflows where you need to preview local code changes in a real browser. The tool creates a browser session and sets up a tunnel server that accepts incoming connections from your local machine. After calling this tool, run the provided tunnel command locally to expose your dev server (e.g., localhost:3000) to the cloud browser.",
-    {
-      local_port: z
-        .number()
-        .describe(
-          "The local port your development server is running on (e.g., 3000 for a typical React/Next.js app, 5173 for Vite, 8080 for other servers). This port will be accessible from the cloud browser.",
-        )
-        .default(3000),
-      browser_port: z
-        .number()
-        .describe(
-          "The port inside the browser VM where your local server will be accessible. Defaults to the same as local_port. The browser can access your dev server at localhost:<browser_port>.",
-        )
-        .optional(),
-      timeout_seconds: z
-        .number()
-        .describe(
-          "Session timeout in seconds. Defaults to 1800 (30 minutes) for development sessions. Maximum is 86400 (24 hours).",
-        )
-        .default(1800),
-      headless: z
-        .boolean()
-        .describe(
-          "If true, runs browser without GUI (faster but no live view). Defaults to false so you can see the browser.",
-        )
-        .default(false),
-      stealth: z
-        .boolean()
-        .describe(
-          "If true, enables stealth mode to avoid bot detection. Useful for testing on sites with anti-automation.",
-        )
-        .default(true),
-      session_id: z
-        .string()
-        .describe(
-          "Optional: Use an existing browser session instead of creating a new one. If provided, the tunnel will be set up on this existing session.",
-        )
-        .optional(),
-    },
-    async (
-      {
-        local_port,
-        browser_port,
-        timeout_seconds,
-        headless,
-        stealth,
-        session_id,
-      },
-      extra,
-    ) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-      const targetBrowserPort = browser_port || local_port;
-
-      try {
-        let browser;
-
-        // Use existing browser or create a new one
-        if (session_id) {
-          browser = await client.browsers.retrieve(session_id);
-          if (!browser) {
-            throw new Error(`Browser session "${session_id}" not found`);
-          }
-        } else {
-          browser = await client.browsers.create({
-            headless,
-            stealth,
-            timeout_seconds,
-          });
-
-          if (!browser || !browser.session_id) {
-            throw new Error("Failed to create browser session");
-          }
-        }
-
-        // Install and start bore tunnel server inside the browser VM
-        // bore is a simple, modern tunneling tool that's easy to use
-        const installResult = await client.browsers.process.exec(
-          browser.session_id,
-          {
-            command: "bash",
-            args: [
-              "-c",
-              `
-              # Check if bore is already installed
-              if ! command -v bore &> /dev/null; then
-                # Download and install bore
-                curl -sSL https://github.com/ekzhang/bore/releases/download/v0.5.2/bore-v0.5.2-x86_64-unknown-linux-musl.tar.gz | tar -xzf - -C /tmp
-                chmod +x /tmp/bore
-                mv /tmp/bore /usr/local/bin/bore 2>/dev/null || sudo mv /tmp/bore /usr/local/bin/bore 2>/dev/null || cp /tmp/bore /home/kernel/bore
-              fi
-              echo "bore installed successfully"
-              `,
-            ],
-            timeout_sec: 60,
-            as_root: true,
-          },
-        );
-
-        // Check installation result
-        const installStdout = installResult.stdout_b64
-          ? Buffer.from(installResult.stdout_b64, "base64").toString("utf-8")
-          : "";
-        const installStderr = installResult.stderr_b64
-          ? Buffer.from(installResult.stderr_b64, "base64").toString("utf-8")
-          : "";
-
-        // Start bore server in the background to accept incoming tunnel connections
-        // The bore server listens for incoming tunnel clients
-        const boreServerPort = 7835; // bore's default control port
-        const spawnResult = await client.browsers.process.spawn(
-          browser.session_id,
-          {
-            command: "bash",
-            args: [
-              "-c",
-              `
-              # Kill any existing bore server
-              pkill -f "bore server" 2>/dev/null || true
-              sleep 1
-              # Start bore server
-              /usr/local/bin/bore server --min-port ${targetBrowserPort} --max-port ${targetBrowserPort + 100} 2>&1 &
-              echo "bore server started"
-              `,
-            ],
-            timeout_sec: 300, // Keep running for 5 minutes before timeout
-            as_root: true,
-          },
-        );
-
-        // Give the server a moment to start
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-
-        // Extract the browser VM's connection info from the CDP WebSocket URL
-        // The CDP URL format is usually: wss://<session-id>.browsers.onkernel.com/...
-        let tunnelHost = "";
-        try {
-          const cdpUrl = new URL(browser.cdp_ws_url);
-          tunnelHost = cdpUrl.hostname;
-        } catch {
-          tunnelHost = "Unable to determine tunnel host";
-        }
-
-        // Generate connection instructions
-        const tunnelCommand = `bore local ${local_port} --to ${tunnelHost} --port ${targetBrowserPort}`;
-        const sshTunnelCommand = `ssh -R ${targetBrowserPort}:localhost:${local_port} kernel@${tunnelHost}`;
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `# Browser Tunnel Session Created
-
-## Session Details
-- **Session ID:** ${browser.session_id}
-- **Status:** Ready for tunnel connection
-- **Timeout:** ${timeout_seconds} seconds
-- **Stealth Mode:** ${stealth}
-- **Headless:** ${headless}
-
-## Browser Access
-- **Live View URL:** ${browser.browser_live_view_url || "N/A (headless mode)"}
-- **CDP WebSocket:** ${browser.cdp_ws_url}
-
-## Tunnel Configuration
-- **Local Port (your dev server):** ${local_port}
-- **Browser Port (accessible in browser):** ${targetBrowserPort}
-- **Tunnel Host:** ${tunnelHost}
-
-## How to Connect Your Local Dev Server
-
-### Option 1: Using bore (Recommended)
-Install bore locally if you haven't:
-\`\`\`bash
-# macOS
-brew install bore-cli
-
-# Linux/Windows (with cargo)
-cargo install bore-cli
-
-# Or download from: https://github.com/ekzhang/bore/releases
-\`\`\`
-
-Then run:
-\`\`\`bash
-${tunnelCommand}
-\`\`\`
-
-### Option 2: Using SSH (if bore isn't available)
-\`\`\`bash
-${sshTunnelCommand}
-\`\`\`
-
-### Option 3: Using cloudflared
-If you have cloudflared installed:
-\`\`\`bash
-cloudflared tunnel --url http://localhost:${local_port}
-\`\`\`
-Then navigate to the generated URL in the cloud browser.
-
-## After Connecting
-Once the tunnel is established, your local dev server will be accessible inside the cloud browser at:
-\`\`\`
-http://localhost:${targetBrowserPort}
-\`\`\`
-
-You can then use execute_playwright_code or other browser automation tools to interact with your local application!
-
-## Example Workflow
-\`\`\`javascript
-// Navigate to your local dev server in the cloud browser
-await page.goto('http://localhost:${targetBrowserPort}');
-// Now you can interact with your local app!
-\`\`\`
-
-## Installation Output
-${installStdout || "(No output)"}
-${installStderr ? `\nWarnings/Errors:\n${installStderr}` : ""}
-`,
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error creating browser tunnel: ${error instanceof Error ? error.message : String(error)}
-
-## Troubleshooting
-1. Ensure you have a valid Kernel API key
-2. Check if you have available browser session quota
-3. Try creating a regular browser first with create_browser to verify connectivity
-`,
-            },
-          ],
-        };
-      }
-    },
-  );
 });
 
 async function handleAuthenticatedRequest(req: NextRequest): Promise<Response> {
