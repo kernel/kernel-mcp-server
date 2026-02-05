@@ -118,15 +118,17 @@ const handler = createMcpHandler((server) => {
 
     if (uriString === "browsers://") {
       // List all browsers
-      const browsers = await client.browsers.list();
+      const browsersPage = await client.browsers.list();
+      const items = browsersPage.getPaginatedItems();
       return {
         contents: [
           {
             uri: "browsers://",
             mimeType: "application/json",
-            text: browsers
-              ? JSON.stringify(browsers, null, 2)
-              : "No browsers found",
+            text:
+              items.length > 0
+                ? JSON.stringify(items, null, 2)
+                : "No browsers found",
           },
         ],
       };
@@ -163,21 +165,25 @@ const handler = createMcpHandler((server) => {
 
     if (uriString === "apps://") {
       // List all apps
-      const apps = await client.apps.list();
+      const appsPage = await client.apps.list();
+      const items = appsPage.getPaginatedItems();
       return {
         contents: [
           {
             uri: "apps://",
             mimeType: "application/json",
-            text: apps ? JSON.stringify(apps, null, 2) : "No apps found",
+            text:
+              items.length > 0
+                ? JSON.stringify(items, null, 2)
+                : "No apps found",
           },
         ],
       };
     } else if (uriString.startsWith("apps://")) {
       // Get specific app by name
       const appName = uriString.replace("apps://", "");
-      const appsPage = await client.apps.list();
-      const app = appsPage.getPaginatedItems().find((a) => a.app_name === appName);
+      const appsPage = await client.apps.list({ app_name: appName });
+      const app = appsPage.getPaginatedItems()[0];
 
       if (!app) {
         throw new Error(`App "${appName}" not found`);
@@ -591,7 +597,9 @@ Based on your issue "${issue_description}", start with:
         .optional(),
       limit: z
         .number()
-        .describe("Maximum number of results to return per page. Defaults to 50.")
+        .describe(
+          "Maximum number of results to return per page. Defaults to 50.",
+        )
         .optional(),
       offset: z
         .number()
@@ -619,17 +627,18 @@ Based on your issue "${issue_description}", start with:
           content: [
             {
               type: "text",
-              text: items.length > 0
-                ? JSON.stringify(
-                    {
-                      items,
-                      has_more: page.has_more,
-                      next_offset: page.next_offset,
-                    },
-                    null,
-                    2,
-                  )
-                : "No apps found",
+              text:
+                items.length > 0
+                  ? JSON.stringify(
+                      {
+                        items,
+                        has_more: page.has_more,
+                        next_offset: page.next_offset,
+                      },
+                      null,
+                      2,
+                    )
+                  : "No apps found",
             },
           ],
         };
@@ -1023,15 +1032,14 @@ Based on your issue "${issue_description}", start with:
         let responseText = JSON.stringify(kernelBrowser, null, 2);
 
         if (local_forward || remote_forward) {
-          const sshParts = [
-            "kernel browsers ssh",
-            kernelBrowser.session_id,
-          ];
+          const sshParts = ["kernel browsers ssh", kernelBrowser.session_id];
           if (local_forward) sshParts.push(`-L ${local_forward}`);
           if (remote_forward) sshParts.push(`-R ${remote_forward}`);
           const sshCommand = sshParts.join(" ");
 
-          const remotePort = remote_forward ? remote_forward.split(":")[0] : null;
+          const remotePort = remote_forward
+            ? remote_forward.split(":")[0]
+            : null;
           const localPort = local_forward ? local_forward.split(":")[0] : null;
 
           responseText += `\n\n## SSH Port Forwarding\n\nRun this command in a terminal:\n\n\`\`\`bash\n${sshCommand}\n\`\`\`\n\nPrerequisites: [Kernel CLI](https://kernel.sh/docs/reference/cli) and [websocat](https://github.com/vi/websocat) (\`brew install websocat\` on macOS).`;
@@ -1076,7 +1084,9 @@ Based on your issue "${issue_description}", start with:
         .optional(),
       limit: z
         .number()
-        .describe("Maximum number of results to return per page. Defaults to 50.")
+        .describe(
+          "Maximum number of results to return per page. Defaults to 50.",
+        )
         .optional(),
       offset: z
         .number()
@@ -1236,7 +1246,9 @@ Based on your issue "${issue_description}", start with:
         .optional(),
       limit: z
         .number()
-        .describe("Maximum number of results to return per page. Defaults to 50.")
+        .describe(
+          "Maximum number of results to return per page. Defaults to 50.",
+        )
         .optional(),
       offset: z
         .number()
@@ -1263,17 +1275,18 @@ Based on your issue "${issue_description}", start with:
           content: [
             {
               type: "text",
-              text: items.length > 0
-                ? JSON.stringify(
-                    {
-                      items,
-                      has_more: page.has_more,
-                      next_offset: page.next_offset,
-                    },
-                    null,
-                    2,
-                  )
-                : "No deployments found",
+              text:
+                items.length > 0
+                  ? JSON.stringify(
+                      {
+                        items,
+                        has_more: page.has_more,
+                        next_offset: page.next_offset,
+                      },
+                      null,
+                      2,
+                    )
+                  : "No deployments found",
             },
           ],
         };
@@ -1852,7 +1865,6 @@ The profile and all its associated authentication data have been permanently rem
       }
     },
   );
-
 });
 
 async function handleAuthenticatedRequest(req: NextRequest): Promise<Response> {
