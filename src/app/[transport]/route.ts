@@ -1877,15 +1877,14 @@ Based on your issue "${issue_description}", start with:
             ]);
             const blob = await screenshotResponse.blob();
             const buffer = Buffer.from(await blob.arrayBuffer());
-            const viewport = browserInfo.viewport ?? {
-              width: 1920,
-              height: 1080,
-            };
+            const viewport = browserInfo.viewport;
             return {
               content: [
                 {
                   type: "text",
-                  text: `Viewport: ${viewport.width}x${viewport.height}. Use these dimensions as the coordinate space for click, scroll, and move actions.`,
+                  text: viewport
+                    ? `Viewport: ${viewport.width}x${viewport.height}. Use these dimensions as the coordinate space for click, scroll, and move actions.`
+                    : "Could not determine viewport dimensions. Use manage_browsers with action 'get' to check the browser's viewport before clicking.",
                 },
                 {
                   type: "image",
