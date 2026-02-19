@@ -373,7 +373,7 @@ kernel browsers process --help
 kernel browsers playwright --help
 \`\`\`
 
-**MCP Exception:** The \`take_screenshot\` MCP tool is useful since it returns images directly to the agent.
+**MCP Exception:** The \`computer_action\` MCP tool with action "screenshot" is useful since it returns images directly to the agent.
 
 ---
 
@@ -502,114 +502,65 @@ Based on your issue "${issue_description}", start with:
     },
   );
 
-  // Search Docs Tool
+  // search_docs -- Search Kernel platform documentation
   server.tool(
     "search_docs",
-    "Fast vector search through Kernel platform documentation to find relevant information, guides, tutorials, and API references. Returns ranked documentation chunks with titles, URLs, and content snippets. Use this tool when you need to understand how Kernel features work, troubleshoot issues, or provide accurate information about the platform capabilities.",
+    "Search Kernel platform documentation for guides, tutorials, and API references. Use when you need to understand how Kernel features work or troubleshoot issues.",
     {
       query: z
         .string()
         .describe(
-          'Search query to find relevant documentation. Use natural language like "how to deploy an app" or "browser automation examples"',
+          'Natural language search query (e.g., "how to deploy an app", "browser automation examples").',
         ),
     },
     async ({ query }, extra) => {
-      if (!process.env.MINTLIFY_ASSISTANT_API_TOKEN) {
-        console.error(
-          "MINTLIFY_ASSISTANT_API_TOKEN environment variable is not set",
-        );
+      if (
+        !process.env.MINTLIFY_ASSISTANT_API_TOKEN ||
+        !process.env.MINTLIFY_DOMAIN
+      ) {
         return {
           content: [
             {
               type: "text",
-              text: "Error: MINTLIFY_ASSISTANT_API_TOKEN environment variable is not set",
+              text: "Error: Documentation search is not configured (missing MINTLIFY_ASSISTANT_API_TOKEN or MINTLIFY_DOMAIN).",
             },
           ],
         };
       }
-
-      if (!process.env.MINTLIFY_DOMAIN) {
-        console.error("MINTLIFY_DOMAIN environment variable is not set");
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Error: MINTLIFY_DOMAIN environment variable is not set",
-            },
-          ],
-        };
-      }
-
-      // Check if query is provided
-      if (!query) {
-        console.error("No query provided to search_docs tool");
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Error: No query provided for documentation search",
-            },
-          ],
-        };
-      }
-
-      const headers = {
-        Authorization: `Bearer ${process.env.MINTLIFY_ASSISTANT_API_TOKEN}`,
-        "Content-Type": "application/json",
-      };
-
-      const searchBody = {
-        query: query,
-        pageSize: 10,
-      };
 
       try {
         const searchResponse = await fetch(
           `https://api-dsc.mintlify.com/v1/search/${process.env.MINTLIFY_DOMAIN}`,
           {
             method: "POST",
-            headers,
-            body: JSON.stringify(searchBody),
+            headers: {
+              Authorization: `Bearer ${process.env.MINTLIFY_ASSISTANT_API_TOKEN}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ query, pageSize: 10 }),
           },
         );
 
         if (!searchResponse.ok) {
-          console.error(
-            `Failed to search documentation: ${searchResponse.status} ${searchResponse.statusText}`,
-          );
           throw new Error(
-            `Failed to search documentation: ${searchResponse.status} ${searchResponse.statusText}`,
+            `Search failed: ${searchResponse.status} ${searchResponse.statusText}`,
           );
         }
 
         const searchResults: MintlifySearchResult[] =
           await searchResponse.json();
+        let formatted = "# Documentation Search Results\n\n";
 
-        // Format the search results for better readability
-        let formattedResults = "# Documentation Search Results\n\n";
-
-        if (searchResults && searchResults.length > 0) {
-          searchResults.forEach(
-            (result: MintlifySearchResult, index: number) => {
-              formattedResults += `## ${index + 1}. ${result.path}\n\n`;
-              formattedResults += `${result.content}\n\n`;
-              formattedResults += "---\n\n";
-            },
-          );
+        if (searchResults?.length > 0) {
+          searchResults.forEach((result, index) => {
+            formatted += `## ${index + 1}. ${result.path}\n\n${result.content}\n\n---\n\n`;
+          });
         } else {
-          formattedResults += "No results found for your query.";
+          formatted += "No results found for your query.";
         }
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: formattedResults,
-            },
-          ],
-        };
+        return { content: [{ type: "text", text: formatted }] };
       } catch (error) {
-        console.error("Error searching documentation:", error);
         return {
           content: [
             {
@@ -622,859 +573,270 @@ Based on your issue "${issue_description}", start with:
     },
   );
 
-  // List Apps Tool
+  // manage_browsers -- Create, list, get, and delete browser sessions
   server.tool(
-    "list_apps",
-    "List all apps deployed in the Kernel platform. Use this to discover available apps, check their versions, or filter by specific criteria. Helpful for understanding what apps are available before invoking actions.",
+    "manage_browsers",
+    'Manage browser sessions in the Kernel platform. Use action "create" to launch a new browser, "list" to see existing sessions, "get" to retrieve details about a specific session, or "delete" to terminate one. Created browsers run in isolated VMs and support headless/stealth modes, profiles, proxies, viewports, extensions, and SSH tunneling.',
     {
-      app_name: z
-        .string()
-        .describe(
-          'Filter results to show only apps with this exact name (e.g., "my-web-scraper")',
-        )
-        .optional(),
-      version: z
-        .string()
-        .describe(
-          'Filter results to show only apps with this exact version label (e.g., "v1.0.0", "latest")',
-        )
-        .optional(),
-      limit: z
-        .number()
-        .describe(
-          "Maximum number of results to return per page. Defaults to 50.",
-        )
-        .optional(),
-      offset: z
-        .number()
-        .describe("Number of results to skip for pagination. Defaults to 0.")
-        .optional(),
-    },
-    async ({ app_name, version, limit, offset }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        const page = await client.apps.list({
-          ...(app_name && { app_name }),
-          ...(version && { version }),
-          ...(limit !== undefined && { limit }),
-          ...(offset !== undefined && { offset }),
-        });
-
-        const items = page.getPaginatedItems();
-
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                items.length > 0
-                  ? JSON.stringify(
-                      {
-                        items,
-                        has_more: page.has_more,
-                        next_offset: page.next_offset,
-                      },
-                      null,
-                      2,
-                    )
-                  : "No apps found",
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error fetching apps: ${error}`,
-            },
-          ],
-        };
-      }
-    },
-  );
-
-  // Invoke Action Tool
-  server.tool(
-    "invoke_action",
-    "Execute a specific action within a Kernel app. This is the primary way to interact with deployed apps - use this to trigger workflows, run computations, or perform operations. The action will run asynchronously and you can track its progress with the returned invocation ID.",
-    {
-      app_name: z
-        .string()
-        .describe(
-          'Name of the Kernel app (e.g., "my-web-scraper", "data-processor")',
-        ),
-      action_name: z
-        .string()
-        .describe(
-          'Name of the specific action to invoke within the app (e.g., "scrape_website", "process_data")',
-        ),
-      payload: z
-        .string()
-        .describe(
-          "JSON string containing parameters for the action. Format depends on the specific action being invoked.",
-        )
-        .optional(),
-      version: z
-        .string()
-        .describe("Specific version of the app to use")
-        .optional(),
-    },
-    async ({ app_name, action_name, payload, version }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        // Create the invocation
-        const invocation = await client.invocations.create({
-          app_name: app_name,
-          action_name: action_name,
-          payload: payload,
-          version: version ?? "latest",
-          async: true,
-        });
-
-        if (!invocation) {
-          throw new Error("Failed to create invocation");
-        }
-
-        const stream = await client.invocations.follow(invocation.id);
-        let finalInvocation = invocation;
-
-        for await (const evt of stream) {
-          switch (evt.event) {
-            case "error":
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: JSON.stringify(
-                      {
-                        status: "error",
-                        message: "An error occurred during invocation",
-                        invocation_id: invocation.id,
-                        error: evt,
-                      },
-                      null,
-                      2,
-                    ),
-                  },
-                ],
-              };
-
-            case "invocation_state":
-              finalInvocation = evt.invocation || finalInvocation;
-
-              // Break out of the loop when invocation is complete or failed
-              if (
-                finalInvocation.status === "succeeded" ||
-                finalInvocation.status === "failed"
-              ) {
-                break;
-              }
-              break;
-
-            case "log":
-              // Ignore logs for now
-              break;
-
-            default:
-              break;
-          }
-
-          // Exit the loop if invocation is in a final state
-          if (
-            finalInvocation.status === "succeeded" ||
-            finalInvocation.status === "failed"
-          ) {
-            break;
-          }
-        }
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(finalInvocation, null, 2),
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error invoking action: ${error}`,
-            },
-          ],
-        };
-      }
-    },
-  );
-
-  // Get Browser Tool
-  server.tool(
-    "get_browser",
-    "Retrieve detailed information about a specific browser session including its current status, configuration, and metadata. Use this to check if a browser is still active, get its access URLs, or understand its current state before performing operations.",
-    {
+      action: z
+        .enum(["create", "list", "get", "delete"])
+        .describe("Operation to perform."),
       session_id: z
         .string()
-        .describe(
-          "Unique identifier of the browser session to retrieve information about. You can get this from list_browsers or create_browser responses.",
-        ),
-    },
-    async ({ session_id }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        const browser = await client.browsers.retrieve(session_id);
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: browser
-                ? JSON.stringify(browser, null, 2)
-                : "Browser session not found",
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error fetching browser: ${error}`,
-            },
-          ],
-        };
-      }
-    },
-  );
-
-  // Create Browser Tool
-  server.tool(
-    "create_browser",
-    "Launch a new browser session in the Kernel platform. This creates a managed browser instance that can be used for web automation, testing, or interactive browsing. The browser runs in a secure sandbox environment and can be configured with various options like headless mode, stealth mode, profiles, proxies, viewports, extensions, and SSH port forwarding. To expose a local dev server to the browser, use the remote_forward parameter (e.g., '3000:localhost:3000').",
-    {
+        .describe("Browser session ID. Required for get and delete actions.")
+        .optional(),
       headless: z
         .boolean()
-        .describe(
-          "If true, launches the browser without GUI/VNC access (faster, less resource intensive). Use false for interactive browsing or debugging.",
-        )
+        .describe("(create) Launch without GUI. Faster but no live view.")
         .optional(),
       stealth: z
         .boolean()
-        .describe(
-          "If true, configures browser to avoid detection by anti-bot systems. Recommended for web scraping and automation.",
-        )
+        .describe("(create) Avoid bot detection. Recommended for scraping.")
         .optional(),
       timeout_seconds: z
         .number()
         .describe(
-          "The number of seconds of inactivity before the browser session is terminated. Activity includes CDP connections and live view connections. Defaults to 60 seconds. Maximum is 259200 (72 hours).",
+          "(create) Inactivity timeout in seconds (max 259200 = 72h). Default 60.",
         )
         .optional(),
       profile_name: z
         .string()
         .describe(
-          "Name of an existing profile to load into this browser session. Use list_profiles to see available profiles. The profile will load all saved cookies, logins, and session data. Cannot be used with profile_id.",
+          "(create) Profile name to load saved cookies/logins. Cannot use with profile_id.",
         )
         .optional(),
       profile_id: z
         .string()
-        .describe(
-          "ID of an existing profile to load into this browser session. The profile will load all saved cookies, logins, and session data. Cannot be used with profile_name.",
-        )
+        .describe("(create) Profile ID to load. Cannot use with profile_name.")
         .optional(),
       save_profile_changes: z
         .boolean()
-        .describe(
-          "If true, save changes made during the session (cookies, logins, etc.) back to the profile when the session ends. Only applies when a profile is loaded via profile_name or profile_id. Defaults to false.",
-        )
+        .describe("(create) Save session changes back to profile on close.")
         .optional(),
       proxy_id: z
         .string()
-        .describe(
-          "ID of a proxy to associate with this browser session. The proxy must belong to your organization. Use this for residential, ISP, or datacenter proxy routing.",
-        )
+        .describe("(create) Proxy ID for traffic routing.")
         .optional(),
       kiosk_mode: z
         .boolean()
-        .describe(
-          "If true, launches the browser in kiosk mode which hides the address bar and tabs in live view. Useful for presenting a cleaner browsing experience.",
-        )
+        .describe("(create) Hide address bar/tabs in live view.")
         .optional(),
       viewport_width: z
         .number()
         .describe(
-          "Browser window width in pixels. Must be used together with viewport_height. Supported resolutions: 2560x1440, 1920x1080, 1920x1200, 1440x900, 1280x800, 1024x768, 1200x800. Defaults to 1920.",
+          "(create) Window width in pixels. Must pair with viewport_height.",
         )
         .optional(),
       viewport_height: z
         .number()
         .describe(
-          "Browser window height in pixels. Must be used together with viewport_width. Supported resolutions: 2560x1440, 1920x1080, 1920x1200, 1440x900, 1280x800, 1024x768, 1200x800. Defaults to 1080.",
+          "(create) Window height in pixels. Must pair with viewport_width.",
         )
         .optional(),
       viewport_refresh_rate: z
         .number()
-        .describe(
-          "Display refresh rate in Hz. If omitted, automatically determined from resolution. Higher resolutions use lower refresh rates (e.g., 2560x1440@10, 1920x1080@25, 1280x800@60).",
-        )
+        .describe("(create) Display refresh rate in Hz.")
         .optional(),
       extension_id: z
         .string()
-        .describe(
-          "ID of a browser extension to load into the session. The extension must have been previously uploaded to Kernel.",
-        )
+        .describe("(create) Extension ID to load.")
         .optional(),
       extension_name: z
         .string()
-        .describe(
-          "Name of a browser extension to load into the session (instead of extension_id). The extension must have been previously uploaded to Kernel.",
-        )
+        .describe("(create) Extension name to load.")
         .optional(),
       local_forward: z
         .string()
-        .describe(
-          "Set up SSH local port forwarding (like ssh -L). Format: localport:host:remoteport. Forwards a port on your local machine to a port on the browser VM. Example: '5432:localhost:5432' to access a DB running in the VM. Requires the Kernel CLI and websocat to be installed locally.",
-        )
+        .describe("(create) SSH local forwarding (localport:host:remoteport).")
         .optional(),
       remote_forward: z
         .string()
         .describe(
-          "Set up SSH remote port forwarding (like ssh -R). Format: remoteport:host:localport. Exposes a local dev server to the browser VM. Example: '3000:localhost:3000' to make your local dev server accessible at localhost:3000 inside the browser. Requires the Kernel CLI and websocat to be installed locally.",
+          "(create) SSH remote forwarding (remoteport:host:localport). Use to expose local dev server to browser.",
         )
         .optional(),
-    },
-    async (
-      {
-        headless,
-        stealth,
-        timeout_seconds,
-        profile_name,
-        profile_id,
-        save_profile_changes,
-        proxy_id,
-        kiosk_mode,
-        viewport_width,
-        viewport_height,
-        viewport_refresh_rate,
-        extension_id,
-        extension_name,
-        local_forward,
-        remote_forward,
-      },
-      extra,
-    ) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      if (profile_name && profile_id) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Error: Cannot specify both profile_name and profile_id. Please provide only one.",
-            },
-          ],
-        };
-      }
-
-      if (extension_id && extension_name) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Error: Cannot specify both extension_id and extension_name. Please provide only one.",
-            },
-          ],
-        };
-      }
-
-      if (
-        (viewport_width && !viewport_height) ||
-        (!viewport_width && viewport_height)
-      ) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Error: Both viewport_width and viewport_height must be provided together.",
-            },
-          ],
-        };
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        const createParams: Record<string, unknown> = {};
-
-        if (headless !== undefined) createParams.headless = headless;
-        if (stealth !== undefined) createParams.stealth = stealth;
-        if (timeout_seconds !== undefined)
-          createParams.timeout_seconds = timeout_seconds;
-        if (kiosk_mode !== undefined) createParams.kiosk_mode = kiosk_mode;
-        if (proxy_id) createParams.proxy_id = proxy_id;
-
-        if (profile_name || profile_id) {
-          createParams.profile = {
-            ...(profile_name && { name: profile_name }),
-            ...(profile_id && { id: profile_id }),
-            ...(save_profile_changes !== undefined && {
-              save_changes: save_profile_changes,
-            }),
-          };
-        }
-
-        if (viewport_width && viewport_height) {
-          createParams.viewport = {
-            width: viewport_width,
-            height: viewport_height,
-            ...(viewport_refresh_rate && {
-              refresh_rate: viewport_refresh_rate,
-            }),
-          };
-        }
-
-        if (extension_id || extension_name) {
-          createParams.extensions = [
-            {
-              ...(extension_id && { id: extension_id }),
-              ...(extension_name && { name: extension_name }),
-            },
-          ];
-        }
-
-        const kernelBrowser = await client.browsers.create(
-          createParams as Parameters<typeof client.browsers.create>[0],
-        );
-
-        if (!kernelBrowser) {
-          return {
-            content: [
-              { type: "text", text: "Failed to create browser session" },
-            ],
-          };
-        }
-
-        let responseText = JSON.stringify(kernelBrowser, null, 2);
-
-        if (local_forward || remote_forward) {
-          const sshParts = ["kernel browsers ssh", kernelBrowser.session_id];
-          if (local_forward) sshParts.push(`-L ${local_forward}`);
-          if (remote_forward) sshParts.push(`-R ${remote_forward}`);
-          const sshCommand = sshParts.join(" ");
-
-          const remotePort = remote_forward
-            ? remote_forward.split(":")[0]
-            : null;
-          const localPort = local_forward ? local_forward.split(":")[0] : null;
-
-          responseText += `\n\n## SSH Port Forwarding\n\nRun this command in a terminal:\n\n\`\`\`bash\n${sshCommand}\n\`\`\`\n\nPrerequisites: [Kernel CLI](https://kernel.sh/docs/reference/cli) and [websocat](https://github.com/vi/websocat) (\`brew install websocat\` on macOS).`;
-
-          if (remotePort) {
-            responseText += `\n\nThis forwards the user's local port to port ${remotePort} inside the browser VM. Once the user has the tunnel running, use execute_playwright_code to navigate the browser to http://localhost:${remotePort}`;
-          }
-
-          if (localPort) {
-            responseText += `\n\nThis forwards port ${localPort} from the browser VM to the user's local machine. Once the user has the tunnel running, services inside the VM are accessible locally at localhost:${localPort}`;
-          }
-
-          responseText += `\n\nNote: SSH connections alone don't count as browser activity. Set an appropriate timeout or keep the live view open to prevent cleanup.`;
-        }
-
-        return {
-          content: [{ type: "text", text: responseText }],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error creating browser: ${error}`,
-            },
-          ],
-        };
-      }
-    },
-  );
-
-  // List Browsers Tool
-  server.tool(
-    "list_browsers",
-    "Retrieve a list of browser sessions in the Kernel platform. This shows you which browsers are running, their session IDs, creation times, and basic configuration. Use this to discover existing browser sessions before creating new ones or to audit current browser usage.",
-    {
       status: z
         .enum(["active", "deleted", "all"])
-        .describe(
-          'Filter sessions by status. "active" returns only active sessions (default), "deleted" returns only soft-deleted sessions, "all" returns both.',
-        )
+        .describe('(list) Filter by status. Default "active".')
         .optional(),
       limit: z
         .number()
-        .describe(
-          "Maximum number of results to return per page. Defaults to 50.",
-        )
+        .describe("(list) Max results per page. Default 50.")
         .optional(),
       offset: z
         .number()
-        .describe("Number of results to skip for pagination. Defaults to 0.")
+        .describe("(list) Pagination offset. Default 0.")
         .optional(),
     },
-    async ({ status, limit, offset }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
+    async (params, extra) => {
+      if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);
 
       try {
-        const page = await client.browsers.list({
-          ...(status && { status }),
-          ...(limit !== undefined && { limit }),
-          ...(offset !== undefined && { offset }),
-        });
+        switch (params.action) {
+          case "create": {
+            if (params.profile_name && params.profile_id) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: Cannot specify both profile_name and profile_id.",
+                  },
+                ],
+              };
+            }
+            if (params.extension_id && params.extension_name) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: Cannot specify both extension_id and extension_name.",
+                  },
+                ],
+              };
+            }
+            if (
+              (params.viewport_width && !params.viewport_height) ||
+              (!params.viewport_width && params.viewport_height)
+            ) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: viewport_width and viewport_height must be provided together.",
+                  },
+                ],
+              };
+            }
 
-        const items = page.getPaginatedItems().map((browser) => ({
-          ...browser,
-          cdp_ws_url: undefined,
-        }));
-
-        if (items.length === 0) {
-          return {
-            content: [{ type: "text", text: "No browsers found" }],
-          };
-        }
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
+            const createParams: Record<string, unknown> = {};
+            if (params.headless !== undefined)
+              createParams.headless = params.headless;
+            if (params.stealth !== undefined)
+              createParams.stealth = params.stealth;
+            if (params.timeout_seconds !== undefined)
+              createParams.timeout_seconds = params.timeout_seconds;
+            if (params.kiosk_mode !== undefined)
+              createParams.kiosk_mode = params.kiosk_mode;
+            if (params.proxy_id) createParams.proxy_id = params.proxy_id;
+            if (params.profile_name || params.profile_id) {
+              createParams.profile = {
+                ...(params.profile_name && { name: params.profile_name }),
+                ...(params.profile_id && { id: params.profile_id }),
+                ...(params.save_profile_changes !== undefined && {
+                  save_changes: params.save_profile_changes,
+                }),
+              };
+            }
+            if (params.viewport_width && params.viewport_height) {
+              createParams.viewport = {
+                width: params.viewport_width,
+                height: params.viewport_height,
+                ...(params.viewport_refresh_rate && {
+                  refresh_rate: params.viewport_refresh_rate,
+                }),
+              };
+            }
+            if (params.extension_id || params.extension_name) {
+              createParams.extensions = [
                 {
-                  items,
-                  has_more: page.has_more,
-                  next_offset: page.next_offset,
+                  ...(params.extension_id && { id: params.extension_id }),
+                  ...(params.extension_name && { name: params.extension_name }),
                 },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error fetching browsers: ${error}`,
-            },
-          ],
-        };
-      }
-    },
-  );
+              ];
+            }
 
-  // Delete Browser Tool
-  server.tool(
-    "delete_browser",
-    "Permanently terminate and clean up a browser session. This will stop the browser instance, free up resources, and remove any associated data. Use this when you no longer need a browser session or want to clean up after completing automation tasks.",
-    {
-      session_id: z
-        .string()
-        .describe(
-          "Unique string identifier for browser session. This is the same ID used when creating browsers to maintain state across sessions. You can find this value in the session_id field from list_browsers responses.",
-        ),
-    },
-    async ({ session_id }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
+            const browser = await client.browsers.create(
+              createParams as Parameters<typeof client.browsers.create>[0],
+            );
+            if (!browser)
+              return {
+                content: [
+                  { type: "text", text: "Failed to create browser session" },
+                ],
+              };
 
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        await client.browsers.deleteByID(session_id);
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Browser session deleted successfully",
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error deleting browser: ${error}`,
-            },
-          ],
-        };
-      }
-    },
-  );
-
-  // Get Deployment Tool
-  server.tool(
-    "get_deployment",
-    "Retrieve comprehensive information about a specific deployment including its current status, build logs, configuration, and health metrics. Use this to monitor deployment progress, troubleshoot deployment issues, or verify that an app was deployed successfully.",
-    {
-      deployment_id: z
-        .string()
-        .describe(
-          "Unique identifier of the deployment to retrieve information about. You can get this from list_deployments responses.",
-        ),
-    },
-    async ({ deployment_id }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        const deployment = await client.deployments.retrieve(deployment_id);
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: deployment
-                ? JSON.stringify(deployment, null, 2)
-                : "Deployment not found",
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error fetching deployment: ${error}`,
-            },
-          ],
-        };
-      }
-    },
-  );
-
-  // List Deployments Tool
-  server.tool(
-    "list_deployments",
-    "Retrieve a list of deployments in the Kernel platform, with optional filtering by app name. This provides an overview of deployment history, current status, and allows you to track the deployment lifecycle of your apps. Use this to monitor deployment activity or find specific deployments.",
-    {
-      app_name: z
-        .string()
-        .describe(
-          'Filter results to show only deployments for this specific app name (e.g., "my-web-scraper")',
-        )
-        .optional(),
-      limit: z
-        .number()
-        .describe(
-          "Maximum number of results to return per page. Defaults to 50.",
-        )
-        .optional(),
-      offset: z
-        .number()
-        .describe("Number of results to skip for pagination. Defaults to 0.")
-        .optional(),
-    },
-    async ({ app_name, limit, offset }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        const page = await client.deployments.list({
-          ...(app_name && { app_name }),
-          ...(limit !== undefined && { limit }),
-          ...(offset !== undefined && { offset }),
-        });
-
-        const items = page.getPaginatedItems();
-
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                items.length > 0
-                  ? JSON.stringify(
-                      {
-                        items,
-                        has_more: page.has_more,
-                        next_offset: page.next_offset,
-                      },
-                      null,
-                      2,
-                    )
-                  : "No deployments found",
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error fetching deployments: ${error}`,
-            },
-          ],
-        };
-      }
-    },
-  );
-
-  // Setup Profile Tool
-  server.tool(
-    "setup_profile",
-    "Create a new browser profile or update an existing one, and guide the user through the setup process. This tool creates a profile (or uses existing), launches a browser session with save_changes enabled, and provides a live view URL for the user to manually sign into accounts. When the user is done, use the delete_browser tool to close the session and save the profile.",
-    {
-      profile_name: z
-        .string()
-        .describe(
-          "Name for the profile. Must be 1-255 characters, using letters, numbers, dots, underscores, or hyphens. This will be used to identify the profile in future browser sessions.",
-        ),
-      update_existing: z
-        .boolean()
-        .describe(
-          "If true and the profile already exists, it will be updated. If false and the profile exists, an error will be returned. Defaults to false to prevent accidental overwrites.",
-        )
-        .optional()
-        .default(false),
-    },
-    async ({ profile_name, update_existing }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        // Step 1: Check if profile already exists
-        const existingProfiles = await client.profiles.list();
-        const existingProfile = existingProfiles?.find(
-          (p) => p.name === profile_name,
-        );
-
-        let profile;
-        let isNewProfile = false;
-
-        if (existingProfile) {
-          if (!update_existing) {
+            let responseText = JSON.stringify(browser, null, 2);
+            if (params.local_forward || params.remote_forward) {
+              const sshParts = ["kernel browsers ssh", browser.session_id];
+              if (params.local_forward)
+                sshParts.push(`-L ${params.local_forward}`);
+              if (params.remote_forward)
+                sshParts.push(`-R ${params.remote_forward}`);
+              responseText += `\n\n## SSH Port Forwarding\n\nRun this command in a terminal:\n\n\`\`\`bash\n${sshParts.join(" ")}\n\`\`\`\n\nPrerequisites: Kernel CLI and websocat.`;
+            }
+            return { content: [{ type: "text", text: responseText }] };
+          }
+          case "list": {
+            const page = await client.browsers.list({
+              ...(params.status && { status: params.status }),
+              ...(params.limit !== undefined && { limit: params.limit }),
+              ...(params.offset !== undefined && { offset: params.offset }),
+            });
+            const items = page
+              .getPaginatedItems()
+              .map((b) => ({ ...b, cdp_ws_url: undefined }));
             return {
               content: [
                 {
                   type: "text",
-                  text: `⚠️ **Profile "${profile_name}" already exists!**
-
-🔧 **Existing Profile Details:**
-- Profile ID: ${existingProfile.id}
-- Created: ${new Date(existingProfile.created_at).toLocaleString()}
-- Last Used: ${existingProfile.last_used_at ? new Date(existingProfile.last_used_at).toLocaleString() : "Never"}
-
-**Options:**
-1. **Update existing profile** - Set update_existing: true to update this profile
-2. **Create new profile** - Choose a different name for a new profile
-
-**Suggested alternative names:**
-- ${profile_name}-2
-- ${profile_name}-new
-- ${profile_name}-${new Date().getFullYear()}
-
-To update the existing profile, call setup_profile again with update_existing: true`,
+                  text:
+                    items.length > 0
+                      ? JSON.stringify(
+                          {
+                            items,
+                            has_more: page.has_more,
+                            next_offset: page.next_offset,
+                          },
+                          null,
+                          2,
+                        )
+                      : "No browsers found",
                 },
               ],
             };
-          } else {
-            // Use existing profile for update
-            profile = existingProfile;
           }
-        } else {
-          // Create new profile
-          profile = await client.profiles.create({ name: profile_name });
-          isNewProfile = true;
+          case "get": {
+            if (!params.session_id)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: session_id is required for get action.",
+                  },
+                ],
+              };
+            const browser = await client.browsers.retrieve(params.session_id);
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(browser, null, 2) },
+              ],
+            };
+          }
+          case "delete": {
+            if (!params.session_id)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: session_id is required for delete action.",
+                  },
+                ],
+              };
+            await client.browsers.deleteByID(params.session_id);
+            return {
+              content: [
+                { type: "text", text: "Browser session deleted successfully" },
+              ],
+            };
+          }
         }
-
-        // Step 2: Create a browser session with the profile and save_changes enabled
-        const browser = await client.browsers.create({
-          stealth: true,
-          timeout_seconds: 300, // 5 minutes - enough time for manual profile setup
-          profile: {
-            name: profile_name,
-            save_changes: true,
-          },
-        });
-
-        // Step 3: Return instructions and live view URL
-        const liveViewUrl = browser.browser_live_view_url;
-        const sessionId = browser.session_id;
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Profile "${profile_name}" ${isNewProfile ? "created" : "loaded for update"} successfully!
-
-**Setup Instructions for the user:**
-
-1. **Open the browser session** by clicking this link: [Open Browser Session](${liveViewUrl})
-
-2. **${isNewProfile ? "Sign into accounts" : "Update your accounts"}** - The user should navigate to any websites and sign into the accounts they want to save in this profile (Gmail, social media, work accounts, etc.)
-
-3. **When the user is done setting up**, they should tell you: "I'm done" or "Save my profile" and you should call the delete_browser tool to close the browser session and save the profile.
-
-4. **The profile will be automatically ${isNewProfile ? "saved" : "updated"}** when the browser session closes.
-
-**Profile Details:**
-- Profile Name: ${profile_name}
-- Profile ID: ${profile.id}
-- Session ID: ${sessionId}
-- Live View URL: ${liveViewUrl}
-${
-  !isNewProfile
-    ? `- Created: ${new Date(profile.created_at).toLocaleString()}
-- Last Used: ${profile.last_used_at ? new Date(profile.last_used_at).toLocaleString() : "Never"}`
-    : ""
-}
-
-**Future Use:**
-Once ${isNewProfile ? "saved" : "updated"}, this profile can be used in any future browser session by specifying:
-- Profile name: "${profile_name}" 
-- With or without save_changes (read-only vs editable mode)
-
-The profile will load all saved cookies, logins, and session data into new browser sessions!`,
-            },
-          ],
-        };
       } catch (error) {
         return {
           content: [
             {
               type: "text",
-              text: `Error setting up profile: ${error instanceof Error ? error.message : String(error)}`,
+              text: `Error in manage_browsers (${params.action}): ${error}`,
             },
           ],
         };
@@ -1482,1195 +844,1077 @@ The profile will load all saved cookies, logins, and session data into new brows
     },
   );
 
-  // List Profiles Tool
+  // manage_profiles -- Setup, list, and delete browser profiles
   server.tool(
-    "list_profiles",
-    "List all available browser profiles in your Kernel account. Profiles contain saved cookies, logins, and session data that can be loaded into browser sessions.",
-    {},
-    async (_args, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        const profiles = await client.profiles.list();
-
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                profiles && profiles.length > 0
-                  ? JSON.stringify(profiles, null, 2)
-                  : "No profiles found. Use setup_profile to create your first profile!",
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error listing profiles: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-        };
-      }
-    },
-  );
-
-  // Delete Profile Tool
-  server.tool(
-    "delete_profile",
-    "Permanently delete a browser profile and all its associated authentication data. This action cannot be undone, so make sure you no longer need the profile before deleting it.",
+    "manage_profiles",
+    'Manage browser profiles that persist cookies, logins, and session data across browser sessions. Use action "setup" to create/update a profile with a guided live browser session, "list" to see all profiles, or "delete" to remove one.',
     {
+      action: z
+        .enum(["setup", "list", "delete"])
+        .describe("Operation to perform."),
       profile_name: z
         .string()
         .describe(
-          "Name of the profile to delete. Use list_profiles to see available profiles. Cannot be used with profile_id.",
+          "(setup, delete) Profile name. For setup: 1-255 chars. For delete: name of profile to remove.",
         )
         .optional(),
       profile_id: z
         .string()
-        .describe(
-          "ID of the profile to delete. Use list_profiles to see available profiles. Cannot be used with profile_name.",
-        )
+        .describe("(delete) Profile ID to delete. Alternative to profile_name.")
         .optional(),
-    },
-    async ({ profile_name, profile_id }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      // Validate that exactly one of profile_name or profile_id is provided
-      if (profile_name && profile_id) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Error: Cannot specify both profile_name and profile_id. Please provide only one.",
-            },
-          ],
-        };
-      }
-
-      if (!profile_name && !profile_id) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Error: Must specify either profile_name or profile_id.",
-            },
-          ],
-        };
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        // Verify profile exists first
-        const existingProfiles = await client.profiles.list();
-        const existingProfile = existingProfiles?.find(
-          (p) =>
-            (profile_name && p.name === profile_name) ||
-            (profile_id && p.id === profile_id),
-        );
-
-        if (!existingProfile) {
-          const identifier = profile_name || profile_id;
-          return {
-            content: [
-              {
-                type: "text",
-                text: `❌ **Profile "${identifier}" not found!**
-
-Use list_profiles to see available profiles.`,
-              },
-            ],
-          };
-        }
-
-        // Delete the profile using either name or ID
-        const identifier = profile_name || profile_id;
-        if (identifier) {
-          await client.profiles.delete(identifier);
-        }
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `✅ **Profile "${identifier}" deleted successfully!**
-
-The profile and all its associated authentication data have been permanently removed.`,
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error deleting profile: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-        };
-      }
-    },
-  );
-
-  // Get Invocation Tool
-  server.tool(
-    "get_invocation",
-    "Retrieve detailed information about a specific action invocation including its execution status, output data, error messages, and runtime metrics. Use this to check if an invoked action completed successfully, get its results, or troubleshoot failed executions.",
-    {
-      invocation_id: z
-        .string()
-        .describe(
-          "Unique identifier of the action invocation to retrieve information about. You get this from invoke_action responses.",
-        ),
-    },
-    async ({ invocation_id }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        const invocation = await client.invocations.retrieve(invocation_id);
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: invocation
-                ? JSON.stringify(invocation, null, 2)
-                : "Invocation not found",
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error fetching invocation: ${error}`,
-            },
-          ],
-        };
-      }
-    },
-  );
-
-  // Take Screenshot Tool
-  server.tool(
-    "take_screenshot",
-    "Capture a screenshot of the current browser page. Returns a base64-encoded PNG image. Optionally capture a specific region of the page by providing x, y, width, and height coordinates.",
-    {
-      session_id: z
-        .string()
-        .describe(
-          "Unique identifier of the browser session to capture a screenshot from. You can get this from list_browsers or create_browser responses.",
-        ),
-      x: z
-        .number()
-        .describe(
-          "Optional horizontal starting position for region capture. Must be provided together with y, width, and height.",
-        )
-        .optional(),
-      y: z
-        .number()
-        .describe(
-          "Optional vertical starting position for region capture. Must be provided together with x, width, and height.",
-        )
-        .optional(),
-      width: z
-        .number()
-        .describe(
-          "Optional width of the capture area. Must be provided together with x, y, and height.",
-        )
-        .optional(),
-      height: z
-        .number()
-        .describe(
-          "Optional height of the capture area. Must be provided together with x, y, and width.",
-        )
-        .optional(),
-    },
-    async ({ session_id, x, y, width, height }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      // Validate region parameters - either all or none must be provided
-      const hasRegion =
-        x !== undefined ||
-        y !== undefined ||
-        width !== undefined ||
-        height !== undefined;
-      const hasCompleteRegion =
-        x !== undefined &&
-        y !== undefined &&
-        width !== undefined &&
-        height !== undefined;
-
-      if (hasRegion && !hasCompleteRegion) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Error: When specifying a region, all four parameters (x, y, width, height) must be provided.",
-            },
-          ],
-        };
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        const options = hasCompleteRegion
-          ? { region: { x: x!, y: y!, width: width!, height: height! } }
-          : undefined;
-
-        const response = await client.browsers.computer.captureScreenshot(
-          session_id,
-          options,
-        );
-
-        const blob = await response.blob();
-        const buffer = Buffer.from(await blob.arrayBuffer());
-        const base64Image = buffer.toString("base64");
-
-        return {
-          content: [
-            {
-              type: "image",
-              data: base64Image,
-              mimeType: "image/png",
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error capturing screenshot: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-        };
-      }
-    },
-  );
-
-  // Browser Pool Tools
-
-  server.tool(
-    "create_browser_pool",
-    "Create a pool of pre-warmed browser instances for fast acquisition. Pools maintain idle browsers that can be instantly acquired, avoiding cold-start latency. Configure pool size, browser settings (stealth, headless, viewport, etc.), and fill rate.",
-    {
-      size: z
-        .number()
-        .describe(
-          "Number of browsers to maintain in the pool. The sum of all pool sizes cannot exceed your org's pooled sessions limit.",
-        ),
-      name: z
-        .string()
-        .describe(
-          "Optional name for the browser pool. Must be unique within the organization.",
-        )
-        .optional(),
-      headless: z
+      update_existing: z
         .boolean()
-        .describe("If true, launches browsers in headless mode.")
-        .optional(),
-      stealth: z
-        .boolean()
-        .describe(
-          "If true, launches browsers in stealth mode to reduce bot detection.",
-        )
-        .optional(),
-      timeout_seconds: z
-        .number()
-        .describe(
-          "Default idle timeout in seconds for browsers acquired from this pool. Defaults to 600.",
-        )
-        .optional(),
-      profile_name: z
-        .string()
-        .describe("Profile name to load into each browser in the pool.")
-        .optional(),
-      proxy_id: z
-        .string()
-        .describe("Proxy ID to associate with each browser in the pool.")
-        .optional(),
-      fill_rate_per_minute: z
-        .number()
-        .describe("Percentage of the pool to fill per minute. Defaults to 10%.")
+        .describe("(setup) If true, update existing profile. Default false.")
         .optional(),
     },
-    async (
-      {
-        size,
-        name,
-        headless,
-        stealth,
-        timeout_seconds,
-        profile_name,
-        proxy_id,
-        fill_rate_per_minute,
-      },
-      extra,
-    ) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
+    async (params, extra) => {
+      if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);
 
       try {
-        const pool = await client.browserPools.create({
-          size,
-          ...(name && { name }),
-          ...(headless !== undefined && { headless }),
-          ...(stealth !== undefined && { stealth }),
-          ...(timeout_seconds !== undefined && { timeout_seconds }),
-          ...(profile_name && { profile: { name: profile_name } }),
-          ...(proxy_id && { proxy_id }),
-          ...(fill_rate_per_minute !== undefined && { fill_rate_per_minute }),
-        });
+        switch (params.action) {
+          case "setup": {
+            if (!params.profile_name)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: profile_name is required for setup.",
+                  },
+                ],
+              };
+            const existingProfiles = await client.profiles.list();
+            const existingProfile = existingProfiles?.find(
+              (p) => p.name === params.profile_name,
+            );
+            let profile;
+            let isNewProfile = false;
 
-        return {
-          content: [{ type: "text", text: JSON.stringify(pool, null, 2) }],
-        };
-      } catch (error) {
-        return {
-          content: [
-            { type: "text", text: `Error creating browser pool: ${error}` },
-          ],
-        };
-      }
-    },
-  );
+            if (existingProfile) {
+              if (!params.update_existing) {
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: `Profile "${params.profile_name}" already exists (ID: ${existingProfile.id}). Set update_existing: true to update it, or choose a different name.`,
+                    },
+                  ],
+                };
+              }
+              profile = existingProfile;
+            } else {
+              profile = await client.profiles.create({
+                name: params.profile_name,
+              });
+              isNewProfile = true;
+            }
 
-  server.tool(
-    "list_browser_pools",
-    "List all browser pools in your organization, showing their configuration, size, and availability counts.",
-    {},
-    async (_args, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
+            const browser = await client.browsers.create({
+              stealth: true,
+              timeout_seconds: 300,
+              profile: { name: params.profile_name, save_changes: true },
+            });
 
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        const pools = await client.browserPools.list();
-
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                pools && pools.length > 0
-                  ? JSON.stringify(pools, null, 2)
-                  : "No browser pools found",
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            { type: "text", text: `Error listing browser pools: ${error}` },
-          ],
-        };
-      }
-    },
-  );
-
-  server.tool(
-    "get_browser_pool",
-    "Get details about a specific browser pool including its configuration, available count, and acquired count.",
-    {
-      id_or_name: z.string().describe("Pool ID or name to retrieve."),
-    },
-    async ({ id_or_name }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        const pool = await client.browserPools.retrieve(id_or_name);
-
-        return {
-          content: [{ type: "text", text: JSON.stringify(pool, null, 2) }],
-        };
-      } catch (error) {
-        return {
-          content: [
-            { type: "text", text: `Error getting browser pool: ${error}` },
-          ],
-        };
-      }
-    },
-  );
-
-  server.tool(
-    "acquire_browser",
-    "Acquire a pre-warmed browser from a pool. Returns immediately if a browser is available, otherwise long-polls until one is ready. The acquired browser uses the pool's configured timeout. Remember to release the browser back when done.",
-    {
-      id_or_name: z
-        .string()
-        .describe("Pool ID or name to acquire a browser from."),
-      acquire_timeout_seconds: z
-        .number()
-        .describe(
-          "Maximum seconds to wait for a browser. Defaults to the calculated fill time.",
-        )
-        .optional(),
-    },
-    async ({ id_or_name, acquire_timeout_seconds }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        const browser = await client.browserPools.acquire(id_or_name, {
-          ...(acquire_timeout_seconds !== undefined && {
-            acquire_timeout_seconds,
-          }),
-        });
-
-        return {
-          content: [{ type: "text", text: JSON.stringify(browser, null, 2) }],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error acquiring browser from pool: ${error}`,
-            },
-          ],
-        };
-      }
-    },
-  );
-
-  server.tool(
-    "release_browser",
-    "Release a browser back to its pool after use. Optionally destroy and recreate the browser instance instead of reusing it.",
-    {
-      id_or_name: z
-        .string()
-        .describe("Pool ID or name to release the browser back to."),
-      session_id: z.string().describe("Session ID of the browser to release."),
-      reuse: z
-        .boolean()
-        .describe(
-          "If true, reuse the browser instance. If false, destroy it and create a new one. Defaults to true.",
-        )
-        .optional(),
-    },
-    async ({ id_or_name, session_id, reuse }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        await client.browserPools.release(id_or_name, {
-          session_id,
-          ...(reuse !== undefined && { reuse }),
-        });
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Browser released back to pool successfully",
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            { type: "text", text: `Error releasing browser to pool: ${error}` },
-          ],
-        };
-      }
-    },
-  );
-
-  server.tool(
-    "delete_browser_pool",
-    "Delete a browser pool and all its browsers. By default, deletion is blocked if browsers are currently leased. Use force to terminate leased browsers.",
-    {
-      id_or_name: z.string().describe("Pool ID or name to delete."),
-      force: z
-        .boolean()
-        .describe(
-          "If true, force delete even if browsers are currently leased.",
-        )
-        .optional(),
-    },
-    async ({ id_or_name, force }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        await client.browserPools.delete(id_or_name, {
-          ...(force !== undefined && { force }),
-        });
-
-        return {
-          content: [
-            { type: "text", text: "Browser pool deleted successfully" },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            { type: "text", text: `Error deleting browser pool: ${error}` },
-          ],
-        };
-      }
-    },
-  );
-
-  // Computer Control Tools
-
-  server.tool(
-    "click",
-    "Click the mouse at specific coordinates on a browser session. Supports left/right/middle click, double-click, and modifier keys.",
-    {
-      session_id: z.string().describe("Browser session ID."),
-      x: z.number().describe("X coordinate of the click position."),
-      y: z.number().describe("Y coordinate of the click position."),
-      button: z
-        .enum(["left", "right", "middle"])
-        .describe("Mouse button. Defaults to left.")
-        .optional(),
-      num_clicks: z
-        .number()
-        .describe("Number of clicks (2 for double-click). Defaults to 1.")
-        .optional(),
-      hold_keys: z
-        .array(z.string())
-        .describe(
-          'Modifier keys to hold during click (e.g., ["Shift", "Ctrl"]).',
-        )
-        .optional(),
-    },
-    async ({ session_id, x, y, button, num_clicks, hold_keys }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        await client.browsers.computer.clickMouse(session_id, {
-          x,
-          y,
-          ...(button && { button }),
-          ...(num_clicks !== undefined && { num_clicks }),
-          ...(hold_keys && { hold_keys }),
-        });
-
-        return {
-          content: [{ type: "text", text: `Clicked at (${x}, ${y})` }],
-        };
-      } catch (error) {
-        return {
-          content: [{ type: "text", text: `Error clicking: ${error}` }],
-        };
-      }
-    },
-  );
-
-  server.tool(
-    "type_text",
-    "Type text into the currently focused element in a browser session. Simulates real keystrokes.",
-    {
-      session_id: z.string().describe("Browser session ID."),
-      text: z.string().describe("Text to type."),
-      delay: z
-        .number()
-        .describe("Delay in milliseconds between keystrokes.")
-        .optional(),
-    },
-    async ({ session_id, text, delay }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        await client.browsers.computer.typeText(session_id, {
-          text,
-          ...(delay !== undefined && { delay }),
-        });
-
-        return {
-          content: [{ type: "text", text: `Typed: "${text}"` }],
-        };
-      } catch (error) {
-        return {
-          content: [{ type: "text", text: `Error typing text: ${error}` }],
-        };
-      }
-    },
-  );
-
-  server.tool(
-    "press_key",
-    'Press keyboard keys on a browser session. Supports key combinations like "Ctrl+c", "Alt+Tab", or single keys like "Return", "Escape", "F5".',
-    {
-      session_id: z.string().describe("Browser session ID."),
-      keys: z
-        .array(z.string())
-        .describe(
-          'Key symbols to press. X11 keysym names or combinations like "Ctrl+t", "Ctrl+Shift+Tab". Examples: "Return", "Escape", "Tab", "BackSpace", "F5".',
-        ),
-      hold_keys: z
-        .array(z.string())
-        .describe("Additional modifier keys to hold during the key press.")
-        .optional(),
-      duration: z
-        .number()
-        .describe(
-          "Duration to hold keys down in milliseconds. If omitted, keys are tapped.",
-        )
-        .optional(),
-    },
-    async ({ session_id, keys, hold_keys, duration }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        await client.browsers.computer.pressKey(session_id, {
-          keys,
-          ...(hold_keys && { hold_keys }),
-          ...(duration !== undefined && { duration }),
-        });
-
-        return {
-          content: [{ type: "text", text: `Pressed keys: ${keys.join(", ")}` }],
-        };
-      } catch (error) {
-        return {
-          content: [{ type: "text", text: `Error pressing keys: ${error}` }],
-        };
-      }
-    },
-  );
-
-  server.tool(
-    "scroll",
-    "Scroll the mouse wheel at a position on a browser session. Positive delta_y scrolls down, negative scrolls up.",
-    {
-      session_id: z.string().describe("Browser session ID."),
-      x: z.number().describe("X coordinate to scroll at."),
-      y: z.number().describe("Y coordinate to scroll at."),
-      delta_x: z
-        .number()
-        .describe(
-          "Horizontal scroll amount. Positive scrolls right, negative scrolls left.",
-        )
-        .optional(),
-      delta_y: z
-        .number()
-        .describe(
-          "Vertical scroll amount. Positive scrolls down, negative scrolls up.",
-        )
-        .optional(),
-    },
-    async ({ session_id, x, y, delta_x, delta_y }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        await client.browsers.computer.scroll(session_id, {
-          x,
-          y,
-          ...(delta_x !== undefined && { delta_x }),
-          ...(delta_y !== undefined && { delta_y }),
-        });
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Scrolled at (${x}, ${y}) by (${delta_x ?? 0}, ${delta_y ?? 0})`,
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [{ type: "text", text: `Error scrolling: ${error}` }],
-        };
-      }
-    },
-  );
-
-  server.tool(
-    "move_mouse",
-    "Move the mouse cursor to specific coordinates on a browser session without clicking.",
-    {
-      session_id: z.string().describe("Browser session ID."),
-      x: z.number().describe("X coordinate to move to."),
-      y: z.number().describe("Y coordinate to move to."),
-    },
-    async ({ session_id, x, y }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        await client.browsers.computer.moveMouse(session_id, { x, y });
-
-        return {
-          content: [{ type: "text", text: `Moved mouse to (${x}, ${y})` }],
-        };
-      } catch (error) {
-        return {
-          content: [{ type: "text", text: `Error moving mouse: ${error}` }],
-        };
-      }
-    },
-  );
-
-  server.tool(
-    "get_mouse_position",
-    "Get the current mouse cursor position on a browser session.",
-    {
-      session_id: z.string().describe("Browser session ID."),
-    },
-    async ({ session_id }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        const position =
-          await client.browsers.computer.getMousePosition(session_id);
-
-        return {
-          content: [{ type: "text", text: JSON.stringify(position, null, 2) }],
-        };
-      } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error getting mouse position: ${error}`,
-            },
-          ],
-        };
-      }
-    },
-  );
-
-  // Proxy Tools
-
-  server.tool(
-    "create_proxy",
-    "Create a proxy configuration for routing browser traffic. Supports datacenter, ISP, residential, mobile, and custom proxy types. Quality for avoiding bot detection from best to worst: mobile > residential > ISP > datacenter.",
-    {
-      type: z
-        .enum(["datacenter", "isp", "residential", "mobile", "custom"])
-        .describe("Proxy type."),
-      name: z.string().describe("Readable name for the proxy.").optional(),
-      country: z
-        .string()
-        .describe("ISO 3166 country code (e.g., 'US', 'GB', 'DE').")
-        .optional(),
-      city: z
-        .string()
-        .describe(
-          "City name without spaces (e.g., 'sanfrancisco'). Requires country.",
-        )
-        .optional(),
-      state: z
-        .string()
-        .describe("Two-letter state code (for US proxies).")
-        .optional(),
-      custom_host: z
-        .string()
-        .describe("Proxy host address (required for custom type).")
-        .optional(),
-      custom_port: z
-        .number()
-        .describe("Proxy port (required for custom type).")
-        .optional(),
-      custom_username: z
-        .string()
-        .describe("Username for custom proxy auth.")
-        .optional(),
-      custom_password: z
-        .string()
-        .describe("Password for custom proxy auth.")
-        .optional(),
-    },
-    async (
-      {
-        type,
-        name,
-        country,
-        city,
-        state,
-        custom_host,
-        custom_port,
-        custom_username,
-        custom_password,
-      },
-      extra,
-    ) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        if (type === "custom") {
-          if (!custom_host || !custom_port) {
             return {
               content: [
                 {
                   type: "text",
-                  text: "Error: custom_host and custom_port are required for custom proxy type.",
+                  text:
+                    `Profile "${params.profile_name}" ${isNewProfile ? "created" : "loaded for update"}.\n\n` +
+                    `**Setup:** Open ${browser.browser_live_view_url} and sign into accounts to save.\n` +
+                    `**When done:** Use manage_browsers with action "delete" and session_id "${browser.session_id}" to save the profile.\n\n` +
+                    `Profile ID: ${profile.id} | Session ID: ${browser.session_id}`,
+                },
+              ],
+            };
+          }
+          case "list": {
+            const profiles = await client.profiles.list();
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    profiles?.length > 0
+                      ? JSON.stringify(profiles, null, 2)
+                      : "No profiles found. Use manage_profiles with action 'setup' to create one.",
+                },
+              ],
+            };
+          }
+          case "delete": {
+            if (params.profile_name && params.profile_id) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: Cannot specify both profile_name and profile_id.",
+                  },
+                ],
+              };
+            }
+            const identifier = params.profile_name || params.profile_id;
+            if (!identifier)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: profile_name or profile_id is required for delete.",
+                  },
+                ],
+              };
+            await client.profiles.delete(identifier);
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Profile "${identifier}" deleted successfully.`,
                 },
               ],
             };
           }
         }
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error in manage_profiles (${params.action}): ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+        };
+      }
+    },
+  );
 
-        const createParams: Parameters<typeof client.proxies.create>[0] =
-          type === "custom"
-            ? {
-                type,
-                ...(name && { name }),
-                config: {
-                  host: custom_host!,
-                  port: custom_port!,
-                  ...(custom_username && { username: custom_username }),
-                  ...(custom_password && { password: custom_password }),
-                },
-              }
-            : {
-                type,
-                ...(name && { name }),
-                ...((country || city || state) && {
-                  config: {
-                    ...(country && { country }),
-                    ...(city && { city }),
-                    ...(state && { state }),
-                  },
-                }),
+  // manage_browser_pools -- Create, list, get, delete, flush, acquire, and release browser pools
+  server.tool(
+    "manage_browser_pools",
+    'Manage pools of pre-warmed browser instances for fast acquisition. Use "create" to set up a pool, "list"/"get" to inspect pools, "acquire" to get a browser from a pool, "release" to return it, "flush" to destroy idle browsers, or "delete" to remove a pool.',
+    {
+      action: z
+        .enum([
+          "create",
+          "list",
+          "get",
+          "delete",
+          "flush",
+          "acquire",
+          "release",
+        ])
+        .describe("Operation to perform."),
+      id_or_name: z
+        .string()
+        .describe(
+          "Pool ID or name. Required for get/delete/flush/acquire/release.",
+        )
+        .optional(),
+      size: z
+        .number()
+        .describe("(create) Number of browsers to maintain in the pool.")
+        .optional(),
+      name: z.string().describe("(create) Unique pool name.").optional(),
+      headless: z
+        .boolean()
+        .describe("(create) Headless mode for pool browsers.")
+        .optional(),
+      stealth: z
+        .boolean()
+        .describe("(create) Stealth mode for pool browsers.")
+        .optional(),
+      timeout_seconds: z
+        .number()
+        .describe("(create) Idle timeout for acquired browsers. Default 600.")
+        .optional(),
+      profile_name: z
+        .string()
+        .describe("(create) Profile to load into pool browsers.")
+        .optional(),
+      proxy_id: z
+        .string()
+        .describe("(create) Proxy for pool browsers.")
+        .optional(),
+      fill_rate_per_minute: z
+        .number()
+        .describe("(create) Pool fill rate percentage per minute. Default 10%.")
+        .optional(),
+      force: z
+        .boolean()
+        .describe("(delete) Force delete even if browsers are leased.")
+        .optional(),
+      acquire_timeout_seconds: z
+        .number()
+        .describe("(acquire) Max seconds to wait for a browser.")
+        .optional(),
+      session_id: z
+        .string()
+        .describe("(release) Session ID of browser to release.")
+        .optional(),
+      reuse: z
+        .boolean()
+        .describe("(release) Reuse browser instance or recreate. Default true.")
+        .optional(),
+    },
+    async (params, extra) => {
+      if (!extra.authInfo) throw new Error("Authentication required");
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        switch (params.action) {
+          case "create": {
+            if (params.size === undefined)
+              return {
+                content: [
+                  { type: "text", text: "Error: size is required for create." },
+                ],
               };
-
-        const proxy = await client.proxies.create(createParams);
-
-        return {
-          content: [{ type: "text", text: JSON.stringify(proxy, null, 2) }],
-        };
+            const pool = await client.browserPools.create({
+              size: params.size,
+              ...(params.name && { name: params.name }),
+              ...(params.headless !== undefined && {
+                headless: params.headless,
+              }),
+              ...(params.stealth !== undefined && { stealth: params.stealth }),
+              ...(params.timeout_seconds !== undefined && {
+                timeout_seconds: params.timeout_seconds,
+              }),
+              ...(params.profile_name && {
+                profile: { name: params.profile_name },
+              }),
+              ...(params.proxy_id && { proxy_id: params.proxy_id }),
+              ...(params.fill_rate_per_minute !== undefined && {
+                fill_rate_per_minute: params.fill_rate_per_minute,
+              }),
+            });
+            return {
+              content: [{ type: "text", text: JSON.stringify(pool, null, 2) }],
+            };
+          }
+          case "list": {
+            const pools = await client.browserPools.list();
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    pools?.length > 0
+                      ? JSON.stringify(pools, null, 2)
+                      : "No browser pools found",
+                },
+              ],
+            };
+          }
+          case "get": {
+            if (!params.id_or_name)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: id_or_name is required for get.",
+                  },
+                ],
+              };
+            const pool = await client.browserPools.retrieve(params.id_or_name);
+            return {
+              content: [{ type: "text", text: JSON.stringify(pool, null, 2) }],
+            };
+          }
+          case "delete": {
+            if (!params.id_or_name)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: id_or_name is required for delete.",
+                  },
+                ],
+              };
+            await client.browserPools.delete(params.id_or_name, {
+              ...(params.force !== undefined && { force: params.force }),
+            });
+            return {
+              content: [
+                { type: "text", text: "Browser pool deleted successfully" },
+              ],
+            };
+          }
+          case "flush": {
+            if (!params.id_or_name)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: id_or_name is required for flush.",
+                  },
+                ],
+              };
+            await client.browserPools.flush(params.id_or_name);
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Pool flushed successfully. All idle browsers destroyed.",
+                },
+              ],
+            };
+          }
+          case "acquire": {
+            if (!params.id_or_name)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: id_or_name is required for acquire.",
+                  },
+                ],
+              };
+            const browser = await client.browserPools.acquire(
+              params.id_or_name,
+              {
+                ...(params.acquire_timeout_seconds !== undefined && {
+                  acquire_timeout_seconds: params.acquire_timeout_seconds,
+                }),
+              },
+            );
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(browser, null, 2) },
+              ],
+            };
+          }
+          case "release": {
+            if (!params.id_or_name)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: id_or_name is required for release.",
+                  },
+                ],
+              };
+            if (!params.session_id)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: session_id is required for release.",
+                  },
+                ],
+              };
+            await client.browserPools.release(params.id_or_name, {
+              session_id: params.session_id,
+              ...(params.reuse !== undefined && { reuse: params.reuse }),
+            });
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Browser released back to pool successfully",
+                },
+              ],
+            };
+          }
+        }
       } catch (error) {
-        return {
-          content: [{ type: "text", text: `Error creating proxy: ${error}` }],
-        };
-      }
-    },
-  );
-
-  server.tool(
-    "list_proxies",
-    "List all proxy configurations in your organization.",
-    {},
-    async (_args, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        const proxies = await client.proxies.list();
-
         return {
           content: [
             {
               type: "text",
-              text:
-                proxies && proxies.length > 0
-                  ? JSON.stringify(proxies, null, 2)
-                  : "No proxies found",
+              text: `Error in manage_browser_pools (${params.action}): ${error}`,
             },
           ],
         };
-      } catch (error) {
-        return {
-          content: [{ type: "text", text: `Error listing proxies: ${error}` }],
-        };
       }
     },
   );
 
+  // manage_proxies -- Create, list, and delete proxy configurations
   server.tool(
-    "delete_proxy",
-    "Delete a proxy configuration. Active browser sessions using this proxy are not affected.",
+    "manage_proxies",
+    'Manage proxy configurations for routing browser traffic. Use "create" to add a proxy, "list" to see all proxies, or "delete" to remove one. Proxy quality for bot detection avoidance, best to worst: mobile > residential > ISP > datacenter.',
     {
-      proxy_id: z.string().describe("ID of the proxy to delete."),
-    },
-    async ({ proxy_id }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        await client.proxies.delete(proxy_id);
-
-        return {
-          content: [{ type: "text", text: "Proxy deleted successfully" }],
-        };
-      } catch (error) {
-        return {
-          content: [{ type: "text", text: `Error deleting proxy: ${error}` }],
-        };
-      }
-    },
-  );
-
-  // Extension Tools
-
-  server.tool(
-    "list_extensions",
-    "List all browser extensions uploaded to your organization.",
-    {},
-    async (_args, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        const extensions = await client.extensions.list();
-
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                extensions && extensions.length > 0
-                  ? JSON.stringify(extensions, null, 2)
-                  : "No extensions found",
-            },
-          ],
-        };
-      } catch (error) {
-        return {
-          content: [
-            { type: "text", text: `Error listing extensions: ${error}` },
-          ],
-        };
-      }
-    },
-  );
-
-  server.tool(
-    "delete_extension",
-    "Delete a browser extension from your organization.",
-    {
-      id_or_name: z.string().describe("Extension ID or name to delete."),
-    },
-    async ({ id_or_name }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        await client.extensions.delete(id_or_name);
-
-        return {
-          content: [{ type: "text", text: "Extension deleted successfully" }],
-        };
-      } catch (error) {
-        return {
-          content: [
-            { type: "text", text: `Error deleting extension: ${error}` },
-          ],
-        };
-      }
-    },
-  );
-
-  // Filesystem Tools
-
-  server.tool(
-    "read_file",
-    "Read the contents of a file from a browser VM's filesystem. Returns the file content as text.",
-    {
-      session_id: z.string().describe("Browser session ID."),
-      path: z
+      action: z
+        .enum(["create", "list", "delete"])
+        .describe("Operation to perform."),
+      proxy_id: z.string().describe("(delete) Proxy ID to delete.").optional(),
+      type: z
+        .enum(["datacenter", "isp", "residential", "mobile", "custom"])
+        .describe("(create) Proxy type.")
+        .optional(),
+      name: z
+        .string()
+        .describe("(create) Readable name for the proxy.")
+        .optional(),
+      country: z
+        .string()
+        .describe("(create) ISO 3166 country code (e.g., 'US').")
+        .optional(),
+      city: z
         .string()
         .describe(
-          "Absolute path to the file to read (e.g., '/var/log/supervisord.log', '/etc/resolv.conf').",
-        ),
+          "(create) City name without spaces (e.g., 'sanfrancisco'). Requires country.",
+        )
+        .optional(),
+      state: z.string().describe("(create) Two-letter state code.").optional(),
+      custom_host: z
+        .string()
+        .describe("(create, custom type) Proxy host address.")
+        .optional(),
+      custom_port: z
+        .number()
+        .describe("(create, custom type) Proxy port.")
+        .optional(),
+      custom_username: z
+        .string()
+        .describe("(create, custom type) Auth username.")
+        .optional(),
+      custom_password: z
+        .string()
+        .describe("(create, custom type) Auth password.")
+        .optional(),
     },
-    async ({ session_id, path: filePath }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
+    async (params, extra) => {
+      if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);
 
       try {
-        const response = await client.browsers.fs.readFile(session_id, {
-          path: filePath,
-        });
-
-        const text = await response.text();
-
-        return {
-          content: [{ type: "text", text }],
-        };
+        switch (params.action) {
+          case "create": {
+            if (!params.type)
+              return {
+                content: [
+                  { type: "text", text: "Error: type is required for create." },
+                ],
+              };
+            if (
+              params.type === "custom" &&
+              (!params.custom_host || !params.custom_port)
+            ) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: custom_host and custom_port are required for custom proxy type.",
+                  },
+                ],
+              };
+            }
+            const createParams: Parameters<typeof client.proxies.create>[0] =
+              params.type === "custom"
+                ? {
+                    type: params.type,
+                    ...(params.name && { name: params.name }),
+                    config: {
+                      host: params.custom_host!,
+                      port: params.custom_port!,
+                      ...(params.custom_username && {
+                        username: params.custom_username,
+                      }),
+                      ...(params.custom_password && {
+                        password: params.custom_password,
+                      }),
+                    },
+                  }
+                : {
+                    type: params.type,
+                    ...(params.name && { name: params.name }),
+                    ...((params.country || params.city || params.state) && {
+                      config: {
+                        ...(params.country && { country: params.country }),
+                        ...(params.city && { city: params.city }),
+                        ...(params.state && { state: params.state }),
+                      },
+                    }),
+                  };
+            const proxy = await client.proxies.create(createParams);
+            return {
+              content: [{ type: "text", text: JSON.stringify(proxy, null, 2) }],
+            };
+          }
+          case "list": {
+            const proxies = await client.proxies.list();
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    proxies?.length > 0
+                      ? JSON.stringify(proxies, null, 2)
+                      : "No proxies found",
+                },
+              ],
+            };
+          }
+          case "delete": {
+            if (!params.proxy_id)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: proxy_id is required for delete.",
+                  },
+                ],
+              };
+            await client.proxies.delete(params.proxy_id);
+            return {
+              content: [{ type: "text", text: "Proxy deleted successfully" }],
+            };
+          }
+        }
       } catch (error) {
-        return {
-          content: [{ type: "text", text: `Error reading file: ${error}` }],
-        };
-      }
-    },
-  );
-
-  server.tool(
-    "write_file",
-    "Write content to a file on a browser VM's filesystem. Creates the file if it doesn't exist, overwrites if it does.",
-    {
-      session_id: z.string().describe("Browser session ID."),
-      path: z.string().describe("Absolute path to the file to write."),
-      contents: z.string().describe("Content to write to the file."),
-    },
-    async ({ session_id, path: filePath, contents }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        await client.browsers.fs.writeFile(session_id, contents, {
-          path: filePath,
-        });
-
         return {
           content: [
             {
               type: "text",
-              text: `File written successfully: ${filePath}`,
+              text: `Error in manage_proxies (${params.action}): ${error}`,
             },
           ],
         };
-      } catch (error) {
-        return {
-          content: [{ type: "text", text: `Error writing file: ${error}` }],
-        };
       }
     },
   );
 
+  // manage_extensions -- List and delete browser extensions
   server.tool(
-    "list_files",
-    "List files and directories in a browser VM's filesystem.",
+    "manage_extensions",
+    'Manage browser extensions uploaded to your organization. Use "list" to see all extensions or "delete" to remove one.',
     {
-      session_id: z.string().describe("Browser session ID."),
-      path: z
+      action: z.enum(["list", "delete"]).describe("Operation to perform."),
+      id_or_name: z
         .string()
-        .describe(
-          "Absolute path to the directory to list (e.g., '/home', '/var/log').",
-        ),
+        .describe("(delete) Extension ID or name to delete.")
+        .optional(),
     },
-    async ({ session_id, path: dirPath }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
+    async (params, extra) => {
+      if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);
 
       try {
-        const files = await client.browsers.fs.listFiles(session_id, {
-          path: dirPath,
-        });
-
-        return {
-          content: [{ type: "text", text: JSON.stringify(files, null, 2) }],
-        };
+        switch (params.action) {
+          case "list": {
+            const extensions = await client.extensions.list();
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    extensions?.length > 0
+                      ? JSON.stringify(extensions, null, 2)
+                      : "No extensions found",
+                },
+              ],
+            };
+          }
+          case "delete": {
+            if (!params.id_or_name)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: id_or_name is required for delete.",
+                  },
+                ],
+              };
+            await client.extensions.delete(params.id_or_name);
+            return {
+              content: [
+                { type: "text", text: "Extension deleted successfully" },
+              ],
+            };
+          }
+        }
       } catch (error) {
         return {
-          content: [{ type: "text", text: `Error listing files: ${error}` }],
+          content: [
+            {
+              type: "text",
+              text: `Error in manage_extensions (${params.action}): ${error}`,
+            },
+          ],
         };
       }
     },
   );
 
-  // Process Tool
+  // manage_apps -- List apps, invoke actions, manage deployments, check invocations
+  server.tool(
+    "manage_apps",
+    'Manage Kernel apps, deployments, and invocations. Use "list_apps" to discover apps, "invoke" to execute an app action, "get_deployment"/"list_deployments" to check deployment status, or "get_invocation" to check action results.',
+    {
+      action: z
+        .enum([
+          "list_apps",
+          "invoke",
+          "get_deployment",
+          "list_deployments",
+          "get_invocation",
+        ])
+        .describe("Operation to perform."),
+      app_name: z
+        .string()
+        .describe(
+          "(list_apps, invoke, list_deployments) App name filter or target.",
+        )
+        .optional(),
+      version: z
+        .string()
+        .describe(
+          "(list_apps, invoke) App version filter. Defaults to 'latest' for invoke.",
+        )
+        .optional(),
+      action_name: z
+        .string()
+        .describe("(invoke) Action to execute within the app.")
+        .optional(),
+      payload: z
+        .string()
+        .describe("(invoke) JSON string with action parameters.")
+        .optional(),
+      deployment_id: z
+        .string()
+        .describe("(get_deployment) Deployment ID to retrieve.")
+        .optional(),
+      invocation_id: z
+        .string()
+        .describe("(get_invocation) Invocation ID to retrieve.")
+        .optional(),
+      limit: z
+        .number()
+        .describe("(list_apps, list_deployments) Max results. Default 50.")
+        .optional(),
+      offset: z
+        .number()
+        .describe("(list_apps, list_deployments) Pagination offset. Default 0.")
+        .optional(),
+    },
+    async (params, extra) => {
+      if (!extra.authInfo) throw new Error("Authentication required");
+      const client = createKernelClient(extra.authInfo.token);
 
+      try {
+        switch (params.action) {
+          case "list_apps": {
+            const page = await client.apps.list({
+              ...(params.app_name && { app_name: params.app_name }),
+              ...(params.version && { version: params.version }),
+              ...(params.limit !== undefined && { limit: params.limit }),
+              ...(params.offset !== undefined && { offset: params.offset }),
+            });
+            const items = page.getPaginatedItems();
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    items.length > 0
+                      ? JSON.stringify(
+                          {
+                            items,
+                            has_more: page.has_more,
+                            next_offset: page.next_offset,
+                          },
+                          null,
+                          2,
+                        )
+                      : "No apps found",
+                },
+              ],
+            };
+          }
+          case "invoke": {
+            if (!params.app_name || !params.action_name) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: app_name and action_name are required for invoke.",
+                  },
+                ],
+              };
+            }
+            const invocation = await client.invocations.create({
+              app_name: params.app_name,
+              action_name: params.action_name,
+              payload: params.payload,
+              version: params.version ?? "latest",
+              async: true,
+            });
+            if (!invocation) throw new Error("Failed to create invocation");
+
+            const stream = await client.invocations.follow(invocation.id);
+            let finalInvocation = invocation;
+            for await (const evt of stream) {
+              if (evt.event === "error") {
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: JSON.stringify(
+                        {
+                          status: "error",
+                          invocation_id: invocation.id,
+                          error: evt,
+                        },
+                        null,
+                        2,
+                      ),
+                    },
+                  ],
+                };
+              }
+              if (evt.event === "invocation_state") {
+                finalInvocation = evt.invocation || finalInvocation;
+                if (
+                  finalInvocation.status === "succeeded" ||
+                  finalInvocation.status === "failed"
+                )
+                  break;
+              }
+            }
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(finalInvocation, null, 2),
+                },
+              ],
+            };
+          }
+          case "get_deployment": {
+            if (!params.deployment_id)
+              return {
+                content: [
+                  { type: "text", text: "Error: deployment_id is required." },
+                ],
+              };
+            const deployment = await client.deployments.retrieve(
+              params.deployment_id,
+            );
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(deployment, null, 2) },
+              ],
+            };
+          }
+          case "list_deployments": {
+            const page = await client.deployments.list({
+              ...(params.app_name && { app_name: params.app_name }),
+              ...(params.limit !== undefined && { limit: params.limit }),
+              ...(params.offset !== undefined && { offset: params.offset }),
+            });
+            const items = page.getPaginatedItems();
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    items.length > 0
+                      ? JSON.stringify(
+                          {
+                            items,
+                            has_more: page.has_more,
+                            next_offset: page.next_offset,
+                          },
+                          null,
+                          2,
+                        )
+                      : "No deployments found",
+                },
+              ],
+            };
+          }
+          case "get_invocation": {
+            if (!params.invocation_id)
+              return {
+                content: [
+                  { type: "text", text: "Error: invocation_id is required." },
+                ],
+              };
+            const invocation = await client.invocations.retrieve(
+              params.invocation_id,
+            );
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(invocation, null, 2) },
+              ],
+            };
+          }
+        }
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error in manage_apps (${params.action}): ${error}`,
+            },
+          ],
+        };
+      }
+    },
+  );
+
+  // computer_action -- Mouse, keyboard, and screenshot controls for browser sessions
+  server.tool(
+    "computer_action",
+    'Interact with a browser session at the OS level. Actions: "click" (mouse click), "type" (type text), "press_key" (keyboard keys/combos), "scroll" (mouse wheel), "move" (move cursor), "get_position" (cursor position), "screenshot" (capture page image).',
+    {
+      session_id: z.string().describe("Browser session ID."),
+      action: z
+        .enum([
+          "click",
+          "type",
+          "press_key",
+          "scroll",
+          "move",
+          "get_position",
+          "screenshot",
+        ])
+        .describe("Action to perform."),
+      x: z
+        .number()
+        .describe("(click, scroll, move, screenshot region) X coordinate.")
+        .optional(),
+      y: z
+        .number()
+        .describe("(click, scroll, move, screenshot region) Y coordinate.")
+        .optional(),
+      text: z.string().describe("(type) Text to type.").optional(),
+      keys: z
+        .array(z.string())
+        .describe(
+          '(press_key) Keys to press. X11 keysym names or combos like "Ctrl+t", "Return".',
+        )
+        .optional(),
+      button: z
+        .enum(["left", "right", "middle"])
+        .describe("(click) Mouse button. Default left.")
+        .optional(),
+      num_clicks: z
+        .number()
+        .describe("(click) Click count (2 for double-click). Default 1.")
+        .optional(),
+      hold_keys: z
+        .array(z.string())
+        .describe("(click, press_key) Modifier keys to hold.")
+        .optional(),
+      delay: z
+        .number()
+        .describe("(type) Delay in ms between keystrokes.")
+        .optional(),
+      duration: z
+        .number()
+        .describe("(press_key) Hold duration in ms. Omit to tap.")
+        .optional(),
+      delta_x: z
+        .number()
+        .describe("(scroll) Horizontal scroll. Positive=right, negative=left.")
+        .optional(),
+      delta_y: z
+        .number()
+        .describe("(scroll) Vertical scroll. Positive=down, negative=up.")
+        .optional(),
+      width: z
+        .number()
+        .describe("(screenshot) Region capture width. Requires x, y, height.")
+        .optional(),
+      height: z
+        .number()
+        .describe("(screenshot) Region capture height. Requires x, y, width.")
+        .optional(),
+    },
+    async (params, extra) => {
+      if (!extra.authInfo) throw new Error("Authentication required");
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        switch (params.action) {
+          case "click": {
+            if (params.x === undefined || params.y === undefined)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: x and y are required for click.",
+                  },
+                ],
+              };
+            await client.browsers.computer.clickMouse(params.session_id, {
+              x: params.x,
+              y: params.y,
+              ...(params.button && { button: params.button }),
+              ...(params.num_clicks !== undefined && {
+                num_clicks: params.num_clicks,
+              }),
+              ...(params.hold_keys && { hold_keys: params.hold_keys }),
+            });
+            return {
+              content: [
+                { type: "text", text: `Clicked at (${params.x}, ${params.y})` },
+              ],
+            };
+          }
+          case "type": {
+            if (!params.text)
+              return {
+                content: [
+                  { type: "text", text: "Error: text is required for type." },
+                ],
+              };
+            await client.browsers.computer.typeText(params.session_id, {
+              text: params.text,
+              ...(params.delay !== undefined && { delay: params.delay }),
+            });
+            return {
+              content: [{ type: "text", text: `Typed: "${params.text}"` }],
+            };
+          }
+          case "press_key": {
+            if (!params.keys?.length)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: keys is required for press_key.",
+                  },
+                ],
+              };
+            await client.browsers.computer.pressKey(params.session_id, {
+              keys: params.keys,
+              ...(params.hold_keys && { hold_keys: params.hold_keys }),
+              ...(params.duration !== undefined && {
+                duration: params.duration,
+              }),
+            });
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Pressed keys: ${params.keys.join(", ")}`,
+                },
+              ],
+            };
+          }
+          case "scroll": {
+            if (params.x === undefined || params.y === undefined)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: x and y are required for scroll.",
+                  },
+                ],
+              };
+            await client.browsers.computer.scroll(params.session_id, {
+              x: params.x,
+              y: params.y,
+              ...(params.delta_x !== undefined && { delta_x: params.delta_x }),
+              ...(params.delta_y !== undefined && { delta_y: params.delta_y }),
+            });
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Scrolled at (${params.x}, ${params.y})`,
+                },
+              ],
+            };
+          }
+          case "move": {
+            if (params.x === undefined || params.y === undefined)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: x and y are required for move.",
+                  },
+                ],
+              };
+            await client.browsers.computer.moveMouse(params.session_id, {
+              x: params.x,
+              y: params.y,
+            });
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Moved mouse to (${params.x}, ${params.y})`,
+                },
+              ],
+            };
+          }
+          case "get_position": {
+            const position = await client.browsers.computer.getMousePosition(
+              params.session_id,
+            );
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(position, null, 2) },
+              ],
+            };
+          }
+          case "screenshot": {
+            const hasRegion =
+              params.x !== undefined &&
+              params.y !== undefined &&
+              params.width !== undefined &&
+              params.height !== undefined;
+            const screenshotOpts = hasRegion
+              ? {
+                  region: {
+                    x: params.x!,
+                    y: params.y!,
+                    width: params.width!,
+                    height: params.height!,
+                  },
+                }
+              : undefined;
+            const response = await client.browsers.computer.captureScreenshot(
+              params.session_id,
+              screenshotOpts,
+            );
+            const blob = await response.blob();
+            const buffer = Buffer.from(await blob.arrayBuffer());
+            return {
+              content: [
+                {
+                  type: "image",
+                  data: buffer.toString("base64"),
+                  mimeType: "image/png",
+                },
+              ],
+            };
+          }
+        }
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error in computer_action (${params.action}): ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+        };
+      }
+    },
+  );
+
+  // exec_command -- Execute shell commands inside a browser VM
   server.tool(
     "exec_command",
-    "Execute a shell command synchronously inside a browser VM. Returns stdout, stderr, and exit code. Useful for running curl, checking DNS, installing packages, or debugging the VM environment.",
+    'Execute a shell command synchronously inside a browser VM. Returns stdout, stderr, and exit code. Common uses: read files (cat /path), list directories (ls /path), write files (echo "content" > /path), check DNS (cat /etc/resolv.conf), test connectivity (curl -I https://example.com), install packages (apt-get install).',
     {
       session_id: z.string().describe("Browser session ID."),
-      command: z
-        .string()
-        .describe(
-          "Command to execute (e.g., 'curl -I https://example.com', 'cat /etc/resolv.conf').",
-        ),
+      command: z.string().describe("Shell command to execute."),
       args: z.array(z.string()).describe("Command arguments.").optional(),
-      cwd: z
-        .string()
-        .describe("Working directory (absolute path) to run the command in.")
-        .optional(),
+      cwd: z.string().describe("Working directory (absolute path).").optional(),
       timeout_sec: z
         .number()
-        .describe("Maximum execution time in seconds.")
+        .describe("Max execution time in seconds.")
         .optional(),
-      as_root: z
-        .boolean()
-        .describe("Run the command with root privileges.")
-        .optional(),
+      as_root: z.boolean().describe("Run with root privileges.").optional(),
     },
     async ({ session_id, command, args, cwd, timeout_sec, as_root }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
+      if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);
 
       try {
@@ -2716,71 +1960,57 @@ The profile and all its associated authentication data have been permanently rem
     },
   );
 
-  // Execute Playwright Code Tool
+  // execute_playwright_code -- Run Playwright/TypeScript code against a browser
   server.tool(
     "execute_playwright_code",
-    "Execute Playwright/TypeScript automation code against a Kernel browser session. If session_id is provided, uses that existing browser; otherwise creates a new browser. Executes your TypeScript/Playwright code with a `page` object in scope, and returns the result with a video replay. When using a new browser, it is automatically cleaned up after execution. Perfect for one-off automation tasks, web scraping, testing, and rapid prototyping without deploying a full app. IMPORTANT: Do not use page.screenshot() or any screenshot methods in your code. If you need a screenshot, use the dedicated take_screenshot tool instead.",
+    'Execute Playwright/TypeScript automation code against a Kernel browser session. If session_id is provided, uses that existing browser; otherwise creates a new one. Returns the result with a video replay URL. Auto-cleans up browsers it creates. Use computer_action with action "screenshot" instead of page.screenshot() in code.',
     {
       code: z
         .string()
         .describe(
-          'Playwright/TypeScript code to execute. The code will have access to a Playwright `page` object and can use async/await. Example: "await page.goto(\\"https://example.com\\"); return await page.title();" Tip: Use `await page._snapshotForAI()` in return statements after other Playwright commands to get a comprehensive snapshot of the page state.',
+          'Playwright/TypeScript code with a `page` object in scope. Example: "await page.goto(\\"https://example.com\\"); return await page.title();" Tip: Use `await page._snapshotForAI()` for a comprehensive page state snapshot.',
         ),
       session_id: z
         .string()
         .describe(
-          "Optional browser session ID to use. If provided, the code will execute against this existing browser session instead of creating a new one. The browser will NOT be deleted after execution when using an existing session.",
+          "Existing browser session ID. If omitted, a new browser is created and cleaned up after execution.",
         )
         .optional(),
     },
     async ({ code, session_id }, extra) => {
-      if (!extra.authInfo) {
-        throw new Error("Authentication required");
-      }
-
+      if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);
       let kernelBrowser;
       let replay;
       const shouldCleanup = !session_id;
 
       try {
-        if (!code || typeof code !== "string") {
+        if (!code || typeof code !== "string")
           throw new Error("code is required and must be a string");
-        }
 
-        // Use existing browser session or create a new one
         if (session_id) {
           kernelBrowser = await client.browsers.retrieve(session_id);
-          if (!kernelBrowser) {
+          if (!kernelBrowser)
             throw new Error(`Browser session "${session_id}" not found`);
-          }
         } else {
-          kernelBrowser = await client.browsers.create({
-            stealth: true,
-          });
-
-          if (!kernelBrowser || !kernelBrowser.session_id) {
+          kernelBrowser = await client.browsers.create({ stealth: true });
+          if (!kernelBrowser?.session_id)
             throw new Error("Failed to create browser session");
-          }
         }
 
-        // Start replay recording (only available on paid plans)
         try {
           replay = await client.browsers.replays.start(
             kernelBrowser.session_id,
           );
-        } catch (replayError) {
-          console.log("Replay recording unavailable:", replayError);
+        } catch {
           replay = null;
         }
 
-        // Execute Playwright code via Kernel API
         const response = await client.browsers.playwright.execute(
           kernelBrowser.session_id,
           { code },
         );
 
-        // Stop replay recording
         let replayUrl = null;
         if (replay && kernelBrowser?.session_id) {
           try {
@@ -2788,12 +2018,9 @@ The profile and all its associated authentication data have been permanently rem
               id: kernelBrowser.session_id,
             });
             replayUrl = replay.replay_view_url;
-          } catch (replayError) {
-            console.error("Error stopping replay:", replayError);
-          }
+          } catch {}
         }
 
-        // Delete the Kernel browser session only if we created it
         if (shouldCleanup && kernelBrowser?.session_id) {
           await client.browsers.deleteByID(kernelBrowser.session_id);
         }
@@ -2818,7 +2045,6 @@ The profile and all its associated authentication data have been permanently rem
           ],
         };
       } catch (error) {
-        // Stop replay on error if it was started
         let replayUrl = null;
         if (replay && kernelBrowser?.session_id) {
           try {
@@ -2826,19 +2052,12 @@ The profile and all its associated authentication data have been permanently rem
               id: kernelBrowser.session_id,
             });
             replayUrl = replay.replay_view_url;
-          } catch (replayError) {
-            console.error("Error stopping replay:", replayError);
-          }
+          } catch {}
         }
-
-        // Clean up on error only if we created the browser
         try {
-          if (shouldCleanup && kernelBrowser?.session_id) {
+          if (shouldCleanup && kernelBrowser?.session_id)
             await client.browsers.deleteByID(kernelBrowser.session_id);
-          }
-        } catch (cleanupError) {
-          console.error("Error during cleanup:", cleanupError);
-        }
+        } catch {}
 
         return {
           content: [
