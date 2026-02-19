@@ -259,19 +259,54 @@ Configure these values wherever the tool expects MCP server settings.
 
 ### Browser Automation
 
-- `create_browser` - Launch a new browser session with options (headless, stealth, timeout, profile)
+- `create_browser` - Launch a new browser session with options (headless, stealth, timeout, profile, proxy, viewport, extensions, SSH tunneling)
 - `get_browser` - Get browser session information
 - `list_browsers` - List active browser sessions
 - `delete_browser` - Terminate a browser session
-- `execute_playwright_code` - Execute Playwright/TypeScript code in a fresh browser session with automatic video replay and cleanup
+- `execute_playwright_code` - Execute Playwright/TypeScript code against a browser session with automatic video replay
 - `take_screenshot` - Capture a screenshot of the current browser page, optionally specifying a region
-- `create_browser_tunnel` - Create a browser session with SSH tunnel capability to connect a local dev server to the cloud browser
+
+### Computer Controls
+
+- `click` - Click the mouse at specific coordinates (supports left/right/middle click, double-click, modifier keys)
+- `type_text` - Type text into the currently focused element
+- `press_key` - Press keyboard keys or key combinations (e.g., "Ctrl+c", "Return", "F5")
+- `scroll` - Scroll the mouse wheel at a position
+- `move_mouse` - Move the mouse cursor to specific coordinates
+- `get_mouse_position` - Get the current mouse cursor position
+
+### Browser Pools
+
+- `create_browser_pool` - Create a pool of pre-warmed browser instances for fast acquisition
+- `list_browser_pools` - List all browser pools
+- `get_browser_pool` - Get details about a specific browser pool
+- `acquire_browser` - Acquire a pre-warmed browser from a pool
+- `release_browser` - Release a browser back to its pool
+- `delete_browser_pool` - Delete a browser pool and all its browsers
+
+### Filesystem & Process
+
+- `read_file` - Read file contents from a browser VM
+- `write_file` - Write content to a file on a browser VM
+- `list_files` - List files and directories in a browser VM
+- `exec_command` - Execute a shell command inside a browser VM
 
 ### Profile Management
 
 - `setup_profile` - Create or update browser profiles with guided setup process
 - `list_profiles` - List all available browser profiles
 - `delete_profile` - Delete browser profile permanently
+
+### Proxies
+
+- `create_proxy` - Create a proxy configuration (datacenter, ISP, residential, mobile, or custom)
+- `list_proxies` - List all proxy configurations
+- `delete_proxy` - Delete a proxy configuration
+
+### Extensions
+
+- `list_extensions` - List all uploaded browser extensions
+- `delete_extension` - Delete a browser extension
 
 ### App Management
 
@@ -288,6 +323,7 @@ Configure these values wherever the tool expects MCP server settings.
 ## Resources
 
 - `browsers://` - Access browser sessions (list all or get specific session)
+- `browser_pools://` - Access browser pools (list all or get specific pool)
 - `profiles://` - Access browser profiles (list all or get specific profile)
 - `apps://` - Access deployed apps (list all or get specific app)
 

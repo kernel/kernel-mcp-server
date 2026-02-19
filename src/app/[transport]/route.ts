@@ -155,6 +155,50 @@ const handler = createMcpHandler((server) => {
     throw new Error(`Invalid browser URI: ${uriString}`);
   });
 
+  server.resource("browser_pools", "browser_pools://", async (uri, extra) => {
+    if (!extra.authInfo) {
+      throw new Error("Authentication required");
+    }
+
+    const client = createKernelClient(extra.authInfo.token);
+    const uriString = uri.toString();
+
+    if (uriString === "browser_pools://") {
+      const pools = await client.browserPools.list();
+      return {
+        contents: [
+          {
+            uri: "browser_pools://",
+            mimeType: "application/json",
+            text:
+              pools && pools.length > 0
+                ? JSON.stringify(pools, null, 2)
+                : "No browser pools found",
+          },
+        ],
+      };
+    } else if (uriString.startsWith("browser_pools://")) {
+      const idOrName = uriString.replace("browser_pools://", "");
+      const pool = await client.browserPools.retrieve(idOrName);
+
+      if (!pool) {
+        throw new Error(`Browser pool "${idOrName}" not found`);
+      }
+
+      return {
+        contents: [
+          {
+            uri: uriString,
+            mimeType: "application/json",
+            text: JSON.stringify(pool, null, 2),
+          },
+        ],
+      };
+    }
+
+    throw new Error(`Invalid browser pool URI: ${uriString}`);
+  });
+
   server.resource("apps", "apps://", async (uri, extra) => {
     if (!extra.authInfo) {
       throw new Error("Authentication required");
@@ -1716,6 +1760,956 @@ The profile and all its associated authentication data have been permanently rem
               type: "text",
               text: `Error capturing screenshot: ${error instanceof Error ? error.message : String(error)}`,
             },
+          ],
+        };
+      }
+    },
+  );
+
+  // Browser Pool Tools
+
+  server.tool(
+    "create_browser_pool",
+    "Create a pool of pre-warmed browser instances for fast acquisition. Pools maintain idle browsers that can be instantly acquired, avoiding cold-start latency. Configure pool size, browser settings (stealth, headless, viewport, etc.), and fill rate.",
+    {
+      size: z
+        .number()
+        .describe(
+          "Number of browsers to maintain in the pool. The sum of all pool sizes cannot exceed your org's pooled sessions limit.",
+        ),
+      name: z
+        .string()
+        .describe(
+          "Optional name for the browser pool. Must be unique within the organization.",
+        )
+        .optional(),
+      headless: z
+        .boolean()
+        .describe("If true, launches browsers in headless mode.")
+        .optional(),
+      stealth: z
+        .boolean()
+        .describe(
+          "If true, launches browsers in stealth mode to reduce bot detection.",
+        )
+        .optional(),
+      timeout_seconds: z
+        .number()
+        .describe(
+          "Default idle timeout in seconds for browsers acquired from this pool. Defaults to 600.",
+        )
+        .optional(),
+      profile_name: z
+        .string()
+        .describe("Profile name to load into each browser in the pool.")
+        .optional(),
+      proxy_id: z
+        .string()
+        .describe("Proxy ID to associate with each browser in the pool.")
+        .optional(),
+      fill_rate_per_minute: z
+        .number()
+        .describe("Percentage of the pool to fill per minute. Defaults to 10%.")
+        .optional(),
+    },
+    async (
+      {
+        size,
+        name,
+        headless,
+        stealth,
+        timeout_seconds,
+        profile_name,
+        proxy_id,
+        fill_rate_per_minute,
+      },
+      extra,
+    ) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        const pool = await client.browserPools.create({
+          size,
+          ...(name && { name }),
+          ...(headless !== undefined && { headless }),
+          ...(stealth !== undefined && { stealth }),
+          ...(timeout_seconds !== undefined && { timeout_seconds }),
+          ...(profile_name && { profile: { name: profile_name } }),
+          ...(proxy_id && { proxy_id }),
+          ...(fill_rate_per_minute !== undefined && { fill_rate_per_minute }),
+        });
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(pool, null, 2) }],
+        };
+      } catch (error) {
+        return {
+          content: [
+            { type: "text", text: `Error creating browser pool: ${error}` },
+          ],
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "list_browser_pools",
+    "List all browser pools in your organization, showing their configuration, size, and availability counts.",
+    {},
+    async (_args, extra) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        const pools = await client.browserPools.list();
+
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                pools && pools.length > 0
+                  ? JSON.stringify(pools, null, 2)
+                  : "No browser pools found",
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            { type: "text", text: `Error listing browser pools: ${error}` },
+          ],
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "get_browser_pool",
+    "Get details about a specific browser pool including its configuration, available count, and acquired count.",
+    {
+      id_or_name: z.string().describe("Pool ID or name to retrieve."),
+    },
+    async ({ id_or_name }, extra) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        const pool = await client.browserPools.retrieve(id_or_name);
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(pool, null, 2) }],
+        };
+      } catch (error) {
+        return {
+          content: [
+            { type: "text", text: `Error getting browser pool: ${error}` },
+          ],
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "acquire_browser",
+    "Acquire a pre-warmed browser from a pool. Returns immediately if a browser is available, otherwise long-polls until one is ready. The acquired browser uses the pool's configured timeout. Remember to release the browser back when done.",
+    {
+      id_or_name: z
+        .string()
+        .describe("Pool ID or name to acquire a browser from."),
+      acquire_timeout_seconds: z
+        .number()
+        .describe(
+          "Maximum seconds to wait for a browser. Defaults to the calculated fill time.",
+        )
+        .optional(),
+    },
+    async ({ id_or_name, acquire_timeout_seconds }, extra) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        const browser = await client.browserPools.acquire(id_or_name, {
+          ...(acquire_timeout_seconds !== undefined && {
+            acquire_timeout_seconds,
+          }),
+        });
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(browser, null, 2) }],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error acquiring browser from pool: ${error}`,
+            },
+          ],
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "release_browser",
+    "Release a browser back to its pool after use. Optionally destroy and recreate the browser instance instead of reusing it.",
+    {
+      id_or_name: z
+        .string()
+        .describe("Pool ID or name to release the browser back to."),
+      session_id: z.string().describe("Session ID of the browser to release."),
+      reuse: z
+        .boolean()
+        .describe(
+          "If true, reuse the browser instance. If false, destroy it and create a new one. Defaults to true.",
+        )
+        .optional(),
+    },
+    async ({ id_or_name, session_id, reuse }, extra) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        await client.browserPools.release(id_or_name, {
+          session_id,
+          ...(reuse !== undefined && { reuse }),
+        });
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Browser released back to pool successfully",
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            { type: "text", text: `Error releasing browser to pool: ${error}` },
+          ],
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "delete_browser_pool",
+    "Delete a browser pool and all its browsers. By default, deletion is blocked if browsers are currently leased. Use force to terminate leased browsers.",
+    {
+      id_or_name: z.string().describe("Pool ID or name to delete."),
+      force: z
+        .boolean()
+        .describe(
+          "If true, force delete even if browsers are currently leased.",
+        )
+        .optional(),
+    },
+    async ({ id_or_name, force }, extra) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        await client.browserPools.delete(id_or_name, {
+          ...(force !== undefined && { force }),
+        });
+
+        return {
+          content: [
+            { type: "text", text: "Browser pool deleted successfully" },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            { type: "text", text: `Error deleting browser pool: ${error}` },
+          ],
+        };
+      }
+    },
+  );
+
+  // Computer Control Tools
+
+  server.tool(
+    "click",
+    "Click the mouse at specific coordinates on a browser session. Supports left/right/middle click, double-click, and modifier keys.",
+    {
+      session_id: z.string().describe("Browser session ID."),
+      x: z.number().describe("X coordinate of the click position."),
+      y: z.number().describe("Y coordinate of the click position."),
+      button: z
+        .enum(["left", "right", "middle"])
+        .describe("Mouse button. Defaults to left.")
+        .optional(),
+      num_clicks: z
+        .number()
+        .describe("Number of clicks (2 for double-click). Defaults to 1.")
+        .optional(),
+      hold_keys: z
+        .array(z.string())
+        .describe(
+          'Modifier keys to hold during click (e.g., ["Shift", "Ctrl"]).',
+        )
+        .optional(),
+    },
+    async ({ session_id, x, y, button, num_clicks, hold_keys }, extra) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        await client.browsers.computer.clickMouse(session_id, {
+          x,
+          y,
+          ...(button && { button }),
+          ...(num_clicks !== undefined && { num_clicks }),
+          ...(hold_keys && { hold_keys }),
+        });
+
+        return {
+          content: [{ type: "text", text: `Clicked at (${x}, ${y})` }],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: `Error clicking: ${error}` }],
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "type_text",
+    "Type text into the currently focused element in a browser session. Simulates real keystrokes.",
+    {
+      session_id: z.string().describe("Browser session ID."),
+      text: z.string().describe("Text to type."),
+      delay: z
+        .number()
+        .describe("Delay in milliseconds between keystrokes.")
+        .optional(),
+    },
+    async ({ session_id, text, delay }, extra) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        await client.browsers.computer.typeText(session_id, {
+          text,
+          ...(delay !== undefined && { delay }),
+        });
+
+        return {
+          content: [{ type: "text", text: `Typed: "${text}"` }],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: `Error typing text: ${error}` }],
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "press_key",
+    'Press keyboard keys on a browser session. Supports key combinations like "Ctrl+c", "Alt+Tab", or single keys like "Return", "Escape", "F5".',
+    {
+      session_id: z.string().describe("Browser session ID."),
+      keys: z
+        .array(z.string())
+        .describe(
+          'Key symbols to press. X11 keysym names or combinations like "Ctrl+t", "Ctrl+Shift+Tab". Examples: "Return", "Escape", "Tab", "BackSpace", "F5".',
+        ),
+      hold_keys: z
+        .array(z.string())
+        .describe("Additional modifier keys to hold during the key press.")
+        .optional(),
+      duration: z
+        .number()
+        .describe(
+          "Duration to hold keys down in milliseconds. If omitted, keys are tapped.",
+        )
+        .optional(),
+    },
+    async ({ session_id, keys, hold_keys, duration }, extra) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        await client.browsers.computer.pressKey(session_id, {
+          keys,
+          ...(hold_keys && { hold_keys }),
+          ...(duration !== undefined && { duration }),
+        });
+
+        return {
+          content: [{ type: "text", text: `Pressed keys: ${keys.join(", ")}` }],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: `Error pressing keys: ${error}` }],
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "scroll",
+    "Scroll the mouse wheel at a position on a browser session. Positive delta_y scrolls down, negative scrolls up.",
+    {
+      session_id: z.string().describe("Browser session ID."),
+      x: z.number().describe("X coordinate to scroll at."),
+      y: z.number().describe("Y coordinate to scroll at."),
+      delta_x: z
+        .number()
+        .describe(
+          "Horizontal scroll amount. Positive scrolls right, negative scrolls left.",
+        )
+        .optional(),
+      delta_y: z
+        .number()
+        .describe(
+          "Vertical scroll amount. Positive scrolls down, negative scrolls up.",
+        )
+        .optional(),
+    },
+    async ({ session_id, x, y, delta_x, delta_y }, extra) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        await client.browsers.computer.scroll(session_id, {
+          x,
+          y,
+          ...(delta_x !== undefined && { delta_x }),
+          ...(delta_y !== undefined && { delta_y }),
+        });
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Scrolled at (${x}, ${y}) by (${delta_x ?? 0}, ${delta_y ?? 0})`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: `Error scrolling: ${error}` }],
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "move_mouse",
+    "Move the mouse cursor to specific coordinates on a browser session without clicking.",
+    {
+      session_id: z.string().describe("Browser session ID."),
+      x: z.number().describe("X coordinate to move to."),
+      y: z.number().describe("Y coordinate to move to."),
+    },
+    async ({ session_id, x, y }, extra) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        await client.browsers.computer.moveMouse(session_id, { x, y });
+
+        return {
+          content: [{ type: "text", text: `Moved mouse to (${x}, ${y})` }],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: `Error moving mouse: ${error}` }],
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "get_mouse_position",
+    "Get the current mouse cursor position on a browser session.",
+    {
+      session_id: z.string().describe("Browser session ID."),
+    },
+    async ({ session_id }, extra) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        const position =
+          await client.browsers.computer.getMousePosition(session_id);
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(position, null, 2) }],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error getting mouse position: ${error}`,
+            },
+          ],
+        };
+      }
+    },
+  );
+
+  // Proxy Tools
+
+  server.tool(
+    "create_proxy",
+    "Create a proxy configuration for routing browser traffic. Supports datacenter, ISP, residential, mobile, and custom proxy types. Quality for avoiding bot detection from best to worst: mobile > residential > ISP > datacenter.",
+    {
+      type: z
+        .enum(["datacenter", "isp", "residential", "mobile", "custom"])
+        .describe("Proxy type."),
+      name: z.string().describe("Readable name for the proxy.").optional(),
+      country: z
+        .string()
+        .describe("ISO 3166 country code (e.g., 'US', 'GB', 'DE').")
+        .optional(),
+      city: z
+        .string()
+        .describe(
+          "City name without spaces (e.g., 'sanfrancisco'). Requires country.",
+        )
+        .optional(),
+      state: z
+        .string()
+        .describe("Two-letter state code (for US proxies).")
+        .optional(),
+      custom_host: z
+        .string()
+        .describe("Proxy host address (required for custom type).")
+        .optional(),
+      custom_port: z
+        .number()
+        .describe("Proxy port (required for custom type).")
+        .optional(),
+      custom_username: z
+        .string()
+        .describe("Username for custom proxy auth.")
+        .optional(),
+      custom_password: z
+        .string()
+        .describe("Password for custom proxy auth.")
+        .optional(),
+    },
+    async (
+      {
+        type,
+        name,
+        country,
+        city,
+        state,
+        custom_host,
+        custom_port,
+        custom_username,
+        custom_password,
+      },
+      extra,
+    ) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        if (type === "custom") {
+          if (!custom_host || !custom_port) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Error: custom_host and custom_port are required for custom proxy type.",
+                },
+              ],
+            };
+          }
+        }
+
+        const createParams: Parameters<typeof client.proxies.create>[0] =
+          type === "custom"
+            ? {
+                type,
+                ...(name && { name }),
+                config: {
+                  host: custom_host!,
+                  port: custom_port!,
+                  ...(custom_username && { username: custom_username }),
+                  ...(custom_password && { password: custom_password }),
+                },
+              }
+            : {
+                type,
+                ...(name && { name }),
+                ...((country || city || state) && {
+                  config: {
+                    ...(country && { country }),
+                    ...(city && { city }),
+                    ...(state && { state }),
+                  },
+                }),
+              };
+
+        const proxy = await client.proxies.create(createParams);
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(proxy, null, 2) }],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: `Error creating proxy: ${error}` }],
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "list_proxies",
+    "List all proxy configurations in your organization.",
+    {},
+    async (_args, extra) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        const proxies = await client.proxies.list();
+
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                proxies && proxies.length > 0
+                  ? JSON.stringify(proxies, null, 2)
+                  : "No proxies found",
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: `Error listing proxies: ${error}` }],
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "delete_proxy",
+    "Delete a proxy configuration. Active browser sessions using this proxy are not affected.",
+    {
+      proxy_id: z.string().describe("ID of the proxy to delete."),
+    },
+    async ({ proxy_id }, extra) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        await client.proxies.delete(proxy_id);
+
+        return {
+          content: [{ type: "text", text: "Proxy deleted successfully" }],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: `Error deleting proxy: ${error}` }],
+        };
+      }
+    },
+  );
+
+  // Extension Tools
+
+  server.tool(
+    "list_extensions",
+    "List all browser extensions uploaded to your organization.",
+    {},
+    async (_args, extra) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        const extensions = await client.extensions.list();
+
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                extensions && extensions.length > 0
+                  ? JSON.stringify(extensions, null, 2)
+                  : "No extensions found",
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            { type: "text", text: `Error listing extensions: ${error}` },
+          ],
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "delete_extension",
+    "Delete a browser extension from your organization.",
+    {
+      id_or_name: z.string().describe("Extension ID or name to delete."),
+    },
+    async ({ id_or_name }, extra) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        await client.extensions.delete(id_or_name);
+
+        return {
+          content: [{ type: "text", text: "Extension deleted successfully" }],
+        };
+      } catch (error) {
+        return {
+          content: [
+            { type: "text", text: `Error deleting extension: ${error}` },
+          ],
+        };
+      }
+    },
+  );
+
+  // Filesystem Tools
+
+  server.tool(
+    "read_file",
+    "Read the contents of a file from a browser VM's filesystem. Returns the file content as text.",
+    {
+      session_id: z.string().describe("Browser session ID."),
+      path: z
+        .string()
+        .describe(
+          "Absolute path to the file to read (e.g., '/var/log/supervisord.log', '/etc/resolv.conf').",
+        ),
+    },
+    async ({ session_id, path: filePath }, extra) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        const response = await client.browsers.fs.readFile(session_id, {
+          path: filePath,
+        });
+
+        const text = await response.text();
+
+        return {
+          content: [{ type: "text", text }],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: `Error reading file: ${error}` }],
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "write_file",
+    "Write content to a file on a browser VM's filesystem. Creates the file if it doesn't exist, overwrites if it does.",
+    {
+      session_id: z.string().describe("Browser session ID."),
+      path: z.string().describe("Absolute path to the file to write."),
+      contents: z.string().describe("Content to write to the file."),
+    },
+    async ({ session_id, path: filePath, contents }, extra) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        await client.browsers.fs.writeFile(session_id, contents, {
+          path: filePath,
+        });
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `File written successfully: ${filePath}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: `Error writing file: ${error}` }],
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "list_files",
+    "List files and directories in a browser VM's filesystem.",
+    {
+      session_id: z.string().describe("Browser session ID."),
+      path: z
+        .string()
+        .describe(
+          "Absolute path to the directory to list (e.g., '/home', '/var/log').",
+        ),
+    },
+    async ({ session_id, path: dirPath }, extra) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        const files = await client.browsers.fs.listFiles(session_id, {
+          path: dirPath,
+        });
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(files, null, 2) }],
+        };
+      } catch (error) {
+        return {
+          content: [{ type: "text", text: `Error listing files: ${error}` }],
+        };
+      }
+    },
+  );
+
+  // Process Tool
+
+  server.tool(
+    "exec_command",
+    "Execute a shell command synchronously inside a browser VM. Returns stdout, stderr, and exit code. Useful for running curl, checking DNS, installing packages, or debugging the VM environment.",
+    {
+      session_id: z.string().describe("Browser session ID."),
+      command: z
+        .string()
+        .describe(
+          "Command to execute (e.g., 'curl -I https://example.com', 'cat /etc/resolv.conf').",
+        ),
+      args: z.array(z.string()).describe("Command arguments.").optional(),
+      cwd: z
+        .string()
+        .describe("Working directory (absolute path) to run the command in.")
+        .optional(),
+      timeout_sec: z
+        .number()
+        .describe("Maximum execution time in seconds.")
+        .optional(),
+      as_root: z
+        .boolean()
+        .describe("Run the command with root privileges.")
+        .optional(),
+    },
+    async ({ session_id, command, args, cwd, timeout_sec, as_root }, extra) => {
+      if (!extra.authInfo) {
+        throw new Error("Authentication required");
+      }
+
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        const result = await client.browsers.process.exec(session_id, {
+          command,
+          ...(args && { args }),
+          ...(cwd && { cwd }),
+          ...(timeout_sec !== undefined && { timeout_sec }),
+          ...(as_root !== undefined && { as_root }),
+        });
+
+        const stdout = result.stdout_b64
+          ? Buffer.from(result.stdout_b64, "base64").toString("utf-8")
+          : "";
+        const stderr = result.stderr_b64
+          ? Buffer.from(result.stderr_b64, "base64").toString("utf-8")
+          : "";
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  exit_code: result.exit_code,
+                  duration_ms: result.duration_ms,
+                  stdout,
+                  stderr,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            { type: "text", text: `Error executing command: ${error}` },
           ],
         };
       }
