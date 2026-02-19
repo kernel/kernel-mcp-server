@@ -1868,14 +1868,25 @@ Based on your issue "${issue_description}", start with:
                   },
                 }
               : undefined;
-            const response = await client.browsers.computer.captureScreenshot(
-              params.session_id,
-              screenshotOpts,
-            );
-            const blob = await response.blob();
+            const [screenshotResponse, browserInfo] = await Promise.all([
+              client.browsers.computer.captureScreenshot(
+                params.session_id,
+                screenshotOpts,
+              ),
+              client.browsers.retrieve(params.session_id),
+            ]);
+            const blob = await screenshotResponse.blob();
             const buffer = Buffer.from(await blob.arrayBuffer());
+            const viewport = browserInfo.viewport ?? {
+              width: 1920,
+              height: 1080,
+            };
             return {
               content: [
+                {
+                  type: "text",
+                  text: `Viewport: ${viewport.width}x${viewport.height}. Use these dimensions as the coordinate space for click, scroll, and move actions.`,
+                },
                 {
                   type: "image",
                   data: buffer.toString("base64"),
