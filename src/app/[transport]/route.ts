@@ -1901,11 +1901,16 @@ Based on your issue "${issue_description}", start with:
   // exec_command -- Execute shell commands inside a browser VM
   server.tool(
     "exec_command",
-    'Execute a shell command synchronously inside a browser VM. Returns stdout, stderr, and exit code. Common uses: read files (cat /path), list directories (ls /path), write files (echo "content" > /path), check DNS (cat /etc/resolv.conf), test connectivity (curl -I https://example.com), install packages (apt-get install).',
+    'Execute a command synchronously inside a browser VM. Returns stdout, stderr, and exit code. The command field is the executable; use args for its arguments. Common uses: read files (command: "cat", args: ["/var/log/supervisord.log"]), list dirs (command: "ls", args: ["/var/log"]), check DNS (command: "cat", args: ["/etc/resolv.conf"]), test connectivity (command: "curl", args: ["-I", "https://example.com"]).',
     {
       session_id: z.string().describe("Browser session ID."),
-      command: z.string().describe("Shell command to execute."),
-      args: z.array(z.string()).describe("Command arguments.").optional(),
+      command: z
+        .string()
+        .describe("Executable to run (e.g., 'cat', 'ls', 'curl')."),
+      args: z
+        .array(z.string())
+        .describe("Arguments to pass to the command.")
+        .optional(),
       cwd: z.string().describe("Working directory (absolute path).").optional(),
       timeout_sec: z
         .number()
