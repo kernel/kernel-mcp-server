@@ -763,7 +763,26 @@ Based on your issue "${issue_description}", start with:
                 sshParts.push(`-L ${params.local_forward}`);
               if (params.remote_forward)
                 sshParts.push(`-R ${params.remote_forward}`);
-              responseText += `\n\n## SSH Port Forwarding\n\nRun this command in a terminal:\n\n\`\`\`bash\n${sshParts.join(" ")}\n\`\`\`\n\nPrerequisites: Kernel CLI and websocat.`;
+              const sshCommand = sshParts.join(" ");
+
+              const remotePort = params.remote_forward
+                ? params.remote_forward.split(":")[0]
+                : null;
+              const localPort = params.local_forward
+                ? params.local_forward.split(":")[0]
+                : null;
+
+              responseText += `\n\n## SSH Port Forwarding\n\nRun this command in a terminal:\n\n\`\`\`bash\n${sshCommand}\n\`\`\`\n\nPrerequisites: [Kernel CLI](https://kernel.sh/docs/reference/cli) and [websocat](https://github.com/vi/websocat) (\`brew install websocat\` on macOS).`;
+
+              if (remotePort) {
+                responseText += `\n\nThis forwards the user's local port to port ${remotePort} inside the browser VM. Once the user has the tunnel running, use execute_playwright_code to navigate the browser to http://localhost:${remotePort}`;
+              }
+
+              if (localPort) {
+                responseText += `\n\nThis forwards port ${localPort} from the browser VM to the user's local machine. Once the user has the tunnel running, services inside the VM are accessible locally at localhost:${localPort}`;
+              }
+
+              responseText += `\n\nNote: SSH connections alone don't count as browser activity. Set an appropriate timeout or keep the live view open to prevent cleanup.`;
             }
             return { content: [{ type: "text", text: responseText }] };
           }
@@ -1853,11 +1872,26 @@ Based on your issue "${issue_description}", start with:
             };
           }
           case "screenshot": {
+            const hasAnyRegion =
+              params.x !== undefined ||
+              params.y !== undefined ||
+              params.width !== undefined ||
+              params.height !== undefined;
             const hasRegion =
               params.x !== undefined &&
               params.y !== undefined &&
               params.width !== undefined &&
               params.height !== undefined;
+            if (hasAnyRegion && !hasRegion) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: When specifying a region, all four parameters (x, y, width, height) must be provided.",
+                  },
+                ],
+              };
+            }
             const screenshotOpts = hasRegion
               ? {
                   region: {
