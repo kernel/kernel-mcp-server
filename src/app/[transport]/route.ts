@@ -384,7 +384,7 @@ kernel browsers playwright --help
 kernel browsers get ${session_id}
 \`\`\`
 
-### Take a screenshot (or use MCP take_screenshot tool)
+### Take a screenshot (or use MCP computer_action with action "screenshot")
 \`\`\`bash
 kernel browsers screenshot ${session_id}
 \`\`\`
@@ -428,7 +428,7 @@ kernel browsers playwright execute ${session_id} "const cookies = await page.con
 **Signs of bot detection:**
 - curl works from the VM but Chrome shows an error
 - "Access Denied", CAPTCHA pages, or "Checking your browser..." messages
-- \`stealth: false\` in browser config (check with get_browser)
+- \`stealth: false\` in browser config (check with manage_browsers action "get")
 
 **Solutions:** Use \`stealth: true\`, use profiles with real auth, or try shorter session lifetimes.
 
