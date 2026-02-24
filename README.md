@@ -255,39 +255,30 @@ Many other MCP-capable tools accept:
 
 Configure these values wherever the tool expects MCP server settings.
 
-## Tools
+## Tools (10 total)
 
-### Browser Automation
+Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Four standalone tools handle high-frequency workflows.
 
-- `create_browser` - Launch a new browser session with options (headless, stealth, timeout, profile)
-- `get_browser` - Get browser session information
-- `list_browsers` - List active browser sessions
-- `delete_browser` - Terminate a browser session
-- `execute_playwright_code` - Execute Playwright/TypeScript code in a fresh browser session with automatic video replay and cleanup
-- `take_screenshot` - Capture a screenshot of the current browser page, optionally specifying a region
-- `create_browser_tunnel` - Create a browser session with SSH tunnel capability to connect a local dev server to the cloud browser
+### manage\_\* tools
 
-### Profile Management
+- `manage_browsers` - Create, list, get, and delete browser sessions. Supports headless/stealth modes, profiles, proxies, viewports, extensions, and SSH tunneling.
+- `manage_profiles` - Setup (with guided live browser session), list, and delete browser profiles for persisting cookies and logins.
+- `manage_browser_pools` - Create, list, get, delete, and flush pools of pre-warmed browsers. Acquire and release browsers from pools.
+- `manage_proxies` - Create, list, and delete proxy configurations (datacenter, ISP, residential, mobile, custom).
+- `manage_extensions` - List and delete uploaded browser extensions.
+- `manage_apps` - List apps, invoke actions, get/list deployments, and get invocation results.
 
-- `setup_profile` - Create or update browser profiles with guided setup process
-- `list_profiles` - List all available browser profiles
-- `delete_profile` - Delete browser profile permanently
+### Standalone tools
 
-### App Management
-
-- `list_apps` - List apps in your Kernel organization with optional filtering
-- `invoke_action` - Execute actions in Kernel apps
-- `get_deployment` - Get deployment status and logs
-- `list_deployments` - List all deployments with optional filtering
-- `get_invocation` - Get action invocation details
-
-### Documentation & Search
-
-- `search_docs` - Search Kernel platform documentation and guides
+- `computer_action` - Mouse, keyboard, and screenshot controls for browser sessions (click, type, press_key, scroll, move, get_position, screenshot).
+- `execute_playwright_code` - Execute Playwright/TypeScript code against a browser with automatic video replay and cleanup.
+- `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
+- `search_docs` - Search Kernel platform documentation and guides.
 
 ## Resources
 
 - `browsers://` - Access browser sessions (list all or get specific session)
+- `browser_pools://` - Access browser pools (list all or get specific pool)
 - `profiles://` - Access browser profiles (list all or get specific profile)
 - `apps://` - Access deployed apps (list all or get specific app)
 
