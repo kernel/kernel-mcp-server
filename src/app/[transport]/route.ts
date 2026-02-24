@@ -1726,269 +1726,210 @@ Based on your issue "${issue_description}", start with:
     },
   );
 
-  // computer_action -- Mouse, keyboard, and screenshot controls for browser sessions
+  // computer_action -- Execute one or more computer actions on a browser session
   server.tool(
     "computer_action",
-    'Interact with a browser session at the OS level. Actions: "click" (mouse click), "type" (type text), "press_key" (keyboard keys/combos), "scroll" (mouse wheel), "move" (move cursor), "get_position" (cursor position), "screenshot" (capture page image).',
+    'Execute computer actions on a browser session. Pass a single action for simple operations (e.g. one click or one screenshot), or pass multiple actions to batch them into a single request for lower latency (e.g. click, type, press_key in one call). Use sleep actions between steps when the page needs time to react (e.g. after a click that triggers navigation or animation). Action types: click_mouse, move_mouse, type_text, press_key, scroll, drag_mouse, set_cursor, sleep, screenshot, get_mouse_position. screenshot and get_mouse_position return data, so they must be the last action if included.',
     {
       session_id: z.string().describe("Browser session ID."),
-      action: z
-        .enum([
-          "click",
-          "type",
-          "press_key",
-          "scroll",
-          "move",
-          "get_position",
-          "screenshot",
-        ])
-        .describe("Action to perform."),
-      x: z
-        .number()
-        .describe("(click, scroll, move, screenshot region) X coordinate.")
-        .optional(),
-      y: z
-        .number()
-        .describe("(click, scroll, move, screenshot region) Y coordinate.")
-        .optional(),
-      text: z.string().describe("(type) Text to type.").optional(),
-      keys: z
-        .array(z.string())
-        .describe(
-          '(press_key) Keys to press. X11 keysym names or combos like "Ctrl+t", "Return".',
+      actions: z
+        .array(
+          z.object({
+            type: z
+              .enum([
+                "click_mouse",
+                "move_mouse",
+                "type_text",
+                "press_key",
+                "scroll",
+                "drag_mouse",
+                "set_cursor",
+                "sleep",
+                "screenshot",
+                "get_mouse_position",
+              ])
+              .describe("Action type."),
+            click_mouse: z
+              .object({
+                x: z.number(),
+                y: z.number(),
+                button: z.enum(["left", "right", "middle"]).optional(),
+                click_type: z.enum(["down", "up", "click"]).optional(),
+                num_clicks: z.number().optional(),
+                hold_keys: z.array(z.string()).optional(),
+              })
+              .describe('Params for click_mouse action.')
+              .optional(),
+            move_mouse: z
+              .object({
+                x: z.number(),
+                y: z.number(),
+                hold_keys: z.array(z.string()).optional(),
+              })
+              .describe('Params for move_mouse action.')
+              .optional(),
+            type_text: z
+              .object({
+                text: z.string(),
+                delay: z.number().optional(),
+              })
+              .describe('Params for type_text action.')
+              .optional(),
+            press_key: z
+              .object({
+                keys: z.array(z.string()).describe('X11 keysym names or combos like "Ctrl+t", "Return".'),
+                duration: z.number().optional(),
+                hold_keys: z.array(z.string()).optional(),
+              })
+              .describe('Params for press_key action.')
+              .optional(),
+            scroll: z
+              .object({
+                x: z.number(),
+                y: z.number(),
+                delta_x: z.number().describe("Positive=right, negative=left.").optional(),
+                delta_y: z.number().describe("Positive=down, negative=up.").optional(),
+                hold_keys: z.array(z.string()).optional(),
+              })
+              .describe('Params for scroll action.')
+              .optional(),
+            drag_mouse: z
+              .object({
+                path: z.array(z.array(z.number())).describe("Ordered [x,y] pairs, at least 2 points."),
+                button: z.enum(["left", "middle", "right"]).optional(),
+                delay: z.number().optional(),
+                steps_per_segment: z.number().optional(),
+                step_delay_ms: z.number().optional(),
+                hold_keys: z.array(z.string()).optional(),
+              })
+              .describe('Params for drag_mouse action.')
+              .optional(),
+            set_cursor: z
+              .object({
+                hidden: z.boolean(),
+              })
+              .describe('Params for set_cursor action.')
+              .optional(),
+            sleep: z
+              .object({
+                duration_ms: z.number(),
+              })
+              .describe('Params for sleep action.')
+              .optional(),
+            screenshot: z
+              .object({
+                region: z
+                  .object({
+                    x: z.number(),
+                    y: z.number(),
+                    width: z.number(),
+                    height: z.number(),
+                  })
+                  .optional(),
+              })
+              .describe('Params for screenshot action. Omit or pass {} for full-page screenshot.')
+              .optional(),
+          }),
         )
-        .optional(),
-      button: z
-        .enum(["left", "right", "middle"])
-        .describe("(click) Mouse button. Default left.")
-        .optional(),
-      num_clicks: z
-        .number()
-        .describe("(click) Click count (2 for double-click). Default 1.")
-        .optional(),
-      hold_keys: z
-        .array(z.string())
-        .describe("(click, press_key) Modifier keys to hold.")
-        .optional(),
-      delay: z
-        .number()
-        .describe("(type) Delay in ms between keystrokes.")
-        .optional(),
-      duration: z
-        .number()
-        .describe("(press_key) Hold duration in ms. Omit to tap.")
-        .optional(),
-      delta_x: z
-        .number()
-        .describe("(scroll) Horizontal scroll. Positive=right, negative=left.")
-        .optional(),
-      delta_y: z
-        .number()
-        .describe("(scroll) Vertical scroll. Positive=down, negative=up.")
-        .optional(),
-      width: z
-        .number()
-        .describe("(screenshot) Region capture width. Requires x, y, height.")
-        .optional(),
-      height: z
-        .number()
-        .describe("(screenshot) Region capture height. Requires x, y, width.")
-        .optional(),
+        .describe("Ordered list of actions. Use one action for simple operations or multiple for batched sequences."),
     },
-    async (params, extra) => {
+    async ({ session_id, actions }, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);
 
       try {
-        switch (params.action) {
-          case "click": {
-            if (params.x === undefined || params.y === undefined)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: x and y are required for click.",
-                  },
-                ],
-              };
-            await client.browsers.computer.clickMouse(params.session_id, {
-              x: params.x,
-              y: params.y,
-              ...(params.button && { button: params.button }),
-              ...(params.num_clicks !== undefined && {
-                num_clicks: params.num_clicks,
-              }),
-              ...(params.hold_keys && { hold_keys: params.hold_keys }),
-            });
-            return {
-              content: [
-                { type: "text", text: `Clicked at (${params.x}, ${params.y})` },
-              ],
-            };
-          }
-          case "type": {
-            if (!params.text)
-              return {
-                content: [
-                  { type: "text", text: "Error: text is required for type." },
-                ],
-              };
-            await client.browsers.computer.typeText(params.session_id, {
-              text: params.text,
-              ...(params.delay !== undefined && { delay: params.delay }),
-            });
-            return {
-              content: [{ type: "text", text: `Typed: "${params.text}"` }],
-            };
-          }
-          case "press_key": {
-            if (!params.keys?.length)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: keys is required for press_key.",
-                  },
-                ],
-              };
-            await client.browsers.computer.pressKey(params.session_id, {
-              keys: params.keys,
-              ...(params.hold_keys && { hold_keys: params.hold_keys }),
-              ...(params.duration !== undefined && {
-                duration: params.duration,
-              }),
-            });
+        const lastAction = actions[actions.length - 1];
+        const hasTrailingScreenshot = lastAction?.type === "screenshot";
+        const hasTrailingGetPosition = lastAction?.type === "get_mouse_position";
+        const hasTrailingSpecial = hasTrailingScreenshot || hasTrailingGetPosition;
+
+        // Validate: screenshot/get_mouse_position can only be the last action
+        for (let i = 0; i < actions.length - 1; i++) {
+          if (actions[i].type === "screenshot" || actions[i].type === "get_mouse_position") {
             return {
               content: [
                 {
                   type: "text",
-                  text: `Pressed keys: ${params.keys.join(", ")}`,
-                },
-              ],
-            };
-          }
-          case "scroll": {
-            if (params.x === undefined || params.y === undefined)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: x and y are required for scroll.",
-                  },
-                ],
-              };
-            await client.browsers.computer.scroll(params.session_id, {
-              x: params.x,
-              y: params.y,
-              ...(params.delta_x !== undefined && { delta_x: params.delta_x }),
-              ...(params.delta_y !== undefined && { delta_y: params.delta_y }),
-            });
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Scrolled at (${params.x}, ${params.y})`,
-                },
-              ],
-            };
-          }
-          case "move": {
-            if (params.x === undefined || params.y === undefined)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: x and y are required for move.",
-                  },
-                ],
-              };
-            await client.browsers.computer.moveMouse(params.session_id, {
-              x: params.x,
-              y: params.y,
-            });
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Moved mouse to (${params.x}, ${params.y})`,
-                },
-              ],
-            };
-          }
-          case "get_position": {
-            const position = await client.browsers.computer.getMousePosition(
-              params.session_id,
-            );
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(position, null, 2) },
-              ],
-            };
-          }
-          case "screenshot": {
-            const hasAnyRegion =
-              params.x !== undefined ||
-              params.y !== undefined ||
-              params.width !== undefined ||
-              params.height !== undefined;
-            const hasRegion =
-              params.x !== undefined &&
-              params.y !== undefined &&
-              params.width !== undefined &&
-              params.height !== undefined;
-            if (hasAnyRegion && !hasRegion) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: When specifying a region, all four parameters (x, y, width, height) must be provided.",
-                  },
-                ],
-              };
-            }
-            const screenshotOpts = hasRegion
-              ? {
-                  region: {
-                    x: params.x!,
-                    y: params.y!,
-                    width: params.width!,
-                    height: params.height!,
-                  },
-                }
-              : undefined;
-            const [screenshotResponse, browserInfo] = await Promise.all([
-              client.browsers.computer.captureScreenshot(
-                params.session_id,
-                screenshotOpts,
-              ),
-              client.browsers.retrieve(params.session_id),
-            ]);
-            const blob = await screenshotResponse.blob();
-            const buffer = Buffer.from(await blob.arrayBuffer());
-            const viewport = browserInfo.viewport;
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: viewport
-                    ? `Viewport: ${viewport.width}x${viewport.height}. Use these dimensions as the coordinate space for click, scroll, and move actions.`
-                    : "Could not determine viewport dimensions. Use manage_browsers with action 'get' to check the browser's viewport before clicking.",
-                },
-                {
-                  type: "image",
-                  data: buffer.toString("base64"),
-                  mimeType: "image/png",
+                  text: `Error: ${actions[i].type} must be the last action in the sequence.`,
                 },
               ],
             };
           }
         }
+
+        const batchActions = hasTrailingSpecial ? actions.slice(0, -1) : actions;
+
+        if (batchActions.length > 0) {
+          await client.browsers.computer.batch(session_id, {
+            actions: batchActions as Parameters<
+              typeof client.browsers.computer.batch
+            >[1]["actions"],
+          });
+        }
+
+        if (hasTrailingScreenshot) {
+          const screenshotParams = lastAction.screenshot;
+          const screenshotOpts = screenshotParams?.region
+            ? { region: screenshotParams.region }
+            : undefined;
+          const [screenshotResponse, browserInfo] = await Promise.all([
+            client.browsers.computer.captureScreenshot(session_id, screenshotOpts),
+            client.browsers.retrieve(session_id),
+          ]);
+          const blob = await screenshotResponse.blob();
+          const buffer = Buffer.from(await blob.arrayBuffer());
+          const viewport = browserInfo.viewport;
+          const content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
+          if (batchActions.length > 0) {
+            content.push({
+              type: "text",
+              text: `Executed ${batchActions.length} action(s), then captured screenshot.`,
+            });
+          }
+          content.push({
+            type: "text",
+            text: viewport
+              ? `Viewport: ${viewport.width}x${viewport.height}. Use these dimensions as the coordinate space for click, scroll, and move actions.`
+              : "Could not determine viewport dimensions. Use manage_browsers with action 'get' to check the browser's viewport.",
+          });
+          content.push({
+            type: "image",
+            data: buffer.toString("base64"),
+            mimeType: "image/png",
+          });
+          return { content };
+        }
+
+        if (hasTrailingGetPosition) {
+          const position = await client.browsers.computer.getMousePosition(session_id);
+          const content: Array<{ type: "text"; text: string }> = [];
+          if (batchActions.length > 0) {
+            content.push({
+              type: "text",
+              text: `Executed ${batchActions.length} action(s).`,
+            });
+          }
+          content.push({
+            type: "text",
+            text: JSON.stringify(position, null, 2),
+          });
+          return { content };
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Executed ${actions.length} action(s) successfully`,
+            },
+          ],
+        };
       } catch (error) {
         return {
           content: [
             {
               type: "text",
-              text: `Error in computer_action (${params.action}): ${error instanceof Error ? error.message : String(error)}`,
+              text: `Error in computer_action: ${error instanceof Error ? error.message : String(error)}`,
             },
           ],
         };
