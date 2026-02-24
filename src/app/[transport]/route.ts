@@ -826,6 +826,12 @@ Based on your issue "${issue_description}", start with:
                 ],
               };
             const browser = await client.browsers.retrieve(params.session_id);
+            if (!browser)
+              return {
+                content: [
+                  { type: "text", text: `Browser session "${params.session_id}" not found` },
+                ],
+              };
             return {
               content: [
                 { type: "text", text: JSON.stringify(browser, null, 2) },
@@ -925,6 +931,12 @@ Based on your issue "${issue_description}", start with:
               profile = await client.profiles.create({
                 name: params.profile_name,
               });
+              if (!profile)
+                return {
+                  content: [
+                    { type: "text", text: "Failed to create profile" },
+                  ],
+                };
               isNewProfile = true;
             }
 
@@ -933,6 +945,12 @@ Based on your issue "${issue_description}", start with:
               timeout_seconds: 300,
               profile: { name: params.profile_name, save_changes: true },
             });
+            if (!browser)
+              return {
+                content: [
+                  { type: "text", text: "Failed to create browser for profile setup" },
+                ],
+              };
 
             return {
               content: [
@@ -1105,6 +1123,12 @@ Based on your issue "${issue_description}", start with:
                 fill_rate_per_minute: params.fill_rate_per_minute,
               }),
             });
+            if (!pool)
+              return {
+                content: [
+                  { type: "text", text: "Failed to create browser pool" },
+                ],
+              };
             return {
               content: [{ type: "text", text: JSON.stringify(pool, null, 2) }],
             };
@@ -1134,6 +1158,12 @@ Based on your issue "${issue_description}", start with:
                 ],
               };
             const pool = await client.browserPools.retrieve(params.id_or_name);
+            if (!pool)
+              return {
+                content: [
+                  { type: "text", text: `Browser pool "${params.id_or_name}" not found` },
+                ],
+              };
             return {
               content: [{ type: "text", text: JSON.stringify(pool, null, 2) }],
             };
@@ -1195,6 +1225,12 @@ Based on your issue "${issue_description}", start with:
                 }),
               },
             );
+            if (!browser)
+              return {
+                content: [
+                  { type: "text", text: "Failed to acquire browser from pool" },
+                ],
+              };
             return {
               content: [
                 { type: "text", text: JSON.stringify(browser, null, 2) },
@@ -1346,6 +1382,12 @@ Based on your issue "${issue_description}", start with:
                     }),
                   };
             const proxy = await client.proxies.create(createParams);
+            if (!proxy)
+              return {
+                content: [
+                  { type: "text", text: "Failed to create proxy" },
+                ],
+              };
             return {
               content: [{ type: "text", text: JSON.stringify(proxy, null, 2) }],
             };
@@ -1609,6 +1651,12 @@ Based on your issue "${issue_description}", start with:
             const deployment = await client.deployments.retrieve(
               params.deployment_id,
             );
+            if (!deployment)
+              return {
+                content: [
+                  { type: "text", text: `Deployment "${params.deployment_id}" not found` },
+                ],
+              };
             return {
               content: [
                 { type: "text", text: JSON.stringify(deployment, null, 2) },
@@ -1652,6 +1700,12 @@ Based on your issue "${issue_description}", start with:
             const invocation = await client.invocations.retrieve(
               params.invocation_id,
             );
+            if (!invocation)
+              return {
+                content: [
+                  { type: "text", text: `Invocation "${params.invocation_id}" not found` },
+                ],
+              };
             return {
               content: [
                 { type: "text", text: JSON.stringify(invocation, null, 2) },
