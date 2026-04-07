@@ -1,7 +1,7 @@
 import {
   createMcpHandler,
   experimental_withMcpAuth as withMcpAuth,
-} from "@vercel/mcp-adapter";
+} from "mcp-handler";
 import { verifyToken } from "@clerk/nextjs/server";
 import { NextRequest } from "next/server";
 import { Kernel } from "@onkernel/sdk";
