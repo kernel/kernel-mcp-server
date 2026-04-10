@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.next/
+out/
+bun.lock
+package-lock.json
+**/*.test.ts
+**/*.spec.ts
