@@ -18,15 +18,13 @@ const handler = async (request: NextRequest) => {
     );
   }
 
-  const clerkBaseUrl = `https://${clerkDomain}`;
-
   const modifiedMetadata: Record<string, unknown> = {
     ...clerkMetadata,
     resource: baseUrl,
     authorization_servers: [baseUrl],
     authorization_endpoint: `${baseUrl}/authorize`,
     token_endpoint: `${baseUrl}/token`,
-    registration_endpoint: `${clerkBaseUrl}/oauth/register`,
+    registration_endpoint: `${baseUrl}/register`,
     scopes_supported: ["openid"],
   };
 
