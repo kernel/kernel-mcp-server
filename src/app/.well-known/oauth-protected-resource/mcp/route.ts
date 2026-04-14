@@ -9,14 +9,6 @@ const handler = async (request: NextRequest) => {
   const clerkMetadata = await clerkResponse.json();
 
   const baseUrl = `${request.nextUrl.protocol}//${request.nextUrl.host}`;
-  const clerkDomain = process.env.NEXT_PUBLIC_CLERK_DOMAIN;
-
-  if (!clerkDomain) {
-    return Response.json(
-      { error: "server_error", error_description: "Clerk domain not found" },
-      { status: 500 },
-    );
-  }
 
   const modifiedMetadata: Record<string, unknown> = {
     ...clerkMetadata,
