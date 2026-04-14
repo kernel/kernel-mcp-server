@@ -1,0 +1,17 @@
+name: Semgrep
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  scan:
+    uses: kernel/security-workflows/.github/workflows/semgrep.yml@main
+    with:
+      extra-configs: '--config p/javascript --config p/typescript'
+      codebase-description: 'Hosted MCP server handling authenticated tool execution and browser session data'
+    secrets: inherit
