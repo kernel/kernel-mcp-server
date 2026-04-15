@@ -18,14 +18,18 @@ const ibmPlexMono = IBM_Plex_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'Kernel',
-  description: 'Authorize access to Kernel platform tools and browser automation capabilities.',
+  title: 'Kernel MCP Server',
+  description: 'A Model Context Protocol (MCP) server that provides AI assistants with secure access to Kernel platform tools and browser automation capabilities.',
   keywords: [
-    'Kernel',
     'MCP',
+    'Model Context Protocol',
+    'Kernel',
     'browser automation',
     'AI assistants',
-    'OAuth',
+    'cloud deployment',
+    'web automation',
+    'Chromium',
+    'headless browser',
   ],
   icons: {
     icon: [

@@ -27,6 +27,7 @@ function SelectOrgContent(): React.ReactElement {
   // Check if we just returned from org creation and reload to get fresh data
   useEffect(() => {
     if (searchParams.get('org_created') === 'true') {
+      // Remove the flag from URL and reload to get fresh organization data
       const newUrl = new URL(window.location.href);
       newUrl.searchParams.delete('org_created');
       window.location.href = newUrl.toString();
@@ -71,12 +72,15 @@ function SelectOrgContent(): React.ReactElement {
     try {
       await setActive({ organization: selectedOrgId });
 
+      // After setting active org, redirect back to authorize
       const authorizeUrl = new URL('/authorize', window.location.origin);
 
+      // Add all original OAuth parameters
       Object.entries(originalParams).forEach(([key, value]) => {
         if (value) authorizeUrl.searchParams.set(key, value);
       });
 
+      // Add the selected orgId as a parameter
       authorizeUrl.searchParams.set('org_id', selectedOrgId);
 
       router.push(authorizeUrl.toString());
@@ -96,10 +100,11 @@ function SelectOrgContent(): React.ReactElement {
     );
   }
 
-  // No organizations — show create flow
+  // Check if user has any organizations (only after loaded)
   if (isLoaded && !userMemberships?.isLoading && (!userMemberships?.data || userMemberships.data.length === 0)) {
     return (
       <Col className="min-h-screen items-center justify-center">
+        {/* User button in top-right corner */}
         <div className="absolute top-6 right-6">
           <UserButton
             afterSignOutUrl={`/select-org?${searchParams.toString()}`}
@@ -128,6 +133,7 @@ function SelectOrgContent(): React.ReactElement {
 
   return (
     <Col className="min-h-screen items-center justify-center">
+      {/* User button in top-right corner */}
       <div className="absolute top-6 right-6">
         <UserButton
           afterSignOutUrl={`/select-org?${searchParams.toString()}`}
@@ -150,6 +156,7 @@ function SelectOrgContent(): React.ReactElement {
           >
             {(userMemberships?.data || user?.organizationMemberships)
               ?.sort((a, b) => {
+                // Put the currently active org first
                 if (a.organization.id === orgId) return -1;
                 if (b.organization.id === orgId) return 1;
                 return 0;
@@ -196,6 +203,7 @@ function SelectOrgContent(): React.ReactElement {
             })}
           </div>
 
+          {/* Fade overlays to indicate scrollability */}
           {canScrollUp && (
             <div className="absolute top-0 left-0 right-0 h-6 bg-gradient-to-b from-[#faf9f2] to-transparent pointer-events-none" />
           )}
