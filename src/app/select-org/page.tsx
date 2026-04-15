@@ -179,9 +179,9 @@ function SelectOrgContent(): React.ReactElement {
                     )}
                     <Col className="flex-1 gap-1">
                       <Row className="justify-between items-center">
-                        <span className="font-normal text-sm text-foreground">{membership.organization.name}</span>
+                        <span className="font-light text-sm text-foreground">{membership.organization.name}</span>
                         {isCurrentlyActive && (
-                          <span className="text-[10px] uppercase tracking-wide border-[0.5px] border-foreground px-2 py-0.5">
+                          <span className="text-[10px] font-[350] uppercase tracking-normal border-[0.5px] border-foreground px-2 py-0.5">
                             active
                           </span>
                         )}
@@ -205,7 +205,7 @@ function SelectOrgContent(): React.ReactElement {
         <button
           onClick={handleConfirm}
           disabled={isSelecting || !selectedOrgId}
-          className="w-full bg-foreground text-background py-3 px-4 font-light text-sm hover:underline hover:decoration-[0.5px] hover:underline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-opacity"
+          className="w-full bg-foreground text-background py-3 px-4 font-[250] text-sm hover:underline hover:decoration-[0.5px] hover:underline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-opacity"
         >
           {isSelecting ? (
             <Row className="items-center justify-center gap-2">

@@ -5,7 +5,6 @@ import { ThemeProvider } from 'next-themes'
 import './globals.css'
 
 const inter = Inter({
-  weight: ['300', '400', '500', '600'],
   variable: '--font-inter',
   subsets: ['latin'],
   display: 'optional',
@@ -70,8 +69,9 @@ export default function RootLayout({
           formButtonPrimary: {
             backgroundColor: '#1c2024',
             color: '#f2f0e7',
-            fontWeight: '300',
+            fontWeight: '250',
             borderRadius: '0px',
+            letterSpacing: '0.3px',
             textTransform: 'lowercase' as const,
           },
           formFieldInput: {
@@ -84,11 +84,13 @@ export default function RootLayout({
           },
           headerTitle: {
             textTransform: 'lowercase' as const,
-            fontWeight: '300',
+            fontWeight: '250',
+            letterSpacing: '0.5px',
           },
           headerSubtitle: {
             textTransform: 'lowercase' as const,
-            fontWeight: '300',
+            fontWeight: '250',
+            letterSpacing: '0.3px',
           },
           socialButtonsBlockButton: {
             border: '0.5px solid #1c2024',

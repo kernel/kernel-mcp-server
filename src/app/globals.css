@@ -88,8 +88,9 @@
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
-    font-weight: 300;
+    font-weight: 250;
     line-height: 1.2;
+    letter-spacing: 0.3px;
     text-transform: lowercase;
     font-feature-settings: 'liga' off, 'clig' off;
     -webkit-font-smoothing: antialiased;
@@ -99,7 +100,7 @@
     text-transform: none;
   }
   h1, h2, h3, h4, h5, h6 {
-    font-weight: 300;
+    font-weight: 250;
     line-height: 1.2;
   }
   a:hover {
