@@ -30,12 +30,12 @@
 }
 
 :root {
-  --radius: 0.5rem;
+  --radius: 0px;
   --background: #f2f0e7;
   --foreground: #1c2024;
-  --card: #faf9f2;
+  --card: #f2f0e7;
   --card-foreground: #1c2024;
-  --popover: #faf9f2;
+  --popover: #f2f0e7;
   --popover-foreground: #1c2024;
   --primary: #81b300;
   --primary-foreground: #1c2024;
@@ -46,17 +46,17 @@
   --accent: #f0f0f3;
   --accent-foreground: #1c2024;
   --destructive: #dc3545;
-  --border: rgba(28, 32, 36, 0.15);
-  --input: rgba(28, 32, 36, 0.15);
+  --border: #1c2024;
+  --input: #1c2024;
   --ring: #81b300;
 }
 
 .dark {
   --background: #212225;
   --foreground: #edeef0;
-  --card: #2a2b2e;
+  --card: #212225;
   --card-foreground: #edeef0;
-  --popover: #2a2b2e;
+  --popover: #212225;
   --popover-foreground: #edeef0;
   --primary: #81b300;
   --primary-foreground: #212225;
@@ -67,8 +67,8 @@
   --accent: #333437;
   --accent-foreground: #edeef0;
   --destructive: #dc3545;
-  --border: rgba(237, 238, 240, 0.1);
-  --input: rgba(237, 238, 240, 0.12);
+  --border: #edeef0;
+  --input: #edeef0;
   --ring: #81b300;
 }
 
@@ -90,12 +90,22 @@
     font-family: var(--font-sans);
     font-weight: 300;
     line-height: 1.2;
+    text-transform: lowercase;
+    font-feature-settings: 'liga' off, 'clig' off;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+  input, textarea, [data-preserve-case] {
+    text-transform: none;
   }
   h1, h2, h3, h4, h5, h6 {
     font-weight: 300;
     line-height: 1.2;
+  }
+  a:hover {
+    text-decoration: underline;
+    text-decoration-thickness: 0.5px;
+    text-underline-offset: 2px;
   }
   ::selection {
     background-color: #81b300;
@@ -109,7 +119,7 @@
   font-family: var(--font-sans);
 }
 .toaster [data-sonner-toast] {
-  @apply border border-border rounded-lg shadow-md;
+  @apply border border-border shadow-md;
   padding: 0.875rem !important;
 }
 .toaster [data-sonner-toast][data-type="success"] [data-icon] {

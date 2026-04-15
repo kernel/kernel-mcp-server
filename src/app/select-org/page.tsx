@@ -27,7 +27,6 @@ function SelectOrgContent(): React.ReactElement {
   // Check if we just returned from org creation and reload to get fresh data
   useEffect(() => {
     if (searchParams.get('org_created') === 'true') {
-      // Remove the flag from URL and reload to get fresh organization data
       const newUrl = new URL(window.location.href);
       newUrl.searchParams.delete('org_created');
       window.location.href = newUrl.toString();
@@ -72,20 +71,15 @@ function SelectOrgContent(): React.ReactElement {
     try {
       await setActive({ organization: selectedOrgId });
 
-      // After setting active org, redirect back to authorize
       const authorizeUrl = new URL('/authorize', window.location.origin);
 
-      // Add all original OAuth parameters
       Object.entries(originalParams).forEach(([key, value]) => {
         if (value) authorizeUrl.searchParams.set(key, value);
       });
 
-      // Add the selected orgId as a parameter
       authorizeUrl.searchParams.set('org_id', selectedOrgId);
 
-      const redirectUri = authorizeUrl.toString();
-
-      router.push(redirectUri);
+      router.push(authorizeUrl.toString());
     } catch (error) {
       console.error('Failed to set active organization:', error);
       setIsSelecting(false);
@@ -103,12 +97,11 @@ function SelectOrgContent(): React.ReactElement {
     );
   }
 
-  // Check if user has any organizations (only after loaded)
+  // No organizations — show create flow
   if (isLoaded && !userMemberships?.isLoading && (!userMemberships?.data || userMemberships.data.length === 0)) {
     return (
       <Col className="min-h-screen items-center justify-center">
-        {/* User button in top-right corner */}
-        <div className="absolute top-4 right-4">
+        <div className="absolute top-6 right-6">
           <UserButton
             afterSignOutUrl={`/select-org?${searchParams.toString()}`}
           />
@@ -136,8 +129,7 @@ function SelectOrgContent(): React.ReactElement {
 
   return (
     <Col className="min-h-screen items-center justify-center">
-      {/* User button in top-right corner */}
-      <div className="absolute top-4 right-4">
+      <div className="absolute top-6 right-6">
         <UserButton
           afterSignOutUrl={`/select-org?${searchParams.toString()}`}
         />
@@ -155,11 +147,10 @@ function SelectOrgContent(): React.ReactElement {
           <div
             ref={scrollContainerRef}
             onScroll={updateScrollState}
-            className="flex flex-col gap-2 max-h-60 overflow-y-auto"
+            className="flex flex-col gap-0 max-h-64 overflow-y-auto"
           >
             {(userMemberships?.data || user?.organizationMemberships)
               ?.sort((a, b) => {
-                // Put the currently active org first
                 if (a.organization.id === orgId) return -1;
                 if (b.organization.id === orgId) return 1;
                 return 0;
@@ -172,10 +163,10 @@ function SelectOrgContent(): React.ReactElement {
                   key={membership.organization.id}
                   onClick={() => handleOrgSelect(membership.organization.id)}
                   disabled={isSelecting}
-                  className={`w-full p-4 text-left rounded-lg transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                  className={`w-full p-4 text-left transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed border-[0.5px] border-foreground -mt-[0.5px] first:mt-0 ${
                     isSelected
-                      ? 'bg-primary/10 border border-primary/40'
-                      : 'border border-border hover:border-primary/30 hover:bg-primary/5'
+                      ? 'bg-primary/10'
+                      : 'hover:bg-primary/5'
                   }`}
                 >
                   <Row className="gap-3">
@@ -183,14 +174,14 @@ function SelectOrgContent(): React.ReactElement {
                       <img
                         src={membership.organization.imageUrl}
                         alt={membership.organization.name}
-                        className="w-10 h-10 rounded-lg"
+                        className="w-10 h-10"
                       />
                     )}
                     <Col className="flex-1 gap-1">
                       <Row className="justify-between items-center">
                         <span className="font-normal text-sm text-foreground">{membership.organization.name}</span>
                         {isCurrentlyActive && (
-                          <span className="text-xs bg-primary/15 text-primary px-2 py-0.5 rounded-full">
+                          <span className="text-[10px] uppercase tracking-wide border-[0.5px] border-foreground px-2 py-0.5">
                             active
                           </span>
                         )}
@@ -203,23 +194,22 @@ function SelectOrgContent(): React.ReactElement {
             })}
           </div>
 
-          {/* Fade overlays to indicate scrollability */}
           {canScrollUp && (
-            <div className="absolute top-0 left-0 right-0 h-4 bg-gradient-to-b from-background to-transparent pointer-events-none" />
+            <div className="absolute top-0 left-0 right-0 h-6 bg-gradient-to-b from-background to-transparent pointer-events-none" />
           )}
           {canScrollDown && (
-            <div className="absolute bottom-0 left-0 right-0 h-4 bg-gradient-to-t from-background to-transparent pointer-events-none" />
+            <div className="absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-background to-transparent pointer-events-none" />
           )}
         </div>
 
         <button
           onClick={handleConfirm}
           disabled={isSelecting || !selectedOrgId}
-          className="w-full bg-primary text-primary-foreground py-3 px-4 rounded-lg font-normal text-sm hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-opacity"
+          className="w-full bg-foreground text-background py-3 px-4 font-light text-sm hover:underline hover:decoration-[0.5px] hover:underline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-opacity"
         >
           {isSelecting ? (
             <Row className="items-center justify-center gap-2">
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-foreground"></div>
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-background"></div>
               authorizing...
             </Row>
           ) : 'continue'}
