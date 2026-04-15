@@ -112,7 +112,7 @@ export default function RootLayout({
       }}
     >
       <html lang="en" suppressHydrationWarning>
-        <body className={`${inter.variable} ${ibmPlexMono.variable} font-sans`}>
+        <body className={`${inter.variable} ${ibmPlexMono.variable} font-sans overscroll-y-none`}>
           <ThemeProvider
             attribute="class"
             defaultTheme="light"
