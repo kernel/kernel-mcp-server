@@ -6,6 +6,7 @@ import { useState, Suspense, useEffect, useRef } from 'react';
 import { Col } from '@/components/col'
 import { Row } from '@/components/row'
 import { LoadingState } from '@/components/spinner/loading-state';
+import { KernelWordmark } from '@/components/icons';
 
 function SelectOrgContent(): React.ReactElement {
   const { isLoaded, setActive, userMemberships } = useOrganizationList({
@@ -65,25 +66,25 @@ function SelectOrgContent(): React.ReactElement {
 
   const handleConfirm = async (): Promise<void> => {
     if (!setActive || isSelecting || !selectedOrgId) return;
-    
+
     setIsSelecting(true);
-    
+
     try {
       await setActive({ organization: selectedOrgId });
-      
+
       // After setting active org, redirect back to authorize
       const authorizeUrl = new URL('/authorize', window.location.origin);
-      
+
       // Add all original OAuth parameters
       Object.entries(originalParams).forEach(([key, value]) => {
         if (value) authorizeUrl.searchParams.set(key, value);
       });
-      
+
       // Add the selected orgId as a parameter
       authorizeUrl.searchParams.set('org_id', selectedOrgId);
 
       const redirectUri = authorizeUrl.toString();
-      
+
       router.push(redirectUri);
     } catch (error) {
       console.error('Failed to set active organization:', error);
@@ -95,11 +96,11 @@ function SelectOrgContent(): React.ReactElement {
     return (
       <Col className="min-h-screen items-center justify-center">
         <Col className="text-center items-center gap-2">
-        <LoadingState />
-          <p className="text-muted-foreground">Loading your organizations...</p>
+          <LoadingState />
+          <p className="text-muted-foreground text-sm">loading your organizations...</p>
         </Col>
       </Col>
-    ); 
+    );
   }
 
   // Check if user has any organizations (only after loaded)
@@ -108,17 +109,19 @@ function SelectOrgContent(): React.ReactElement {
       <Col className="min-h-screen items-center justify-center">
         {/* User button in top-right corner */}
         <div className="absolute top-4 right-4">
-          <UserButton 
+          <UserButton
             afterSignOutUrl={`/select-org?${searchParams.toString()}`}
           />
         </div>
-        
-        <Col className="text-center max-w-md mx-auto p-6 gap-6">
-          <h1 className="text-2xl font-bold text-foreground">Create Organization</h1>
-          <p className="text-muted-foreground">
-            You need to be a member of at least one organization to continue with authorization.
-          </p>
-          <CreateOrganization 
+
+        <Col className="text-center max-w-md mx-auto p-8 gap-8">
+          <Col className="items-center gap-4">
+            <KernelWordmark className="text-foreground" width={100} height={22} />
+            <p className="text-muted-foreground text-sm">
+              you need to be a member of at least one organization to continue.
+            </p>
+          </Col>
+          <CreateOrganization
             afterCreateOrganizationUrl={(() => {
               const params = new URLSearchParams(searchParams.toString());
               params.set('org_created', 'true');
@@ -135,29 +138,24 @@ function SelectOrgContent(): React.ReactElement {
     <Col className="min-h-screen items-center justify-center">
       {/* User button in top-right corner */}
       <div className="absolute top-4 right-4">
-        <UserButton 
+        <UserButton
           afterSignOutUrl={`/select-org?${searchParams.toString()}`}
         />
       </div>
-      
-      <Col className="max-w-md w-full mx-auto p-6 bg-muted rounded-lg gap-6">
-        <Col className="text-center gap-2">
-          <h1 className="text-2xl font-bold text-foreground">Select Organization</h1>
-          <p className="text-muted-foreground">
-            Choose which organization you'd like to authorize access for.
+
+      <Col className="max-w-md w-full mx-auto p-8 gap-8">
+        <Col className="items-center gap-3">
+          <KernelWordmark className="text-foreground" width={100} height={22} />
+          <p className="text-muted-foreground text-sm">
+            select an organization to authorize access.
           </p>
-          {orgId && (
-            <p className="text-sm text-primary">
-              Currently active: {userMemberships?.data?.find(m => m.organization.id === orgId)?.organization.name || user?.organizationMemberships?.find(m => m.organization.id === orgId)?.organization.name || orgId}
-            </p>
-          )}
         </Col>
 
         <div className="relative">
-          <div 
+          <div
             ref={scrollContainerRef}
             onScroll={updateScrollState}
-            className="flex flex-col gap-3 max-h-60 overflow-y-auto scrollbar-thin scrollbar-thumb-border scrollbar-track-transparent"
+            className="flex flex-col gap-2 max-h-60 overflow-y-auto"
           >
             {(userMemberships?.data || user?.organizationMemberships)
               ?.sort((a, b) => {
@@ -174,60 +172,58 @@ function SelectOrgContent(): React.ReactElement {
                   key={membership.organization.id}
                   onClick={() => handleOrgSelect(membership.organization.id)}
                   disabled={isSelecting}
-                  className={`w-full p-4 text-left border rounded-lg transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-                    isSelected 
-                      ? 'border-primary bg-background' 
-                      : 'border-border hover:border-primary/50 hover:bg-accent/50'
+                  className={`w-full p-4 text-left rounded-lg transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                    isSelected
+                      ? 'bg-primary/10 border border-primary/40'
+                      : 'border border-border hover:border-primary/30 hover:bg-primary/5'
                   }`}
                 >
                   <Row className="gap-3">
                     {membership.organization.imageUrl && (
-                      <img 
-                        src={membership.organization.imageUrl} 
+                      <img
+                        src={membership.organization.imageUrl}
                         alt={membership.organization.name}
-                        className="w-10 h-10 rounded-full"
+                        className="w-10 h-10 rounded-lg"
                       />
                     )}
                     <Col className="flex-1 gap-1">
                       <Row className="justify-between items-center">
-                        <h3 className="font-medium text-foreground">{membership.organization.name}</h3>
+                        <span className="font-normal text-sm text-foreground">{membership.organization.name}</span>
                         {isCurrentlyActive && (
-                          <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded-full">
-                            Active
+                          <span className="text-xs bg-primary/15 text-primary px-2 py-0.5 rounded-full">
+                            active
                           </span>
                         )}
                       </Row>
-                      <p className="text-sm text-muted-foreground">{membership.organization.slug}</p>
+                      <span className="text-xs text-muted-foreground">{membership.organization.slug}</span>
                     </Col>
                   </Row>
                 </button>
               );
             })}
           </div>
-          
+
           {/* Fade overlays to indicate scrollability */}
           {canScrollUp && (
-            <div className="absolute top-0 left-0 right-0 h-4 bg-gradient-to-b from-muted to-transparent pointer-events-none" />
+            <div className="absolute top-0 left-0 right-0 h-4 bg-gradient-to-b from-background to-transparent pointer-events-none" />
           )}
           {canScrollDown && (
-            <div className="absolute bottom-0 left-0 right-0 h-4 bg-gradient-to-t from-muted to-transparent pointer-events-none" />
+            <div className="absolute bottom-0 left-0 right-0 h-4 bg-gradient-to-t from-background to-transparent pointer-events-none" />
           )}
         </div>
 
-        <Col className="gap-4">
-          <button
-            onClick={handleConfirm}
-            disabled={isSelecting || !selectedOrgId}
-            className="w-full bg-primary text-primary-foreground py-3 px-4 rounded-lg font-medium hover:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-opacity"
-          >
-            {isSelecting ? (
-              <Row className="items-center justify-center gap-2">
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-foreground"></div>
-                Setting Organization
-              </Row>
-            ) : 'Continue with Selected Organization'}
-          </button>
-        </Col>
+        <button
+          onClick={handleConfirm}
+          disabled={isSelecting || !selectedOrgId}
+          className="w-full bg-primary text-primary-foreground py-3 px-4 rounded-lg font-normal text-sm hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-opacity"
+        >
+          {isSelecting ? (
+            <Row className="items-center justify-center gap-2">
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary-foreground"></div>
+              authorizing...
+            </Row>
+          ) : 'continue'}
+        </button>
       </Col>
     </Col>
   );
@@ -236,9 +232,9 @@ function SelectOrgContent(): React.ReactElement {
 function LoadingFallback(): React.ReactElement {
   return (
     <Col className="min-h-screen items-center justify-center">
-      <Col className="text-center gap-2">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
-        <p className="text-muted-foreground">Loading...</p>
+      <Col className="text-center items-center gap-2">
+        <LoadingState />
+        <p className="text-muted-foreground text-sm">loading...</p>
       </Col>
     </Col>
   );
@@ -250,4 +246,4 @@ export default function SelectOrgPage(): React.ReactElement {
       <SelectOrgContent />
     </Suspense>
   );
-} 
+}

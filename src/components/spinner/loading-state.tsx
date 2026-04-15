@@ -11,7 +11,7 @@ export interface LoadingStateProps {
 export const LoadingState = ({ children, fullscreen }: LoadingStateProps) => {
   const spinner = (
     <Row className="gap-2">
-      <KernelIcon className="animate-spin duration-1000 -mt-24 object-contain" size={48} />
+      <KernelIcon className="animate-spin duration-1000 object-contain" size={48} />
       {children}
     </Row>
   );
