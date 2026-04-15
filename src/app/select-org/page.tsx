@@ -147,7 +147,7 @@ function SelectOrgContent(): React.ReactElement {
           <div
             ref={scrollContainerRef}
             onScroll={updateScrollState}
-            className="flex flex-col gap-0 max-h-64 overflow-y-auto overscroll-contain bg-[#faf9f2] border-[0.5px] border-[#e1dccf]"
+            className="flex flex-col gap-0 max-h-64 overflow-y-auto overscroll-y-none bg-[#faf9f2] border-[0.5px] border-[#e1dccf]"
           >
             {(userMemberships?.data || user?.organizationMemberships)
               ?.sort((a, b) => {
