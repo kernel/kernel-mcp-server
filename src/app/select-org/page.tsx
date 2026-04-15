@@ -89,10 +89,9 @@ function SelectOrgContent(): React.ReactElement {
   if (!isLoaded || userMemberships?.isLoading) {
     return (
       <Col className="min-h-screen items-center justify-center">
-        <Col className="text-center items-center gap-2">
-          <LoadingState />
+        <LoadingState>
           <p className="text-muted-foreground text-sm">loading your organizations...</p>
-        </Col>
+        </LoadingState>
       </Col>
     );
   }
@@ -225,10 +224,9 @@ function SelectOrgContent(): React.ReactElement {
 function LoadingFallback(): React.ReactElement {
   return (
     <Col className="min-h-screen items-center justify-center">
-      <Col className="text-center items-center gap-2">
-        <LoadingState />
+      <LoadingState>
         <p className="text-muted-foreground text-sm">loading...</p>
-      </Col>
+      </LoadingState>
     </Col>
   );
 }
