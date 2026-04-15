@@ -147,7 +147,7 @@ function SelectOrgContent(): React.ReactElement {
           <div
             ref={scrollContainerRef}
             onScroll={updateScrollState}
-            className="flex flex-col gap-0 max-h-64 overflow-y-auto"
+            className="flex flex-col gap-0 max-h-64 overflow-y-auto bg-[#faf9f2] border-[0.5px] border-[#e1dccf]"
           >
             {(userMemberships?.data || user?.organizationMemberships)
               ?.sort((a, b) => {
@@ -155,18 +155,21 @@ function SelectOrgContent(): React.ReactElement {
                 if (b.organization.id === orgId) return 1;
                 return 0;
               })
-              ?.map((membership) => {
+              ?.map((membership, index, arr) => {
               const isSelected = membership.organization.id === selectedOrgId;
               const isCurrentlyActive = membership.organization.id === orgId;
+              const isLast = index === arr.length - 1;
               return (
                 <button
                   key={membership.organization.id}
                   onClick={() => handleOrgSelect(membership.organization.id)}
                   disabled={isSelecting}
-                  className={`w-full p-4 text-left transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed border-[0.5px] border-foreground -mt-[0.5px] first:mt-0 ${
+                  className={`w-full p-4 text-left transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                    !isLast ? 'border-b-[0.5px] border-b-[#e1dccf]' : ''
+                  } ${
                     isSelected
                       ? 'bg-primary/10'
-                      : 'hover:bg-primary/5'
+                      : 'bg-[#faf9f2] hover:bg-primary/5'
                   }`}
                 >
                   <Row className="gap-3">
@@ -195,10 +198,10 @@ function SelectOrgContent(): React.ReactElement {
           </div>
 
           {canScrollUp && (
-            <div className="absolute top-0 left-0 right-0 h-6 bg-gradient-to-b from-background to-transparent pointer-events-none" />
+            <div className="absolute top-0 left-0 right-0 h-6 bg-gradient-to-b from-[#faf9f2] to-transparent pointer-events-none" />
           )}
           {canScrollDown && (
-            <div className="absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-background to-transparent pointer-events-none" />
+            <div className="absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-[#faf9f2] to-transparent pointer-events-none" />
           )}
         </div>
 
