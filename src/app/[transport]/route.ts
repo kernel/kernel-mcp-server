@@ -21,8 +21,7 @@ function createKernelClient(apiKey: string) {
     "X-Referral-Source": "mcp.onkernel.com",
   };
 
-  const projectId =
-    process.env.KERNEL_PROJECT || process.env.KERNEL_PROJECT_ID;
+  const projectId = process.env.KERNEL_PROJECT;
   if (projectId) {
     headers["X-Kernel-Project-Id"] = projectId;
   }
