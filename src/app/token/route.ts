@@ -88,8 +88,31 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const grantType = body.get("grant_type") as string;
     console.debug("[token] start", { grantType });
 
-    // Validate client_id (required for both flows)
-    const clientId = body.get("client_id") as string | null;
+    // Extract client_id from body or Authorization: Basic header
+    let clientId = body.get("client_id") as string | null;
+    let clientSecret = body.get("client_secret") as string | null;
+
+    if (!clientId) {
+      const authHeader = request.headers.get("authorization");
+      if (authHeader?.startsWith("Basic ")) {
+        try {
+          const decoded = atob(authHeader.slice(6));
+          const colonIdx = decoded.indexOf(":");
+          if (colonIdx !== -1) {
+            clientId = decodeURIComponent(decoded.slice(0, colonIdx));
+            clientSecret = decodeURIComponent(decoded.slice(colonIdx + 1));
+            params.set("client_id", clientId);
+            if (clientSecret) {
+              params.set("client_secret", clientSecret);
+            }
+            console.debug("[token] extracted client_id from Basic auth header");
+          }
+        } catch {
+          console.debug("[token] failed to decode Basic auth header");
+        }
+      }
+    }
+
     if (!clientId) {
       console.debug("[token] missing client_id");
       return createErrorResponse(
