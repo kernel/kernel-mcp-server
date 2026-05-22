@@ -301,7 +301,7 @@ Each Kernel feature has a single `manage_*` tool with an `action` parameter, kee
 ```
 Human: Run my web-scraper app to get data from reddit.com
 Assistant: I'll execute your web-scraper action with reddit.com as the target.
-[Uses invoke_action tool to run your deployed app in the cloud]
+[Uses manage_apps tool with action: "invoke" to run your deployed app in the cloud]
 ```
 
 ### Execute Playwright code dynamically
@@ -318,11 +318,11 @@ Returns: { success: true, result: "Example Domain", replay_url: "https://..." }
 ```
 Human: Set up a profile for my work accounts
 Assistant: I'll create a profile and guide you through the setup process.
-[Uses setup_profile tool]
+[Uses manage_profiles tool with action: "setup"]
 
 Human: I'm done setting up my accounts
 Assistant: Perfect! I'll close the browser session and save your profile.
-[Uses delete_browser tool to save profile]
+[Uses manage_browsers tool with action: "delete" to save profile]
 ```
 
 ### Debug a browser session
@@ -342,9 +342,9 @@ This is perfect for AI coding workflows where you need to preview local changes 
 
 ```
 Human: I'm working on a React app running on localhost:3000. I want to test it in a cloud browser.
-Assistant: I'll create a browser tunnel session for you.
-[Uses create_browser_tunnel tool with local_port: 3000]
-Returns: Session ID, live view URL, and tunnel connection command.
+Assistant: I'll create a browser session with SSH port forwarding for you.
+[Uses manage_browsers tool with action: "create" and remote_forward: "3000:localhost:3000"]
+Returns: Session ID, live view URL, and SSH tunnel command.
 ```
 
 ## 🤝 Contributing
