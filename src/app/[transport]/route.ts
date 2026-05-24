@@ -836,7 +836,10 @@ Based on your issue "${issue_description}", start with:
             if (!browser)
               return {
                 content: [
-                  { type: "text", text: `Browser session "${params.session_id}" not found` },
+                  {
+                    type: "text",
+                    text: `Browser session "${params.session_id}" not found`,
+                  },
                 ],
               };
             return {
@@ -940,9 +943,7 @@ Based on your issue "${issue_description}", start with:
               });
               if (!profile)
                 return {
-                  content: [
-                    { type: "text", text: "Failed to create profile" },
-                  ],
+                  content: [{ type: "text", text: "Failed to create profile" }],
                 };
               isNewProfile = true;
             }
@@ -955,7 +956,10 @@ Based on your issue "${issue_description}", start with:
             if (!browser)
               return {
                 content: [
-                  { type: "text", text: "Failed to create browser for profile setup" },
+                  {
+                    type: "text",
+                    text: "Failed to create browser for profile setup",
+                  },
                 ],
               };
 
@@ -1168,7 +1172,10 @@ Based on your issue "${issue_description}", start with:
             if (!pool)
               return {
                 content: [
-                  { type: "text", text: `Browser pool "${params.id_or_name}" not found` },
+                  {
+                    type: "text",
+                    text: `Browser pool "${params.id_or_name}" not found`,
+                  },
                 ],
               };
             return {
@@ -1391,9 +1398,7 @@ Based on your issue "${issue_description}", start with:
             const proxy = await client.proxies.create(createParams);
             if (!proxy)
               return {
-                content: [
-                  { type: "text", text: "Failed to create proxy" },
-                ],
+                content: [{ type: "text", text: "Failed to create proxy" }],
               };
             return {
               content: [{ type: "text", text: JSON.stringify(proxy, null, 2) }],
@@ -1661,7 +1666,10 @@ Based on your issue "${issue_description}", start with:
             if (!deployment)
               return {
                 content: [
-                  { type: "text", text: `Deployment "${params.deployment_id}" not found` },
+                  {
+                    type: "text",
+                    text: `Deployment "${params.deployment_id}" not found`,
+                  },
                 ],
               };
             return {
@@ -1710,7 +1718,10 @@ Based on your issue "${issue_description}", start with:
             if (!invocation)
               return {
                 content: [
-                  { type: "text", text: `Invocation "${params.invocation_id}" not found` },
+                  {
+                    type: "text",
+                    text: `Invocation "${params.invocation_id}" not found`,
+                  },
                 ],
               };
             return {
@@ -1736,7 +1747,7 @@ Based on your issue "${issue_description}", start with:
   // computer_action -- Execute one or more computer actions on a browser session
   server.tool(
     "computer_action",
-    'Execute computer actions on a browser session. Pass a single action for simple operations (e.g. one click or one screenshot), or pass multiple actions to batch them into a single request for lower latency (e.g. click, type, press_key in one call). Use sleep actions between steps when the page needs time to react (e.g. after a click that triggers navigation or animation). IMPORTANT: Always include a screenshot as the last action so you can see the result of your actions. Action types: click_mouse, move_mouse, type_text, press_key, scroll, drag_mouse, set_cursor, sleep, screenshot, get_mouse_position. screenshot and get_mouse_position return data, so they must be the last action if included.',
+    "Execute computer actions on a browser session. Pass a single action for simple operations (e.g. one click or one screenshot), or pass multiple actions to batch them into a single request for lower latency (e.g. click, type, press_key in one call). Use sleep actions between steps when the page needs time to react (e.g. after a click that triggers navigation or animation). IMPORTANT: Always include a screenshot as the last action so you can see the result of your actions. Action types: click_mouse, move_mouse, type_text, press_key, scroll, drag_mouse, set_cursor, sleep, screenshot, get_mouse_position. screenshot and get_mouse_position return data, so they must be the last action if included.",
     {
       session_id: z.string().describe("Browser session ID."),
       actions: z
@@ -1765,7 +1776,7 @@ Based on your issue "${issue_description}", start with:
                 num_clicks: z.number().optional(),
                 hold_keys: z.array(z.string()).optional(),
               })
-              .describe('Params for click_mouse action.')
+              .describe("Params for click_mouse action.")
               .optional(),
             move_mouse: z
               .object({
@@ -1773,55 +1784,67 @@ Based on your issue "${issue_description}", start with:
                 y: z.number(),
                 hold_keys: z.array(z.string()).optional(),
               })
-              .describe('Params for move_mouse action.')
+              .describe("Params for move_mouse action.")
               .optional(),
             type_text: z
               .object({
                 text: z.string(),
                 delay: z.number().optional(),
               })
-              .describe('Params for type_text action.')
+              .describe("Params for type_text action.")
               .optional(),
             press_key: z
               .object({
-                keys: z.array(z.string()).describe('X11 keysym names or combos like "Ctrl+t", "Return".'),
+                keys: z
+                  .array(z.string())
+                  .describe(
+                    'X11 keysym names or combos like "Ctrl+t", "Return".',
+                  ),
                 duration: z.number().optional(),
                 hold_keys: z.array(z.string()).optional(),
               })
-              .describe('Params for press_key action.')
+              .describe("Params for press_key action.")
               .optional(),
             scroll: z
               .object({
                 x: z.number(),
                 y: z.number(),
-                delta_x: z.number().describe("Positive=right, negative=left.").optional(),
-                delta_y: z.number().describe("Positive=down, negative=up.").optional(),
+                delta_x: z
+                  .number()
+                  .describe("Positive=right, negative=left.")
+                  .optional(),
+                delta_y: z
+                  .number()
+                  .describe("Positive=down, negative=up.")
+                  .optional(),
                 hold_keys: z.array(z.string()).optional(),
               })
-              .describe('Params for scroll action.')
+              .describe("Params for scroll action.")
               .optional(),
             drag_mouse: z
               .object({
-                path: z.array(z.array(z.number())).describe("Ordered [x,y] pairs, at least 2 points."),
+                path: z
+                  .array(z.array(z.number()))
+                  .describe("Ordered [x,y] pairs, at least 2 points."),
                 button: z.enum(["left", "middle", "right"]).optional(),
                 delay: z.number().optional(),
                 steps_per_segment: z.number().optional(),
                 step_delay_ms: z.number().optional(),
                 hold_keys: z.array(z.string()).optional(),
               })
-              .describe('Params for drag_mouse action.')
+              .describe("Params for drag_mouse action.")
               .optional(),
             set_cursor: z
               .object({
                 hidden: z.boolean(),
               })
-              .describe('Params for set_cursor action.')
+              .describe("Params for set_cursor action.")
               .optional(),
             sleep: z
               .object({
                 duration_ms: z.number(),
               })
-              .describe('Params for sleep action.')
+              .describe("Params for sleep action.")
               .optional(),
             screenshot: z
               .object({
@@ -1834,11 +1857,15 @@ Based on your issue "${issue_description}", start with:
                   })
                   .optional(),
               })
-              .describe('Params for screenshot action. Omit or pass {} for full-page screenshot.')
+              .describe(
+                "Params for screenshot action. Omit or pass {} for full-page screenshot.",
+              )
               .optional(),
           }),
         )
-        .describe("Ordered list of actions. Use one action for simple operations or multiple for batched sequences."),
+        .describe(
+          "Ordered list of actions. Use one action for simple operations or multiple for batched sequences.",
+        ),
     },
     async ({ session_id, actions }, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
@@ -1847,12 +1874,17 @@ Based on your issue "${issue_description}", start with:
       try {
         const lastAction = actions[actions.length - 1];
         const hasTrailingScreenshot = lastAction?.type === "screenshot";
-        const hasTrailingGetPosition = lastAction?.type === "get_mouse_position";
-        const hasTrailingSpecial = hasTrailingScreenshot || hasTrailingGetPosition;
+        const hasTrailingGetPosition =
+          lastAction?.type === "get_mouse_position";
+        const hasTrailingSpecial =
+          hasTrailingScreenshot || hasTrailingGetPosition;
 
         // Validate: screenshot/get_mouse_position can only be the last action
         for (let i = 0; i < actions.length - 1; i++) {
-          if (actions[i].type === "screenshot" || actions[i].type === "get_mouse_position") {
+          if (
+            actions[i].type === "screenshot" ||
+            actions[i].type === "get_mouse_position"
+          ) {
             return {
               content: [
                 {
@@ -1864,7 +1896,9 @@ Based on your issue "${issue_description}", start with:
           }
         }
 
-        const batchActions = hasTrailingSpecial ? actions.slice(0, -1) : actions;
+        const batchActions = hasTrailingSpecial
+          ? actions.slice(0, -1)
+          : actions;
 
         if (batchActions.length > 0) {
           await client.browsers.computer.batch(session_id, {
@@ -1880,13 +1914,19 @@ Based on your issue "${issue_description}", start with:
             ? { region: screenshotParams.region }
             : undefined;
           const [screenshotResponse, browserInfo] = await Promise.all([
-            client.browsers.computer.captureScreenshot(session_id, screenshotOpts),
+            client.browsers.computer.captureScreenshot(
+              session_id,
+              screenshotOpts,
+            ),
             client.browsers.retrieve(session_id),
           ]);
           const blob = await screenshotResponse.blob();
           const buffer = Buffer.from(await blob.arrayBuffer());
           const viewport = browserInfo.viewport;
-          const content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
+          const content: Array<
+            | { type: "text"; text: string }
+            | { type: "image"; data: string; mimeType: string }
+          > = [];
           if (batchActions.length > 0) {
             content.push({
               type: "text",
@@ -1908,7 +1948,8 @@ Based on your issue "${issue_description}", start with:
         }
 
         if (hasTrailingGetPosition) {
-          const position = await client.browsers.computer.getMousePosition(session_id);
+          const position =
+            await client.browsers.computer.getMousePosition(session_id);
           const content: Array<{ type: "text"; text: string }> = [];
           if (batchActions.length > 0) {
             content.push({
@@ -2123,6 +2164,451 @@ Based on your issue "${issue_description}", start with:
                 null,
                 2,
               ),
+            },
+          ],
+        };
+      }
+    },
+  );
+
+  // manage_auth_connections -- Manage Kernel managed auth connections
+  server.tool(
+    "manage_auth_connections",
+    'Manage Kernel managed auth connections for keeping a profile logged into a third-party site. Use "create" to start managing auth for a profile + domain (optionally referencing a stored credential), "login" to begin a login flow (returns a hosted_url to share with the user, plus live_view_url to watch), "submit" to provide field values or pick an MFA option when a flow is awaiting input, "get" to poll flow state, "list" to see connections, or "delete" to remove one. Agents do NOT store credentials here — credentials are pre-stored by humans and referenced by name.',
+    {
+      action: z
+        .enum(["create", "list", "get", "delete", "login", "submit"])
+        .describe("Operation to perform."),
+      id: z
+        .string()
+        .describe(
+          "Auth connection ID. Required for get, delete, login, submit.",
+        )
+        .optional(),
+      domain: z
+        .string()
+        .describe("(create) Target domain (e.g. 'netflix.com').")
+        .optional(),
+      profile_name: z
+        .string()
+        .describe(
+          "(create) Profile to manage auth for. (list) Filter by profile_name.",
+        )
+        .optional(),
+      allowed_domains: z
+        .array(z.string())
+        .describe(
+          "(create) Additional domains valid for this auth flow. Common SSO providers (Google, Microsoft, Okta, Auth0, Apple, GitHub, Facebook, LinkedIn, Cognito, OneLogin, Ping) are allowed by default.",
+        )
+        .optional(),
+      credential_name: z
+        .string()
+        .describe(
+          "(create) Name of a pre-stored Kernel credential to use for automatic login.",
+        )
+        .optional(),
+      credential_provider: z
+        .string()
+        .describe(
+          "(create) External credential provider name (e.g. '1password'). Use with credential_path or credential_auto.",
+        )
+        .optional(),
+      credential_path: z
+        .string()
+        .describe(
+          "(create) Provider-specific item path (e.g. 'VaultName/ItemName').",
+        )
+        .optional(),
+      credential_auto: z
+        .boolean()
+        .describe(
+          "(create) If true, the provider auto-looks up credentials by domain.",
+        )
+        .optional(),
+      login_url: z
+        .string()
+        .describe(
+          "(create) Optional explicit login page URL to skip discovery.",
+        )
+        .optional(),
+      health_check_interval: z
+        .number()
+        .describe(
+          "(create) Seconds between automatic re-auth checks. Plan-dependent minimum, max 86400.",
+        )
+        .optional(),
+      save_credentials: z
+        .boolean()
+        .describe(
+          "(create) Save credentials after each successful login. Default true.",
+        )
+        .optional(),
+      proxy_id: z
+        .string()
+        .describe("(create, login) Proxy ID to route the auth flow through.")
+        .optional(),
+      proxy_name: z
+        .string()
+        .describe("(create, login) Proxy name to route the auth flow through.")
+        .optional(),
+      domain_filter: z.string().describe("(list) Filter by domain.").optional(),
+      limit: z
+        .number()
+        .describe("(list) Max results per page. Default 50.")
+        .optional(),
+      offset: z
+        .number()
+        .describe("(list) Pagination offset. Default 0.")
+        .optional(),
+      fields: z
+        .record(z.string(), z.string())
+        .describe(
+          "(submit) Map of field name to value (e.g. { mfa_code: '123456' }). Look at discovered_fields from `get` to know what to provide.",
+        )
+        .optional(),
+      mfa_option_id: z
+        .string()
+        .describe(
+          "(submit) ID of the MFA option to use, from mfa_options on the connection.",
+        )
+        .optional(),
+      sso_button_selector: z
+        .string()
+        .describe(
+          "(submit) XPath of an SSO button to click instead of submitting fields.",
+        )
+        .optional(),
+    },
+    async (params, extra) => {
+      if (!extra.authInfo) throw new Error("Authentication required");
+      const client = createKernelClient(extra.authInfo.token);
+
+      const buildProxy = () =>
+        params.proxy_id || params.proxy_name
+          ? {
+              ...(params.proxy_id && { id: params.proxy_id }),
+              ...(params.proxy_name && { name: params.proxy_name }),
+            }
+          : undefined;
+
+      try {
+        switch (params.action) {
+          case "create": {
+            if (!params.domain || !params.profile_name) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: domain and profile_name are required for create.",
+                  },
+                ],
+              };
+            }
+            const credential =
+              params.credential_name ||
+              params.credential_provider ||
+              params.credential_path ||
+              params.credential_auto !== undefined
+                ? {
+                    ...(params.credential_name && {
+                      name: params.credential_name,
+                    }),
+                    ...(params.credential_provider && {
+                      provider: params.credential_provider,
+                    }),
+                    ...(params.credential_path && {
+                      path: params.credential_path,
+                    }),
+                    ...(params.credential_auto !== undefined && {
+                      auto: params.credential_auto,
+                    }),
+                  }
+                : undefined;
+            const proxy = buildProxy();
+            const connection = await client.auth.connections.create({
+              domain: params.domain,
+              profile_name: params.profile_name,
+              ...(params.allowed_domains && {
+                allowed_domains: params.allowed_domains,
+              }),
+              ...(credential && { credential }),
+              ...(params.login_url && { login_url: params.login_url }),
+              ...(params.health_check_interval !== undefined && {
+                health_check_interval: params.health_check_interval,
+              }),
+              ...(params.save_credentials !== undefined && {
+                save_credentials: params.save_credentials,
+              }),
+              ...(proxy && { proxy }),
+            });
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(connection, null, 2) },
+              ],
+            };
+          }
+          case "list": {
+            const page = await client.auth.connections.list({
+              ...(params.profile_name && { profile_name: params.profile_name }),
+              ...(params.domain_filter && { domain: params.domain_filter }),
+              ...(params.limit !== undefined && { limit: params.limit }),
+              ...(params.offset !== undefined && { offset: params.offset }),
+            });
+            const items = page.getPaginatedItems();
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    items.length > 0
+                      ? JSON.stringify(
+                          {
+                            items,
+                            has_more: page.has_more,
+                            next_offset: page.next_offset,
+                          },
+                          null,
+                          2,
+                        )
+                      : "No auth connections found",
+                },
+              ],
+            };
+          }
+          case "get": {
+            if (!params.id)
+              return {
+                content: [
+                  { type: "text", text: "Error: id is required for get." },
+                ],
+              };
+            const connection = await client.auth.connections.retrieve(
+              params.id,
+            );
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(connection, null, 2) },
+              ],
+            };
+          }
+          case "delete": {
+            if (!params.id)
+              return {
+                content: [
+                  { type: "text", text: "Error: id is required for delete." },
+                ],
+              };
+            await client.auth.connections.delete(params.id);
+            return {
+              content: [
+                { type: "text", text: "Auth connection deleted successfully" },
+              ],
+            };
+          }
+          case "login": {
+            if (!params.id)
+              return {
+                content: [
+                  { type: "text", text: "Error: id is required for login." },
+                ],
+              };
+            const proxy = buildProxy();
+            const response = await client.auth.connections.login(
+              params.id,
+              proxy ? { proxy } : undefined,
+            );
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(response, null, 2) },
+              ],
+            };
+          }
+          case "submit": {
+            if (!params.id)
+              return {
+                content: [
+                  { type: "text", text: "Error: id is required for submit." },
+                ],
+              };
+            const response = await client.auth.connections.submit(params.id, {
+              ...(params.fields && { fields: params.fields }),
+              ...(params.mfa_option_id && {
+                mfa_option_id: params.mfa_option_id,
+              }),
+              ...(params.sso_button_selector && {
+                sso_button_selector: params.sso_button_selector,
+              }),
+            });
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(response, null, 2) },
+              ],
+            };
+          }
+        }
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error in manage_auth_connections (${params.action}): ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+        };
+      }
+    },
+  );
+
+  // manage_credentials -- Read-only access to stored credentials (humans create them)
+  server.tool(
+    "manage_credentials",
+    'Read access to credentials stored in Kernel for managed auth. Use "list" to discover credentials by name/domain, "get" to view a credential\'s metadata (values are never returned), or "totp_code" to fetch the current 6-digit TOTP for credentials with a configured totp_secret. Credentials are created by humans via the dashboard or CLI — agents only consume them by name when calling manage_auth_connections.',
+    {
+      action: z
+        .enum(["list", "get", "totp_code"])
+        .describe("Operation to perform."),
+      id_or_name: z
+        .string()
+        .describe("(get, totp_code) Credential ID or name.")
+        .optional(),
+      limit: z
+        .number()
+        .describe("(list) Max results per page. Default 50.")
+        .optional(),
+      offset: z
+        .number()
+        .describe("(list) Pagination offset. Default 0.")
+        .optional(),
+    },
+    async (params, extra) => {
+      if (!extra.authInfo) throw new Error("Authentication required");
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        switch (params.action) {
+          case "list": {
+            const page = await client.credentials.list({
+              ...(params.limit !== undefined && { limit: params.limit }),
+              ...(params.offset !== undefined && { offset: params.offset }),
+            });
+            const items = page.getPaginatedItems();
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    items.length > 0
+                      ? JSON.stringify(
+                          {
+                            items,
+                            has_more: page.has_more,
+                            next_offset: page.next_offset,
+                          },
+                          null,
+                          2,
+                        )
+                      : "No credentials found",
+                },
+              ],
+            };
+          }
+          case "get": {
+            if (!params.id_or_name)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: id_or_name is required for get.",
+                  },
+                ],
+              };
+            const credential = await client.credentials.retrieve(
+              params.id_or_name,
+            );
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(credential, null, 2) },
+              ],
+            };
+          }
+          case "totp_code": {
+            if (!params.id_or_name)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: id_or_name is required for totp_code.",
+                  },
+                ],
+              };
+            const response = await client.credentials.totpCode(
+              params.id_or_name,
+            );
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(response, null, 2) },
+              ],
+            };
+          }
+        }
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error in manage_credentials (${params.action}): ${error instanceof Error ? error.message : String(error)}`,
+            },
+          ],
+        };
+      }
+    },
+  );
+
+  // manage_credential_providers -- Read-only access to external credential providers
+  server.tool(
+    "manage_credential_providers",
+    'Read access to external credential providers configured on the organization (e.g. 1Password). Use "list" to see configured providers or "get" to retrieve one by ID. Providers are configured by humans — agents reference them by name when creating an auth connection.',
+    {
+      action: z.enum(["list", "get"]).describe("Operation to perform."),
+      id: z.string().describe("(get) Credential provider ID.").optional(),
+    },
+    async (params, extra) => {
+      if (!extra.authInfo) throw new Error("Authentication required");
+      const client = createKernelClient(extra.authInfo.token);
+
+      try {
+        switch (params.action) {
+          case "list": {
+            const providers = await client.credentialProviders.list();
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(providers, null, 2) },
+              ],
+            };
+          }
+          case "get": {
+            if (!params.id)
+              return {
+                content: [
+                  { type: "text", text: "Error: id is required for get." },
+                ],
+              };
+            const provider = await client.credentialProviders.retrieve(
+              params.id,
+            );
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(provider, null, 2) },
+              ],
+            };
+          }
+        }
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error in manage_credential_providers (${params.action}): ${error instanceof Error ? error.message : String(error)}`,
             },
           ],
         };
