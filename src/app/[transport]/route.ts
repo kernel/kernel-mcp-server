@@ -2304,24 +2304,49 @@ Based on your issue "${issue_description}", start with:
                 ],
               };
             }
+            const hasName = !!params.credential_name;
+            const hasProvider = !!params.credential_provider;
+            const hasPath = !!params.credential_path;
+            const hasAuto = params.credential_auto !== undefined;
+            if (hasName && (hasProvider || hasPath || hasAuto)) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: credential_name cannot be combined with credential_provider, credential_path, or credential_auto. Use one of: { credential_name } for Kernel credentials, { credential_provider, credential_path } for an external provider item, or { credential_provider, credential_auto: true } for provider domain lookup.",
+                  },
+                ],
+              };
+            }
+            if ((hasPath || hasAuto) && !hasProvider) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: credential_path and credential_auto require credential_provider.",
+                  },
+                ],
+              };
+            }
+            if (hasProvider && !hasPath && !hasAuto) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: credential_provider requires either credential_path or credential_auto: true.",
+                  },
+                ],
+              };
+            }
             const credential =
-              params.credential_name ||
-              params.credential_provider ||
-              params.credential_path ||
-              params.credential_auto !== undefined
+              hasName || hasProvider
                 ? {
-                    ...(params.credential_name && {
-                      name: params.credential_name,
-                    }),
-                    ...(params.credential_provider && {
+                    ...(hasName && { name: params.credential_name }),
+                    ...(hasProvider && {
                       provider: params.credential_provider,
                     }),
-                    ...(params.credential_path && {
-                      path: params.credential_path,
-                    }),
-                    ...(params.credential_auto !== undefined && {
-                      auto: params.credential_auto,
-                    }),
+                    ...(hasPath && { path: params.credential_path }),
+                    ...(hasAuto && { auto: params.credential_auto }),
                   }
                 : undefined;
             const proxy = buildProxy();
