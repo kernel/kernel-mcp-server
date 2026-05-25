@@ -2307,8 +2307,8 @@ Based on your issue "${issue_description}", start with:
             const hasName = !!params.credential_name;
             const hasProvider = !!params.credential_provider;
             const hasPath = !!params.credential_path;
-            const hasAuto = params.credential_auto !== undefined;
-            if (hasName && (hasProvider || hasPath || hasAuto)) {
+            const autoTrue = params.credential_auto === true;
+            if (hasName && (hasProvider || hasPath || autoTrue)) {
               return {
                 content: [
                   {
@@ -2318,7 +2318,7 @@ Based on your issue "${issue_description}", start with:
                 ],
               };
             }
-            if ((hasPath || hasAuto) && !hasProvider) {
+            if ((hasPath || autoTrue) && !hasProvider) {
               return {
                 content: [
                   {
@@ -2328,7 +2328,17 @@ Based on your issue "${issue_description}", start with:
                 ],
               };
             }
-            if (hasProvider && !hasPath && !hasAuto) {
+            if (hasPath && autoTrue) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: credential_path and credential_auto: true are alternatives — provide exactly one.",
+                  },
+                ],
+              };
+            }
+            if (hasProvider && !hasPath && !autoTrue) {
               return {
                 content: [
                   {
@@ -2346,7 +2356,7 @@ Based on your issue "${issue_description}", start with:
                       provider: params.credential_provider,
                     }),
                     ...(hasPath && { path: params.credential_path }),
-                    ...(hasAuto && { auto: params.credential_auto }),
+                    ...(autoTrue && { auto: true }),
                   }
                 : undefined;
             const proxy = buildProxy();
