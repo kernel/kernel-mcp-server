@@ -2376,6 +2376,12 @@ Based on your issue "${issue_description}", start with:
               }),
               ...(proxy && { proxy }),
             });
+            if (!connection)
+              return {
+                content: [
+                  { type: "text", text: "Failed to create auth connection" },
+                ],
+              };
             return {
               content: [
                 { type: "text", text: JSON.stringify(connection, null, 2) },
@@ -2463,6 +2469,19 @@ Based on your issue "${issue_description}", start with:
               return {
                 content: [
                   { type: "text", text: "Error: id is required for submit." },
+                ],
+              };
+            if (
+              !params.fields &&
+              !params.mfa_option_id &&
+              !params.sso_button_selector
+            )
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: submit requires at least one of fields, mfa_option_id, or sso_button_selector.",
+                  },
                 ],
               };
             const response = await client.auth.connections.submit(params.id, {
@@ -2617,12 +2636,17 @@ Based on your issue "${issue_description}", start with:
             };
           }
           case "create": {
-            if (!params.domain || !params.name || !params.values) {
+            if (
+              !params.domain ||
+              !params.name ||
+              !params.values ||
+              Object.keys(params.values).length === 0
+            ) {
               return {
                 content: [
                   {
                     type: "text",
-                    text: "Error: domain, name, and values are required for create.",
+                    text: "Error: domain, name, and non-empty values are required for create.",
                   },
                 ],
               };
