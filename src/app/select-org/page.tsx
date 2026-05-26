@@ -12,8 +12,15 @@ function SelectOrgContent(): React.ReactElement {
   const { isLoaded, setActive, userMemberships } = useOrganizationList({
     userMemberships: {
       infinite: true,
+      pageSize: 100,
     },
   });
+
+  useEffect(() => {
+    if (userMemberships?.hasNextPage && !userMemberships.isFetching) {
+      userMemberships.fetchNext?.();
+    }
+  }, [userMemberships?.hasNextPage, userMemberships?.isFetching]);
   const { orgId } = useAuth();
   const { user } = useUser();
   const searchParams = useSearchParams();
