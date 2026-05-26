@@ -268,8 +268,8 @@ Each Kernel feature has a single `manage_*` tool with an `action` parameter, kee
 - `manage_extensions` - List and delete uploaded browser extensions.
 - `manage_apps` - List apps, invoke actions, get/list deployments, and get invocation results.
 - `manage_auth_connections` - Create, list, get, delete managed auth connections; start login flows (returns a hosted URL and live view); submit MFA codes or SSO selections.
-- `manage_credentials` - Read-only: list stored credentials, get a credential's metadata, fetch a current TOTP code. Credentials are created by humans; agents reference them by name.
-- `manage_credential_providers` - Read-only: list and get external credential providers (e.g. 1Password) configured for the organization.
+- `manage_credentials` - Create, list, get, update, and delete stored credentials; fetch a current TOTP code for credentials with a configured totp_secret.
+- `manage_credential_providers` - Create, list, get, update, and delete external credential providers (e.g. 1Password); list available items and test the provider connection.
 
 ### Standalone tools
 

@@ -2494,17 +2494,17 @@ Based on your issue "${issue_description}", start with:
     },
   );
 
-  // manage_credentials -- Read-only access to stored credentials (humans create them)
+  // manage_credentials -- Manage stored credentials for managed auth
   server.tool(
     "manage_credentials",
-    'Read access to credentials stored in Kernel for managed auth. Use "list" to discover credentials by name/domain, "get" to view a credential\'s metadata (values are never returned), or "totp_code" to fetch the current 6-digit TOTP for credentials with a configured totp_secret. Credentials are created by humans via the dashboard or CLI — agents only consume them by name when calling manage_auth_connections.',
+    'Manage credentials stored in Kernel for managed auth. "list" discovers credentials (optionally filtered by domain), "get" returns a credential\'s metadata (values are never returned), "totp_code" returns the current 6-digit TOTP for credentials with a configured totp_secret, "create" stores a new credential, "update" changes its name/values/sso_provider/totp_secret (values are merged with existing), and "delete" removes a credential by ID or name.',
     {
       action: z
-        .enum(["list", "get", "totp_code"])
+        .enum(["list", "get", "totp_code", "create", "update", "delete"])
         .describe("Operation to perform."),
       id_or_name: z
         .string()
-        .describe("(get, totp_code) Credential ID or name.")
+        .describe("(get, totp_code, update, delete) Credential ID or name.")
         .optional(),
       limit: z
         .number()
@@ -2513,6 +2513,36 @@ Based on your issue "${issue_description}", start with:
       offset: z
         .number()
         .describe("(list) Pagination offset. Default 0.")
+        .optional(),
+      domain: z
+        .string()
+        .describe(
+          "(list) Filter by domain. (create) Target domain this credential is for.",
+        )
+        .optional(),
+      name: z
+        .string()
+        .describe(
+          "(create) Unique name for the credential within the organization. (update) New name.",
+        )
+        .optional(),
+      values: z
+        .record(z.string())
+        .describe(
+          "(create, update) Field name to value mapping (e.g. username, password). On update, merged with existing values.",
+        )
+        .optional(),
+      sso_provider: z
+        .string()
+        .describe(
+          "(create, update) SSO provider to use (e.g. google, github, microsoft). On update, empty string clears it.",
+        )
+        .optional(),
+      totp_secret: z
+        .string()
+        .describe(
+          "(create, update) Base32-encoded TOTP secret for automatic 2FA. On update, empty string clears it.",
+        )
         .optional(),
     },
     async (params, extra) => {
@@ -2525,6 +2555,7 @@ Based on your issue "${issue_description}", start with:
             const page = await client.credentials.list({
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
+              ...(params.domain !== undefined && { domain: params.domain }),
             });
             const items = page.getPaginatedItems();
             return {
@@ -2585,6 +2616,83 @@ Based on your issue "${issue_description}", start with:
               ],
             };
           }
+          case "create": {
+            if (!params.domain || !params.name || !params.values) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: domain, name, and values are required for create.",
+                  },
+                ],
+              };
+            }
+            const credential = await client.credentials.create({
+              domain: params.domain,
+              name: params.name,
+              values: params.values,
+              ...(params.sso_provider !== undefined && {
+                sso_provider: params.sso_provider,
+              }),
+              ...(params.totp_secret !== undefined && {
+                totp_secret: params.totp_secret,
+              }),
+            });
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(credential, null, 2) },
+              ],
+            };
+          }
+          case "update": {
+            if (!params.id_or_name)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: id_or_name is required for update.",
+                  },
+                ],
+              };
+            const credential = await client.credentials.update(
+              params.id_or_name,
+              {
+                ...(params.name !== undefined && { name: params.name }),
+                ...(params.values !== undefined && { values: params.values }),
+                ...(params.sso_provider !== undefined && {
+                  sso_provider: params.sso_provider,
+                }),
+                ...(params.totp_secret !== undefined && {
+                  totp_secret: params.totp_secret,
+                }),
+              },
+            );
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(credential, null, 2) },
+              ],
+            };
+          }
+          case "delete": {
+            if (!params.id_or_name)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: id_or_name is required for delete.",
+                  },
+                ],
+              };
+            await client.credentials.delete(params.id_or_name);
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Credential ${params.id_or_name} deleted.`,
+                },
+              ],
+            };
+          }
         }
       } catch (error) {
         return {
@@ -2599,13 +2707,60 @@ Based on your issue "${issue_description}", start with:
     },
   );
 
-  // manage_credential_providers -- Read-only access to external credential providers
+  // manage_credential_providers -- Manage external credential providers
   server.tool(
     "manage_credential_providers",
-    'Read access to external credential providers configured on the organization (e.g. 1Password). Use "list" to see configured providers or "get" to retrieve one by ID. Providers are configured by humans — agents reference them by name when creating an auth connection.',
+    'Manage external credential providers (e.g. 1Password). "list" returns configured providers, "get" retrieves one by ID, "create" configures a new provider with a service-account token, "update" changes its name/token/priority/enabled/cache_ttl_seconds, "delete" removes it, "list_items" returns available credential items from the provider (e.g. 1Password login items with their paths), and "test" validates the token and lists accessible vaults.',
     {
-      action: z.enum(["list", "get"]).describe("Operation to perform."),
-      id: z.string().describe("(get) Credential provider ID.").optional(),
+      action: z
+        .enum([
+          "list",
+          "get",
+          "create",
+          "update",
+          "delete",
+          "list_items",
+          "test",
+        ])
+        .describe("Operation to perform."),
+      id: z
+        .string()
+        .describe(
+          "(get, update, delete, list_items, test) Credential provider ID.",
+        )
+        .optional(),
+      name: z
+        .string()
+        .describe("(create, update) Human-readable name (unique per org).")
+        .optional(),
+      token: z
+        .string()
+        .describe(
+          "(create) Service-account token for the provider. (update) New token to rotate credentials.",
+        )
+        .optional(),
+      provider_type: z
+        .enum(["onepassword"])
+        .describe("(create) Type of credential provider.")
+        .optional(),
+      cache_ttl_seconds: z
+        .number()
+        .describe(
+          "(create, update) How long to cache credential lists (default 300).",
+        )
+        .optional(),
+      enabled: z
+        .boolean()
+        .describe(
+          "(update) Whether the provider is enabled for credential lookups.",
+        )
+        .optional(),
+      priority: z
+        .number()
+        .describe(
+          "(update) Priority order for credential lookups (lower numbers checked first).",
+        )
+        .optional(),
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
@@ -2634,6 +2789,110 @@ Based on your issue "${issue_description}", start with:
             return {
               content: [
                 { type: "text", text: JSON.stringify(provider, null, 2) },
+              ],
+            };
+          }
+          case "create": {
+            if (!params.token || !params.name || !params.provider_type) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: token, name, and provider_type are required for create.",
+                  },
+                ],
+              };
+            }
+            const provider = await client.credentialProviders.create({
+              token: params.token,
+              name: params.name,
+              provider_type: params.provider_type,
+              ...(params.cache_ttl_seconds !== undefined && {
+                cache_ttl_seconds: params.cache_ttl_seconds,
+              }),
+            });
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(provider, null, 2) },
+              ],
+            };
+          }
+          case "update": {
+            if (!params.id)
+              return {
+                content: [
+                  { type: "text", text: "Error: id is required for update." },
+                ],
+              };
+            const provider = await client.credentialProviders.update(
+              params.id,
+              {
+                ...(params.name !== undefined && { name: params.name }),
+                ...(params.token !== undefined && { token: params.token }),
+                ...(params.cache_ttl_seconds !== undefined && {
+                  cache_ttl_seconds: params.cache_ttl_seconds,
+                }),
+                ...(params.enabled !== undefined && {
+                  enabled: params.enabled,
+                }),
+                ...(params.priority !== undefined && {
+                  priority: params.priority,
+                }),
+              },
+            );
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(provider, null, 2) },
+              ],
+            };
+          }
+          case "delete": {
+            if (!params.id)
+              return {
+                content: [
+                  { type: "text", text: "Error: id is required for delete." },
+                ],
+              };
+            await client.credentialProviders.delete(params.id);
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Credential provider ${params.id} deleted.`,
+                },
+              ],
+            };
+          }
+          case "list_items": {
+            if (!params.id)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Error: id is required for list_items.",
+                  },
+                ],
+              };
+            const response = await client.credentialProviders.listItems(
+              params.id,
+            );
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(response, null, 2) },
+              ],
+            };
+          }
+          case "test": {
+            if (!params.id)
+              return {
+                content: [
+                  { type: "text", text: "Error: id is required for test." },
+                ],
+              };
+            const result = await client.credentialProviders.test(params.id);
+            return {
+              content: [
+                { type: "text", text: JSON.stringify(result, null, 2) },
               ],
             };
           }
