@@ -1,16 +1,34 @@
 import { createClient } from "redis";
 import { createHmac } from "crypto";
 
+const redisUrl = process.env.REDIS_URL;
+const redisTlsServerName = process.env.REDIS_TLS_SERVER_NAME;
+const parsedRedisUrl = redisUrl ? new URL(redisUrl) : null;
+
+if (redisTlsServerName && parsedRedisUrl?.protocol !== "rediss:") {
+  throw new Error("REDIS_TLS_SERVER_NAME requires REDIS_URL to use rediss://");
+}
+
+// Modest backoff to smooth over first-hit cold connections
+const reconnectStrategy = (retries: number) =>
+  Math.min(500 + retries * 100, 2000);
+
 // Connect on first use
 let isConnected = false;
 let connectPromise: Promise<void> | null = null;
 
 const client = createClient({
-  url: process.env.REDIS_URL,
-  socket: {
-    // Modest backoff to smooth over first-hit cold connections
-    reconnectStrategy: (retries) => Math.min(500 + retries * 100, 2000),
-  },
+  url: redisUrl,
+  socket: redisTlsServerName
+    ? {
+        host: parsedRedisUrl!.hostname,
+        tls: true,
+        servername: redisTlsServerName,
+        reconnectStrategy,
+      }
+    : {
+        reconnectStrategy,
+      },
 });
 
 client.on("error", (err) => {
