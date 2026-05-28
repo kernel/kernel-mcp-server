@@ -2471,8 +2471,10 @@ Based on your issue "${issue_description}", start with:
                   { type: "text", text: "Error: id is required for submit." },
                 ],
               };
+            const hasFields =
+              !!params.fields && Object.keys(params.fields).length > 0;
             if (
-              !params.fields &&
+              !hasFields &&
               !params.mfa_option_id &&
               !params.sso_button_selector
             )
@@ -2480,12 +2482,12 @@ Based on your issue "${issue_description}", start with:
                 content: [
                   {
                     type: "text",
-                    text: "Error: submit requires at least one of fields, mfa_option_id, or sso_button_selector.",
+                    text: "Error: submit requires at least one of fields (non-empty), mfa_option_id, or sso_button_selector.",
                   },
                 ],
               };
             const response = await client.auth.connections.submit(params.id, {
-              ...(params.fields && { fields: params.fields }),
+              ...(hasFields && { fields: params.fields }),
               ...(params.mfa_option_id && {
                 mfa_option_id: params.mfa_option_id,
               }),
