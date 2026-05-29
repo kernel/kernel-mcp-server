@@ -28,6 +28,80 @@ type TelemetryParams = {
   telemetry_interaction?: boolean;
 };
 
+type BrowserAction = "create" | "update" | "list" | "get" | "delete";
+
+const scopedBrowserFields = [
+  "session_id",
+  "start_url",
+  "chrome_policy",
+  "headless",
+  "gpu",
+  "stealth",
+  "timeout_seconds",
+  "profile_name",
+  "profile_id",
+  "save_profile_changes",
+  "proxy_id",
+  "clear_proxy",
+  "disable_default_proxy",
+  "kiosk_mode",
+  "viewport_width",
+  "viewport_height",
+  "viewport_refresh_rate",
+  "viewport_force",
+  "extension_id",
+  "extension_name",
+  "local_forward",
+  "remote_forward",
+  "status",
+  "limit",
+  "offset",
+  "telemetry_enabled",
+  "telemetry_console",
+  "telemetry_network",
+  "telemetry_page",
+  "telemetry_interaction",
+] as const;
+
+type BrowserToolField = (typeof scopedBrowserFields)[number];
+
+const createActions: readonly BrowserAction[] = ["create"];
+const updateActions: readonly BrowserAction[] = ["update"];
+const createUpdateActions: readonly BrowserAction[] = ["create", "update"];
+
+const browserFieldScopes: Record<BrowserToolField, readonly BrowserAction[]> = {
+  session_id: ["update", "get", "delete"],
+  start_url: createActions,
+  chrome_policy: createActions,
+  headless: createActions,
+  gpu: createActions,
+  stealth: createActions,
+  timeout_seconds: createActions,
+  profile_name: createUpdateActions,
+  profile_id: createUpdateActions,
+  save_profile_changes: createUpdateActions,
+  proxy_id: createUpdateActions,
+  clear_proxy: updateActions,
+  disable_default_proxy: updateActions,
+  kiosk_mode: createActions,
+  viewport_width: createUpdateActions,
+  viewport_height: createUpdateActions,
+  viewport_refresh_rate: createUpdateActions,
+  viewport_force: updateActions,
+  extension_id: createActions,
+  extension_name: createActions,
+  local_forward: createActions,
+  remote_forward: createActions,
+  status: ["list"],
+  limit: ["list"],
+  offset: ["list"],
+  telemetry_enabled: createUpdateActions,
+  telemetry_console: createUpdateActions,
+  telemetry_network: createUpdateActions,
+  telemetry_page: createUpdateActions,
+  telemetry_interaction: createUpdateActions,
+};
+
 const telemetryCategories = [
   ["telemetry_console", "console"],
   ["telemetry_network", "network"],
@@ -35,24 +109,29 @@ const telemetryCategories = [
   ["telemetry_interaction", "interaction"],
 ] as const;
 
-const createOnlyFields = [
-  "start_url",
-  "chrome_policy",
-  "gpu",
-  "headless",
-  "stealth",
-  "timeout_seconds",
-  "kiosk_mode",
-] as const;
-
-const updateOnlyFields = [
-  "clear_proxy",
-  "disable_default_proxy",
-  "viewport_force",
-] as const;
-
 function textResponse(text: string) {
   return { content: [{ type: "text" as const, text }] };
+}
+
+function formatActionScope(field: BrowserToolField) {
+  return browserFieldScopes[field].join(", ");
+}
+
+function actionFieldError(
+  params: Partial<Record<BrowserToolField, unknown>>,
+  action: BrowserAction,
+) {
+  const unsupportedField = scopedBrowserFields.find(
+    (field) =>
+      params[field] !== undefined &&
+      !browserFieldScopes[field].includes(action),
+  );
+
+  return unsupportedField
+    ? `Error: ${unsupportedField} is only supported for ${formatActionScope(
+        unsupportedField,
+      )}.`
+    : undefined;
 }
 
 function buildProfile(params: ProfileParams): BrowserCreateParams["profile"] {
@@ -75,17 +154,15 @@ function buildProfile(params: ProfileParams): BrowserCreateParams["profile"] {
   };
 }
 
-function buildViewport(
+function buildViewportBase(
   params: ViewportParams,
-  options?: { includeForce?: boolean },
-): BrowserCreateParams["viewport"] | BrowserUpdateParams["viewport"] {
-  const hasWidth = params.viewport_width !== undefined;
-  const hasHeight = params.viewport_height !== undefined;
+): NonNullable<BrowserCreateParams["viewport"]> | undefined {
+  const width = params.viewport_width;
+  const height = params.viewport_height;
+  const hasWidth = width !== undefined;
+  const hasHeight = height !== undefined;
   const hasViewportOptions =
-    hasWidth ||
-    hasHeight ||
-    params.viewport_refresh_rate !== undefined ||
-    (options?.includeForce && params.viewport_force !== undefined);
+    hasWidth || hasHeight || params.viewport_refresh_rate !== undefined;
 
   if (!hasViewportOptions) return undefined;
   if (!hasWidth || !hasHeight) {
@@ -95,13 +172,39 @@ function buildViewport(
   }
 
   return {
-    width: params.viewport_width!,
-    height: params.viewport_height!,
+    width,
+    height,
     ...(params.viewport_refresh_rate !== undefined && {
       refresh_rate: params.viewport_refresh_rate,
     }),
-    ...(options?.includeForce &&
-      params.viewport_force !== undefined && { force: params.viewport_force }),
+  };
+}
+
+function buildCreateViewport(
+  params: ViewportParams,
+): BrowserCreateParams["viewport"] {
+  return buildViewportBase(params);
+}
+
+function buildUpdateViewport(
+  params: ViewportParams,
+): BrowserUpdateParams["viewport"] {
+  const viewport = buildViewportBase(params);
+
+  if (!viewport) {
+    if (params.viewport_force !== undefined) {
+      throw new Error(
+        "viewport_width and viewport_height must be provided when viewport_force is set.",
+      );
+    }
+    return undefined;
+  }
+
+  return {
+    ...viewport,
+    ...(params.viewport_force !== undefined && {
+      force: params.viewport_force,
+    }),
   };
 }
 
@@ -187,7 +290,7 @@ export function registerBrowserCapabilities(server: McpServer) {
     throw new Error(`Invalid browser URI: ${uriString}`);
   });
 
-  // manage_browsers -- Create, list, get, and delete browser sessions
+  // manage_browsers -- Create, update, list, get, and delete browser sessions
   server.tool(
     "manage_browsers",
     'Manage browser sessions in the Kernel platform. Use action "create" to launch a new browser, "update" to modify supported session settings, "list" to see existing sessions, "get" to retrieve details about a specific session, or "delete" to terminate one. Created browsers run in isolated VMs and support headless/stealth modes, profiles, proxies, viewports, extensions, Chrome policy overrides, telemetry, start URLs, and SSH tunneling.',
@@ -237,16 +340,20 @@ export function registerBrowserCapabilities(server: McpServer) {
       profile_name: z
         .string()
         .describe(
-          "(create) Profile name to load saved cookies/logins. Cannot use with profile_id.",
+          "(create, update) Profile name to load saved cookies/logins. Cannot use with profile_id.",
         )
         .optional(),
       profile_id: z
         .string()
-        .describe("(create) Profile ID to load. Cannot use with profile_name.")
+        .describe(
+          "(create, update) Profile ID to load. Cannot use with profile_name.",
+        )
         .optional(),
       save_profile_changes: z
         .boolean()
-        .describe("(create) Save session changes back to profile on close.")
+        .describe(
+          "(create, update) Save session changes back to profile on close.",
+        )
         .optional(),
       proxy_id: z
         .string()
@@ -271,13 +378,13 @@ export function registerBrowserCapabilities(server: McpServer) {
       viewport_width: z
         .number()
         .describe(
-          "(create) Window width in pixels. Must pair with viewport_height.",
+          "(create, update) Window width in pixels. Must pair with viewport_height.",
         )
         .optional(),
       viewport_height: z
         .number()
         .describe(
-          "(create) Window height in pixels. Must pair with viewport_width.",
+          "(create, update) Window height in pixels. Must pair with viewport_width.",
         )
         .optional(),
       viewport_refresh_rate: z
@@ -354,6 +461,8 @@ export function registerBrowserCapabilities(server: McpServer) {
       try {
         switch (params.action) {
           case "create": {
+            const scopeError = actionFieldError(params, "create");
+            if (scopeError) return textResponse(scopeError);
             if (params.profile_name && params.profile_id) {
               return {
                 content: [
@@ -374,14 +483,6 @@ export function registerBrowserCapabilities(server: McpServer) {
                 ],
               };
             }
-            const updateOnlyField = updateOnlyFields.find(
-              (field) => params[field] !== undefined,
-            );
-            if (updateOnlyField) {
-              return textResponse(
-                `Error: ${updateOnlyField} is only supported for update.`,
-              );
-            }
 
             const createParams: BrowserCreateParams = {};
             if (params.headless !== undefined)
@@ -399,7 +500,7 @@ export function registerBrowserCapabilities(server: McpServer) {
             if (params.proxy_id) createParams.proxy_id = params.proxy_id;
             const profile = buildProfile(params);
             if (profile) createParams.profile = profile;
-            const viewport = buildViewport(params);
+            const viewport = buildCreateViewport(params);
             if (viewport) createParams.viewport = viewport;
             const telemetry = buildTelemetry(params);
             if (telemetry !== undefined) createParams.telemetry = telemetry;
@@ -451,6 +552,8 @@ export function registerBrowserCapabilities(server: McpServer) {
             return { content: [{ type: "text", text: responseText }] };
           }
           case "update": {
+            const scopeError = actionFieldError(params, "update");
+            if (scopeError) return textResponse(scopeError);
             if (!params.session_id)
               return textResponse(
                 "Error: session_id is required for update action.",
@@ -463,14 +566,6 @@ export function registerBrowserCapabilities(server: McpServer) {
             if (params.extension_id || params.extension_name) {
               return textResponse(
                 "Error: extensions can only be loaded during create.",
-              );
-            }
-            const createOnlyField = createOnlyFields.find(
-              (field) => params[field] !== undefined,
-            );
-            if (createOnlyField) {
-              return textResponse(
-                `Error: ${createOnlyField} is only supported for create.`,
               );
             }
             if (params.proxy_id && params.clear_proxy) {
@@ -490,7 +585,7 @@ export function registerBrowserCapabilities(server: McpServer) {
             }
             const profile = buildProfile(params);
             if (profile) updateParams.profile = profile;
-            const viewport = buildViewport(params, { includeForce: true });
+            const viewport = buildUpdateViewport(params);
             if (viewport) updateParams.viewport = viewport;
             const telemetry = buildTelemetry(params);
             if (telemetry !== undefined) updateParams.telemetry = telemetry;
@@ -512,6 +607,8 @@ export function registerBrowserCapabilities(server: McpServer) {
             };
           }
           case "list": {
+            const scopeError = actionFieldError(params, "list");
+            if (scopeError) return textResponse(scopeError);
             const page = await client.browsers.list({
               ...(params.status && { status: params.status }),
               ...(params.limit !== undefined && { limit: params.limit }),
@@ -541,6 +638,8 @@ export function registerBrowserCapabilities(server: McpServer) {
             };
           }
           case "get": {
+            const scopeError = actionFieldError(params, "get");
+            if (scopeError) return textResponse(scopeError);
             if (!params.session_id)
               return {
                 content: [
@@ -567,6 +666,8 @@ export function registerBrowserCapabilities(server: McpServer) {
             };
           }
           case "delete": {
+            const scopeError = actionFieldError(params, "delete");
+            if (scopeError) return textResponse(scopeError);
             if (!params.session_id)
               return {
                 content: [
