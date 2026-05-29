@@ -94,7 +94,7 @@ const handler = createMcpHandler((server) => {
           {
             uri: "profiles://",
             mimeType: "application/json",
-            text: profiles
+            text: profiles.length > 0
               ? JSON.stringify(profiles, null, 2)
               : "No profiles found",
           },
