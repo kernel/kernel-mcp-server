@@ -67,6 +67,14 @@ function createAuthErrorResponse(
   );
 }
 
+async function listProfiles(client: ReturnType<typeof createKernelClient>) {
+  const profiles: Awaited<ReturnType<typeof client.profiles.retrieve>>[] = [];
+  for await (const profile of client.profiles.list()) {
+    profiles.push(profile);
+  }
+  return profiles;
+}
+
 // Create MCP handler with tools
 const handler = createMcpHandler((server) => {
   // Register MCP resources
@@ -80,13 +88,13 @@ const handler = createMcpHandler((server) => {
 
     if (uriString === "profiles://") {
       // List all profiles
-      const profiles = await client.profiles.list();
+      const profiles = await listProfiles(client);
       return {
         contents: [
           {
             uri: "profiles://",
             mimeType: "application/json",
-            text: profiles
+            text: profiles.length > 0
               ? JSON.stringify(profiles, null, 2)
               : "No profiles found",
           },
@@ -915,7 +923,7 @@ Based on your issue "${issue_description}", start with:
                   },
                 ],
               };
-            const existingProfiles = await client.profiles.list();
+            const existingProfiles = await listProfiles(client);
             const existingProfile = existingProfiles?.find(
               (p) => p.name === params.profile_name,
             );
@@ -973,7 +981,7 @@ Based on your issue "${issue_description}", start with:
             };
           }
           case "list": {
-            const profiles = await client.profiles.list();
+            const profiles = await listProfiles(client);
             return {
               content: [
                 {
