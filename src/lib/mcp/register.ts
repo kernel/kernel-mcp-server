@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerKernelPrompts } from "@/lib/mcp/prompts";
+import { registerAPIKeyCapabilities } from "@/lib/mcp/tools/api-keys";
 import { registerAppCapabilities } from "@/lib/mcp/tools/apps";
 import { registerBrowserPoolCapabilities } from "@/lib/mcp/tools/browser-pools";
 import { registerBrowserCapabilities } from "@/lib/mcp/tools/browsers";
@@ -18,6 +19,7 @@ export function registerMcpCapabilities(server: McpServer) {
   registerDocsTools(server);
   registerBrowserCapabilities(server);
   registerProjectCapabilities(server);
+  registerAPIKeyCapabilities(server);
   registerBrowserPoolCapabilities(server);
   registerProxyTools(server);
   registerExtensionTools(server);
