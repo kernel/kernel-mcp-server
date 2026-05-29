@@ -30,47 +30,14 @@ type TelemetryParams = {
 
 type BrowserAction = "create" | "update" | "list" | "get" | "delete";
 
-const scopedBrowserFields = [
-  "session_id",
-  "start_url",
-  "chrome_policy",
-  "headless",
-  "gpu",
-  "stealth",
-  "timeout_seconds",
-  "profile_name",
-  "profile_id",
-  "save_profile_changes",
-  "proxy_id",
-  "clear_proxy",
-  "disable_default_proxy",
-  "kiosk_mode",
-  "viewport_width",
-  "viewport_height",
-  "viewport_refresh_rate",
-  "viewport_force",
-  "extension_id",
-  "extension_name",
-  "local_forward",
-  "remote_forward",
-  "status",
-  "limit",
-  "offset",
-  "telemetry_enabled",
-  "telemetry_console",
-  "telemetry_network",
-  "telemetry_page",
-  "telemetry_interaction",
-] as const;
-
-type BrowserToolField = (typeof scopedBrowserFields)[number];
-
 const createActions: readonly BrowserAction[] = ["create"];
 const updateActions: readonly BrowserAction[] = ["update"];
 const createUpdateActions: readonly BrowserAction[] = ["create", "update"];
+const sessionIdActions: readonly BrowserAction[] = ["update", "get", "delete"];
+const listActions: readonly BrowserAction[] = ["list"];
 
-const browserFieldScopes: Record<BrowserToolField, readonly BrowserAction[]> = {
-  session_id: ["update", "get", "delete"],
+const browserFieldScopes = {
+  session_id: sessionIdActions,
   start_url: createActions,
   chrome_policy: createActions,
   headless: createActions,
@@ -92,15 +59,21 @@ const browserFieldScopes: Record<BrowserToolField, readonly BrowserAction[]> = {
   extension_name: createActions,
   local_forward: createActions,
   remote_forward: createActions,
-  status: ["list"],
-  limit: ["list"],
-  offset: ["list"],
+  status: listActions,
+  limit: listActions,
+  offset: listActions,
   telemetry_enabled: createUpdateActions,
   telemetry_console: createUpdateActions,
   telemetry_network: createUpdateActions,
   telemetry_page: createUpdateActions,
   telemetry_interaction: createUpdateActions,
-};
+} satisfies Record<string, readonly BrowserAction[]>;
+
+type BrowserToolField = keyof typeof browserFieldScopes;
+
+const scopedBrowserFields = Object.keys(
+  browserFieldScopes,
+) as BrowserToolField[];
 
 const telemetryCategories = [
   ["telemetry_console", "console"],
