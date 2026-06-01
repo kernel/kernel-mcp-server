@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
+import { errorMessage, jsonResponse, textResponse } from "@/lib/mcp/responses";
 
 export function registerAppCapabilities(server: McpServer) {
   server.resource("apps", "apps://", async (uri, extra) => {
@@ -38,7 +39,7 @@ export function registerAppCapabilities(server: McpServer) {
   // manage_apps -- List apps, invoke actions, manage deployments, check invocations
   server.tool(
     "manage_apps",
-    'Manage Kernel apps, deployments, and invocations. Use "list_apps" to discover apps, "invoke" to execute an app action, "get_deployment"/"list_deployments" to check deployment status, or "get_invocation" to check action results.',
+    'Manage Kernel apps, deployments, and invocations. Use "list_apps" to discover apps, "invoke" to execute an app action, "get_deployment"/"list_deployments" to check deployment status, "delete_deployment" to remove a deployment, or "get_invocation" to check action results.',
     {
       action: z
         .enum([
@@ -46,6 +47,7 @@ export function registerAppCapabilities(server: McpServer) {
           "invoke",
           "get_deployment",
           "list_deployments",
+          "delete_deployment",
           "get_invocation",
         ])
         .describe("Operation to perform."),
@@ -58,9 +60,10 @@ export function registerAppCapabilities(server: McpServer) {
       version: z
         .string()
         .describe(
-          "(list_apps, invoke) App version filter. Defaults to 'latest' for invoke.",
+          "(list_apps, invoke, list_deployments) App version filter. Defaults to 'latest' for invoke. Deployment version filtering requires app_name.",
         )
         .optional(),
+      query: z.string().describe("(list_apps) Search apps by name.").optional(),
       action_name: z
         .string()
         .describe("(invoke) Action to execute within the app.")
@@ -71,7 +74,7 @@ export function registerAppCapabilities(server: McpServer) {
         .optional(),
       deployment_id: z
         .string()
-        .describe("(get_deployment) Deployment ID to retrieve.")
+        .describe("(get_deployment, delete_deployment) Deployment ID.")
         .optional(),
       invocation_id: z
         .string()
@@ -96,40 +99,23 @@ export function registerAppCapabilities(server: McpServer) {
             const page = await client.apps.list({
               ...(params.app_name && { app_name: params.app_name }),
               ...(params.version && { version: params.version }),
+              ...(params.query && { query: params.query }),
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
             const items = page.getPaginatedItems();
-            return {
-              content: [
-                {
-                  type: "text",
-                  text:
-                    items.length > 0
-                      ? JSON.stringify(
-                          {
-                            items,
-                            has_more: page.has_more,
-                            next_offset: page.next_offset,
-                          },
-                          null,
-                          2,
-                        )
-                      : "No apps found",
-                },
-              ],
-            };
+            if (items.length === 0) return textResponse("No apps found");
+            return jsonResponse({
+              items,
+              has_more: page.has_more,
+              next_offset: page.next_offset,
+            });
           }
           case "invoke": {
             if (!params.app_name || !params.action_name) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: app_name and action_name are required for invoke.",
-                  },
-                ],
-              };
+              return textResponse(
+                "Error: app_name and action_name are required for invoke.",
+              );
             }
             const invocation = await client.invocations.create({
               app_name: params.app_name,
@@ -144,22 +130,11 @@ export function registerAppCapabilities(server: McpServer) {
             let finalInvocation = invocation;
             for await (const evt of stream) {
               if (evt.event === "error") {
-                return {
-                  content: [
-                    {
-                      type: "text",
-                      text: JSON.stringify(
-                        {
-                          status: "error",
-                          invocation_id: invocation.id,
-                          error: evt,
-                        },
-                        null,
-                        2,
-                      ),
-                    },
-                  ],
-                };
+                return jsonResponse({
+                  status: "error",
+                  invocation_id: invocation.id,
+                  error: evt,
+                });
               }
               if (evt.event === "invocation_state") {
                 finalInvocation = evt.invocation || finalInvocation;
@@ -170,102 +145,68 @@ export function registerAppCapabilities(server: McpServer) {
                   break;
               }
             }
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify(finalInvocation, null, 2),
-                },
-              ],
-            };
+            return jsonResponse(finalInvocation);
           }
           case "get_deployment": {
             if (!params.deployment_id)
-              return {
-                content: [
-                  { type: "text", text: "Error: deployment_id is required." },
-                ],
-              };
+              return textResponse("Error: deployment_id is required.");
             const deployment = await client.deployments.retrieve(
               params.deployment_id,
             );
             if (!deployment)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `Deployment "${params.deployment_id}" not found`,
-                  },
-                ],
-              };
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(deployment, null, 2) },
-              ],
-            };
+              return textResponse(
+                `Deployment "${params.deployment_id}" not found`,
+              );
+            return jsonResponse(deployment);
           }
           case "list_deployments": {
+            if (params.version && !params.app_name) {
+              return textResponse(
+                "Error: app_name is required when filtering deployments by version.",
+              );
+            }
             const page = await client.deployments.list({
               ...(params.app_name && { app_name: params.app_name }),
+              ...(params.version && { app_version: params.version }),
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
             const items = page.getPaginatedItems();
-            return {
-              content: [
-                {
-                  type: "text",
-                  text:
-                    items.length > 0
-                      ? JSON.stringify(
-                          {
-                            items,
-                            has_more: page.has_more,
-                            next_offset: page.next_offset,
-                          },
-                          null,
-                          2,
-                        )
-                      : "No deployments found",
-                },
-              ],
-            };
+            if (items.length === 0) return textResponse("No deployments found");
+            return jsonResponse({
+              items,
+              has_more: page.has_more,
+              next_offset: page.next_offset,
+            });
+          }
+          case "delete_deployment": {
+            if (!params.deployment_id) {
+              return textResponse(
+                "Error: deployment_id is required for delete_deployment.",
+              );
+            }
+            await client.deployments.delete(params.deployment_id);
+            return textResponse(
+              `Deployment "${params.deployment_id}" deleted successfully.`,
+            );
           }
           case "get_invocation": {
             if (!params.invocation_id)
-              return {
-                content: [
-                  { type: "text", text: "Error: invocation_id is required." },
-                ],
-              };
+              return textResponse("Error: invocation_id is required.");
             const invocation = await client.invocations.retrieve(
               params.invocation_id,
             );
             if (!invocation)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `Invocation "${params.invocation_id}" not found`,
-                  },
-                ],
-              };
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(invocation, null, 2) },
-              ],
-            };
+              return textResponse(
+                `Invocation "${params.invocation_id}" not found`,
+              );
+            return jsonResponse(invocation);
           }
         }
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error in manage_apps (${params.action}): ${error}`,
-            },
-          ],
-        };
+        return textResponse(
+          `Error in manage_apps (${params.action}): ${errorMessage(error)}`,
+        );
       }
     },
   );

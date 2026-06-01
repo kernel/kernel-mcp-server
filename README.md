@@ -255,21 +255,26 @@ Many other MCP-capable tools accept:
 
 Configure these values wherever the tool expects MCP server settings.
 
-## Tools (10 total)
+## Tools (15 total)
 
-Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Four standalone tools handle high-frequency workflows.
+Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Seven standalone tools handle high-frequency workflows.
 
 ### manage\_\* tools
 
 - `manage_browsers` - Create, list, get, and delete browser sessions. Supports headless/stealth modes, profiles, proxies, viewports, extensions, and SSH tunneling.
-- `manage_profiles` - Setup (with guided live browser session), list, and delete browser profiles for persisting cookies and logins.
+- `manage_profiles` - Setup (with guided live browser session), search/list with pagination, get, and delete browser profiles for persisting cookies and logins.
+- `manage_projects` - Create, list, get, update, and delete organization projects. Inspect and update per-project resource limits.
+- `manage_api_keys` - Create, list, get, update, and delete org-wide or project-scoped API keys.
 - `manage_browser_pools` - Create, list, get, delete, and flush pools of pre-warmed browsers. Acquire and release browsers from pools.
-- `manage_proxies` - Create, list, and delete proxy configurations (datacenter, ISP, residential, mobile, custom).
+- `manage_proxies` - Create, list, get, check, and delete proxy configurations (datacenter, ISP, residential, mobile, custom).
 - `manage_extensions` - List and delete uploaded browser extensions.
-- `manage_apps` - List apps, invoke actions, get/list deployments, and get invocation results.
+- `manage_apps` - List/search apps, invoke actions, get/list/delete deployments, and get invocation results.
 
 ### Standalone tools
 
+- `browser_curl` - Run an HTTP request from inside a browser session's network context.
+- `read_browser_clipboard` - Read clipboard text from a browser session.
+- `write_browser_clipboard` - Write clipboard text to a browser session.
 - `computer_action` - Mouse, keyboard, and screenshot controls for browser sessions (click, type, press_key, scroll, move, get_position, screenshot).
 - `execute_playwright_code` - Execute Playwright/TypeScript code against a browser with automatic video replay and cleanup.
 - `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
