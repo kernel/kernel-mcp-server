@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
+import { errorMessage, jsonResponse, textResponse } from "@/lib/mcp/responses";
 
 export function registerAPIKeyCapabilities(server: McpServer) {
   // manage_api_keys -- Create, list, get, update, and delete Kernel API keys
@@ -44,11 +45,7 @@ export function registerAPIKeyCapabilities(server: McpServer) {
         switch (params.action) {
           case "create": {
             if (!params.name) {
-              return {
-                content: [
-                  { type: "text", text: "Error: name is required for create." },
-                ],
-              };
+              return textResponse("Error: name is required for create.");
             }
             const createParams: Parameters<typeof client.apiKeys.create>[0] = {
               name: params.name,
@@ -60,11 +57,7 @@ export function registerAPIKeyCapabilities(server: McpServer) {
               createParams.days_to_expire = params.days_to_expire;
             }
             const apiKey = await client.apiKeys.create(createParams);
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(apiKey, null, 2) },
-              ],
-            };
+            return jsonResponse(apiKey);
           }
           case "list": {
             const page = await client.apiKeys.list({
@@ -72,94 +65,43 @@ export function registerAPIKeyCapabilities(server: McpServer) {
               ...(params.offset !== undefined && { offset: params.offset }),
             });
             const items = page.getPaginatedItems();
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify(
-                    {
-                      items,
-                      has_more: page.has_more,
-                      next_offset: page.next_offset,
-                    },
-                    null,
-                    2,
-                  ),
-                },
-              ],
-            };
+            return jsonResponse({
+              items,
+              has_more: page.has_more,
+              next_offset: page.next_offset,
+            });
           }
           case "get": {
             if (!params.api_key_id) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: api_key_id is required for get.",
-                  },
-                ],
-              };
+              return textResponse("Error: api_key_id is required for get.");
             }
             const apiKey = await client.apiKeys.retrieve(params.api_key_id);
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(apiKey, null, 2) },
-              ],
-            };
+            return jsonResponse(apiKey);
           }
           case "update": {
             if (!params.api_key_id) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: api_key_id is required for update.",
-                  },
-                ],
-              };
+              return textResponse("Error: api_key_id is required for update.");
             }
             if (!params.name) {
-              return {
-                content: [
-                  { type: "text", text: "Error: name is required for update." },
-                ],
-              };
+              return textResponse("Error: name is required for update.");
             }
             const apiKey = await client.apiKeys.update(params.api_key_id, {
               name: params.name,
             });
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(apiKey, null, 2) },
-              ],
-            };
+            return jsonResponse(apiKey);
           }
           case "delete": {
             if (!params.api_key_id) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: api_key_id is required for delete.",
-                  },
-                ],
-              };
+              return textResponse("Error: api_key_id is required for delete.");
             }
             await client.apiKeys.delete(params.api_key_id);
-            return {
-              content: [{ type: "text", text: "API key deleted successfully" }],
-            };
+            return textResponse("API key deleted successfully");
           }
         }
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error in manage_api_keys (${params.action}): ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-        };
+        return textResponse(
+          `Error in manage_api_keys (${params.action}): ${errorMessage(error)}`,
+        );
       }
     },
   );

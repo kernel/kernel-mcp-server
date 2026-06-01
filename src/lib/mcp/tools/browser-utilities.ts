@@ -1,12 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
+import { errorMessage, jsonResponse, textResponse } from "@/lib/mcp/responses";
 
 type BrowserCurlParams = Parameters<KernelClient["browsers"]["curl"]>[1];
-
-function textResponse(text: string) {
-  return { content: [{ type: "text" as const, text }] };
-}
 
 function validateCurlUrl(url: string) {
   const parsed = new URL(url);
@@ -54,13 +51,9 @@ export function registerBrowserUtilityTools(server: McpServer) {
         validateCurlUrl(curlParams.url);
 
         const response = await client.browsers.curl(session_id, curlParams);
-        return textResponse(JSON.stringify(response, null, 2));
+        return jsonResponse(response);
       } catch (error) {
-        return textResponse(
-          `Error in browser_curl: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
+        return textResponse(`Error in browser_curl: ${errorMessage(error)}`);
       }
     },
   );
@@ -79,12 +72,10 @@ export function registerBrowserUtilityTools(server: McpServer) {
         const response = await client.browsers.computer.readClipboard(
           params.session_id,
         );
-        return textResponse(JSON.stringify(response, null, 2));
+        return jsonResponse(response);
       } catch (error) {
         return textResponse(
-          `Error in read_browser_clipboard: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `Error in read_browser_clipboard: ${errorMessage(error)}`,
         );
       }
     },
@@ -108,9 +99,7 @@ export function registerBrowserUtilityTools(server: McpServer) {
         return textResponse("Clipboard updated successfully");
       } catch (error) {
         return textResponse(
-          `Error in write_browser_clipboard: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `Error in write_browser_clipboard: ${errorMessage(error)}`,
         );
       }
     },

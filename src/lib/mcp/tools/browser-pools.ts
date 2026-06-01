@@ -1,6 +1,15 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import {
+  buildBrowserExtensions,
+  buildBrowserProfile,
+  buildBrowserViewport,
+  type BrowserExtensionParams,
+  type BrowserProfileParams,
+  type BrowserViewportParams,
+} from "@/lib/mcp/browser-config";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
+import { errorMessage, jsonResponse, textResponse } from "@/lib/mcp/responses";
 
 type BrowserPoolCreateParams = Parameters<
   KernelClient["browserPools"]["create"]
@@ -19,26 +28,9 @@ type BrowserPoolAction =
   | "acquire"
   | "release";
 
-type ProfileParams = {
-  profile_name?: string;
-  profile_id?: string;
-  save_profile_changes?: boolean;
-};
-
-type ExtensionParams = {
-  extension_id?: string;
-  extension_name?: string;
-};
-
-type ViewportParams = {
-  viewport_width?: number;
-  viewport_height?: number;
-  viewport_refresh_rate?: number;
-};
-
-type PoolConfigParams = ProfileParams &
-  ExtensionParams &
-  ViewportParams & {
+type PoolConfigParams = BrowserProfileParams &
+  BrowserExtensionParams &
+  BrowserViewportParams & {
     size?: number;
     name?: string;
     headless?: boolean;
@@ -99,10 +91,6 @@ const scopedBrowserPoolFields = Object.keys(
   browserPoolFieldScopes,
 ) as BrowserPoolToolField[];
 
-function textResponse(text: string) {
-  return { content: [{ type: "text" as const, text }] };
-}
-
 function formatActionScope(field: BrowserPoolToolField) {
   return browserPoolFieldScopes[field].join(", ");
 }
@@ -124,72 +112,6 @@ function actionFieldError(
     : undefined;
 }
 
-function buildProfile(
-  params: ProfileParams,
-): BrowserPoolCreateParams["profile"] {
-  if (params.profile_name && params.profile_id) {
-    throw new Error("Cannot specify both profile_name and profile_id.");
-  }
-  if (
-    params.save_profile_changes !== undefined &&
-    !params.profile_name &&
-    !params.profile_id
-  ) {
-    throw new Error(
-      "profile_name or profile_id is required when save_profile_changes is set.",
-    );
-  }
-  if (!params.profile_name && !params.profile_id) return undefined;
-  return {
-    ...(params.profile_name && { name: params.profile_name }),
-    ...(params.profile_id && { id: params.profile_id }),
-    ...(params.save_profile_changes !== undefined && {
-      save_changes: params.save_profile_changes,
-    }),
-  };
-}
-
-function buildExtensions(
-  params: ExtensionParams,
-): BrowserPoolCreateParams["extensions"] {
-  if (params.extension_id && params.extension_name) {
-    throw new Error("Cannot specify both extension_id and extension_name.");
-  }
-  if (!params.extension_id && !params.extension_name) return undefined;
-  return [
-    {
-      ...(params.extension_id && { id: params.extension_id }),
-      ...(params.extension_name && { name: params.extension_name }),
-    },
-  ];
-}
-
-function buildViewport(
-  params: ViewportParams,
-): BrowserPoolCreateParams["viewport"] {
-  const width = params.viewport_width;
-  const height = params.viewport_height;
-  const hasWidth = width !== undefined;
-  const hasHeight = height !== undefined;
-  const hasViewportOptions =
-    hasWidth || hasHeight || params.viewport_refresh_rate !== undefined;
-
-  if (!hasViewportOptions) return undefined;
-  if (!hasWidth || !hasHeight) {
-    throw new Error(
-      "viewport_width and viewport_height must be provided together.",
-    );
-  }
-
-  return {
-    width,
-    height,
-    ...(params.viewport_refresh_rate !== undefined && {
-      refresh_rate: params.viewport_refresh_rate,
-    }),
-  };
-}
-
 function buildPoolConfigParams(
   params: PoolConfigParams,
 ): BrowserPoolCreateParams {
@@ -197,9 +119,9 @@ function buildPoolConfigParams(
     throw new Error("size is required for create and update.");
   }
 
-  const profile = buildProfile(params);
-  const extensions = buildExtensions(params);
-  const viewport = buildViewport(params);
+  const profile = buildBrowserProfile(params);
+  const extensions = buildBrowserExtensions(params);
+  const viewport = buildBrowserViewport(params);
 
   return {
     size: params.size,
@@ -421,9 +343,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
               buildPoolConfigParams(params),
             );
             if (!pool) return textResponse("Failed to create browser pool");
-            return {
-              content: [{ type: "text", text: JSON.stringify(pool, null, 2) }],
-            };
+            return jsonResponse(pool);
           }
           case "update": {
             const scopeError = actionFieldError(params, "update");
@@ -442,26 +362,18 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
               params.id_or_name,
               updateParams,
             );
-            return {
-              content: [{ type: "text", text: JSON.stringify(pool, null, 2) }],
-            };
+            return jsonResponse(pool);
           }
           case "list": {
             const scopeError = actionFieldError(params, "list");
             if (scopeError) return textResponse(scopeError);
 
             const pools = await client.browserPools.list();
-            return {
-              content: [
-                {
-                  type: "text",
-                  text:
-                    pools?.length > 0
-                      ? JSON.stringify(pools, null, 2)
-                      : "No browser pools found",
-                },
-              ],
-            };
+            return textResponse(
+              pools?.length > 0
+                ? JSON.stringify(pools, null, 2)
+                : "No browser pools found",
+            );
           }
           case "get": {
             const scopeError = actionFieldError(params, "get");
@@ -473,9 +385,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
               return textResponse(
                 `Browser pool "${params.id_or_name}" not found`,
               );
-            return {
-              content: [{ type: "text", text: JSON.stringify(pool, null, 2) }],
-            };
+            return jsonResponse(pool);
           }
           case "delete": {
             const scopeError = actionFieldError(params, "delete");
@@ -512,11 +422,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
             );
             if (!browser)
               return textResponse("Failed to acquire browser from pool");
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(browser, null, 2) },
-              ],
-            };
+            return jsonResponse(browser);
           }
           case "release": {
             const scopeError = actionFieldError(params, "release");
@@ -534,9 +440,9 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
         }
       } catch (error) {
         return textResponse(
-          `Error in manage_browser_pools (${params.action}): ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `Error in manage_browser_pools (${params.action}): ${errorMessage(
+            error,
+          )}`,
         );
       }
     },
