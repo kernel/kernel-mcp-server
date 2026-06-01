@@ -1,7 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
-import { errorMessage, jsonResponse, textResponse } from "@/lib/mcp/responses";
+import {
+  errorMessage,
+  jsonResponse,
+  paginatedJsonResponse,
+  textResponse,
+} from "@/lib/mcp/responses";
 
 export function registerProjectCapabilities(server: McpServer) {
   // manage_projects -- Create, list, get, update, delete, and manage organization project limits
@@ -80,12 +85,7 @@ export function registerProjectCapabilities(server: McpServer) {
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
-            const items = page.getPaginatedItems();
-            return jsonResponse({
-              items,
-              has_more: page.has_more,
-              next_offset: page.next_offset,
-            });
+            return paginatedJsonResponse(page);
           }
           case "get": {
             if (!params.project_id) {

@@ -1,7 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
-import { errorMessage, textResponse } from "@/lib/mcp/responses";
+import {
+  errorMessage,
+  jsonListResponse,
+  textResponse,
+} from "@/lib/mcp/responses";
 
 export function registerExtensionTools(server: McpServer) {
   // manage_extensions -- List and delete browser extensions
@@ -23,22 +27,12 @@ export function registerExtensionTools(server: McpServer) {
         switch (params.action) {
           case "list": {
             const extensions = await client.extensions.list();
-            return textResponse(
-              extensions?.length > 0
-                ? JSON.stringify(extensions, null, 2)
-                : "No extensions found",
-            );
+            return jsonListResponse(extensions, "No extensions found");
           }
           case "delete": {
-            if (!params.id_or_name)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: id_or_name is required for delete.",
-                  },
-                ],
-              };
+            if (!params.id_or_name) {
+              return textResponse("Error: id_or_name is required for delete.");
+            }
             await client.extensions.delete(params.id_or_name);
             return textResponse("Extension deleted successfully");
           }

@@ -2,7 +2,12 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
-import { errorMessage, jsonResponse, textResponse } from "@/lib/mcp/responses";
+import {
+  errorMessage,
+  jsonResponse,
+  paginatedJsonResponse,
+  textResponse,
+} from "@/lib/mcp/responses";
 
 export function registerAppCapabilities(server: McpServer) {
   server.resource("apps", "apps://", async (uri, extra) => {
@@ -103,13 +108,7 @@ export function registerAppCapabilities(server: McpServer) {
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
-            const items = page.getPaginatedItems();
-            if (items.length === 0) return textResponse("No apps found");
-            return jsonResponse({
-              items,
-              has_more: page.has_more,
-              next_offset: page.next_offset,
-            });
+            return paginatedJsonResponse(page, "No apps found");
           }
           case "invoke": {
             if (!params.app_name || !params.action_name) {
@@ -171,13 +170,7 @@ export function registerAppCapabilities(server: McpServer) {
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
-            const items = page.getPaginatedItems();
-            if (items.length === 0) return textResponse("No deployments found");
-            return jsonResponse({
-              items,
-              has_more: page.has_more,
-              next_offset: page.next_offset,
-            });
+            return paginatedJsonResponse(page, "No deployments found");
           }
           case "delete_deployment": {
             if (!params.deployment_id) {

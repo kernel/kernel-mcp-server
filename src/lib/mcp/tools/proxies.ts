@@ -1,7 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
-import { errorMessage, jsonResponse, textResponse } from "@/lib/mcp/responses";
+import {
+  errorMessage,
+  jsonListResponse,
+  jsonResponse,
+  textResponse,
+} from "@/lib/mcp/responses";
 
 const httpUrlSchema = z
   .string()
@@ -122,11 +127,7 @@ export function registerProxyTools(server: McpServer) {
           }
           case "list": {
             const proxies = await client.proxies.list();
-            return textResponse(
-              proxies?.length > 0
-                ? JSON.stringify(proxies, null, 2)
-                : "No proxies found",
-            );
+            return jsonListResponse(proxies, "No proxies found");
           }
           case "get": {
             if (!params.proxy_id) {

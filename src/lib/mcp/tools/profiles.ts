@@ -2,7 +2,12 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
 import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
-import { errorMessage, jsonResponse, textResponse } from "@/lib/mcp/responses";
+import {
+  errorMessage,
+  jsonResponse,
+  paginatedJsonResponse,
+  textResponse,
+} from "@/lib/mcp/responses";
 
 type ProfileListParams = NonNullable<
   Parameters<KernelClient["profiles"]["list"]>[0]
@@ -126,17 +131,10 @@ export function registerProfileCapabilities(server: McpServer) {
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
-            const items = page.getPaginatedItems();
-            if (items.length === 0) {
-              return textResponse(
-                "No profiles found. Use manage_profiles with action 'setup' to create one.",
-              );
-            }
-            return jsonResponse({
-              items,
-              has_more: page.has_more,
-              next_offset: page.next_offset,
-            });
+            return paginatedJsonResponse(
+              page,
+              "No profiles found. Use manage_profiles with action 'setup' to create one.",
+            );
           }
           case "get": {
             if (params.profile_name && params.profile_id) {
