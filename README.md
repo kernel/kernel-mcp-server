@@ -277,10 +277,14 @@ Each Kernel feature has a single `manage_*` tool with an `action` parameter, kee
 
 ## Resources
 
-- `browsers://` - Access browser sessions (list all or get specific session)
-- `browser_pools://` - Access browser pools (list all or get specific pool)
-- `profiles://` - Access browser profiles (list all or get specific profile)
-- `apps://` - Access deployed apps (list all or get specific app)
+- `browsers://` - List browser sessions
+- `browser-pools://` - List browser pools
+- `profiles://` - List browser profiles
+- `apps://` - List deployed apps
+- `browsers://{session_id}` - Access one browser session
+- `browser-pools://{id_or_name}` - Access one browser pool
+- `profiles://{profile_name}` - Access one browser profile
+- `apps://{app_name}` - Access one deployed app
 
 ## Prompts
 

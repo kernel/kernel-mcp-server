@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
+import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
 
 export function registerAppCapabilities(server: McpServer) {
   server.resource("apps", "apps://", async (uri, extra) => {
@@ -9,46 +10,29 @@ export function registerAppCapabilities(server: McpServer) {
     }
 
     const client = createKernelClient(extra.authInfo.token);
-    const uriString = uri.toString();
+    const appsPage = await client.apps.list();
+    const items = appsPage.getPaginatedItems();
+    return {
+      contents: [
+        {
+          uri: uri.toString(),
+          mimeType: "application/json",
+          text:
+            items.length > 0 ? JSON.stringify(items, null, 2) : "No apps found",
+        },
+      ],
+    };
+  });
 
-    if (uriString === "apps://") {
-      // List all apps
-      const appsPage = await client.apps.list();
-      const items = appsPage.getPaginatedItems();
-      return {
-        contents: [
-          {
-            uri: "apps://",
-            mimeType: "application/json",
-            text:
-              items.length > 0
-                ? JSON.stringify(items, null, 2)
-                : "No apps found",
-          },
-        ],
-      };
-    } else if (uriString.startsWith("apps://")) {
-      // Get specific app by name
-      const appName = uriString.replace("apps://", "");
+  registerJsonResourceTemplate(server, {
+    name: "app",
+    uriTemplate: "apps://{appName}",
+    variableName: "appName",
+    resourceLabel: "App",
+    read: async (client, appName) => {
       const appsPage = await client.apps.list({ app_name: appName });
-      const app = appsPage.getPaginatedItems()[0];
-
-      if (!app) {
-        throw new Error(`App "${appName}" not found`);
-      }
-
-      return {
-        contents: [
-          {
-            uri: uriString,
-            mimeType: "application/json",
-            text: JSON.stringify(app, null, 2),
-          },
-        ],
-      };
-    }
-
-    throw new Error(`Invalid app URI: ${uriString}`);
+      return appsPage.getPaginatedItems()[0];
+    },
   });
 
   // manage_apps -- List apps, invoke actions, manage deployments, check invocations

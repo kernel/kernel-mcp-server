@@ -3,12 +3,14 @@ import { z } from "zod";
 import {
   buildBrowserExtensions,
   buildBrowserProfile,
+  buildBrowserStartUrl,
   buildBrowserViewport,
   type BrowserExtensionParams,
   type BrowserProfileParams,
   type BrowserViewportParams,
 } from "@/lib/mcp/browser-config";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
+import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
 import { errorMessage, jsonResponse, textResponse } from "@/lib/mcp/responses";
 
 type BrowserPoolCreateParams = Parameters<
@@ -121,6 +123,7 @@ function buildPoolConfigParams(
   const profile = buildBrowserProfile(params);
   const extensions = buildBrowserExtensions(params);
   const viewport = buildBrowserViewport(params);
+  const startUrl = buildBrowserStartUrl(params.start_url);
 
   return {
     size: params.size,
@@ -135,7 +138,7 @@ function buildPoolConfigParams(
     ...(params.fill_rate_per_minute !== undefined && {
       fill_rate_per_minute: params.fill_rate_per_minute,
     }),
-    ...(params.start_url !== undefined && { start_url: params.start_url }),
+    ...(startUrl !== undefined && { start_url: startUrl }),
     ...(params.chrome_policy !== undefined && {
       chrome_policy: params.chrome_policy,
     }),
@@ -146,48 +149,33 @@ function buildPoolConfigParams(
 }
 
 export function registerBrowserPoolCapabilities(server: McpServer) {
-  server.resource("browser_pools", "browser_pools://", async (uri, extra) => {
+  server.resource("browser_pools", "browser-pools://", async (uri, extra) => {
     if (!extra.authInfo) {
       throw new Error("Authentication required");
     }
 
     const client = createKernelClient(extra.authInfo.token);
-    const uriString = uri.toString();
+    const pools = await client.browserPools.list();
+    return {
+      contents: [
+        {
+          uri: uri.toString(),
+          mimeType: "application/json",
+          text:
+            pools && pools.length > 0
+              ? JSON.stringify(pools, null, 2)
+              : "No browser pools found",
+        },
+      ],
+    };
+  });
 
-    if (uriString === "browser_pools://") {
-      const pools = await client.browserPools.list();
-      return {
-        contents: [
-          {
-            uri: "browser_pools://",
-            mimeType: "application/json",
-            text:
-              pools && pools.length > 0
-                ? JSON.stringify(pools, null, 2)
-                : "No browser pools found",
-          },
-        ],
-      };
-    } else if (uriString.startsWith("browser_pools://")) {
-      const idOrName = uriString.replace("browser_pools://", "");
-      const pool = await client.browserPools.retrieve(idOrName);
-
-      if (!pool) {
-        throw new Error(`Browser pool "${idOrName}" not found`);
-      }
-
-      return {
-        contents: [
-          {
-            uri: uriString,
-            mimeType: "application/json",
-            text: JSON.stringify(pool, null, 2),
-          },
-        ],
-      };
-    }
-
-    throw new Error(`Invalid browser pool URI: ${uriString}`);
+  registerJsonResourceTemplate(server, {
+    name: "browser_pool",
+    uriTemplate: "browser-pools://{idOrName}",
+    variableName: "idOrName",
+    resourceLabel: "Browser pool",
+    read: (client, idOrName) => client.browserPools.retrieve(idOrName),
   });
 
   // manage_browser_pools -- Create, update, list, get, delete, flush, acquire, and release browser pools

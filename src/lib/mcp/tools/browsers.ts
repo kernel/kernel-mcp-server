@@ -3,10 +3,12 @@ import { z } from "zod";
 import {
   buildBrowserExtensions,
   buildBrowserProfile,
+  buildBrowserStartUrl,
   buildBrowserViewport,
   buildBrowserViewportUpdate,
 } from "@/lib/mcp/browser-config";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
+import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
 import { errorMessage, jsonResponse, textResponse } from "@/lib/mcp/responses";
 
 type BrowserCreateParams = NonNullable<
@@ -138,45 +140,28 @@ export function registerBrowserCapabilities(server: McpServer) {
     }
 
     const client = createKernelClient(extra.authInfo.token);
-    const uriString = uri.toString();
+    const browsersPage = await client.browsers.list();
+    const items = browsersPage.getPaginatedItems();
+    return {
+      contents: [
+        {
+          uri: uri.toString(),
+          mimeType: "application/json",
+          text:
+            items.length > 0
+              ? JSON.stringify(items, null, 2)
+              : "No browsers found",
+        },
+      ],
+    };
+  });
 
-    if (uriString === "browsers://") {
-      // List all browsers
-      const browsersPage = await client.browsers.list();
-      const items = browsersPage.getPaginatedItems();
-      return {
-        contents: [
-          {
-            uri: "browsers://",
-            mimeType: "application/json",
-            text:
-              items.length > 0
-                ? JSON.stringify(items, null, 2)
-                : "No browsers found",
-          },
-        ],
-      };
-    } else if (uriString.startsWith("browsers://")) {
-      // Get specific browser by session ID
-      const sessionId = uriString.replace("browsers://", "");
-      const browser = await client.browsers.retrieve(sessionId);
-
-      if (!browser) {
-        throw new Error(`Browser session "${sessionId}" not found`);
-      }
-
-      return {
-        contents: [
-          {
-            uri: uriString,
-            mimeType: "application/json",
-            text: JSON.stringify(browser, null, 2),
-          },
-        ],
-      };
-    }
-
-    throw new Error(`Invalid browser URI: ${uriString}`);
+  registerJsonResourceTemplate(server, {
+    name: "browser",
+    uriTemplate: "browsers://{sessionId}",
+    variableName: "sessionId",
+    resourceLabel: "Browser session",
+    read: (client, sessionId) => client.browsers.retrieve(sessionId),
   });
 
   // manage_browsers -- Create, update, list, get, and delete browser sessions
@@ -363,7 +348,8 @@ export function registerBrowserCapabilities(server: McpServer) {
               createParams.timeout_seconds = params.timeout_seconds;
             if (params.kiosk_mode !== undefined)
               createParams.kiosk_mode = params.kiosk_mode;
-            if (params.start_url) createParams.start_url = params.start_url;
+            const startUrl = buildBrowserStartUrl(params.start_url);
+            if (startUrl !== undefined) createParams.start_url = startUrl;
             if (params.chrome_policy)
               createParams.chrome_policy = params.chrome_policy;
             if (params.proxy_id) createParams.proxy_id = params.proxy_id;

@@ -19,6 +19,18 @@ export type BrowserViewportUpdateParams = BrowserViewportParams & {
   viewport_force?: boolean;
 };
 
+export function buildBrowserStartUrl(startUrl: string | undefined) {
+  if (startUrl === undefined) return undefined;
+
+  try {
+    new URL(startUrl);
+  } catch {
+    throw new Error("start_url must be a valid URL.");
+  }
+
+  return startUrl;
+}
+
 export function buildBrowserProfile(params: BrowserProfileParams) {
   if (params.profile_name && params.profile_id) {
     throw new Error("Cannot specify both profile_name and profile_id.");
