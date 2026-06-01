@@ -48,24 +48,12 @@ export function registerBrowserUtilityTools(server: McpServer) {
       const client = createKernelClient(extra.authInfo.token);
 
       try {
-        validateCurlUrl(params.url);
+        const { session_id, ...curlParams } = params satisfies {
+          session_id: string;
+        } & BrowserCurlParams;
+        validateCurlUrl(curlParams.url);
 
-        const curlParams: BrowserCurlParams = {
-          url: params.url,
-          ...(params.method !== undefined && { method: params.method }),
-          ...(params.headers !== undefined && { headers: params.headers }),
-          ...(params.body !== undefined && { body: params.body }),
-          ...(params.response_encoding !== undefined && {
-            response_encoding: params.response_encoding,
-          }),
-          ...(params.timeout_ms !== undefined && {
-            timeout_ms: params.timeout_ms,
-          }),
-        };
-        const response = await client.browsers.curl(
-          params.session_id,
-          curlParams,
-        );
+        const response = await client.browsers.curl(session_id, curlParams);
         return textResponse(JSON.stringify(response, null, 2));
       } catch (error) {
         return textResponse(
