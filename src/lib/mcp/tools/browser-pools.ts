@@ -19,6 +19,9 @@ type BrowserPoolCreateParams = Parameters<
 type BrowserPoolUpdateParams = Parameters<
   KernelClient["browserPools"]["update"]
 >[1];
+type BrowserPoolUpdateBody = Omit<BrowserPoolUpdateParams, "size"> & {
+  size?: BrowserPoolUpdateParams["size"];
+};
 
 type BrowserPoolAction =
   | "create"
@@ -115,18 +118,14 @@ function actionFieldError(
 
 function buildPoolConfigParams(
   params: PoolConfigParams,
-): BrowserPoolCreateParams {
-  if (params.size === undefined) {
-    throw new Error("size is required for create and update.");
-  }
-
+): BrowserPoolUpdateBody {
   const profile = buildBrowserProfile(params);
   const extensions = buildBrowserExtensions(params);
   const viewport = buildBrowserViewport(params);
   const startUrl = buildBrowserStartUrl(params.start_url);
 
   return {
-    size: params.size,
+    ...(params.size !== undefined && { size: params.size }),
     ...(params.name && { name: params.name }),
     ...(params.headless !== undefined && { headless: params.headless }),
     ...(params.stealth !== undefined && { stealth: params.stealth }),
@@ -145,6 +144,27 @@ function buildPoolConfigParams(
     ...(params.kiosk_mode !== undefined && { kiosk_mode: params.kiosk_mode }),
     ...(extensions && { extensions }),
     ...(viewport && { viewport }),
+  };
+}
+
+function buildPoolCreateParams(
+  params: PoolConfigParams,
+): BrowserPoolCreateParams {
+  if (params.size === undefined) {
+    throw new Error("size is required for create.");
+  }
+
+  return { ...buildPoolConfigParams(params), size: params.size };
+}
+
+function buildPoolUpdateParams(
+  params: PoolConfigParams & { discard_all_idle?: boolean },
+) {
+  return {
+    ...buildPoolConfigParams(params),
+    ...(params.discard_all_idle !== undefined && {
+      discard_all_idle: params.discard_all_idle,
+    }),
   };
 }
 
@@ -328,7 +348,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
             if (scopeError) return textResponse(scopeError);
 
             const pool = await client.browserPools.create(
-              buildPoolConfigParams(params),
+              buildPoolCreateParams(params),
             );
             if (!pool) return textResponse("Failed to create browser pool");
             return jsonResponse(pool);
@@ -340,15 +360,17 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
               return textResponse("Error: id_or_name is required for update.");
             }
 
-            const updateParams: BrowserPoolUpdateParams =
-              buildPoolConfigParams(params);
-            if (params.discard_all_idle !== undefined) {
-              updateParams.discard_all_idle = params.discard_all_idle;
+            const updateParams = buildPoolUpdateParams(params);
+            if (Object.keys(updateParams).length === 0) {
+              return textResponse(
+                "Error: at least one update field is required.",
+              );
             }
 
+            // Generated SDK types still require size, but pool PATCH accepts partial bodies.
             const pool = await client.browserPools.update(
               params.id_or_name,
-              updateParams,
+              updateParams as BrowserPoolUpdateParams,
             );
             return jsonResponse(pool);
           }
