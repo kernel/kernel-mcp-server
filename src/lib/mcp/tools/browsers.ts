@@ -573,6 +573,8 @@ export function registerBrowserCapabilities(server: McpServer) {
               params.session_id,
               updateParams,
             );
+            if (!browser)
+              return textResponse("Failed to update browser session");
             return {
               content: [
                 { type: "text", text: JSON.stringify(browser, null, 2) },
