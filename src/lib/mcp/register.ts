@@ -3,6 +3,7 @@ import { registerKernelPrompts } from "@/lib/mcp/prompts";
 import { registerAPIKeyCapabilities } from "@/lib/mcp/tools/api-keys";
 import { registerAppCapabilities } from "@/lib/mcp/tools/apps";
 import { registerBrowserPoolCapabilities } from "@/lib/mcp/tools/browser-pools";
+import { registerBrowserUtilityTools } from "@/lib/mcp/tools/browser-utilities";
 import { registerBrowserCapabilities } from "@/lib/mcp/tools/browsers";
 import { registerComputerActionTool } from "@/lib/mcp/tools/computer-action";
 import { registerDocsTools } from "@/lib/mcp/tools/docs";
@@ -21,6 +22,7 @@ export function registerMcpCapabilities(server: McpServer) {
   registerProjectCapabilities(server);
   registerAPIKeyCapabilities(server);
   registerBrowserPoolCapabilities(server);
+  registerBrowserUtilityTools(server);
   registerProxyTools(server);
   registerExtensionTools(server);
   registerAppCapabilities(server);
