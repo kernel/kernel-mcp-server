@@ -107,6 +107,15 @@ export function registerCredentialProviderTools(server: McpServer) {
                 cache_ttl_seconds: params.cache_ttl_seconds,
               }),
             });
+            if (!provider)
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: "Failed to create credential provider",
+                  },
+                ],
+              };
             return {
               content: [
                 { type: "text", text: JSON.stringify(provider, null, 2) },
