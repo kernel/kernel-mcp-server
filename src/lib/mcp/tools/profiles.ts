@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
+import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
 
 async function listProfiles(client: KernelClient) {
   const profiles: Awaited<ReturnType<typeof client.profiles.retrieve>>[] = [];
@@ -17,44 +18,27 @@ export function registerProfileCapabilities(server: McpServer) {
     }
 
     const client = createKernelClient(extra.authInfo.token);
-    const uriString = uri.toString();
+    const profiles = await listProfiles(client);
+    return {
+      contents: [
+        {
+          uri: uri.toString(),
+          mimeType: "application/json",
+          text:
+            profiles.length > 0
+              ? JSON.stringify(profiles, null, 2)
+              : "No profiles found",
+        },
+      ],
+    };
+  });
 
-    if (uriString === "profiles://") {
-      // List all profiles
-      const profiles = await listProfiles(client);
-      return {
-        contents: [
-          {
-            uri: "profiles://",
-            mimeType: "application/json",
-            text:
-              profiles.length > 0
-                ? JSON.stringify(profiles, null, 2)
-                : "No profiles found",
-          },
-        ],
-      };
-    } else if (uriString.startsWith("profiles://")) {
-      // Get specific profile by name
-      const profileName = uriString.replace("profiles://", "");
-      const profile = await client.profiles.retrieve(profileName);
-
-      if (!profile) {
-        throw new Error(`Profile "${profileName}" not found`);
-      }
-
-      return {
-        contents: [
-          {
-            uri: uriString,
-            mimeType: "application/json",
-            text: JSON.stringify(profile, null, 2),
-          },
-        ],
-      };
-    }
-
-    throw new Error(`Invalid profile URI: ${uriString}`);
+  registerJsonResourceTemplate(server, {
+    name: "profile",
+    uriTemplate: "profiles://{profileName}",
+    variableName: "profileName",
+    resourceLabel: "Profile",
+    read: (client, profileName) => client.profiles.retrieve(profileName),
   });
 
   server.tool(
