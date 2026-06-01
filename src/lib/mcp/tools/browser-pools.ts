@@ -43,7 +43,6 @@ type PoolConfigParams = BrowserProfileParams &
     kiosk_mode?: boolean;
   };
 
-const createActions: readonly BrowserPoolAction[] = ["create"];
 const updateActions: readonly BrowserPoolAction[] = ["update"];
 const createUpdateActions: readonly BrowserPoolAction[] = ["create", "update"];
 const idOrNameActions: readonly BrowserPoolAction[] = [
@@ -268,6 +267,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
         .optional(),
       start_url: z
         .string()
+        .url()
         .describe(
           "(create, update) URL to open when a browser is warmed into the pool. Navigation is best-effort.",
         )
