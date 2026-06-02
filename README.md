@@ -255,9 +255,11 @@ Many other MCP-capable tools accept:
 
 Configure these values wherever the tool expects MCP server settings.
 
-## Tools (10 total)
+## Tools (12 total)
 
 Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Four standalone tools handle high-frequency workflows.
+
+Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_DISABLED_TOOLSETS` to a comma-separated list. For example, `KERNEL_MCP_DISABLED_TOOLSETS=api_keys` prevents `manage_api_keys` from being registered.
 
 ### manage\_\* tools
 
@@ -267,6 +269,8 @@ Each Kernel feature has a single `manage_*` tool with an `action` parameter, kee
 - `manage_proxies` - Create, list, and delete proxy configurations (datacenter, ISP, residential, mobile, custom).
 - `manage_extensions` - List and delete uploaded browser extensions.
 - `manage_apps` - List apps, invoke actions, get/list deployments, and get invocation results.
+- `manage_projects` - Create, list, get, update, and delete organization projects.
+- `manage_api_keys` - Create, list, get, update, and delete Kernel API keys. Create returns the plaintext key once.
 
 ### Standalone tools
 
