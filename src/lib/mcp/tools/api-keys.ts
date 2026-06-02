@@ -2,6 +2,22 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 
+function textResponse(text: string) {
+  return { content: [{ type: "text" as const, text }] };
+}
+
+function jsonResponse(value: unknown) {
+  return textResponse(JSON.stringify(value, null, 2) ?? String(value));
+}
+
+function errorResponse(text: string) {
+  return { ...textResponse(text), isError: true as const };
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function registerAPIKeyCapabilities(server: McpServer) {
   // manage_api_keys -- Create, list, get, update, and delete Kernel API keys
   server.tool(
@@ -33,8 +49,18 @@ export function registerAPIKeyCapabilities(server: McpServer) {
           "(create) Days until expiry, up to 3650. Use null for no expiry.",
         )
         .optional(),
-      limit: z.number().describe("(list) Max results per page.").optional(),
-      offset: z.number().describe("(list) Pagination offset.").optional(),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .describe("(list) Max results per page.")
+        .optional(),
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .describe("(list) Pagination offset.")
+        .optional(),
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
@@ -44,11 +70,7 @@ export function registerAPIKeyCapabilities(server: McpServer) {
         switch (params.action) {
           case "create": {
             if (!params.name) {
-              return {
-                content: [
-                  { type: "text", text: "Error: name is required for create." },
-                ],
-              };
+              return errorResponse("Error: name is required for create.");
             }
             const createParams: Parameters<typeof client.apiKeys.create>[0] = {
               name: params.name,
@@ -60,11 +82,7 @@ export function registerAPIKeyCapabilities(server: McpServer) {
               createParams.days_to_expire = params.days_to_expire;
             }
             const apiKey = await client.apiKeys.create(createParams);
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(apiKey, null, 2) },
-              ],
-            };
+            return jsonResponse(apiKey);
           }
           case "list": {
             const page = await client.apiKeys.list({
@@ -72,94 +90,43 @@ export function registerAPIKeyCapabilities(server: McpServer) {
               ...(params.offset !== undefined && { offset: params.offset }),
             });
             const items = page.getPaginatedItems();
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify(
-                    {
-                      items,
-                      has_more: page.has_more,
-                      next_offset: page.next_offset,
-                    },
-                    null,
-                    2,
-                  ),
-                },
-              ],
-            };
+            return jsonResponse({
+              items,
+              has_more: page.has_more,
+              next_offset: page.next_offset,
+            });
           }
           case "get": {
             if (!params.api_key_id) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: api_key_id is required for get.",
-                  },
-                ],
-              };
+              return errorResponse("Error: api_key_id is required for get.");
             }
             const apiKey = await client.apiKeys.retrieve(params.api_key_id);
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(apiKey, null, 2) },
-              ],
-            };
+            return jsonResponse(apiKey);
           }
           case "update": {
             if (!params.api_key_id) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: api_key_id is required for update.",
-                  },
-                ],
-              };
+              return errorResponse("Error: api_key_id is required for update.");
             }
             if (!params.name) {
-              return {
-                content: [
-                  { type: "text", text: "Error: name is required for update." },
-                ],
-              };
+              return errorResponse("Error: name is required for update.");
             }
             const apiKey = await client.apiKeys.update(params.api_key_id, {
               name: params.name,
             });
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(apiKey, null, 2) },
-              ],
-            };
+            return jsonResponse(apiKey);
           }
           case "delete": {
             if (!params.api_key_id) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: api_key_id is required for delete.",
-                  },
-                ],
-              };
+              return errorResponse("Error: api_key_id is required for delete.");
             }
             await client.apiKeys.delete(params.api_key_id);
-            return {
-              content: [{ type: "text", text: "API key deleted successfully" }],
-            };
+            return textResponse("API key deleted successfully");
           }
         }
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error in manage_api_keys (${params.action}): ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-        };
+        return errorResponse(
+          `Error in manage_api_keys (${params.action}): ${errorMessage(error)}`,
+        );
       }
     },
   );
