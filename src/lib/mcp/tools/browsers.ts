@@ -1,7 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
-import { textResponse, toolErrorResponse } from "@/lib/mcp/responses";
+import {
+  errorResponse,
+  textResponse,
+  toolErrorResponse,
+} from "@/lib/mcp/responses";
 
 type BrowserCreateParams = NonNullable<
   Parameters<KernelClient["browsers"]["create"]>[0]
@@ -111,18 +115,20 @@ function buildTelemetry(
     NonNullable<BrowserCreateParams["telemetry"]>["browser"]
   > = {};
   let hasBrowserCategories = false;
+  let hasEnabledBrowserCategories = false;
 
   for (const [paramKey, category] of telemetryCategories) {
     const enabled = params[paramKey];
     if (enabled !== undefined) {
       browser[category] = { enabled };
       hasBrowserCategories = true;
+      if (enabled) hasEnabledBrowserCategories = true;
     }
   }
 
-  if (params.telemetry_enabled === false && hasBrowserCategories) {
+  if (params.telemetry_enabled === false && hasEnabledBrowserCategories) {
     throw new Error(
-      "telemetry_enabled=false cannot be combined with telemetry category settings.",
+      "telemetry_enabled=false cannot be combined with enabled telemetry categories.",
     );
   }
 
@@ -358,12 +364,12 @@ export function registerBrowserCapabilities(server: McpServer) {
         switch (params.action) {
           case "create": {
             if (params.profile_name && params.profile_id) {
-              return textResponse(
+              return errorResponse(
                 "Error: Cannot specify both profile_name and profile_id.",
               );
             }
             if (params.extension_id && params.extension_name) {
-              return textResponse(
+              return errorResponse(
                 "Error: Cannot specify both extension_id and extension_name.",
               );
             }
@@ -399,7 +405,7 @@ export function registerBrowserCapabilities(server: McpServer) {
 
             const browser = await client.browsers.create(createParams);
             if (!browser)
-              return textResponse("Failed to create browser session");
+              return errorResponse("Failed to create browser session");
 
             let responseText = JSON.stringify(browser, null, 2);
             if (params.local_forward || params.remote_forward) {
@@ -433,16 +439,16 @@ export function registerBrowserCapabilities(server: McpServer) {
           }
           case "update": {
             if (!params.session_id)
-              return textResponse(
+              return errorResponse(
                 "Error: session_id is required for update action.",
               );
             if (params.profile_name && params.profile_id) {
-              return textResponse(
+              return errorResponse(
                 "Error: Cannot specify both profile_name and profile_id.",
               );
             }
             if (params.proxy_id && params.clear_proxy) {
-              return textResponse(
+              return errorResponse(
                 "Error: Cannot specify both proxy_id and clear_proxy.",
               );
             }
@@ -464,7 +470,7 @@ export function registerBrowserCapabilities(server: McpServer) {
             if (telemetry !== undefined) updateParams.telemetry = telemetry;
 
             if (Object.keys(updateParams).length === 0) {
-              return textResponse(
+              return errorResponse(
                 "Error: at least one update field is required.",
               );
             }
@@ -474,7 +480,7 @@ export function registerBrowserCapabilities(server: McpServer) {
               updateParams,
             );
             if (!browser)
-              return textResponse("Failed to update browser session");
+              return errorResponse("Failed to update browser session");
             return textResponse(JSON.stringify(browser, null, 2));
           }
           case "list": {
@@ -502,19 +508,19 @@ export function registerBrowserCapabilities(server: McpServer) {
           }
           case "get": {
             if (!params.session_id)
-              return textResponse(
+              return errorResponse(
                 "Error: session_id is required for get action.",
               );
             const browser = await client.browsers.retrieve(params.session_id);
             if (!browser)
-              return textResponse(
+              return errorResponse(
                 `Browser session "${params.session_id}" not found`,
               );
             return textResponse(JSON.stringify(browser, null, 2));
           }
           case "delete": {
             if (!params.session_id)
-              return textResponse(
+              return errorResponse(
                 "Error: session_id is required for delete action.",
               );
             await client.browsers.deleteByID(params.session_id);
