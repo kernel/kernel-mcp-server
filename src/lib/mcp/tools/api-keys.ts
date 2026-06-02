@@ -48,7 +48,7 @@ export function registerAPIKeyCapabilities(server: McpServer) {
       readOnlyHint: false,
       destructiveHint: true,
       idempotentHint: false,
-      openWorldHint: true,
+      openWorldHint: false,
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
