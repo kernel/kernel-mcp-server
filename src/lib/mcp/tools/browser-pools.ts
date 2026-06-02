@@ -11,7 +11,11 @@ import {
 } from "@/lib/mcp/browser-config";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
 import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
-import { errorMessage, jsonResponse, textResponse } from "@/lib/mcp/responses";
+import {
+  jsonResponse,
+  textResponse,
+  toolErrorResponse,
+} from "@/lib/mcp/responses";
 
 type BrowserPoolCreateParams = Parameters<
   KernelClient["browserPools"]["create"]
@@ -449,11 +453,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           }
         }
       } catch (error) {
-        return textResponse(
-          `Error in manage_browser_pools (${params.action}): ${errorMessage(
-            error,
-          )}`,
-        );
+        return toolErrorResponse("manage_browser_pools", params.action, error);
       }
     },
   );

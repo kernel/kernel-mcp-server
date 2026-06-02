@@ -1,7 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
-import { errorMessage, jsonResponse, textResponse } from "@/lib/mcp/responses";
+import {
+  jsonResponse,
+  textResponse,
+  toolErrorResponse,
+} from "@/lib/mcp/responses";
 
 type BrowserCurlParams = Parameters<KernelClient["browsers"]["curl"]>[1];
 
@@ -53,7 +57,7 @@ export function registerBrowserUtilityTools(server: McpServer) {
         const response = await client.browsers.curl(session_id, curlParams);
         return jsonResponse(response);
       } catch (error) {
-        return textResponse(`Error in browser_curl: ${errorMessage(error)}`);
+        return toolErrorResponse("browser_curl", "request", error);
       }
     },
   );
@@ -74,9 +78,7 @@ export function registerBrowserUtilityTools(server: McpServer) {
         );
         return jsonResponse(response);
       } catch (error) {
-        return textResponse(
-          `Error in read_browser_clipboard: ${errorMessage(error)}`,
-        );
+        return toolErrorResponse("read_browser_clipboard", "read", error);
       }
     },
   );
@@ -98,9 +100,7 @@ export function registerBrowserUtilityTools(server: McpServer) {
         });
         return textResponse("Clipboard updated successfully");
       } catch (error) {
-        return textResponse(
-          `Error in write_browser_clipboard: ${errorMessage(error)}`,
-        );
+        return toolErrorResponse("write_browser_clipboard", "write", error);
       }
     },
   );
