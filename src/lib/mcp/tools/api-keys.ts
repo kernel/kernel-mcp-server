@@ -1,22 +1,13 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
-
-function textResponse(text: string) {
-  return { content: [{ type: "text" as const, text }] };
-}
-
-function jsonResponse(value: unknown) {
-  return textResponse(JSON.stringify(value, null, 2) ?? String(value));
-}
-
-function errorResponse(text: string) {
-  return { ...textResponse(text), isError: true as const };
-}
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
+import {
+  errorMessage,
+  errorResponse,
+  jsonResponse,
+  paginatedJsonResponse,
+  textResponse,
+} from "@/lib/mcp/responses";
 
 export function registerAPIKeyCapabilities(server: McpServer) {
   // manage_api_keys -- Create, list, get, update, and delete Kernel API keys
@@ -89,12 +80,7 @@ export function registerAPIKeyCapabilities(server: McpServer) {
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
-            const items = page.getPaginatedItems();
-            return jsonResponse({
-              items,
-              has_more: page.has_more,
-              next_offset: page.next_offset,
-            });
+            return paginatedJsonResponse(page);
           }
           case "get": {
             if (!params.api_key_id) {

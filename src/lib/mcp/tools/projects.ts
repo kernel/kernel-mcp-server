@@ -1,6 +1,13 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
+import {
+  errorMessage,
+  errorResponse,
+  jsonResponse,
+  paginatedJsonResponse,
+  textResponse,
+} from "@/lib/mcp/responses";
 
 export function registerProjectCapabilities(server: McpServer) {
   // manage_projects -- Create, list, get, update, and delete organization projects
@@ -37,18 +44,10 @@ export function registerProjectCapabilities(server: McpServer) {
         switch (params.action) {
           case "create": {
             if (!params.name) {
-              return {
-                content: [
-                  { type: "text", text: "Error: name is required for create." },
-                ],
-              };
+              return errorResponse("Error: name is required for create.");
             }
             const project = await client.projects.create({ name: params.name });
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(project, null, 2) },
-              ],
-            };
+            return jsonResponse(project);
           }
           case "list": {
             const page = await client.projects.list({
@@ -56,62 +55,23 @@ export function registerProjectCapabilities(server: McpServer) {
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
-            const items = page.getPaginatedItems();
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify(
-                    {
-                      items,
-                      has_more: page.has_more,
-                      next_offset: page.next_offset,
-                    },
-                    null,
-                    2,
-                  ),
-                },
-              ],
-            };
+            return paginatedJsonResponse(page);
           }
           case "get": {
             if (!params.project_id) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: project_id is required for get.",
-                  },
-                ],
-              };
+              return errorResponse("Error: project_id is required for get.");
             }
             const project = await client.projects.retrieve(params.project_id);
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(project, null, 2) },
-              ],
-            };
+            return jsonResponse(project);
           }
           case "update": {
             if (!params.project_id) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: project_id is required for update.",
-                  },
-                ],
-              };
+              return errorResponse("Error: project_id is required for update.");
             }
             if (!params.name && !params.status) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: name or status is required for update.",
-                  },
-                ],
-              };
+              return errorResponse(
+                "Error: name or status is required for update.",
+              );
             }
             const updateParams: Parameters<typeof client.projects.update>[1] =
               {};
@@ -121,38 +81,20 @@ export function registerProjectCapabilities(server: McpServer) {
               params.project_id,
               updateParams,
             );
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(project, null, 2) },
-              ],
-            };
+            return jsonResponse(project);
           }
           case "delete": {
             if (!params.project_id) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: project_id is required for delete.",
-                  },
-                ],
-              };
+              return errorResponse("Error: project_id is required for delete.");
             }
             await client.projects.delete(params.project_id);
-            return {
-              content: [{ type: "text", text: "Project deleted successfully" }],
-            };
+            return textResponse("Project deleted successfully");
           }
         }
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error in manage_projects (${params.action}): ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-        };
+        return errorResponse(
+          `Error in manage_projects (${params.action}): ${errorMessage(error)}`,
+        );
       }
     },
   );
