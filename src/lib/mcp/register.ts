@@ -46,15 +46,19 @@ function isMcpToolset(value: string): value is McpToolset {
   return mcpToolsetSet.has(value);
 }
 
+function resolveMcpToolset(token: string): McpToolset | undefined {
+  if (isMcpToolset(token)) return token;
+  return standaloneToolsetAliases[token];
+}
+
 function normalizeMcpToolset(value: string): McpToolset | undefined {
   const token = value.trim().toLowerCase().replace(/-/g, "_");
-  if (isMcpToolset(token)) return token;
-  if (standaloneToolsetAliases[token]) return standaloneToolsetAliases[token];
+  const toolset = resolveMcpToolset(token);
+  if (toolset) return toolset;
 
   const managePrefix = "manage_";
   if (token.startsWith(managePrefix)) {
-    const managedToolset = token.slice(managePrefix.length);
-    if (isMcpToolset(managedToolset)) return managedToolset;
+    return resolveMcpToolset(token.slice(managePrefix.length));
   }
 
   return undefined;
