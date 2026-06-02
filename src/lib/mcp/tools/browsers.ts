@@ -28,53 +28,6 @@ type TelemetryParams = {
   telemetry_interaction?: boolean;
 };
 
-type BrowserAction = "create" | "update" | "list" | "get" | "delete";
-
-const createActions: readonly BrowserAction[] = ["create"];
-const updateActions: readonly BrowserAction[] = ["update"];
-const createUpdateActions: readonly BrowserAction[] = ["create", "update"];
-const sessionIdActions: readonly BrowserAction[] = ["update", "get", "delete"];
-const listActions: readonly BrowserAction[] = ["list"];
-
-const browserFieldScopes = {
-  session_id: sessionIdActions,
-  start_url: createActions,
-  chrome_policy: createActions,
-  headless: createActions,
-  gpu: createActions,
-  stealth: createActions,
-  timeout_seconds: createActions,
-  profile_name: createUpdateActions,
-  profile_id: createUpdateActions,
-  save_profile_changes: createUpdateActions,
-  proxy_id: createUpdateActions,
-  clear_proxy: updateActions,
-  disable_default_proxy: updateActions,
-  kiosk_mode: createActions,
-  viewport_width: createUpdateActions,
-  viewport_height: createUpdateActions,
-  viewport_refresh_rate: createUpdateActions,
-  viewport_force: updateActions,
-  extension_id: createActions,
-  extension_name: createActions,
-  local_forward: createActions,
-  remote_forward: createActions,
-  status: listActions,
-  limit: listActions,
-  offset: listActions,
-  telemetry_enabled: createUpdateActions,
-  telemetry_console: createUpdateActions,
-  telemetry_network: createUpdateActions,
-  telemetry_page: createUpdateActions,
-  telemetry_interaction: createUpdateActions,
-} satisfies Record<string, readonly BrowserAction[]>;
-
-type BrowserToolField = keyof typeof browserFieldScopes;
-
-const scopedBrowserFields = Object.keys(
-  browserFieldScopes,
-) as BrowserToolField[];
-
 const telemetryCategories = [
   ["telemetry_console", "console"],
   ["telemetry_network", "network"],
@@ -86,25 +39,8 @@ function textResponse(text: string) {
   return { content: [{ type: "text" as const, text }] };
 }
 
-function formatActionScope(field: BrowserToolField) {
-  return browserFieldScopes[field].join(", ");
-}
-
-function actionFieldError(
-  params: Partial<Record<BrowserToolField, unknown>>,
-  action: BrowserAction,
-) {
-  const unsupportedField = scopedBrowserFields.find(
-    (field) =>
-      params[field] !== undefined &&
-      !browserFieldScopes[field].includes(action),
-  );
-
-  return unsupportedField
-    ? `Error: ${unsupportedField} is only supported for ${formatActionScope(
-        unsupportedField,
-      )}.`
-    : undefined;
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function buildProfile(params: ProfileParams): BrowserCreateParams["profile"] {
@@ -153,12 +89,6 @@ function buildViewportBase(
   };
 }
 
-function buildCreateViewport(
-  params: ViewportParams,
-): BrowserCreateParams["viewport"] {
-  return buildViewportBase(params);
-}
-
 function buildUpdateViewport(
   params: ViewportParams,
 ): BrowserUpdateParams["viewport"] {
@@ -183,7 +113,7 @@ function buildUpdateViewport(
 
 function buildTelemetry(
   params: TelemetryParams,
-): BrowserCreateParams["telemetry"] | BrowserUpdateParams["telemetry"] {
+): BrowserCreateParams["telemetry"] {
   const browser: NonNullable<
     NonNullable<BrowserCreateParams["telemetry"]>["browser"]
   > = {};
@@ -434,27 +364,15 @@ export function registerBrowserCapabilities(server: McpServer) {
       try {
         switch (params.action) {
           case "create": {
-            const scopeError = actionFieldError(params, "create");
-            if (scopeError) return textResponse(scopeError);
             if (params.profile_name && params.profile_id) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: Cannot specify both profile_name and profile_id.",
-                  },
-                ],
-              };
+              return textResponse(
+                "Error: Cannot specify both profile_name and profile_id.",
+              );
             }
             if (params.extension_id && params.extension_name) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: Cannot specify both extension_id and extension_name.",
-                  },
-                ],
-              };
+              return textResponse(
+                "Error: Cannot specify both extension_id and extension_name.",
+              );
             }
 
             const createParams: BrowserCreateParams = {};
@@ -473,7 +391,7 @@ export function registerBrowserCapabilities(server: McpServer) {
             if (params.proxy_id) createParams.proxy_id = params.proxy_id;
             const profile = buildProfile(params);
             if (profile) createParams.profile = profile;
-            const viewport = buildCreateViewport(params);
+            const viewport = buildViewportBase(params);
             if (viewport) createParams.viewport = viewport;
             const telemetry = buildTelemetry(params);
             if (telemetry !== undefined) createParams.telemetry = telemetry;
@@ -488,11 +406,7 @@ export function registerBrowserCapabilities(server: McpServer) {
 
             const browser = await client.browsers.create(createParams);
             if (!browser)
-              return {
-                content: [
-                  { type: "text", text: "Failed to create browser session" },
-                ],
-              };
+              return textResponse("Failed to create browser session");
 
             let responseText = JSON.stringify(browser, null, 2);
             if (params.local_forward || params.remote_forward) {
@@ -522,11 +436,9 @@ export function registerBrowserCapabilities(server: McpServer) {
 
               responseText += `\n\nNote: SSH connections alone don't count as browser activity. Set an appropriate timeout or keep the live view open to prevent cleanup.`;
             }
-            return { content: [{ type: "text", text: responseText }] };
+            return textResponse(responseText);
           }
           case "update": {
-            const scopeError = actionFieldError(params, "update");
-            if (scopeError) return textResponse(scopeError);
             if (!params.session_id)
               return textResponse(
                 "Error: session_id is required for update action.",
@@ -534,11 +446,6 @@ export function registerBrowserCapabilities(server: McpServer) {
             if (params.profile_name && params.profile_id) {
               return textResponse(
                 "Error: Cannot specify both profile_name and profile_id.",
-              );
-            }
-            if (params.extension_id || params.extension_name) {
-              return textResponse(
-                "Error: extensions can only be loaded during create.",
               );
             }
             if (params.proxy_id && params.clear_proxy) {
@@ -575,15 +482,9 @@ export function registerBrowserCapabilities(server: McpServer) {
             );
             if (!browser)
               return textResponse("Failed to update browser session");
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(browser, null, 2) },
-              ],
-            };
+            return textResponse(JSON.stringify(browser, null, 2));
           }
           case "list": {
-            const scopeError = actionFieldError(params, "list");
-            if (scopeError) return textResponse(scopeError);
             const page = await client.browsers.list({
               ...(params.status && { status: params.status }),
               ...(params.limit !== undefined && { limit: params.limit }),
@@ -592,83 +493,43 @@ export function registerBrowserCapabilities(server: McpServer) {
             const items = page
               .getPaginatedItems()
               .map((b) => ({ ...b, cdp_ws_url: undefined }));
-            return {
-              content: [
-                {
-                  type: "text",
-                  text:
-                    items.length > 0
-                      ? JSON.stringify(
-                          {
-                            items,
-                            has_more: page.has_more,
-                            next_offset: page.next_offset,
-                          },
-                          null,
-                          2,
-                        )
-                      : "No browsers found",
-                },
-              ],
-            };
+            return textResponse(
+              items.length > 0
+                ? JSON.stringify(
+                    {
+                      items,
+                      has_more: page.has_more,
+                      next_offset: page.next_offset,
+                    },
+                    null,
+                    2,
+                  )
+                : "No browsers found",
+            );
           }
           case "get": {
-            const scopeError = actionFieldError(params, "get");
-            if (scopeError) return textResponse(scopeError);
             if (!params.session_id)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: session_id is required for get action.",
-                  },
-                ],
-              };
+              return textResponse(
+                "Error: session_id is required for get action.",
+              );
             const browser = await client.browsers.retrieve(params.session_id);
             if (!browser)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `Browser session "${params.session_id}" not found`,
-                  },
-                ],
-              };
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(browser, null, 2) },
-              ],
-            };
+              return textResponse(
+                `Browser session "${params.session_id}" not found`,
+              );
+            return textResponse(JSON.stringify(browser, null, 2));
           }
           case "delete": {
-            const scopeError = actionFieldError(params, "delete");
-            if (scopeError) return textResponse(scopeError);
             if (!params.session_id)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: session_id is required for delete action.",
-                  },
-                ],
-              };
+              return textResponse(
+                "Error: session_id is required for delete action.",
+              );
             await client.browsers.deleteByID(params.session_id);
-            return {
-              content: [
-                { type: "text", text: "Browser session deleted successfully" },
-              ],
-            };
+            return textResponse("Browser session deleted successfully");
           }
         }
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error in manage_browsers (${params.action}): ${error}`,
-            },
-          ],
-        };
+        return textResponse(`Error: ${errorMessage(error)}`);
       }
     },
   );
