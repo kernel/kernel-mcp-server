@@ -8,6 +8,7 @@ import {
   paginatedJsonResponse,
   textResponse,
 } from "@/lib/mcp/responses";
+import { paginationParams } from "@/lib/mcp/schemas";
 
 export function registerAPIKeyCapabilities(server: McpServer) {
   // manage_api_keys -- Create, list, get, update, and delete Kernel API keys
@@ -40,18 +41,7 @@ export function registerAPIKeyCapabilities(server: McpServer) {
           "(create) Days until expiry, up to 3650. Use null for no expiry.",
         )
         .optional(),
-      limit: z
-        .number()
-        .int()
-        .min(1)
-        .describe("(list) Max results per page.")
-        .optional(),
-      offset: z
-        .number()
-        .int()
-        .min(0)
-        .describe("(list) Pagination offset.")
-        .optional(),
+      ...paginationParams,
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");

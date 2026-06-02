@@ -8,6 +8,7 @@ import {
   paginatedJsonResponse,
   textResponse,
 } from "@/lib/mcp/responses";
+import { paginationParams } from "@/lib/mcp/schemas";
 
 export function registerProjectCapabilities(server: McpServer) {
   // manage_projects -- Create, list, get, update, and delete organization projects
@@ -33,8 +34,7 @@ export function registerProjectCapabilities(server: McpServer) {
           "(list) Case-insensitive substring match against project name.",
         )
         .optional(),
-      limit: z.number().describe("(list) Max results per page.").optional(),
-      offset: z.number().describe("(list) Pagination offset.").optional(),
+      ...paginationParams,
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
