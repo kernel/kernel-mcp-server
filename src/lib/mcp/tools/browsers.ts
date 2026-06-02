@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
+import { textResponse, toolErrorResponse } from "@/lib/mcp/responses";
 
 type BrowserCreateParams = NonNullable<
   Parameters<KernelClient["browsers"]["create"]>[0]
@@ -34,14 +35,6 @@ const telemetryCategories = [
   ["telemetry_page", "page"],
   ["telemetry_interaction", "interaction"],
 ] as const;
-
-function textResponse(text: string) {
-  return { content: [{ type: "text" as const, text }] };
-}
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function buildProfile(params: ProfileParams): BrowserCreateParams["profile"] {
   if (
@@ -529,7 +522,7 @@ export function registerBrowserCapabilities(server: McpServer) {
           }
         }
       } catch (error) {
-        return textResponse(`Error: ${errorMessage(error)}`);
+        return toolErrorResponse("manage_browsers", params.action, error);
       }
     },
   );
