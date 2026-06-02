@@ -2,11 +2,11 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
-  errorMessage,
   errorResponse,
   jsonResponse,
   paginatedJsonResponse,
   textResponse,
+  toolErrorResponse,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 
@@ -92,9 +92,7 @@ export function registerProjectCapabilities(server: McpServer) {
           }
         }
       } catch (error) {
-        return errorResponse(
-          `Error in manage_projects (${params.action}): ${errorMessage(error)}`,
-        );
+        return toolErrorResponse("manage_projects", params.action, error);
       }
     },
   );

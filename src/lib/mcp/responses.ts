@@ -24,6 +24,16 @@ export function errorResponse(text: string) {
   return { ...textResponse(text), isError: true as const };
 }
 
-export function errorMessage(error: unknown) {
+function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function toolErrorResponse(
+  toolName: string,
+  action: string,
+  error: unknown,
+) {
+  return errorResponse(
+    `Error in ${toolName} (${action}): ${errorMessage(error)}`,
+  );
 }
