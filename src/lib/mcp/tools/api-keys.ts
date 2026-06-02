@@ -43,6 +43,13 @@ export function registerAPIKeyCapabilities(server: McpServer) {
         .optional(),
       ...paginationParams,
     },
+    {
+      title: "Manage Kernel API keys",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);
