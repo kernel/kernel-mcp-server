@@ -255,7 +255,7 @@ Many other MCP-capable tools accept:
 
 Configure these values wherever the tool expects MCP server settings.
 
-## Tools (12 total)
+## Tools (15 total)
 
 Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Four standalone tools handle high-frequency workflows.
 
@@ -271,6 +271,9 @@ Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_
 - `manage_apps` - List apps, invoke actions, get/list deployments, and get invocation results.
 - `manage_projects` - Create, list, get, update, and delete organization projects.
 - `manage_api_keys` - Create, list, get, update, and delete Kernel API keys. Create returns the plaintext key once.
+- `manage_auth_connections` - Create, list, get, delete managed auth connections; start login flows (returns a hosted URL and live view); submit MFA codes or SSO selections.
+- `manage_credentials` - Create, list, get, update, and delete stored credentials; fetch a current TOTP code for credentials with a configured totp_secret.
+- `manage_credential_providers` - Create, list, get, update, and delete external credential providers (e.g. 1Password); list available items and test the provider connection.
 
 ### Standalone tools
 
