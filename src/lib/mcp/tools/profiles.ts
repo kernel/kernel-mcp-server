@@ -4,6 +4,7 @@ import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
 import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
 import {
   errorResponse,
+  itemsJsonResponse,
   paginatedJsonResponse,
   textResponse,
   toolErrorResponse,
@@ -24,17 +25,12 @@ async function listProfiles(client: KernelClient, query?: ProfileListParams) {
 }
 
 function fullProfileListResponse(profiles: Profile[]) {
-  return paginatedJsonResponse(
-    {
-      getPaginatedItems: () => profiles,
-      has_more: false,
-      next_offset: null,
-    },
-    {
-      emptyText:
-        "No profiles found. Use manage_profiles with action 'setup' to create one.",
-    },
-  );
+  return itemsJsonResponse(profiles, {
+    has_more: false,
+    next_offset: null,
+    emptyText:
+      "No profiles found. Use manage_profiles with action 'setup' to create one.",
+  });
 }
 
 export function registerProfileCapabilities(server: McpServer) {
@@ -158,10 +154,7 @@ export function registerProfileCapabilities(server: McpServer) {
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             } satisfies ProfileListParams);
-            return paginatedJsonResponse(page, {
-              emptyText:
-                "No profiles found. Use manage_profiles with action 'setup' to create one.",
-            });
+            return paginatedJsonResponse(page);
           }
           case "delete": {
             if (params.profile_name && params.profile_id) {

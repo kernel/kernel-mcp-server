@@ -3,150 +3,247 @@ import { z } from "zod";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
 import {
   errorResponse,
+  jsonResponse,
   textResponse,
   toolErrorResponse,
 } from "@/lib/mcp/responses";
 
+type ComputerClient = KernelClient["browsers"]["computer"];
 type ComputerBatchAction = Parameters<
-  KernelClient["browsers"]["computer"]["batch"]
+  ComputerClient["batch"]
 >[1]["actions"][number];
 
-type ComputerToolAction = Partial<Omit<ComputerBatchAction, "type">> & {
-  type:
-    | ComputerBatchAction["type"]
-    | "screenshot"
-    | "get_mouse_position"
-    | "read_clipboard"
-    | "write_clipboard";
-  screenshot?: {
-    region?: {
-      x: number;
-      y: number;
-      width: number;
-      height: number;
-    };
-  };
-  write_clipboard?: { text: string };
-};
+const computerActionSchema = z.object({
+  type: z
+    .enum([
+      "click_mouse",
+      "move_mouse",
+      "type_text",
+      "press_key",
+      "scroll",
+      "drag_mouse",
+      "set_cursor",
+      "sleep",
+      "write_clipboard",
+      "read_clipboard",
+      "screenshot",
+      "get_mouse_position",
+    ])
+    .describe("Action type."),
+  click_mouse: z
+    .object({
+      x: z.number(),
+      y: z.number(),
+      button: z.enum(["left", "right", "middle"]).optional(),
+      click_type: z.enum(["down", "up", "click"]).optional(),
+      num_clicks: z.number().int().min(1).optional(),
+      hold_keys: z.array(z.string()).optional(),
+    })
+    .describe("Params for click_mouse action.")
+    .optional(),
+  move_mouse: z
+    .object({
+      x: z.number(),
+      y: z.number(),
+      hold_keys: z.array(z.string()).optional(),
+    })
+    .describe("Params for move_mouse action.")
+    .optional(),
+  type_text: z
+    .object({
+      text: z.string(),
+      delay: z.number().int().min(0).optional(),
+    })
+    .describe("Params for type_text action.")
+    .optional(),
+  press_key: z
+    .object({
+      keys: z
+        .array(z.string())
+        .describe('X11 keysym names or combos like "Ctrl+t", "Return".'),
+      duration: z.number().int().min(0).optional(),
+      hold_keys: z.array(z.string()).optional(),
+    })
+    .describe("Params for press_key action.")
+    .optional(),
+  scroll: z
+    .object({
+      x: z.number(),
+      y: z.number(),
+      delta_x: z.number().describe("Positive=right, negative=left.").optional(),
+      delta_y: z.number().describe("Positive=down, negative=up.").optional(),
+      hold_keys: z.array(z.string()).optional(),
+    })
+    .describe("Params for scroll action.")
+    .optional(),
+  drag_mouse: z
+    .object({
+      path: z
+        .array(z.array(z.number()))
+        .describe("Ordered [x,y] pairs, at least 2 points."),
+      button: z.enum(["left", "middle", "right"]).optional(),
+      delay: z.number().int().min(0).optional(),
+      steps_per_segment: z.number().int().min(1).optional(),
+      step_delay_ms: z.number().int().min(0).optional(),
+      hold_keys: z.array(z.string()).optional(),
+    })
+    .describe("Params for drag_mouse action.")
+    .optional(),
+  set_cursor: z
+    .object({
+      hidden: z.boolean(),
+    })
+    .describe("Params for set_cursor action.")
+    .optional(),
+  sleep: z
+    .object({
+      duration_ms: z.number().int().min(0),
+    })
+    .describe("Params for sleep action.")
+    .optional(),
+  write_clipboard: z
+    .object({
+      text: z.string(),
+    })
+    .describe("Params for write_clipboard action.")
+    .optional(),
+  screenshot: z
+    .object({
+      region: z
+        .object({
+          x: z.number(),
+          y: z.number(),
+          width: z.number().int().min(1),
+          height: z.number().int().min(1),
+        })
+        .optional(),
+    })
+    .describe(
+      "Params for screenshot action. Omit or pass {} for full-page screenshot.",
+    )
+    .optional(),
+});
 
-type ComputerBatchToolAction = ComputerToolAction & {
-  type: ComputerBatchAction["type"];
-};
-
-type ComputerResultAction = ComputerToolAction & {
+type ComputerActionParams = z.infer<typeof computerActionSchema>;
+type TerminalAction = ComputerActionParams & {
   type: "screenshot" | "get_mouse_position" | "read_clipboard";
 };
-
-type ComputerExecutionResult =
+type WriteClipboardAction = ComputerActionParams & { type: "write_clipboard" };
+type PrefixExecutionResult =
   | { ok: true; executedActionCount: number }
   | { ok: false; error: string };
 
-function isResultAction(
-  action: ComputerToolAction,
-): action is ComputerResultAction {
+function isTerminalAction(
+  action: ComputerActionParams | undefined,
+): action is TerminalAction {
   return (
-    action.type === "screenshot" ||
-    action.type === "get_mouse_position" ||
-    action.type === "read_clipboard"
+    action?.type === "screenshot" ||
+    action?.type === "get_mouse_position" ||
+    action?.type === "read_clipboard"
   );
 }
 
-function isBatchAction(
-  action: ComputerToolAction,
-): action is ComputerBatchToolAction {
-  return action.type !== "write_clipboard" && !isResultAction(action);
+function isWriteClipboardAction(
+  action: ComputerActionParams,
+): action is WriteClipboardAction {
+  return action.type === "write_clipboard";
 }
 
-function toBatchAction(action: ComputerBatchToolAction): ComputerBatchAction {
+function isBatchAction(
+  action: ComputerActionParams,
+): action is ComputerActionParams & ComputerBatchAction {
   switch (action.type) {
     case "click_mouse":
-      return { type: action.type, click_mouse: action.click_mouse };
     case "move_mouse":
-      return { type: action.type, move_mouse: action.move_mouse };
     case "type_text":
-      return { type: action.type, type_text: action.type_text };
     case "press_key":
-      return { type: action.type, press_key: action.press_key };
     case "scroll":
-      return { type: action.type, scroll: action.scroll };
     case "drag_mouse":
-      return { type: action.type, drag_mouse: action.drag_mouse };
     case "set_cursor":
-      return { type: action.type, set_cursor: action.set_cursor };
     case "sleep":
-      return { type: action.type, sleep: action.sleep };
+      return true;
+    default:
+      return false;
   }
 }
 
-function splitTrailingResultAction(actions: ComputerToolAction[]): {
-  leadingActions: ComputerToolAction[];
-  resultAction?: ComputerResultAction;
-} {
-  const lastAction = actions[actions.length - 1];
-  const resultAction = isResultAction(lastAction) ? lastAction : undefined;
-  return {
-    leadingActions: resultAction ? actions.slice(0, -1) : actions,
-    resultAction,
-  };
+function terminalActionPlacementError(actions: ComputerActionParams[]) {
+  for (let i = 0; i < actions.length - 1; i++) {
+    if (isTerminalAction(actions[i])) {
+      return `Error: ${actions[i].type} must be the last action in the sequence.`;
+    }
+  }
 }
 
-async function executeLeadingComputerActions(
-  client: KernelClient,
+function executionSummaryContent(executedActionCount: number) {
+  if (executedActionCount === 0) return [];
+
+  return [
+    {
+      type: "text" as const,
+      text: `Executed ${executedActionCount} action(s).`,
+    },
+  ];
+}
+
+async function flushBatchActions(
+  computer: ComputerClient,
   sessionId: string,
-  actions: ComputerToolAction[],
-): Promise<ComputerExecutionResult> {
-  let executedActionCount = 0;
-  let batchActions: ComputerBatchAction[] = [];
+  batchActions: ComputerBatchAction[],
+) {
+  if (batchActions.length === 0) return 0;
 
-  async function flushBatchActions() {
-    if (batchActions.length === 0) return;
-    await client.browsers.computer.batch(sessionId, { actions: batchActions });
-    executedActionCount += batchActions.length;
-    batchActions = [];
-  }
+  const actions = [...batchActions];
+  await computer.batch(sessionId, { actions });
+  batchActions.length = 0;
+  return actions.length;
+}
+
+async function executeComputerActionPrefix(
+  computer: ComputerClient,
+  sessionId: string,
+  actions: ComputerActionParams[],
+): Promise<PrefixExecutionResult> {
+  const batchActions: ComputerBatchAction[] = [];
+  let executedActionCount = 0;
 
   for (const action of actions) {
-    if (isResultAction(action)) {
-      return {
-        ok: false,
-        error: `Error: ${action.type} must be the last action in the sequence.`,
-      };
-    }
-
-    if (action.type === "write_clipboard") {
-      await flushBatchActions();
-      if (!action.write_clipboard) {
+    if (isWriteClipboardAction(action)) {
+      const text = action.write_clipboard?.text;
+      if (text === undefined) {
         return {
           ok: false,
-          error:
-            "Error: write_clipboard params are required for write_clipboard action.",
+          error: "Error: write_clipboard action requires write_clipboard.text.",
         };
       }
-      await client.browsers.computer.writeClipboard(sessionId, {
-        text: action.write_clipboard.text,
-      });
+
+      executedActionCount += await flushBatchActions(
+        computer,
+        sessionId,
+        batchActions,
+      );
+      await computer.writeClipboard(sessionId, { text });
       executedActionCount += 1;
       continue;
     }
 
     if (isBatchAction(action)) {
-      batchActions.push(toBatchAction(action));
+      batchActions.push(action);
+      continue;
     }
+
+    return {
+      ok: false,
+      error: `Error: ${action.type} must be the last action in the sequence.`,
+    };
   }
 
-  await flushBatchActions();
+  executedActionCount += await flushBatchActions(
+    computer,
+    sessionId,
+    batchActions,
+  );
   return { ok: true, executedActionCount };
-}
-
-function actionCountPrefix(executedActionCount: number, suffix: string) {
-  return executedActionCount > 0
-    ? [
-        {
-          type: "text" as const,
-          text: `Executed ${executedActionCount} action(s)${suffix}`,
-        },
-      ]
-    : [];
 }
 
 export function registerComputerActionTool(server: McpServer) {
@@ -157,126 +254,7 @@ export function registerComputerActionTool(server: McpServer) {
     {
       session_id: z.string().describe("Browser session ID."),
       actions: z
-        .array(
-          z.object({
-            type: z
-              .enum([
-                "click_mouse",
-                "move_mouse",
-                "type_text",
-                "press_key",
-                "scroll",
-                "drag_mouse",
-                "set_cursor",
-                "sleep",
-                "write_clipboard",
-                "read_clipboard",
-                "screenshot",
-                "get_mouse_position",
-              ])
-              .describe("Action type."),
-            click_mouse: z
-              .object({
-                x: z.number(),
-                y: z.number(),
-                button: z.enum(["left", "right", "middle"]).optional(),
-                click_type: z.enum(["down", "up", "click"]).optional(),
-                num_clicks: z.number().int().min(1).optional(),
-                hold_keys: z.array(z.string()).optional(),
-              })
-              .describe("Params for click_mouse action.")
-              .optional(),
-            move_mouse: z
-              .object({
-                x: z.number(),
-                y: z.number(),
-                hold_keys: z.array(z.string()).optional(),
-              })
-              .describe("Params for move_mouse action.")
-              .optional(),
-            type_text: z
-              .object({
-                text: z.string(),
-                delay: z.number().int().min(0).optional(),
-              })
-              .describe("Params for type_text action.")
-              .optional(),
-            press_key: z
-              .object({
-                keys: z
-                  .array(z.string())
-                  .describe(
-                    'X11 keysym names or combos like "Ctrl+t", "Return".',
-                  ),
-                duration: z.number().int().min(0).optional(),
-                hold_keys: z.array(z.string()).optional(),
-              })
-              .describe("Params for press_key action.")
-              .optional(),
-            scroll: z
-              .object({
-                x: z.number(),
-                y: z.number(),
-                delta_x: z
-                  .number()
-                  .describe("Positive=right, negative=left.")
-                  .optional(),
-                delta_y: z
-                  .number()
-                  .describe("Positive=down, negative=up.")
-                  .optional(),
-                hold_keys: z.array(z.string()).optional(),
-              })
-              .describe("Params for scroll action.")
-              .optional(),
-            drag_mouse: z
-              .object({
-                path: z
-                  .array(z.array(z.number()))
-                  .describe("Ordered [x,y] pairs, at least 2 points."),
-                button: z.enum(["left", "middle", "right"]).optional(),
-                delay: z.number().int().min(0).optional(),
-                steps_per_segment: z.number().int().min(1).optional(),
-                step_delay_ms: z.number().int().min(0).optional(),
-                hold_keys: z.array(z.string()).optional(),
-              })
-              .describe("Params for drag_mouse action.")
-              .optional(),
-            set_cursor: z
-              .object({
-                hidden: z.boolean(),
-              })
-              .describe("Params for set_cursor action.")
-              .optional(),
-            sleep: z
-              .object({
-                duration_ms: z.number().int().min(0),
-              })
-              .describe("Params for sleep action.")
-              .optional(),
-            screenshot: z
-              .object({
-                region: z
-                  .object({
-                    x: z.number(),
-                    y: z.number(),
-                    width: z.number().int().min(1),
-                    height: z.number().int().min(1),
-                  })
-                  .optional(),
-              })
-              .describe(
-                "Params for screenshot action. Omit or pass {} for full-page screenshot.",
-              )
-              .optional(),
-            write_clipboard: z
-              .object({
-                text: z.string(),
-              })
-              .describe("Params for write_clipboard action.")
-              .optional(),
-          }),
-        )
+        .array(computerActionSchema)
         .min(1)
         .describe(
           "Ordered list of actions. Use one action for simple operations or multiple for batched sequences.",
@@ -287,18 +265,24 @@ export function registerComputerActionTool(server: McpServer) {
       const client = createKernelClient(extra.authInfo.token);
 
       try {
-        const toolActions: ComputerToolAction[] = actions;
-        const { leadingActions, resultAction } =
-          splitTrailingResultAction(toolActions);
-        const execution = await executeLeadingComputerActions(
-          client,
-          session_id,
-          leadingActions,
-        );
-        if (!execution.ok) return errorResponse(execution.error);
+        const placementError = terminalActionPlacementError(actions);
+        if (placementError) return errorResponse(placementError);
 
-        if (resultAction?.type === "screenshot") {
-          const screenshotParams = resultAction.screenshot;
+        const terminalAction = isTerminalAction(actions[actions.length - 1])
+          ? actions[actions.length - 1]
+          : undefined;
+        const prefixActions = terminalAction ? actions.slice(0, -1) : actions;
+        const prefixResult = await executeComputerActionPrefix(
+          client.browsers.computer,
+          session_id,
+          prefixActions,
+        );
+        if (!prefixResult.ok) return errorResponse(prefixResult.error);
+
+        const { executedActionCount } = prefixResult;
+
+        if (terminalAction?.type === "screenshot") {
+          const screenshotParams = terminalAction.screenshot;
           const screenshotOpts = screenshotParams?.region
             ? { region: screenshotParams.region }
             : undefined;
@@ -316,12 +300,12 @@ export function registerComputerActionTool(server: McpServer) {
             | { type: "text"; text: string }
             | { type: "image"; data: string; mimeType: string }
           > = [];
-          content.push(
-            ...actionCountPrefix(
-              execution.executedActionCount,
-              ", then captured screenshot.",
-            ),
-          );
+          if (executedActionCount > 0) {
+            content.push({
+              type: "text",
+              text: `Executed ${executedActionCount} action(s), then captured screenshot.`,
+            });
+          }
           content.push({
             type: "text",
             text: viewport
@@ -336,33 +320,30 @@ export function registerComputerActionTool(server: McpServer) {
           return { content };
         }
 
-        if (resultAction?.type === "read_clipboard") {
-          const clipboard =
-            await client.browsers.computer.readClipboard(session_id);
-          return {
-            content: [
-              ...actionCountPrefix(
-                execution.executedActionCount,
-                ", then read clipboard.",
-              ),
-              { type: "text", text: JSON.stringify(clipboard, null, 2) },
-            ],
-          };
-        }
-
-        if (resultAction?.type === "get_mouse_position") {
+        if (terminalAction?.type === "get_mouse_position") {
           const position =
             await client.browsers.computer.getMousePosition(session_id);
           return {
             content: [
-              ...actionCountPrefix(execution.executedActionCount, "."),
-              { type: "text", text: JSON.stringify(position, null, 2) },
+              ...executionSummaryContent(executedActionCount),
+              ...jsonResponse(position).content,
+            ],
+          };
+        }
+
+        if (terminalAction?.type === "read_clipboard") {
+          const response =
+            await client.browsers.computer.readClipboard(session_id);
+          return {
+            content: [
+              ...executionSummaryContent(executedActionCount),
+              ...jsonResponse(response).content,
             ],
           };
         }
 
         return textResponse(
-          `Executed ${execution.executedActionCount} action(s) successfully`,
+          `Executed ${executedActionCount} action(s) successfully`,
         );
       } catch (error) {
         return toolErrorResponse("computer_action", "actions", error);

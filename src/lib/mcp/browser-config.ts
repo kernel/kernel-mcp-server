@@ -1,3 +1,16 @@
+import type { KernelClient } from "@/lib/mcp/kernel-client";
+
+type BrowserCreateParams = NonNullable<
+  Parameters<KernelClient["browsers"]["create"]>[0]
+>;
+type BrowserUpdateParams = Parameters<KernelClient["browsers"]["update"]>[1];
+type BrowserPoolCreateParams = Parameters<
+  KernelClient["browserPools"]["create"]
+>[0];
+type BrowserPoolUpdateParams = Parameters<
+  KernelClient["browserPools"]["update"]
+>[1];
+
 export type BrowserProfileParams = {
   profile_name?: string;
   profile_id?: string;
@@ -28,36 +41,36 @@ export type BrowserCreateConfigParams = BrowserProfileParams &
 export type BrowserUpdateConfigParams = BrowserProfileParams &
   BrowserViewportUpdateParams;
 
-type BrowserProfileConfig = {
-  id?: string;
-  name?: string;
-  save_changes?: boolean;
-};
+type BrowserProfileConfig = NonNullable<
+  | BrowserCreateParams["profile"]
+  | BrowserUpdateParams["profile"]
+  | BrowserPoolCreateParams["profile"]
+  | BrowserPoolUpdateParams["profile"]
+>;
 
-type BrowserExtensionConfig = Array<{
-  id?: string;
-  name?: string;
-}>;
+type BrowserExtensionConfig = NonNullable<
+  | BrowserCreateParams["extensions"]
+  | BrowserPoolCreateParams["extensions"]
+  | BrowserPoolUpdateParams["extensions"]
+>;
 
-type BrowserViewportConfig = {
-  width: number;
-  height: number;
-  refresh_rate?: number;
-};
+type BrowserViewportConfig = NonNullable<
+  | BrowserCreateParams["viewport"]
+  | BrowserPoolCreateParams["viewport"]
+  | BrowserPoolUpdateParams["viewport"]
+>;
 
-type BrowserViewportUpdateConfig = BrowserViewportConfig & { force?: boolean };
+type BrowserViewportUpdateConfig = NonNullable<BrowserUpdateParams["viewport"]>;
 
-export type BrowserCreateConfig = {
-  profile?: BrowserProfileConfig;
-  extensions?: BrowserExtensionConfig;
-  viewport?: BrowserViewportConfig;
-  start_url?: string;
-};
+export type BrowserCreateConfig = Pick<
+  BrowserCreateParams,
+  "profile" | "extensions" | "viewport" | "start_url"
+>;
 
-export type BrowserUpdateConfig = {
-  profile?: BrowserProfileConfig;
-  viewport?: BrowserViewportUpdateConfig;
-};
+export type BrowserUpdateConfig = Pick<
+  BrowserUpdateParams,
+  "profile" | "viewport"
+>;
 
 export type BrowserConfigResult<T> =
   | { ok: true; value: T }

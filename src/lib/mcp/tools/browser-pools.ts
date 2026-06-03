@@ -27,16 +27,6 @@ type BrowserPoolAcquireResponse = Awaited<
   ReturnType<KernelClient["browserPools"]["acquire"]>
 >;
 
-type BrowserPoolAction =
-  | "create"
-  | "update"
-  | "list"
-  | "get"
-  | "delete"
-  | "flush"
-  | "acquire"
-  | "release";
-
 type PoolConfigParams = BrowserCreateConfigParams & {
   size?: number;
   name?: string;

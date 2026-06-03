@@ -29,8 +29,6 @@ type TelemetryParams = {
   telemetry_interaction?: boolean;
 };
 
-type BrowserAction = "create" | "update" | "list" | "get" | "delete";
-
 const telemetryCategories = [
   ["telemetry_console", "console"],
   ["telemetry_network", "network"],
@@ -342,8 +340,12 @@ export function registerBrowserCapabilities(server: McpServer) {
               createParams.timeout_seconds = params.timeout_seconds;
             if (params.kiosk_mode !== undefined)
               createParams.kiosk_mode = params.kiosk_mode;
-            if (params.chrome_policy)
+            if (
+              params.chrome_policy &&
+              Object.keys(params.chrome_policy).length > 0
+            ) {
               createParams.chrome_policy = params.chrome_policy;
+            }
             if (params.proxy_id) createParams.proxy_id = params.proxy_id;
             const browserConfig = buildBrowserCreateConfig(params);
             if (!browserConfig.ok) return errorResponse(browserConfig.error);
