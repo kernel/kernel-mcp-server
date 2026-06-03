@@ -41,6 +41,13 @@ export function registerBrowserCurlTool(server: McpServer) {
         .describe("Request timeout in milliseconds.")
         .optional(),
     },
+    {
+      title: "Browser curl",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);
