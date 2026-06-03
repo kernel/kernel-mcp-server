@@ -19,32 +19,45 @@ export type BrowserViewportUpdateParams = BrowserViewportParams & {
   viewport_force?: boolean;
 };
 
-type BrowserProfileConfig =
-  | {
-      id?: string;
-      name?: string;
-      save_changes?: boolean;
-    }
-  | undefined;
+export type BrowserCreateConfigParams = BrowserProfileParams &
+  BrowserExtensionParams &
+  BrowserViewportParams & {
+    start_url?: string;
+  };
 
-type BrowserExtensionConfig =
-  | Array<{
-      id?: string;
-      name?: string;
-    }>
-  | undefined;
+export type BrowserUpdateConfigParams = BrowserProfileParams &
+  BrowserViewportUpdateParams;
 
-type BrowserViewportConfig =
-  | {
-      width: number;
-      height: number;
-      refresh_rate?: number;
-    }
-  | undefined;
+type BrowserProfileConfig = {
+  id?: string;
+  name?: string;
+  save_changes?: boolean;
+};
 
-type BrowserViewportUpdateConfig =
-  | (NonNullable<BrowserViewportConfig> & { force?: boolean })
-  | undefined;
+type BrowserExtensionConfig = Array<{
+  id?: string;
+  name?: string;
+}>;
+
+type BrowserViewportConfig = {
+  width: number;
+  height: number;
+  refresh_rate?: number;
+};
+
+type BrowserViewportUpdateConfig = BrowserViewportConfig & { force?: boolean };
+
+export type BrowserCreateConfig = {
+  profile?: BrowserProfileConfig;
+  extensions?: BrowserExtensionConfig;
+  viewport?: BrowserViewportConfig;
+  start_url?: string;
+};
+
+export type BrowserUpdateConfig = {
+  profile?: BrowserProfileConfig;
+  viewport?: BrowserViewportUpdateConfig;
+};
 
 export type BrowserConfigResult<T> =
   | { ok: true; value: T }
@@ -58,7 +71,7 @@ function configError<T>(message: string): BrowserConfigResult<T> {
   return { ok: false, error: `Error: ${message}` };
 }
 
-export function buildBrowserStartUrl(
+function buildBrowserStartUrl(
   startUrl: string | undefined,
 ): BrowserConfigResult<string | undefined> {
   if (startUrl === undefined) return configValue(undefined);
@@ -72,9 +85,9 @@ export function buildBrowserStartUrl(
   return configValue(startUrl);
 }
 
-export function buildBrowserProfile(
+function buildBrowserProfile(
   params: BrowserProfileParams,
-): BrowserConfigResult<BrowserProfileConfig> {
+): BrowserConfigResult<BrowserProfileConfig | undefined> {
   if (params.profile_name && params.profile_id) {
     return configError("Cannot specify both profile_name and profile_id.");
   }
@@ -97,9 +110,9 @@ export function buildBrowserProfile(
   });
 }
 
-export function buildBrowserExtensions(
+function buildBrowserExtensions(
   params: BrowserExtensionParams,
-): BrowserConfigResult<BrowserExtensionConfig> {
+): BrowserConfigResult<BrowserExtensionConfig | undefined> {
   if (params.extension_id && params.extension_name) {
     return configError("Cannot specify both extension_id and extension_name.");
   }
@@ -113,9 +126,9 @@ export function buildBrowserExtensions(
   ]);
 }
 
-export function buildBrowserViewport(
+function buildBrowserViewport(
   params: BrowserViewportParams,
-): BrowserConfigResult<BrowserViewportConfig> {
+): BrowserConfigResult<BrowserViewportConfig | undefined> {
   const width = params.viewport_width;
   const height = params.viewport_height;
   const hasViewportOptions =
@@ -139,9 +152,9 @@ export function buildBrowserViewport(
   });
 }
 
-export function buildBrowserViewportUpdate(
+function buildBrowserViewportUpdate(
   params: BrowserViewportUpdateParams,
-): BrowserConfigResult<BrowserViewportUpdateConfig> {
+): BrowserConfigResult<BrowserViewportUpdateConfig | undefined> {
   const viewport = buildBrowserViewport(params);
   if (!viewport.ok) return viewport;
 
@@ -159,5 +172,43 @@ export function buildBrowserViewportUpdate(
     ...(params.viewport_force !== undefined && {
       force: params.viewport_force,
     }),
+  });
+}
+
+export function buildBrowserCreateConfig(
+  params: BrowserCreateConfigParams,
+): BrowserConfigResult<BrowserCreateConfig> {
+  const profile = buildBrowserProfile(params);
+  if (!profile.ok) return profile;
+
+  const extensions = buildBrowserExtensions(params);
+  if (!extensions.ok) return extensions;
+
+  const viewport = buildBrowserViewport(params);
+  if (!viewport.ok) return viewport;
+
+  const startUrl = buildBrowserStartUrl(params.start_url);
+  if (!startUrl.ok) return startUrl;
+
+  return configValue({
+    ...(profile.value && { profile: profile.value }),
+    ...(extensions.value && { extensions: extensions.value }),
+    ...(viewport.value && { viewport: viewport.value }),
+    ...(startUrl.value !== undefined && { start_url: startUrl.value }),
+  });
+}
+
+export function buildBrowserUpdateConfig(
+  params: BrowserUpdateConfigParams,
+): BrowserConfigResult<BrowserUpdateConfig> {
+  const profile = buildBrowserProfile(params);
+  if (!profile.ok) return profile;
+
+  const viewport = buildBrowserViewportUpdate(params);
+  if (!viewport.ok) return viewport;
+
+  return configValue({
+    ...(profile.value && { profile: profile.value }),
+    ...(viewport.value && { viewport: viewport.value }),
   });
 }

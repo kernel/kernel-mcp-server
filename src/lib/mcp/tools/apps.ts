@@ -2,6 +2,12 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
+import {
+  errorResponse,
+  jsonResponse,
+  textResponse,
+  toolErrorResponse,
+} from "@/lib/mcp/responses";
 
 export function registerAppCapabilities(server: McpServer) {
   server.resource("apps", "apps://", async (uri, extra) => {
@@ -100,36 +106,19 @@ export function registerAppCapabilities(server: McpServer) {
               ...(params.offset !== undefined && { offset: params.offset }),
             });
             const items = page.getPaginatedItems();
-            return {
-              content: [
-                {
-                  type: "text",
-                  text:
-                    items.length > 0
-                      ? JSON.stringify(
-                          {
-                            items,
-                            has_more: page.has_more,
-                            next_offset: page.next_offset,
-                          },
-                          null,
-                          2,
-                        )
-                      : "No apps found",
-                },
-              ],
-            };
+            return items.length > 0
+              ? jsonResponse({
+                  items,
+                  has_more: page.has_more,
+                  next_offset: page.next_offset,
+                })
+              : textResponse("No apps found");
           }
           case "invoke": {
             if (!params.app_name || !params.action_name) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: app_name and action_name are required for invoke.",
-                  },
-                ],
-              };
+              return errorResponse(
+                "Error: app_name and action_name are required for invoke.",
+              );
             }
             const invocation = await client.invocations.create({
               app_name: params.app_name,
@@ -138,28 +127,24 @@ export function registerAppCapabilities(server: McpServer) {
               version: params.version ?? "latest",
               async: true,
             });
-            if (!invocation) throw new Error("Failed to create invocation");
+            if (!invocation)
+              return errorResponse("Failed to create invocation");
 
             const stream = await client.invocations.follow(invocation.id);
             let finalInvocation = invocation;
             for await (const evt of stream) {
               if (evt.event === "error") {
-                return {
-                  content: [
+                return errorResponse(
+                  JSON.stringify(
                     {
-                      type: "text",
-                      text: JSON.stringify(
-                        {
-                          status: "error",
-                          invocation_id: invocation.id,
-                          error: evt,
-                        },
-                        null,
-                        2,
-                      ),
+                      status: "error",
+                      invocation_id: invocation.id,
+                      error: evt,
                     },
-                  ],
-                };
+                    null,
+                    2,
+                  ),
+                );
               }
               if (evt.event === "invocation_state") {
                 finalInvocation = evt.invocation || finalInvocation;
@@ -170,39 +155,19 @@ export function registerAppCapabilities(server: McpServer) {
                   break;
               }
             }
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: JSON.stringify(finalInvocation, null, 2),
-                },
-              ],
-            };
+            return jsonResponse(finalInvocation);
           }
           case "get_deployment": {
             if (!params.deployment_id)
-              return {
-                content: [
-                  { type: "text", text: "Error: deployment_id is required." },
-                ],
-              };
+              return errorResponse("Error: deployment_id is required.");
             const deployment = await client.deployments.retrieve(
               params.deployment_id,
             );
             if (!deployment)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `Deployment "${params.deployment_id}" not found`,
-                  },
-                ],
-              };
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(deployment, null, 2) },
-              ],
-            };
+              return errorResponse(
+                `Deployment "${params.deployment_id}" not found`,
+              );
+            return jsonResponse(deployment);
           }
           case "list_deployments": {
             const page = await client.deployments.list({
@@ -211,61 +176,29 @@ export function registerAppCapabilities(server: McpServer) {
               ...(params.offset !== undefined && { offset: params.offset }),
             });
             const items = page.getPaginatedItems();
-            return {
-              content: [
-                {
-                  type: "text",
-                  text:
-                    items.length > 0
-                      ? JSON.stringify(
-                          {
-                            items,
-                            has_more: page.has_more,
-                            next_offset: page.next_offset,
-                          },
-                          null,
-                          2,
-                        )
-                      : "No deployments found",
-                },
-              ],
-            };
+            return items.length > 0
+              ? jsonResponse({
+                  items,
+                  has_more: page.has_more,
+                  next_offset: page.next_offset,
+                })
+              : textResponse("No deployments found");
           }
           case "get_invocation": {
             if (!params.invocation_id)
-              return {
-                content: [
-                  { type: "text", text: "Error: invocation_id is required." },
-                ],
-              };
+              return errorResponse("Error: invocation_id is required.");
             const invocation = await client.invocations.retrieve(
               params.invocation_id,
             );
             if (!invocation)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `Invocation "${params.invocation_id}" not found`,
-                  },
-                ],
-              };
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(invocation, null, 2) },
-              ],
-            };
+              return errorResponse(
+                `Invocation "${params.invocation_id}" not found`,
+              );
+            return jsonResponse(invocation);
           }
         }
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error in manage_apps (${params.action}): ${error}`,
-            },
-          ],
-        };
+        return toolErrorResponse("manage_apps", params.action, error);
       }
     },
   );

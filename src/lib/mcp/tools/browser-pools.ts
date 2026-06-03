@@ -1,14 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
-  buildBrowserExtensions,
-  buildBrowserProfile,
-  buildBrowserStartUrl,
-  buildBrowserViewport,
-  type BrowserExtensionParams,
-  type BrowserProfileParams,
-  type BrowserViewportParams,
+  buildBrowserCreateConfig,
   type BrowserConfigResult,
+  type BrowserCreateConfigParams,
 } from "@/lib/mcp/browser-config";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
 import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
@@ -36,32 +31,23 @@ type BrowserPoolAction =
   | "acquire"
   | "release";
 
-type PoolConfigParams = BrowserProfileParams &
-  BrowserExtensionParams &
-  BrowserViewportParams & {
-    size?: number;
-    name?: string;
-    headless?: boolean;
-    stealth?: boolean;
-    timeout_seconds?: number;
-    proxy_id?: string;
-    fill_rate_per_minute?: number;
-    start_url?: string;
-    chrome_policy?: Record<string, unknown>;
-    kiosk_mode?: boolean;
-  };
+type PoolConfigParams = BrowserCreateConfigParams & {
+  size?: number;
+  name?: string;
+  headless?: boolean;
+  stealth?: boolean;
+  timeout_seconds?: number;
+  proxy_id?: string;
+  fill_rate_per_minute?: number;
+  chrome_policy?: Record<string, unknown>;
+  kiosk_mode?: boolean;
+};
 
 function buildPoolConfigParams(
   params: PoolConfigParams,
 ): BrowserConfigResult<BrowserPoolUpdateParams> {
-  const profile = buildBrowserProfile(params);
-  if (!profile.ok) return profile;
-  const extensions = buildBrowserExtensions(params);
-  if (!extensions.ok) return extensions;
-  const viewport = buildBrowserViewport(params);
-  if (!viewport.ok) return viewport;
-  const startUrl = buildBrowserStartUrl(params.start_url);
-  if (!startUrl.ok) return startUrl;
+  const browserConfig = buildBrowserCreateConfig(params);
+  if (!browserConfig.ok) return browserConfig;
 
   return {
     ok: true,
@@ -73,18 +59,15 @@ function buildPoolConfigParams(
       ...(params.timeout_seconds !== undefined && {
         timeout_seconds: params.timeout_seconds,
       }),
-      ...(profile.value && { profile: profile.value }),
       ...(params.proxy_id !== undefined && { proxy_id: params.proxy_id }),
       ...(params.fill_rate_per_minute !== undefined && {
         fill_rate_per_minute: params.fill_rate_per_minute,
       }),
-      ...(startUrl.value !== undefined && { start_url: startUrl.value }),
       ...(params.chrome_policy !== undefined && {
         chrome_policy: params.chrome_policy,
       }),
       ...(params.kiosk_mode !== undefined && { kiosk_mode: params.kiosk_mode }),
-      ...(extensions.value && { extensions: extensions.value }),
-      ...(viewport.value && { viewport: viewport.value }),
+      ...browserConfig.value,
     },
   };
 }

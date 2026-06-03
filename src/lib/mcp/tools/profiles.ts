@@ -2,6 +2,12 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
 import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
+import {
+  errorResponse,
+  jsonResponse,
+  textResponse,
+  toolErrorResponse,
+} from "@/lib/mcp/responses";
 
 async function listProfiles(client: KernelClient) {
   const profiles: Awaited<ReturnType<typeof client.profiles.retrieve>>[] = [];
@@ -71,14 +77,9 @@ export function registerProfileCapabilities(server: McpServer) {
         switch (params.action) {
           case "setup": {
             if (!params.profile_name)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: profile_name is required for setup.",
-                  },
-                ],
-              };
+              return errorResponse(
+                "Error: profile_name is required for setup.",
+              );
             const existingProfiles = await listProfiles(client);
             const existingProfile = existingProfiles?.find(
               (p) => p.name === params.profile_name,
@@ -88,24 +89,16 @@ export function registerProfileCapabilities(server: McpServer) {
 
             if (existingProfile) {
               if (!params.update_existing) {
-                return {
-                  content: [
-                    {
-                      type: "text",
-                      text: `Profile "${params.profile_name}" already exists (ID: ${existingProfile.id}). Set update_existing: true to update it, or choose a different name.`,
-                    },
-                  ],
-                };
+                return errorResponse(
+                  `Profile "${params.profile_name}" already exists (ID: ${existingProfile.id}). Set update_existing: true to update it, or choose a different name.`,
+                );
               }
               profile = existingProfile;
             } else {
               profile = await client.profiles.create({
                 name: params.profile_name,
               });
-              if (!profile)
-                return {
-                  content: [{ type: "text", text: "Failed to create profile" }],
-                };
+              if (!profile) return errorResponse("Failed to create profile");
               isNewProfile = true;
             }
 
@@ -115,83 +108,44 @@ export function registerProfileCapabilities(server: McpServer) {
               profile: { name: params.profile_name, save_changes: true },
             });
             if (!browser)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Failed to create browser for profile setup",
-                  },
-                ],
-              };
+              return errorResponse(
+                "Failed to create browser for profile setup",
+              );
 
-            return {
-              content: [
-                {
-                  type: "text",
-                  text:
-                    `Profile "${params.profile_name}" ${isNewProfile ? "created" : "loaded for update"}.\n\n` +
-                    `**Setup:** Open ${browser.browser_live_view_url} and sign into accounts to save.\n` +
-                    `**When done:** Use manage_browsers with action "delete" and session_id "${browser.session_id}" to save the profile.\n\n` +
-                    `Profile ID: ${profile.id} | Session ID: ${browser.session_id}`,
-                },
-              ],
-            };
+            return textResponse(
+              `Profile "${params.profile_name}" ${isNewProfile ? "created" : "loaded for update"}.\n\n` +
+                `**Setup:** Open ${browser.browser_live_view_url} and sign into accounts to save.\n` +
+                `**When done:** Use manage_browsers with action "delete" and session_id "${browser.session_id}" to save the profile.\n\n` +
+                `Profile ID: ${profile.id} | Session ID: ${browser.session_id}`,
+            );
           }
           case "list": {
             const profiles = await listProfiles(client);
-            return {
-              content: [
-                {
-                  type: "text",
-                  text:
-                    profiles?.length > 0
-                      ? JSON.stringify(profiles, null, 2)
-                      : "No profiles found. Use manage_profiles with action 'setup' to create one.",
-                },
-              ],
-            };
+            return profiles.length > 0
+              ? jsonResponse(profiles)
+              : textResponse(
+                  "No profiles found. Use manage_profiles with action 'setup' to create one.",
+                );
           }
           case "delete": {
             if (params.profile_name && params.profile_id) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: Cannot specify both profile_name and profile_id.",
-                  },
-                ],
-              };
+              return errorResponse(
+                "Error: Cannot specify both profile_name and profile_id.",
+              );
             }
             const identifier = params.profile_name || params.profile_id;
             if (!identifier)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: profile_name or profile_id is required for delete.",
-                  },
-                ],
-              };
+              return errorResponse(
+                "Error: profile_name or profile_id is required for delete.",
+              );
             await client.profiles.delete(identifier);
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Profile "${identifier}" deleted successfully.`,
-                },
-              ],
-            };
+            return textResponse(
+              `Profile "${identifier}" deleted successfully.`,
+            );
           }
         }
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error in manage_profiles (${params.action}): ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-        };
+        return toolErrorResponse("manage_profiles", params.action, error);
       }
     },
   );

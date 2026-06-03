@@ -1,11 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
-  buildBrowserExtensions,
-  buildBrowserProfile,
-  buildBrowserStartUrl,
-  buildBrowserViewport,
-  buildBrowserViewportUpdate,
+  buildBrowserCreateConfig,
+  buildBrowserUpdateConfig,
   type BrowserConfigResult,
 } from "@/lib/mcp/browser-config";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
@@ -294,26 +291,16 @@ export function registerBrowserCapabilities(server: McpServer) {
               createParams.timeout_seconds = params.timeout_seconds;
             if (params.kiosk_mode !== undefined)
               createParams.kiosk_mode = params.kiosk_mode;
-            const startUrl = buildBrowserStartUrl(params.start_url);
-            if (!startUrl.ok) return errorResponse(startUrl.error);
-            if (startUrl.value !== undefined)
-              createParams.start_url = startUrl.value;
             if (params.chrome_policy)
               createParams.chrome_policy = params.chrome_policy;
             if (params.proxy_id) createParams.proxy_id = params.proxy_id;
-            const profile = buildBrowserProfile(params);
-            if (!profile.ok) return errorResponse(profile.error);
-            if (profile.value) createParams.profile = profile.value;
-            const viewport = buildBrowserViewport(params);
-            if (!viewport.ok) return errorResponse(viewport.error);
-            if (viewport.value) createParams.viewport = viewport.value;
+            const browserConfig = buildBrowserCreateConfig(params);
+            if (!browserConfig.ok) return errorResponse(browserConfig.error);
+            Object.assign(createParams, browserConfig.value);
             const telemetry = buildTelemetry(params);
             if (!telemetry.ok) return errorResponse(telemetry.error);
             if (telemetry.value !== undefined)
               createParams.telemetry = telemetry.value;
-            const extensions = buildBrowserExtensions(params);
-            if (!extensions.ok) return errorResponse(extensions.error);
-            if (extensions.value) createParams.extensions = extensions.value;
 
             const browser = await client.browsers.create(createParams);
             if (!browser)
@@ -369,12 +356,9 @@ export function registerBrowserCapabilities(server: McpServer) {
             } else if (params.proxy_id !== undefined) {
               updateParams.proxy_id = params.proxy_id;
             }
-            const profile = buildBrowserProfile(params);
-            if (!profile.ok) return errorResponse(profile.error);
-            if (profile.value) updateParams.profile = profile.value;
-            const viewport = buildBrowserViewportUpdate(params);
-            if (!viewport.ok) return errorResponse(viewport.error);
-            if (viewport.value) updateParams.viewport = viewport.value;
+            const browserConfig = buildBrowserUpdateConfig(params);
+            if (!browserConfig.ok) return errorResponse(browserConfig.error);
+            Object.assign(updateParams, browserConfig.value);
             const telemetry = buildTelemetry(params);
             if (!telemetry.ok) return errorResponse(telemetry.error);
             if (telemetry.value !== undefined)

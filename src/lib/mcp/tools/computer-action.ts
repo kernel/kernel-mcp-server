@@ -11,32 +11,142 @@ type ComputerBatchAction = Parameters<
   KernelClient["browsers"]["computer"]["batch"]
 >[1]["actions"][number];
 
-type ComputerToolAction =
-  | ComputerBatchAction
-  | {
-      type:
-        | ComputerBatchAction["type"]
-        | "screenshot"
-        | "get_mouse_position"
-        | "read_clipboard"
-        | "write_clipboard";
-      screenshot?: {
-        region?: {
-          x: number;
-          y: number;
-          width: number;
-          height: number;
-        };
-      };
-      write_clipboard?: { text: string };
+type ComputerToolAction = Partial<Omit<ComputerBatchAction, "type">> & {
+  type:
+    | ComputerBatchAction["type"]
+    | "screenshot"
+    | "get_mouse_position"
+    | "read_clipboard"
+    | "write_clipboard";
+  screenshot?: {
+    region?: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
     };
+  };
+  write_clipboard?: { text: string };
+};
 
-function isResultAction(action: ComputerToolAction) {
+type ComputerBatchToolAction = ComputerToolAction & {
+  type: ComputerBatchAction["type"];
+};
+
+type ComputerResultAction = ComputerToolAction & {
+  type: "screenshot" | "get_mouse_position" | "read_clipboard";
+};
+
+type ComputerExecutionResult =
+  | { ok: true; executedActionCount: number }
+  | { ok: false; error: string };
+
+function isResultAction(
+  action: ComputerToolAction,
+): action is ComputerResultAction {
   return (
     action.type === "screenshot" ||
     action.type === "get_mouse_position" ||
     action.type === "read_clipboard"
   );
+}
+
+function isBatchAction(
+  action: ComputerToolAction,
+): action is ComputerBatchToolAction {
+  return action.type !== "write_clipboard" && !isResultAction(action);
+}
+
+function toBatchAction(action: ComputerBatchToolAction): ComputerBatchAction {
+  switch (action.type) {
+    case "click_mouse":
+      return { type: action.type, click_mouse: action.click_mouse };
+    case "move_mouse":
+      return { type: action.type, move_mouse: action.move_mouse };
+    case "type_text":
+      return { type: action.type, type_text: action.type_text };
+    case "press_key":
+      return { type: action.type, press_key: action.press_key };
+    case "scroll":
+      return { type: action.type, scroll: action.scroll };
+    case "drag_mouse":
+      return { type: action.type, drag_mouse: action.drag_mouse };
+    case "set_cursor":
+      return { type: action.type, set_cursor: action.set_cursor };
+    case "sleep":
+      return { type: action.type, sleep: action.sleep };
+  }
+}
+
+function splitTrailingResultAction(actions: ComputerToolAction[]): {
+  leadingActions: ComputerToolAction[];
+  resultAction?: ComputerResultAction;
+} {
+  const lastAction = actions[actions.length - 1];
+  const resultAction = isResultAction(lastAction) ? lastAction : undefined;
+  return {
+    leadingActions: resultAction ? actions.slice(0, -1) : actions,
+    resultAction,
+  };
+}
+
+async function executeLeadingComputerActions(
+  client: KernelClient,
+  sessionId: string,
+  actions: ComputerToolAction[],
+): Promise<ComputerExecutionResult> {
+  let executedActionCount = 0;
+  let batchActions: ComputerBatchAction[] = [];
+
+  async function flushBatchActions() {
+    if (batchActions.length === 0) return;
+    await client.browsers.computer.batch(sessionId, { actions: batchActions });
+    executedActionCount += batchActions.length;
+    batchActions = [];
+  }
+
+  for (const action of actions) {
+    if (isResultAction(action)) {
+      return {
+        ok: false,
+        error: `Error: ${action.type} must be the last action in the sequence.`,
+      };
+    }
+
+    if (action.type === "write_clipboard") {
+      await flushBatchActions();
+      if (!action.write_clipboard) {
+        return {
+          ok: false,
+          error:
+            "Error: write_clipboard params are required for write_clipboard action.",
+        };
+      }
+      await client.browsers.computer.writeClipboard(sessionId, {
+        text: action.write_clipboard.text,
+      });
+      executedActionCount += 1;
+      continue;
+    }
+
+    if (isBatchAction(action)) {
+      batchActions.push(toBatchAction(action));
+    }
+  }
+
+  await flushBatchActions();
+  return { ok: true, executedActionCount };
+}
+
+function actionCountPrefix(executedActionCount: number, suffix: string) {
+  return executedActionCount > 0
+    ? [
+        {
+          type: "text" as const,
+          text: `Executed ${executedActionCount} action(s)${suffix}`,
+        },
+      ]
+    : [];
 }
 
 export function registerComputerActionTool(server: McpServer) {
@@ -177,62 +287,18 @@ export function registerComputerActionTool(server: McpServer) {
       const client = createKernelClient(extra.authInfo.token);
 
       try {
-        const toolActions = actions as ComputerToolAction[];
-        const lastAction = toolActions[toolActions.length - 1];
-        const hasTrailingScreenshot = lastAction?.type === "screenshot";
-        const hasTrailingReadClipboard = lastAction?.type === "read_clipboard";
-        const hasTrailingGetPosition =
-          lastAction?.type === "get_mouse_position";
-        const hasTrailingSpecial =
-          hasTrailingScreenshot ||
-          hasTrailingReadClipboard ||
-          hasTrailingGetPosition;
+        const toolActions: ComputerToolAction[] = actions;
+        const { leadingActions, resultAction } =
+          splitTrailingResultAction(toolActions);
+        const execution = await executeLeadingComputerActions(
+          client,
+          session_id,
+          leadingActions,
+        );
+        if (!execution.ok) return errorResponse(execution.error);
 
-        for (let i = 0; i < toolActions.length - 1; i++) {
-          if (isResultAction(toolActions[i])) {
-            return errorResponse(
-              `Error: ${toolActions[i].type} must be the last action in the sequence.`,
-            );
-          }
-        }
-
-        const leadingActions = hasTrailingSpecial
-          ? toolActions.slice(0, -1)
-          : toolActions;
-        let executedActionCount = 0;
-        let batchActions: ComputerBatchAction[] = [];
-
-        async function flushBatchActions() {
-          if (batchActions.length === 0) return;
-          await client.browsers.computer.batch(session_id, {
-            actions: batchActions,
-          });
-          executedActionCount += batchActions.length;
-          batchActions = [];
-        }
-
-        for (const action of leadingActions) {
-          if (action.type === "write_clipboard") {
-            await flushBatchActions();
-            if (!action.write_clipboard) {
-              return errorResponse(
-                "Error: write_clipboard params are required for write_clipboard action.",
-              );
-            }
-            await client.browsers.computer.writeClipboard(session_id, {
-              text: action.write_clipboard.text,
-            });
-            executedActionCount += 1;
-            continue;
-          }
-
-          batchActions.push(action as ComputerBatchAction);
-        }
-
-        await flushBatchActions();
-
-        if (hasTrailingScreenshot) {
-          const screenshotParams = lastAction.screenshot;
+        if (resultAction?.type === "screenshot") {
+          const screenshotParams = resultAction.screenshot;
           const screenshotOpts = screenshotParams?.region
             ? { region: screenshotParams.region }
             : undefined;
@@ -250,12 +316,12 @@ export function registerComputerActionTool(server: McpServer) {
             | { type: "text"; text: string }
             | { type: "image"; data: string; mimeType: string }
           > = [];
-          if (executedActionCount > 0) {
-            content.push({
-              type: "text",
-              text: `Executed ${executedActionCount} action(s), then captured screenshot.`,
-            });
-          }
+          content.push(
+            ...actionCountPrefix(
+              execution.executedActionCount,
+              ", then captured screenshot.",
+            ),
+          );
           content.push({
             type: "text",
             text: viewport
@@ -270,42 +336,33 @@ export function registerComputerActionTool(server: McpServer) {
           return { content };
         }
 
-        if (hasTrailingReadClipboard) {
+        if (resultAction?.type === "read_clipboard") {
           const clipboard =
             await client.browsers.computer.readClipboard(session_id);
-          const content: Array<{ type: "text"; text: string }> = [];
-          if (executedActionCount > 0) {
-            content.push({
-              type: "text",
-              text: `Executed ${executedActionCount} action(s), then read clipboard.`,
-            });
-          }
-          content.push({
-            type: "text",
-            text: JSON.stringify(clipboard, null, 2),
-          });
-          return { content };
+          return {
+            content: [
+              ...actionCountPrefix(
+                execution.executedActionCount,
+                ", then read clipboard.",
+              ),
+              { type: "text", text: JSON.stringify(clipboard, null, 2) },
+            ],
+          };
         }
 
-        if (hasTrailingGetPosition) {
+        if (resultAction?.type === "get_mouse_position") {
           const position =
             await client.browsers.computer.getMousePosition(session_id);
-          const content: Array<{ type: "text"; text: string }> = [];
-          if (executedActionCount > 0) {
-            content.push({
-              type: "text",
-              text: `Executed ${executedActionCount} action(s).`,
-            });
-          }
-          content.push({
-            type: "text",
-            text: JSON.stringify(position, null, 2),
-          });
-          return { content };
+          return {
+            content: [
+              ...actionCountPrefix(execution.executedActionCount, "."),
+              { type: "text", text: JSON.stringify(position, null, 2) },
+            ],
+          };
         }
 
         return textResponse(
-          `Executed ${executedActionCount} action(s) successfully`,
+          `Executed ${execution.executedActionCount} action(s) successfully`,
         );
       } catch (error) {
         return toolErrorResponse("computer_action", "actions", error);
