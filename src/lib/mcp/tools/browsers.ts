@@ -10,9 +10,11 @@ import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
 import {
   errorResponse,
   jsonResponse,
+  paginatedJsonResponse,
   textResponse,
   toolErrorResponse,
 } from "@/lib/mcp/responses";
+import { paginationParams } from "@/lib/mcp/schemas";
 
 type BrowserCreateParams = NonNullable<
   Parameters<KernelClient["browsers"]["create"]>[0]
@@ -79,6 +81,53 @@ function buildTelemetry(
   };
 }
 
+function browserSessionNextActions(sessionId: string) {
+  return [
+    `Use computer_action with session_id "${sessionId}" to inspect or control the browser.`,
+    `Use manage_browsers with action "get" and session_id "${sessionId}" for full browser details.`,
+    `Use manage_browsers with action "delete" and session_id "${sessionId}" when the session is no longer needed.`,
+  ];
+}
+
+function buildSshPortForwardingInfo(
+  params: { local_forward?: string; remote_forward?: string },
+  sessionId: string,
+) {
+  if (!params.local_forward && !params.remote_forward) return undefined;
+
+  const sshParts = ["kernel browsers ssh", sessionId];
+  if (params.local_forward) sshParts.push(`-L ${params.local_forward}`);
+  if (params.remote_forward) sshParts.push(`-R ${params.remote_forward}`);
+
+  const remotePort = params.remote_forward
+    ? params.remote_forward.split(":")[0]
+    : undefined;
+  const localPort = params.local_forward
+    ? params.local_forward.split(":")[0]
+    : undefined;
+
+  return {
+    command: sshParts.join(" "),
+    prerequisites: [
+      "Kernel CLI: https://kernel.sh/docs/reference/cli",
+      "websocat: brew install websocat on macOS",
+    ],
+    remote_forward: remotePort
+      ? {
+          browser_vm_url: `http://localhost:${remotePort}`,
+          next_action: `Once the user has the tunnel running, use execute_playwright_code to navigate the browser to http://localhost:${remotePort}.`,
+        }
+      : undefined,
+    local_forward: localPort
+      ? {
+          local_url: `http://localhost:${localPort}`,
+          note: `Services inside the browser VM are accessible locally at localhost:${localPort} once the tunnel is running.`,
+        }
+      : undefined,
+    note: "SSH connections alone do not count as browser activity. Set an appropriate timeout or keep the live view open to prevent cleanup.",
+  };
+}
+
 export function registerBrowserCapabilities(server: McpServer) {
   server.resource("browsers", "browsers://", async (uri, extra) => {
     if (!extra.authInfo) {
@@ -113,7 +162,7 @@ export function registerBrowserCapabilities(server: McpServer) {
   // manage_browsers -- Create, update, list, get, and delete browser sessions
   server.tool(
     "manage_browsers",
-    'Manage browser sessions in the Kernel platform. Use action "create" to launch a new browser, "update" to modify supported session settings, "list" to see existing sessions, "get" to retrieve details about a specific session, or "delete" to terminate one. Created browsers run in isolated VMs and support headless/stealth modes, profiles, proxies, viewports, extensions, Chrome policy overrides, telemetry, start URLs, and SSH tunneling.',
+    'Manage browser sessions when an agent needs a live browser to inspect, automate, or debug web state. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, and "delete" when finished.',
     {
       action: z
         .enum(["create", "update", "list", "get", "delete"])
@@ -153,6 +202,9 @@ export function registerBrowserCapabilities(server: McpServer) {
         .optional(),
       timeout_seconds: z
         .number()
+        .int()
+        .min(10)
+        .max(259200)
         .describe(
           "(create) Inactivity timeout in seconds (max 259200 = 72h). Default 60.",
         )
@@ -197,18 +249,24 @@ export function registerBrowserCapabilities(server: McpServer) {
         .optional(),
       viewport_width: z
         .number()
+        .int()
+        .min(1)
         .describe(
           "(create, update) Window width in pixels. Must pair with viewport_height.",
         )
         .optional(),
       viewport_height: z
         .number()
+        .int()
+        .min(1)
         .describe(
           "(create, update) Window height in pixels. Must pair with viewport_width.",
         )
         .optional(),
       viewport_refresh_rate: z
         .number()
+        .int()
+        .min(1)
         .describe("(create, update) Display refresh rate in Hz.")
         .optional(),
       viewport_force: z
@@ -239,14 +297,7 @@ export function registerBrowserCapabilities(server: McpServer) {
         .enum(["active", "deleted", "all"])
         .describe('(list) Filter by status. Default "active".')
         .optional(),
-      limit: z
-        .number()
-        .describe("(list) Max results per page. Default 50.")
-        .optional(),
-      offset: z
-        .number()
-        .describe("(list) Pagination offset. Default 0.")
-        .optional(),
+      ...paginationParams,
       telemetry_enabled: z
         .boolean()
         .describe(
@@ -306,35 +357,17 @@ export function registerBrowserCapabilities(server: McpServer) {
             if (!browser)
               return errorResponse("Failed to create browser session");
 
-            let responseText = JSON.stringify(browser, null, 2);
-            if (params.local_forward || params.remote_forward) {
-              const sshParts = ["kernel browsers ssh", browser.session_id];
-              if (params.local_forward)
-                sshParts.push(`-L ${params.local_forward}`);
-              if (params.remote_forward)
-                sshParts.push(`-R ${params.remote_forward}`);
-              const sshCommand = sshParts.join(" ");
-
-              const remotePort = params.remote_forward
-                ? params.remote_forward.split(":")[0]
-                : null;
-              const localPort = params.local_forward
-                ? params.local_forward.split(":")[0]
-                : null;
-
-              responseText += `\n\n## SSH Port Forwarding\n\nRun this command in a terminal:\n\n\`\`\`bash\n${sshCommand}\n\`\`\`\n\nPrerequisites: [Kernel CLI](https://kernel.sh/docs/reference/cli) and [websocat](https://github.com/vi/websocat) (\`brew install websocat\` on macOS).`;
-
-              if (remotePort) {
-                responseText += `\n\nThis forwards the user's local port to port ${remotePort} inside the browser VM. Once the user has the tunnel running, use execute_playwright_code to navigate the browser to http://localhost:${remotePort}`;
-              }
-
-              if (localPort) {
-                responseText += `\n\nThis forwards port ${localPort} from the browser VM to the user's local machine. Once the user has the tunnel running, services inside the VM are accessible locally at localhost:${localPort}`;
-              }
-
-              responseText += `\n\nNote: SSH connections alone don't count as browser activity. Set an appropriate timeout or keep the live view open to prevent cleanup.`;
-            }
-            return textResponse(responseText);
+            const sshPortForwarding = buildSshPortForwardingInfo(
+              params,
+              browser.session_id,
+            );
+            return jsonResponse({
+              browser,
+              next_actions: browserSessionNextActions(browser.session_id),
+              ...(sshPortForwarding && {
+                ssh_port_forwarding: sshPortForwarding,
+              }),
+            });
           }
           case "update": {
             if (!params.session_id)
@@ -376,7 +409,10 @@ export function registerBrowserCapabilities(server: McpServer) {
             );
             if (!browser)
               return errorResponse("Failed to update browser session");
-            return jsonResponse(browser);
+            return jsonResponse({
+              browser,
+              next_actions: browserSessionNextActions(browser.session_id),
+            });
           }
           case "list": {
             const page = await client.browsers.list({
@@ -384,22 +420,11 @@ export function registerBrowserCapabilities(server: McpServer) {
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
-            const items = page
-              .getPaginatedItems()
-              .map((b) => ({ ...b, cdp_ws_url: undefined }));
-            return textResponse(
-              items.length > 0
-                ? JSON.stringify(
-                    {
-                      items,
-                      has_more: page.has_more,
-                      next_offset: page.next_offset,
-                    },
-                    null,
-                    2,
-                  )
-                : "No browsers found",
-            );
+            return paginatedJsonResponse(page, {
+              mapItem: ({ cdp_ws_url: _cdpWsUrl, ...browser }) => browser,
+              note: 'Use action "get" with session_id for full browser details.',
+              emptyText: "No browsers found",
+            });
           }
           case "get": {
             if (!params.session_id)

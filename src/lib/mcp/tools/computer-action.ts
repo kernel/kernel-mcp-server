@@ -181,7 +181,7 @@ export function registerComputerActionTool(server: McpServer) {
                 y: z.number(),
                 button: z.enum(["left", "right", "middle"]).optional(),
                 click_type: z.enum(["down", "up", "click"]).optional(),
-                num_clicks: z.number().optional(),
+                num_clicks: z.number().int().min(1).optional(),
                 hold_keys: z.array(z.string()).optional(),
               })
               .describe("Params for click_mouse action.")
@@ -197,7 +197,7 @@ export function registerComputerActionTool(server: McpServer) {
             type_text: z
               .object({
                 text: z.string(),
-                delay: z.number().optional(),
+                delay: z.number().int().min(0).optional(),
               })
               .describe("Params for type_text action.")
               .optional(),
@@ -208,7 +208,7 @@ export function registerComputerActionTool(server: McpServer) {
                   .describe(
                     'X11 keysym names or combos like "Ctrl+t", "Return".',
                   ),
-                duration: z.number().optional(),
+                duration: z.number().int().min(0).optional(),
                 hold_keys: z.array(z.string()).optional(),
               })
               .describe("Params for press_key action.")
@@ -235,9 +235,9 @@ export function registerComputerActionTool(server: McpServer) {
                   .array(z.array(z.number()))
                   .describe("Ordered [x,y] pairs, at least 2 points."),
                 button: z.enum(["left", "middle", "right"]).optional(),
-                delay: z.number().optional(),
-                steps_per_segment: z.number().optional(),
-                step_delay_ms: z.number().optional(),
+                delay: z.number().int().min(0).optional(),
+                steps_per_segment: z.number().int().min(1).optional(),
+                step_delay_ms: z.number().int().min(0).optional(),
                 hold_keys: z.array(z.string()).optional(),
               })
               .describe("Params for drag_mouse action.")
@@ -250,7 +250,7 @@ export function registerComputerActionTool(server: McpServer) {
               .optional(),
             sleep: z
               .object({
-                duration_ms: z.number(),
+                duration_ms: z.number().int().min(0),
               })
               .describe("Params for sleep action.")
               .optional(),
@@ -260,8 +260,8 @@ export function registerComputerActionTool(server: McpServer) {
                   .object({
                     x: z.number(),
                     y: z.number(),
-                    width: z.number(),
-                    height: z.number(),
+                    width: z.number().int().min(1),
+                    height: z.number().int().min(1),
                   })
                   .optional(),
               })

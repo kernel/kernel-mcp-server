@@ -4,10 +4,15 @@ import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
 import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
 import {
   errorResponse,
-  jsonResponse,
+  paginatedJsonResponse,
   textResponse,
   toolErrorResponse,
 } from "@/lib/mcp/responses";
+import { paginationParams } from "@/lib/mcp/schemas";
+
+type ProfileListParams = NonNullable<
+  Parameters<KernelClient["profiles"]["list"]>[0]
+>;
 
 async function listProfiles(client: KernelClient) {
   const profiles: Awaited<ReturnType<typeof client.profiles.retrieve>>[] = [];
@@ -49,7 +54,7 @@ export function registerProfileCapabilities(server: McpServer) {
 
   server.tool(
     "manage_profiles",
-    'Manage browser profiles that persist cookies, logins, and session data across browser sessions. Use action "setup" to create/update a profile with a guided live browser session, "list" to see all profiles, or "delete" to remove one.',
+    'Manage browser profiles when an agent needs persistent cookies, login state, or reusable browser state. Use "setup" for a guided login session, "list" to find a profile, and "delete" only when a profile should be removed.',
     {
       action: z
         .enum(["setup", "list", "delete"])
@@ -68,6 +73,11 @@ export function registerProfileCapabilities(server: McpServer) {
         .boolean()
         .describe("(setup) If true, update existing profile. Default false.")
         .optional(),
+      query: z
+        .string()
+        .describe("(list) Search profiles by name or ID.")
+        .optional(),
+      ...paginationParams,
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
@@ -120,12 +130,15 @@ export function registerProfileCapabilities(server: McpServer) {
             );
           }
           case "list": {
-            const profiles = await listProfiles(client);
-            return profiles.length > 0
-              ? jsonResponse(profiles)
-              : textResponse(
-                  "No profiles found. Use manage_profiles with action 'setup' to create one.",
-                );
+            const page = await client.profiles.list({
+              ...(params.query && { query: params.query }),
+              ...(params.limit !== undefined && { limit: params.limit }),
+              ...(params.offset !== undefined && { offset: params.offset }),
+            } satisfies ProfileListParams);
+            return paginatedJsonResponse(page, {
+              emptyText:
+                "No profiles found. Use manage_profiles with action 'setup' to create one.",
+            });
           }
           case "delete": {
             if (params.profile_name && params.profile_id) {

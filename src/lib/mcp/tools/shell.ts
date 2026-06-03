@@ -19,6 +19,8 @@ export function registerShellTool(server: McpServer) {
       cwd: z.string().describe("Working directory (absolute path).").optional(),
       timeout_sec: z
         .number()
+        .int()
+        .min(1)
         .describe("Max execution time in seconds.")
         .optional(),
       as_root: z.boolean().describe("Run with root privileges.").optional(),

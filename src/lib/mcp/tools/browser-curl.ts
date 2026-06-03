@@ -26,7 +26,7 @@ function curlUrlError(url: string) {
 export function registerBrowserCurlTool(server: McpServer) {
   server.tool(
     "browser_curl",
-    "Send an HTTP request through an existing Kernel browser session's Chrome network stack.",
+    "Send an HTTP request through an existing Kernel browser session's Chrome network stack. Use when the request needs that browser session's cookies, proxy, network context, or origin behavior; do not use for general documentation lookup or web search.",
     {
       session_id: z.string().describe("Browser session ID."),
       url: z.string().url().describe("Target http or https URL."),
@@ -49,6 +49,7 @@ export function registerBrowserCurlTool(server: McpServer) {
       timeout_ms: z
         .number()
         .int()
+        .min(1)
         .describe("Request timeout in milliseconds.")
         .optional(),
     },

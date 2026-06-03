@@ -5,9 +5,11 @@ import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
 import {
   errorResponse,
   jsonResponse,
+  paginatedJsonResponse,
   textResponse,
   toolErrorResponse,
 } from "@/lib/mcp/responses";
+import { paginationParams } from "@/lib/mcp/schemas";
 
 export function registerAppCapabilities(server: McpServer) {
   server.resource("apps", "apps://", async (uri, extra) => {
@@ -44,7 +46,7 @@ export function registerAppCapabilities(server: McpServer) {
   // manage_apps -- List apps, invoke actions, manage deployments, check invocations
   server.tool(
     "manage_apps",
-    'Manage Kernel apps, deployments, and invocations. Use "list_apps" to discover apps, "invoke" to execute an app action, "get_deployment"/"list_deployments" to check deployment status, or "get_invocation" to check action results.',
+    'Manage Kernel apps when an agent needs to discover deployed app actions, invoke an app, or inspect deployment/invocation state. Use "list_apps" before invoking an unknown app, "invoke" to run an action, and get/list actions to inspect results.',
     {
       action: z
         .enum([
@@ -83,14 +85,7 @@ export function registerAppCapabilities(server: McpServer) {
         .string()
         .describe("(get_invocation) Invocation ID to retrieve.")
         .optional(),
-      limit: z
-        .number()
-        .describe("(list_apps, list_deployments) Max results. Default 50.")
-        .optional(),
-      offset: z
-        .number()
-        .describe("(list_apps, list_deployments) Pagination offset. Default 0.")
-        .optional(),
+      ...paginationParams,
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
@@ -105,14 +100,9 @@ export function registerAppCapabilities(server: McpServer) {
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
-            const items = page.getPaginatedItems();
-            return items.length > 0
-              ? jsonResponse({
-                  items,
-                  has_more: page.has_more,
-                  next_offset: page.next_offset,
-                })
-              : textResponse("No apps found");
+            return paginatedJsonResponse(page, {
+              emptyText: "No apps found",
+            });
           }
           case "invoke": {
             if (!params.app_name || !params.action_name) {
@@ -175,14 +165,9 @@ export function registerAppCapabilities(server: McpServer) {
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
-            const items = page.getPaginatedItems();
-            return items.length > 0
-              ? jsonResponse({
-                  items,
-                  has_more: page.has_more,
-                  next_offset: page.next_offset,
-                })
-              : textResponse("No deployments found");
+            return paginatedJsonResponse(page, {
+              emptyText: "No deployments found",
+            });
           }
           case "get_invocation": {
             if (!params.invocation_id)
