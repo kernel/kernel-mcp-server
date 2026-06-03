@@ -1,6 +1,14 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
+import {
+  errorResponse,
+  jsonResponse,
+  paginatedJsonResponse,
+  textResponse,
+  toolErrorResponse,
+} from "@/lib/mcp/responses";
+import { paginationParams } from "@/lib/mcp/schemas";
 
 export function registerCredentialTools(server: McpServer) {
   // manage_credentials -- Manage stored credentials for managed auth
@@ -15,14 +23,7 @@ export function registerCredentialTools(server: McpServer) {
         .string()
         .describe("(get, totp_code, update, delete) Credential ID or name.")
         .optional(),
-      limit: z
-        .number()
-        .describe("(list) Max results per page. Default 50.")
-        .optional(),
-      offset: z
-        .number()
-        .describe("(list) Pagination offset. Default 0.")
-        .optional(),
+      ...paginationParams,
       domain: z
         .string()
         .describe(
@@ -54,6 +55,13 @@ export function registerCredentialTools(server: McpServer) {
         )
         .optional(),
     },
+    {
+      title: "Manage Kernel credentials",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);
@@ -66,64 +74,25 @@ export function registerCredentialTools(server: McpServer) {
               ...(params.offset !== undefined && { offset: params.offset }),
               ...(params.domain !== undefined && { domain: params.domain }),
             });
-            const items = page.getPaginatedItems();
-            return {
-              content: [
-                {
-                  type: "text",
-                  text:
-                    items.length > 0
-                      ? JSON.stringify(
-                          {
-                            items,
-                            has_more: page.has_more,
-                            next_offset: page.next_offset,
-                          },
-                          null,
-                          2,
-                        )
-                      : "No credentials found",
-                },
-              ],
-            };
+            return paginatedJsonResponse(page);
           }
           case "get": {
             if (!params.id_or_name)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: id_or_name is required for get.",
-                  },
-                ],
-              };
+              return errorResponse("Error: id_or_name is required for get.");
             const credential = await client.credentials.retrieve(
               params.id_or_name,
             );
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(credential, null, 2) },
-              ],
-            };
+            return jsonResponse(credential);
           }
           case "totp_code": {
             if (!params.id_or_name)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: id_or_name is required for totp_code.",
-                  },
-                ],
-              };
+              return errorResponse(
+                "Error: id_or_name is required for totp_code.",
+              );
             const response = await client.credentials.totpCode(
               params.id_or_name,
             );
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(response, null, 2) },
-              ],
-            };
+            return jsonResponse(response);
           }
           case "create": {
             if (
@@ -132,14 +101,9 @@ export function registerCredentialTools(server: McpServer) {
               !params.values ||
               Object.keys(params.values).length === 0
             ) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: domain, name, and non-empty values are required for create.",
-                  },
-                ],
-              };
+              return errorResponse(
+                "Error: domain, name, and non-empty values are required for create.",
+              );
             }
             const credential = await client.credentials.create({
               domain: params.domain,
@@ -152,28 +116,12 @@ export function registerCredentialTools(server: McpServer) {
                 totp_secret: params.totp_secret,
               }),
             });
-            if (!credential)
-              return {
-                content: [
-                  { type: "text", text: "Failed to create credential" },
-                ],
-              };
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(credential, null, 2) },
-              ],
-            };
+            if (!credential) return errorResponse("Failed to create credential");
+            return jsonResponse(credential);
           }
           case "update": {
             if (!params.id_or_name)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: id_or_name is required for update.",
-                  },
-                ],
-              };
+              return errorResponse("Error: id_or_name is required for update.");
             const credential = await client.credentials.update(
               params.id_or_name,
               {
@@ -187,42 +135,17 @@ export function registerCredentialTools(server: McpServer) {
                 }),
               },
             );
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(credential, null, 2) },
-              ],
-            };
+            return jsonResponse(credential);
           }
           case "delete": {
             if (!params.id_or_name)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: id_or_name is required for delete.",
-                  },
-                ],
-              };
+              return errorResponse("Error: id_or_name is required for delete.");
             await client.credentials.delete(params.id_or_name);
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Credential ${params.id_or_name} deleted.`,
-                },
-              ],
-            };
+            return textResponse(`Credential ${params.id_or_name} deleted.`);
           }
         }
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error in manage_credentials (${params.action}): ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-        };
+        return toolErrorResponse("manage_credentials", params.action, error);
       }
     },
   );

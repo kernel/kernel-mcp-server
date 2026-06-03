@@ -1,6 +1,14 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
+import {
+  errorResponse,
+  jsonResponse,
+  paginatedJsonResponse,
+  textResponse,
+  toolErrorResponse,
+} from "@/lib/mcp/responses";
+import { paginationParams } from "@/lib/mcp/schemas";
 
 export function registerAuthConnectionTools(server: McpServer) {
   // manage_auth_connections -- Manage Kernel managed auth connections
@@ -84,14 +92,7 @@ export function registerAuthConnectionTools(server: McpServer) {
         .describe("(create, login) Proxy name to route the auth flow through.")
         .optional(),
       domain_filter: z.string().describe("(list) Filter by domain.").optional(),
-      limit: z
-        .number()
-        .describe("(list) Max results per page. Default 50.")
-        .optional(),
-      offset: z
-        .number()
-        .describe("(list) Pagination offset. Default 0.")
-        .optional(),
+      ...paginationParams,
       fields: z
         .record(z.string(), z.string())
         .describe(
@@ -111,6 +112,13 @@ export function registerAuthConnectionTools(server: McpServer) {
         )
         .optional(),
     },
+    {
+      title: "Manage Kernel managed auth connections",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);
@@ -127,58 +135,33 @@ export function registerAuthConnectionTools(server: McpServer) {
         switch (params.action) {
           case "create": {
             if (!params.domain || !params.profile_name) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: domain and profile_name are required for create.",
-                  },
-                ],
-              };
+              return errorResponse(
+                "Error: domain and profile_name are required for create.",
+              );
             }
             const hasName = !!params.credential_name;
             const hasProvider = !!params.credential_provider;
             const hasPath = !!params.credential_path;
             const autoTrue = params.credential_auto === true;
             if (hasName && (hasProvider || hasPath || autoTrue)) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: credential_name cannot be combined with credential_provider, credential_path, or credential_auto. Use one of: { credential_name } for Kernel credentials, { credential_provider, credential_path } for an external provider item, or { credential_provider, credential_auto: true } for provider domain lookup.",
-                  },
-                ],
-              };
+              return errorResponse(
+                "Error: credential_name cannot be combined with credential_provider, credential_path, or credential_auto. Use one of: { credential_name } for Kernel credentials, { credential_provider, credential_path } for an external provider item, or { credential_provider, credential_auto: true } for provider domain lookup.",
+              );
             }
             if ((hasPath || autoTrue) && !hasProvider) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: credential_path and credential_auto require credential_provider.",
-                  },
-                ],
-              };
+              return errorResponse(
+                "Error: credential_path and credential_auto require credential_provider.",
+              );
             }
             if (hasPath && autoTrue) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: credential_path and credential_auto: true are alternatives — provide exactly one.",
-                  },
-                ],
-              };
+              return errorResponse(
+                "Error: credential_path and credential_auto: true are alternatives — provide exactly one.",
+              );
             }
             if (hasProvider && !hasPath && !autoTrue) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: credential_provider requires either credential_path or credential_auto: true.",
-                  },
-                ],
-              };
+              return errorResponse(
+                "Error: credential_provider requires either credential_path or credential_auto: true.",
+              );
             }
             const credential =
               hasName || hasProvider
@@ -209,16 +192,8 @@ export function registerAuthConnectionTools(server: McpServer) {
               ...(proxy && { proxy }),
             });
             if (!connection)
-              return {
-                content: [
-                  { type: "text", text: "Failed to create auth connection" },
-                ],
-              };
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(connection, null, 2) },
-              ],
-            };
+              return errorResponse("Failed to create auth connection");
+            return jsonResponse(connection);
           }
           case "list": {
             const page = await client.auth.connections.list({
@@ -227,82 +202,35 @@ export function registerAuthConnectionTools(server: McpServer) {
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
-            const items = page.getPaginatedItems();
-            return {
-              content: [
-                {
-                  type: "text",
-                  text:
-                    items.length > 0
-                      ? JSON.stringify(
-                          {
-                            items,
-                            has_more: page.has_more,
-                            next_offset: page.next_offset,
-                          },
-                          null,
-                          2,
-                        )
-                      : "No auth connections found",
-                },
-              ],
-            };
+            return paginatedJsonResponse(page);
           }
           case "get": {
             if (!params.id)
-              return {
-                content: [
-                  { type: "text", text: "Error: id is required for get." },
-                ],
-              };
+              return errorResponse("Error: id is required for get.");
             const connection = await client.auth.connections.retrieve(
               params.id,
             );
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(connection, null, 2) },
-              ],
-            };
+            return jsonResponse(connection);
           }
           case "delete": {
             if (!params.id)
-              return {
-                content: [
-                  { type: "text", text: "Error: id is required for delete." },
-                ],
-              };
+              return errorResponse("Error: id is required for delete.");
             await client.auth.connections.delete(params.id);
-            return {
-              content: [
-                { type: "text", text: "Auth connection deleted successfully" },
-              ],
-            };
+            return textResponse("Auth connection deleted successfully");
           }
           case "login": {
             if (!params.id)
-              return {
-                content: [
-                  { type: "text", text: "Error: id is required for login." },
-                ],
-              };
+              return errorResponse("Error: id is required for login.");
             const proxy = buildProxy();
             const response = await client.auth.connections.login(
               params.id,
               proxy ? { proxy } : undefined,
             );
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(response, null, 2) },
-              ],
-            };
+            return jsonResponse(response);
           }
           case "submit": {
             if (!params.id)
-              return {
-                content: [
-                  { type: "text", text: "Error: id is required for submit." },
-                ],
-              };
+              return errorResponse("Error: id is required for submit.");
             const hasFields =
               !!params.fields && Object.keys(params.fields).length > 0;
             if (
@@ -310,14 +238,9 @@ export function registerAuthConnectionTools(server: McpServer) {
               !params.mfa_option_id &&
               !params.sso_button_selector
             )
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: submit requires at least one of fields (non-empty), mfa_option_id, or sso_button_selector.",
-                  },
-                ],
-              };
+              return errorResponse(
+                "Error: submit requires at least one of fields (non-empty), mfa_option_id, or sso_button_selector.",
+              );
             const response = await client.auth.connections.submit(params.id, {
               ...(hasFields && { fields: params.fields }),
               ...(params.mfa_option_id && {
@@ -327,22 +250,15 @@ export function registerAuthConnectionTools(server: McpServer) {
                 sso_button_selector: params.sso_button_selector,
               }),
             });
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(response, null, 2) },
-              ],
-            };
+            return jsonResponse(response);
           }
         }
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error in manage_auth_connections (${params.action}): ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-        };
+        return toolErrorResponse(
+          "manage_auth_connections",
+          params.action,
+          error,
+        );
       }
     },
   );

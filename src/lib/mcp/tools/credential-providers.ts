@@ -1,6 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
+import {
+  errorResponse,
+  jsonResponse,
+  textResponse,
+  toolErrorResponse,
+} from "@/lib/mcp/responses";
 
 export function registerCredentialProviderTools(server: McpServer) {
   // manage_credential_providers -- Manage external credential providers
@@ -58,6 +64,13 @@ export function registerCredentialProviderTools(server: McpServer) {
         )
         .optional(),
     },
+    {
+      title: "Manage Kernel credential providers",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);
@@ -66,38 +79,21 @@ export function registerCredentialProviderTools(server: McpServer) {
         switch (params.action) {
           case "list": {
             const providers = await client.credentialProviders.list();
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(providers, null, 2) },
-              ],
-            };
+            return jsonResponse(providers);
           }
           case "get": {
             if (!params.id)
-              return {
-                content: [
-                  { type: "text", text: "Error: id is required for get." },
-                ],
-              };
+              return errorResponse("Error: id is required for get.");
             const provider = await client.credentialProviders.retrieve(
               params.id,
             );
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(provider, null, 2) },
-              ],
-            };
+            return jsonResponse(provider);
           }
           case "create": {
             if (!params.token || !params.name || !params.provider_type) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: token, name, and provider_type are required for create.",
-                  },
-                ],
-              };
+              return errorResponse(
+                "Error: token, name, and provider_type are required for create.",
+              );
             }
             const provider = await client.credentialProviders.create({
               token: params.token,
@@ -108,27 +104,12 @@ export function registerCredentialProviderTools(server: McpServer) {
               }),
             });
             if (!provider)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Failed to create credential provider",
-                  },
-                ],
-              };
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(provider, null, 2) },
-              ],
-            };
+              return errorResponse("Failed to create credential provider");
+            return jsonResponse(provider);
           }
           case "update": {
             if (!params.id)
-              return {
-                content: [
-                  { type: "text", text: "Error: id is required for update." },
-                ],
-              };
+              return errorResponse("Error: id is required for update.");
             const provider = await client.credentialProviders.update(
               params.id,
               {
@@ -145,72 +126,35 @@ export function registerCredentialProviderTools(server: McpServer) {
                 }),
               },
             );
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(provider, null, 2) },
-              ],
-            };
+            return jsonResponse(provider);
           }
           case "delete": {
             if (!params.id)
-              return {
-                content: [
-                  { type: "text", text: "Error: id is required for delete." },
-                ],
-              };
+              return errorResponse("Error: id is required for delete.");
             await client.credentialProviders.delete(params.id);
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Credential provider ${params.id} deleted.`,
-                },
-              ],
-            };
+            return textResponse(`Credential provider ${params.id} deleted.`);
           }
           case "list_items": {
             if (!params.id)
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: "Error: id is required for list_items.",
-                  },
-                ],
-              };
+              return errorResponse("Error: id is required for list_items.");
             const response = await client.credentialProviders.listItems(
               params.id,
             );
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(response, null, 2) },
-              ],
-            };
+            return jsonResponse(response);
           }
           case "test": {
             if (!params.id)
-              return {
-                content: [
-                  { type: "text", text: "Error: id is required for test." },
-                ],
-              };
+              return errorResponse("Error: id is required for test.");
             const result = await client.credentialProviders.test(params.id);
-            return {
-              content: [
-                { type: "text", text: JSON.stringify(result, null, 2) },
-              ],
-            };
+            return jsonResponse(result);
           }
         }
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error in manage_credential_providers (${params.action}): ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-        };
+        return toolErrorResponse(
+          "manage_credential_providers",
+          params.action,
+          error,
+        );
       }
     },
   );
