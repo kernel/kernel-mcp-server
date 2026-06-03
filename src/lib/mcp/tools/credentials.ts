@@ -122,18 +122,24 @@ export function registerCredentialTools(server: McpServer) {
           case "update": {
             if (!params.id_or_name)
               return errorResponse("Error: id_or_name is required for update.");
+            const updateParams = {
+              ...(params.name !== undefined && { name: params.name }),
+              ...(params.values !== undefined && { values: params.values }),
+              ...(params.sso_provider !== undefined && {
+                sso_provider: params.sso_provider,
+              }),
+              ...(params.totp_secret !== undefined && {
+                totp_secret: params.totp_secret,
+              }),
+            };
+            if (Object.keys(updateParams).length === 0) {
+              return errorResponse(
+                "Error: at least one update field is required.",
+              );
+            }
             const credential = await client.credentials.update(
               params.id_or_name,
-              {
-                ...(params.name !== undefined && { name: params.name }),
-                ...(params.values !== undefined && { values: params.values }),
-                ...(params.sso_provider !== undefined && {
-                  sso_provider: params.sso_provider,
-                }),
-                ...(params.totp_secret !== undefined && {
-                  totp_secret: params.totp_secret,
-                }),
-              },
+              updateParams,
             );
             return jsonResponse(credential);
           }

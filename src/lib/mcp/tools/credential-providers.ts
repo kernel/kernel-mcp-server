@@ -47,6 +47,7 @@ export function registerCredentialProviderTools(server: McpServer) {
         .optional(),
       cache_ttl_seconds: z
         .number()
+        .int()
         .describe(
           "(create, update) How long to cache credential lists (default 300).",
         )
@@ -59,6 +60,7 @@ export function registerCredentialProviderTools(server: McpServer) {
         .optional(),
       priority: z
         .number()
+        .int()
         .describe(
           "(update) Priority order for credential lookups (lower numbers checked first).",
         )
@@ -110,21 +112,27 @@ export function registerCredentialProviderTools(server: McpServer) {
           case "update": {
             if (!params.id)
               return errorResponse("Error: id is required for update.");
+            const updateParams = {
+              ...(params.name !== undefined && { name: params.name }),
+              ...(params.token !== undefined && { token: params.token }),
+              ...(params.cache_ttl_seconds !== undefined && {
+                cache_ttl_seconds: params.cache_ttl_seconds,
+              }),
+              ...(params.enabled !== undefined && {
+                enabled: params.enabled,
+              }),
+              ...(params.priority !== undefined && {
+                priority: params.priority,
+              }),
+            };
+            if (Object.keys(updateParams).length === 0) {
+              return errorResponse(
+                "Error: at least one update field is required.",
+              );
+            }
             const provider = await client.credentialProviders.update(
               params.id,
-              {
-                ...(params.name !== undefined && { name: params.name }),
-                ...(params.token !== undefined && { token: params.token }),
-                ...(params.cache_ttl_seconds !== undefined && {
-                  cache_ttl_seconds: params.cache_ttl_seconds,
-                }),
-                ...(params.enabled !== undefined && {
-                  enabled: params.enabled,
-                }),
-                ...(params.priority !== undefined && {
-                  priority: params.priority,
-                }),
-              },
+              updateParams,
             );
             return jsonResponse(provider);
           }

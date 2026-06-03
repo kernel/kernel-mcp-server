@@ -73,6 +73,7 @@ export function registerAuthConnectionTools(server: McpServer) {
         .optional(),
       health_check_interval: z
         .number()
+        .int()
         .describe(
           "(create) Seconds between automatic re-auth checks. Plan-dependent minimum, max 86400.",
         )
