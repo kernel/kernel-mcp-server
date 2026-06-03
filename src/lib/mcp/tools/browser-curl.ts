@@ -2,21 +2,28 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
 import {
+  errorResponse,
   jsonResponse,
-  textResponse,
   toolErrorResponse,
 } from "@/lib/mcp/responses";
 
 type BrowserCurlParams = Parameters<KernelClient["browsers"]["curl"]>[1];
 
-function validateCurlUrl(url: string) {
-  const parsed = new URL(url);
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error("url must use http or https.");
+function curlUrlError(url: string) {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "Error: url must be a valid URL.";
   }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return "Error: url must use http or https.";
+  }
+  return undefined;
 }
 
-export function registerBrowserUtilityTools(server: McpServer) {
+export function registerBrowserCurlTool(server: McpServer) {
   server.tool(
     "browser_curl",
     "Send an HTTP request through an existing Kernel browser session's Chrome network stack.",
@@ -41,6 +48,7 @@ export function registerBrowserUtilityTools(server: McpServer) {
         .optional(),
       timeout_ms: z
         .number()
+        .int()
         .describe("Request timeout in milliseconds.")
         .optional(),
     },
@@ -52,55 +60,13 @@ export function registerBrowserUtilityTools(server: McpServer) {
         const { session_id, ...curlParams } = params satisfies {
           session_id: string;
         } & BrowserCurlParams;
-        validateCurlUrl(curlParams.url);
+        const urlError = curlUrlError(curlParams.url);
+        if (urlError) return errorResponse(urlError);
 
         const response = await client.browsers.curl(session_id, curlParams);
         return jsonResponse(response);
       } catch (error) {
         return toolErrorResponse("browser_curl", "request", error);
-      }
-    },
-  );
-
-  server.tool(
-    "read_browser_clipboard",
-    "Read clipboard text from an existing Kernel browser session.",
-    {
-      session_id: z.string().describe("Browser session ID."),
-    },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        const response = await client.browsers.computer.readClipboard(
-          params.session_id,
-        );
-        return jsonResponse(response);
-      } catch (error) {
-        return toolErrorResponse("read_browser_clipboard", "read", error);
-      }
-    },
-  );
-
-  server.tool(
-    "write_browser_clipboard",
-    "Write clipboard text to an existing Kernel browser session.",
-    {
-      session_id: z.string().describe("Browser session ID."),
-      text: z.string().describe("Text to write to the browser clipboard."),
-    },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
-
-      try {
-        await client.browsers.computer.writeClipboard(params.session_id, {
-          text: params.text,
-        });
-        return textResponse("Clipboard updated successfully");
-      } catch (error) {
-        return toolErrorResponse("write_browser_clipboard", "write", error);
       }
     },
   );

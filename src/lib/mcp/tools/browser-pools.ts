@@ -8,11 +8,13 @@ import {
   type BrowserExtensionParams,
   type BrowserProfileParams,
   type BrowserViewportParams,
+  type BrowserConfigResult,
 } from "@/lib/mcp/browser-config";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
 import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
 import {
   jsonResponse,
+  errorResponse,
   textResponse,
   toolErrorResponse,
 } from "@/lib/mcp/responses";
@@ -49,123 +51,71 @@ type PoolConfigParams = BrowserProfileParams &
     kiosk_mode?: boolean;
   };
 
-const updateActions: readonly BrowserPoolAction[] = ["update"];
-const createUpdateActions: readonly BrowserPoolAction[] = ["create", "update"];
-const idOrNameActions: readonly BrowserPoolAction[] = [
-  "update",
-  "get",
-  "delete",
-  "flush",
-  "acquire",
-  "release",
-];
-const deleteActions: readonly BrowserPoolAction[] = ["delete"];
-const acquireActions: readonly BrowserPoolAction[] = ["acquire"];
-const releaseActions: readonly BrowserPoolAction[] = ["release"];
-
-const browserPoolFieldScopes = {
-  id_or_name: idOrNameActions,
-  size: createUpdateActions,
-  name: createUpdateActions,
-  headless: createUpdateActions,
-  stealth: createUpdateActions,
-  timeout_seconds: createUpdateActions,
-  profile_name: createUpdateActions,
-  profile_id: createUpdateActions,
-  save_profile_changes: createUpdateActions,
-  proxy_id: createUpdateActions,
-  fill_rate_per_minute: createUpdateActions,
-  start_url: createUpdateActions,
-  chrome_policy: createUpdateActions,
-  kiosk_mode: createUpdateActions,
-  extension_id: createUpdateActions,
-  extension_name: createUpdateActions,
-  viewport_width: createUpdateActions,
-  viewport_height: createUpdateActions,
-  viewport_refresh_rate: createUpdateActions,
-  discard_all_idle: updateActions,
-  force: deleteActions,
-  acquire_timeout_seconds: acquireActions,
-  session_id: releaseActions,
-  reuse: releaseActions,
-} satisfies Record<string, readonly BrowserPoolAction[]>;
-
-type BrowserPoolToolField = keyof typeof browserPoolFieldScopes;
-
-const scopedBrowserPoolFields = Object.keys(
-  browserPoolFieldScopes,
-) as BrowserPoolToolField[];
-
-function formatActionScope(field: BrowserPoolToolField) {
-  return browserPoolFieldScopes[field].join(", ");
-}
-
-function actionFieldError(
-  params: Partial<Record<BrowserPoolToolField, unknown>>,
-  action: BrowserPoolAction,
-) {
-  const unsupportedField = scopedBrowserPoolFields.find(
-    (field) =>
-      params[field] !== undefined &&
-      !browserPoolFieldScopes[field].includes(action),
-  );
-
-  return unsupportedField
-    ? `Error: ${unsupportedField} is only supported for ${formatActionScope(
-        unsupportedField,
-      )}.`
-    : undefined;
-}
-
 function buildPoolConfigParams(
   params: PoolConfigParams,
-): BrowserPoolUpdateParams {
+): BrowserConfigResult<BrowserPoolUpdateParams> {
   const profile = buildBrowserProfile(params);
+  if (!profile.ok) return profile;
   const extensions = buildBrowserExtensions(params);
+  if (!extensions.ok) return extensions;
   const viewport = buildBrowserViewport(params);
+  if (!viewport.ok) return viewport;
   const startUrl = buildBrowserStartUrl(params.start_url);
+  if (!startUrl.ok) return startUrl;
 
   return {
-    ...(params.size !== undefined && { size: params.size }),
-    ...(params.name && { name: params.name }),
-    ...(params.headless !== undefined && { headless: params.headless }),
-    ...(params.stealth !== undefined && { stealth: params.stealth }),
-    ...(params.timeout_seconds !== undefined && {
-      timeout_seconds: params.timeout_seconds,
-    }),
-    ...(profile && { profile }),
-    ...(params.proxy_id !== undefined && { proxy_id: params.proxy_id }),
-    ...(params.fill_rate_per_minute !== undefined && {
-      fill_rate_per_minute: params.fill_rate_per_minute,
-    }),
-    ...(startUrl !== undefined && { start_url: startUrl }),
-    ...(params.chrome_policy !== undefined && {
-      chrome_policy: params.chrome_policy,
-    }),
-    ...(params.kiosk_mode !== undefined && { kiosk_mode: params.kiosk_mode }),
-    ...(extensions && { extensions }),
-    ...(viewport && { viewport }),
+    ok: true,
+    value: {
+      ...(params.size !== undefined && { size: params.size }),
+      ...(params.name && { name: params.name }),
+      ...(params.headless !== undefined && { headless: params.headless }),
+      ...(params.stealth !== undefined && { stealth: params.stealth }),
+      ...(params.timeout_seconds !== undefined && {
+        timeout_seconds: params.timeout_seconds,
+      }),
+      ...(profile.value && { profile: profile.value }),
+      ...(params.proxy_id !== undefined && { proxy_id: params.proxy_id }),
+      ...(params.fill_rate_per_minute !== undefined && {
+        fill_rate_per_minute: params.fill_rate_per_minute,
+      }),
+      ...(startUrl.value !== undefined && { start_url: startUrl.value }),
+      ...(params.chrome_policy !== undefined && {
+        chrome_policy: params.chrome_policy,
+      }),
+      ...(params.kiosk_mode !== undefined && { kiosk_mode: params.kiosk_mode }),
+      ...(extensions.value && { extensions: extensions.value }),
+      ...(viewport.value && { viewport: viewport.value }),
+    },
   };
 }
 
 function buildPoolCreateParams(
   params: PoolConfigParams,
-): BrowserPoolCreateParams {
+): BrowserConfigResult<BrowserPoolCreateParams> {
   if (params.size === undefined) {
-    throw new Error("size is required for create.");
+    return { ok: false, error: "Error: size is required for create." };
   }
 
-  return { ...buildPoolConfigParams(params), size: params.size };
+  const config = buildPoolConfigParams(params);
+  if (!config.ok) return config;
+
+  return { ok: true, value: { ...config.value, size: params.size } };
 }
 
 function buildPoolUpdateParams(
   params: PoolConfigParams & { discard_all_idle?: boolean },
-): BrowserPoolUpdateParams {
+): BrowserConfigResult<BrowserPoolUpdateParams> {
+  const config = buildPoolConfigParams(params);
+  if (!config.ok) return config;
+
   return {
-    ...buildPoolConfigParams(params),
-    ...(params.discard_all_idle !== undefined && {
-      discard_all_idle: params.discard_all_idle,
-    }),
+    ok: true,
+    value: {
+      ...config.value,
+      ...(params.discard_all_idle !== undefined && {
+        discard_all_idle: params.discard_all_idle,
+      }),
+    },
   };
 }
 
@@ -345,39 +295,34 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
       try {
         switch (params.action) {
           case "create": {
-            const scopeError = actionFieldError(params, "create");
-            if (scopeError) return textResponse(scopeError);
+            const createParams = buildPoolCreateParams(params);
+            if (!createParams.ok) return errorResponse(createParams.error);
 
-            const pool = await client.browserPools.create(
-              buildPoolCreateParams(params),
-            );
-            if (!pool) return textResponse("Failed to create browser pool");
+            const pool = await client.browserPools.create(createParams.value);
+            if (!pool) return errorResponse("Failed to create browser pool");
             return jsonResponse(pool);
           }
           case "update": {
-            const scopeError = actionFieldError(params, "update");
-            if (scopeError) return textResponse(scopeError);
             if (!params.id_or_name) {
-              return textResponse("Error: id_or_name is required for update.");
+              return errorResponse("Error: id_or_name is required for update.");
             }
 
             const updateParams = buildPoolUpdateParams(params);
-            if (Object.keys(updateParams).length === 0) {
-              return textResponse(
+            if (!updateParams.ok) return errorResponse(updateParams.error);
+            if (Object.keys(updateParams.value).length === 0) {
+              return errorResponse(
                 "Error: at least one update field is required.",
               );
             }
 
             const pool = await client.browserPools.update(
               params.id_or_name,
-              updateParams,
+              updateParams.value,
             );
+            if (!pool) return errorResponse("Failed to update browser pool");
             return jsonResponse(pool);
           }
           case "list": {
-            const scopeError = actionFieldError(params, "list");
-            if (scopeError) return textResponse(scopeError);
-
             const pools = await client.browserPools.list();
             return textResponse(
               pools?.length > 0
@@ -386,42 +331,36 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
             );
           }
           case "get": {
-            const scopeError = actionFieldError(params, "get");
-            if (scopeError) return textResponse(scopeError);
             if (!params.id_or_name)
-              return textResponse("Error: id_or_name is required for get.");
+              return errorResponse("Error: id_or_name is required for get.");
             const pool = await client.browserPools.retrieve(params.id_or_name);
             if (!pool)
-              return textResponse(
+              return errorResponse(
                 `Browser pool "${params.id_or_name}" not found`,
               );
             return jsonResponse(pool);
           }
           case "delete": {
-            const scopeError = actionFieldError(params, "delete");
-            if (scopeError) return textResponse(scopeError);
             if (!params.id_or_name)
-              return textResponse("Error: id_or_name is required for delete.");
+              return errorResponse("Error: id_or_name is required for delete.");
             await client.browserPools.delete(params.id_or_name, {
               ...(params.force !== undefined && { force: params.force }),
             });
             return textResponse("Browser pool deleted successfully");
           }
           case "flush": {
-            const scopeError = actionFieldError(params, "flush");
-            if (scopeError) return textResponse(scopeError);
             if (!params.id_or_name)
-              return textResponse("Error: id_or_name is required for flush.");
+              return errorResponse("Error: id_or_name is required for flush.");
             await client.browserPools.flush(params.id_or_name);
             return textResponse(
               "Pool flushed successfully. All idle browsers destroyed.",
             );
           }
           case "acquire": {
-            const scopeError = actionFieldError(params, "acquire");
-            if (scopeError) return textResponse(scopeError);
             if (!params.id_or_name)
-              return textResponse("Error: id_or_name is required for acquire.");
+              return errorResponse(
+                "Error: id_or_name is required for acquire.",
+              );
             const browser = await client.browserPools.acquire(
               params.id_or_name,
               {
@@ -431,16 +370,18 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
               },
             );
             if (!browser)
-              return textResponse("Failed to acquire browser from pool");
+              return errorResponse("Failed to acquire browser from pool");
             return jsonResponse(browser);
           }
           case "release": {
-            const scopeError = actionFieldError(params, "release");
-            if (scopeError) return textResponse(scopeError);
             if (!params.id_or_name)
-              return textResponse("Error: id_or_name is required for release.");
+              return errorResponse(
+                "Error: id_or_name is required for release.",
+              );
             if (!params.session_id)
-              return textResponse("Error: session_id is required for release.");
+              return errorResponse(
+                "Error: session_id is required for release.",
+              );
             await client.browserPools.release(params.id_or_name, {
               session_id: params.session_id,
               ...(params.reuse !== undefined && { reuse: params.reuse }),

@@ -2,8 +2,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerKernelPrompts } from "@/lib/mcp/prompts";
 import { registerAPIKeyCapabilities } from "@/lib/mcp/tools/api-keys";
 import { registerAppCapabilities } from "@/lib/mcp/tools/apps";
+import { registerBrowserCurlTool } from "@/lib/mcp/tools/browser-curl";
 import { registerBrowserPoolCapabilities } from "@/lib/mcp/tools/browser-pools";
-import { registerBrowserUtilityTools } from "@/lib/mcp/tools/browser-utilities";
 import { registerBrowserCapabilities } from "@/lib/mcp/tools/browsers";
 import { registerComputerActionTool } from "@/lib/mcp/tools/computer-action";
 import { registerDocsTools } from "@/lib/mcp/tools/docs";
@@ -23,7 +23,7 @@ const mcpToolRegistrations = [
   ["projects", registerProjectCapabilities],
   ["api_keys", registerAPIKeyCapabilities],
   ["browser_pools", registerBrowserPoolCapabilities],
-  ["browser_utilities", registerBrowserUtilityTools],
+  ["browser_curl", registerBrowserCurlTool],
   ["proxies", registerProxyTools],
   ["extensions", registerExtensionTools],
   ["apps", registerAppCapabilities],
@@ -42,6 +42,7 @@ const standaloneToolsetAliases: Partial<Record<string, McpToolset>> = {
   search_docs: "docs",
   execute_playwright_code: "playwright",
   exec_command: "shell",
+  browser_utilities: "browser_curl",
 };
 
 function isMcpToolset(value: string): value is McpToolset {

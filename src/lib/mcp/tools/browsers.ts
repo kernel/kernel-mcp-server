@@ -6,10 +6,12 @@ import {
   buildBrowserStartUrl,
   buildBrowserViewport,
   buildBrowserViewportUpdate,
+  type BrowserConfigResult,
 } from "@/lib/mcp/browser-config";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
 import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
 import {
+  errorResponse,
   jsonResponse,
   textResponse,
   toolErrorResponse,
@@ -30,51 +32,6 @@ type TelemetryParams = {
 
 type BrowserAction = "create" | "update" | "list" | "get" | "delete";
 
-const createActions: readonly BrowserAction[] = ["create"];
-const updateActions: readonly BrowserAction[] = ["update"];
-const createUpdateActions: readonly BrowserAction[] = ["create", "update"];
-const sessionIdActions: readonly BrowserAction[] = ["update", "get", "delete"];
-const listActions: readonly BrowserAction[] = ["list"];
-
-const browserFieldScopes = {
-  session_id: sessionIdActions,
-  start_url: createActions,
-  chrome_policy: createActions,
-  headless: createActions,
-  gpu: createActions,
-  stealth: createActions,
-  timeout_seconds: createActions,
-  profile_name: createUpdateActions,
-  profile_id: createUpdateActions,
-  save_profile_changes: createUpdateActions,
-  proxy_id: createUpdateActions,
-  clear_proxy: updateActions,
-  disable_default_proxy: updateActions,
-  kiosk_mode: createActions,
-  viewport_width: createUpdateActions,
-  viewport_height: createUpdateActions,
-  viewport_refresh_rate: createUpdateActions,
-  viewport_force: updateActions,
-  extension_id: createActions,
-  extension_name: createActions,
-  local_forward: createActions,
-  remote_forward: createActions,
-  status: listActions,
-  limit: listActions,
-  offset: listActions,
-  telemetry_enabled: createUpdateActions,
-  telemetry_console: createUpdateActions,
-  telemetry_network: createUpdateActions,
-  telemetry_page: createUpdateActions,
-  telemetry_interaction: createUpdateActions,
-} satisfies Record<string, readonly BrowserAction[]>;
-
-type BrowserToolField = keyof typeof browserFieldScopes;
-
-const scopedBrowserFields = Object.keys(
-  browserFieldScopes,
-) as BrowserToolField[];
-
 const telemetryCategories = [
   ["telemetry_console", "console"],
   ["telemetry_network", "network"],
@@ -82,58 +39,46 @@ const telemetryCategories = [
   ["telemetry_interaction", "interaction"],
 ] as const;
 
-function formatActionScope(field: BrowserToolField) {
-  return browserFieldScopes[field].join(", ");
-}
-
-function actionFieldError(
-  params: Partial<Record<BrowserToolField, unknown>>,
-  action: BrowserAction,
-) {
-  const unsupportedField = scopedBrowserFields.find(
-    (field) =>
-      params[field] !== undefined &&
-      !browserFieldScopes[field].includes(action),
-  );
-
-  return unsupportedField
-    ? `Error: ${unsupportedField} is only supported for ${formatActionScope(
-        unsupportedField,
-      )}.`
-    : undefined;
-}
-
 function buildTelemetry(
   params: TelemetryParams,
-): BrowserCreateParams["telemetry"] | BrowserUpdateParams["telemetry"] {
+): BrowserConfigResult<
+  BrowserCreateParams["telemetry"] | BrowserUpdateParams["telemetry"]
+> {
   const browser: NonNullable<
     NonNullable<BrowserCreateParams["telemetry"]>["browser"]
   > = {};
   let hasBrowserCategories = false;
+  let hasEnabledBrowserCategories = false;
 
   for (const [paramKey, category] of telemetryCategories) {
     const enabled = params[paramKey];
     if (enabled !== undefined) {
       browser[category] = { enabled };
       hasBrowserCategories = true;
+      if (enabled) hasEnabledBrowserCategories = true;
     }
   }
 
-  if (params.telemetry_enabled === false && hasBrowserCategories) {
-    throw new Error(
-      "telemetry_enabled=false cannot be combined with telemetry category settings.",
-    );
+  if (params.telemetry_enabled === false && hasEnabledBrowserCategories) {
+    return {
+      ok: false,
+      error:
+        "Error: telemetry_enabled=false cannot be combined with enabled telemetry categories.",
+    };
   }
 
   if (params.telemetry_enabled === undefined && !hasBrowserCategories) {
-    return undefined;
+    return { ok: true, value: undefined };
   }
 
   return {
-    ...(params.telemetry_enabled !== undefined && {
-      enabled: params.telemetry_enabled,
-    }),
-    ...(hasBrowserCategories && { browser }),
+    ok: true,
+    value: {
+      ...(params.telemetry_enabled !== undefined && {
+        enabled: params.telemetry_enabled,
+      }),
+      ...(hasBrowserCategories && { browser }),
+    },
   };
 }
 
@@ -339,9 +284,6 @@ export function registerBrowserCapabilities(server: McpServer) {
       try {
         switch (params.action) {
           case "create": {
-            const scopeError = actionFieldError(params, "create");
-            if (scopeError) return textResponse(scopeError);
-
             const createParams: BrowserCreateParams = {};
             if (params.headless !== undefined)
               createParams.headless = params.headless;
@@ -353,22 +295,29 @@ export function registerBrowserCapabilities(server: McpServer) {
             if (params.kiosk_mode !== undefined)
               createParams.kiosk_mode = params.kiosk_mode;
             const startUrl = buildBrowserStartUrl(params.start_url);
-            if (startUrl !== undefined) createParams.start_url = startUrl;
+            if (!startUrl.ok) return errorResponse(startUrl.error);
+            if (startUrl.value !== undefined)
+              createParams.start_url = startUrl.value;
             if (params.chrome_policy)
               createParams.chrome_policy = params.chrome_policy;
             if (params.proxy_id) createParams.proxy_id = params.proxy_id;
             const profile = buildBrowserProfile(params);
-            if (profile) createParams.profile = profile;
+            if (!profile.ok) return errorResponse(profile.error);
+            if (profile.value) createParams.profile = profile.value;
             const viewport = buildBrowserViewport(params);
-            if (viewport) createParams.viewport = viewport;
+            if (!viewport.ok) return errorResponse(viewport.error);
+            if (viewport.value) createParams.viewport = viewport.value;
             const telemetry = buildTelemetry(params);
-            if (telemetry !== undefined) createParams.telemetry = telemetry;
+            if (!telemetry.ok) return errorResponse(telemetry.error);
+            if (telemetry.value !== undefined)
+              createParams.telemetry = telemetry.value;
             const extensions = buildBrowserExtensions(params);
-            if (extensions) createParams.extensions = extensions;
+            if (!extensions.ok) return errorResponse(extensions.error);
+            if (extensions.value) createParams.extensions = extensions.value;
 
             const browser = await client.browsers.create(createParams);
             if (!browser)
-              return textResponse("Failed to create browser session");
+              return errorResponse("Failed to create browser session");
 
             let responseText = JSON.stringify(browser, null, 2);
             if (params.local_forward || params.remote_forward) {
@@ -401,14 +350,12 @@ export function registerBrowserCapabilities(server: McpServer) {
             return textResponse(responseText);
           }
           case "update": {
-            const scopeError = actionFieldError(params, "update");
-            if (scopeError) return textResponse(scopeError);
             if (!params.session_id)
-              return textResponse(
+              return errorResponse(
                 "Error: session_id is required for update action.",
               );
             if (params.proxy_id && params.clear_proxy) {
-              return textResponse(
+              return errorResponse(
                 "Error: Cannot specify both proxy_id and clear_proxy.",
               );
             }
@@ -423,14 +370,18 @@ export function registerBrowserCapabilities(server: McpServer) {
               updateParams.proxy_id = params.proxy_id;
             }
             const profile = buildBrowserProfile(params);
-            if (profile) updateParams.profile = profile;
+            if (!profile.ok) return errorResponse(profile.error);
+            if (profile.value) updateParams.profile = profile.value;
             const viewport = buildBrowserViewportUpdate(params);
-            if (viewport) updateParams.viewport = viewport;
+            if (!viewport.ok) return errorResponse(viewport.error);
+            if (viewport.value) updateParams.viewport = viewport.value;
             const telemetry = buildTelemetry(params);
-            if (telemetry !== undefined) updateParams.telemetry = telemetry;
+            if (!telemetry.ok) return errorResponse(telemetry.error);
+            if (telemetry.value !== undefined)
+              updateParams.telemetry = telemetry.value;
 
             if (Object.keys(updateParams).length === 0) {
-              return textResponse(
+              return errorResponse(
                 "Error: at least one update field is required.",
               );
             }
@@ -440,12 +391,10 @@ export function registerBrowserCapabilities(server: McpServer) {
               updateParams,
             );
             if (!browser)
-              return textResponse("Failed to update browser session");
+              return errorResponse("Failed to update browser session");
             return jsonResponse(browser);
           }
           case "list": {
-            const scopeError = actionFieldError(params, "list");
-            if (scopeError) return textResponse(scopeError);
             const page = await client.browsers.list({
               ...(params.status && { status: params.status }),
               ...(params.limit !== undefined && { limit: params.limit }),
@@ -469,24 +418,20 @@ export function registerBrowserCapabilities(server: McpServer) {
             );
           }
           case "get": {
-            const scopeError = actionFieldError(params, "get");
-            if (scopeError) return textResponse(scopeError);
             if (!params.session_id)
-              return textResponse(
+              return errorResponse(
                 "Error: session_id is required for get action.",
               );
             const browser = await client.browsers.retrieve(params.session_id);
             if (!browser)
-              return textResponse(
+              return errorResponse(
                 `Browser session "${params.session_id}" not found`,
               );
             return jsonResponse(browser);
           }
           case "delete": {
-            const scopeError = actionFieldError(params, "delete");
-            if (scopeError) return textResponse(scopeError);
             if (!params.session_id)
-              return textResponse(
+              return errorResponse(
                 "Error: session_id is required for delete action.",
               );
             await client.browsers.deleteByID(params.session_id);

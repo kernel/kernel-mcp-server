@@ -1,12 +1,49 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { createKernelClient } from "@/lib/mcp/kernel-client";
+import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
+import {
+  errorResponse,
+  textResponse,
+  toolErrorResponse,
+} from "@/lib/mcp/responses";
+
+type ComputerBatchAction = Parameters<
+  KernelClient["browsers"]["computer"]["batch"]
+>[1]["actions"][number];
+
+type ComputerToolAction =
+  | ComputerBatchAction
+  | {
+      type:
+        | ComputerBatchAction["type"]
+        | "screenshot"
+        | "get_mouse_position"
+        | "read_clipboard"
+        | "write_clipboard";
+      screenshot?: {
+        region?: {
+          x: number;
+          y: number;
+          width: number;
+          height: number;
+        };
+      };
+      write_clipboard?: { text: string };
+    };
+
+function isResultAction(action: ComputerToolAction) {
+  return (
+    action.type === "screenshot" ||
+    action.type === "get_mouse_position" ||
+    action.type === "read_clipboard"
+  );
+}
 
 export function registerComputerActionTool(server: McpServer) {
   // computer_action -- Execute one or more computer actions on a browser session
   server.tool(
     "computer_action",
-    "Execute computer actions on a browser session. Pass a single action for simple operations (e.g. one click or one screenshot), or pass multiple actions to batch them into a single request for lower latency (e.g. click, type, press_key in one call). Use sleep actions between steps when the page needs time to react (e.g. after a click that triggers navigation or animation). IMPORTANT: Always include a screenshot as the last action so you can see the result of your actions. Action types: click_mouse, move_mouse, type_text, press_key, scroll, drag_mouse, set_cursor, sleep, screenshot, get_mouse_position. screenshot and get_mouse_position return data, so they must be the last action if included.",
+    "Execute computer actions on a browser session. Pass a single action for simple operations (e.g. one click or one screenshot), or pass multiple actions to batch them into a single request for lower latency (e.g. click, type, press_key in one call). Use sleep actions between steps when the page needs time to react (e.g. after a click that triggers navigation or animation). IMPORTANT: Always include a screenshot as the last action so you can see the result of your actions. Action types: click_mouse, move_mouse, type_text, press_key, scroll, drag_mouse, set_cursor, sleep, write_clipboard, read_clipboard, screenshot, get_mouse_position. screenshot, read_clipboard, and get_mouse_position return data, so they must be the last action if included.",
     {
       session_id: z.string().describe("Browser session ID."),
       actions: z
@@ -22,6 +59,8 @@ export function registerComputerActionTool(server: McpServer) {
                 "drag_mouse",
                 "set_cursor",
                 "sleep",
+                "write_clipboard",
+                "read_clipboard",
                 "screenshot",
                 "get_mouse_position",
               ])
@@ -120,8 +159,15 @@ export function registerComputerActionTool(server: McpServer) {
                 "Params for screenshot action. Omit or pass {} for full-page screenshot.",
               )
               .optional(),
+            write_clipboard: z
+              .object({
+                text: z.string(),
+              })
+              .describe("Params for write_clipboard action.")
+              .optional(),
           }),
         )
+        .min(1)
         .describe(
           "Ordered list of actions. Use one action for simple operations or multiple for batched sequences.",
         ),
@@ -131,41 +177,59 @@ export function registerComputerActionTool(server: McpServer) {
       const client = createKernelClient(extra.authInfo.token);
 
       try {
-        const lastAction = actions[actions.length - 1];
+        const toolActions = actions as ComputerToolAction[];
+        const lastAction = toolActions[toolActions.length - 1];
         const hasTrailingScreenshot = lastAction?.type === "screenshot";
+        const hasTrailingReadClipboard = lastAction?.type === "read_clipboard";
         const hasTrailingGetPosition =
           lastAction?.type === "get_mouse_position";
         const hasTrailingSpecial =
-          hasTrailingScreenshot || hasTrailingGetPosition;
+          hasTrailingScreenshot ||
+          hasTrailingReadClipboard ||
+          hasTrailingGetPosition;
 
-        // Validate: screenshot/get_mouse_position can only be the last action
-        for (let i = 0; i < actions.length - 1; i++) {
-          if (
-            actions[i].type === "screenshot" ||
-            actions[i].type === "get_mouse_position"
-          ) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Error: ${actions[i].type} must be the last action in the sequence.`,
-                },
-              ],
-            };
+        for (let i = 0; i < toolActions.length - 1; i++) {
+          if (isResultAction(toolActions[i])) {
+            return errorResponse(
+              `Error: ${toolActions[i].type} must be the last action in the sequence.`,
+            );
           }
         }
 
-        const batchActions = hasTrailingSpecial
-          ? actions.slice(0, -1)
-          : actions;
+        const leadingActions = hasTrailingSpecial
+          ? toolActions.slice(0, -1)
+          : toolActions;
+        let executedActionCount = 0;
+        let batchActions: ComputerBatchAction[] = [];
 
-        if (batchActions.length > 0) {
+        async function flushBatchActions() {
+          if (batchActions.length === 0) return;
           await client.browsers.computer.batch(session_id, {
-            actions: batchActions as Parameters<
-              typeof client.browsers.computer.batch
-            >[1]["actions"],
+            actions: batchActions,
           });
+          executedActionCount += batchActions.length;
+          batchActions = [];
         }
+
+        for (const action of leadingActions) {
+          if (action.type === "write_clipboard") {
+            await flushBatchActions();
+            if (!action.write_clipboard) {
+              return errorResponse(
+                "Error: write_clipboard params are required for write_clipboard action.",
+              );
+            }
+            await client.browsers.computer.writeClipboard(session_id, {
+              text: action.write_clipboard.text,
+            });
+            executedActionCount += 1;
+            continue;
+          }
+
+          batchActions.push(action as ComputerBatchAction);
+        }
+
+        await flushBatchActions();
 
         if (hasTrailingScreenshot) {
           const screenshotParams = lastAction.screenshot;
@@ -186,10 +250,10 @@ export function registerComputerActionTool(server: McpServer) {
             | { type: "text"; text: string }
             | { type: "image"; data: string; mimeType: string }
           > = [];
-          if (batchActions.length > 0) {
+          if (executedActionCount > 0) {
             content.push({
               type: "text",
-              text: `Executed ${batchActions.length} action(s), then captured screenshot.`,
+              text: `Executed ${executedActionCount} action(s), then captured screenshot.`,
             });
           }
           content.push({
@@ -206,14 +270,31 @@ export function registerComputerActionTool(server: McpServer) {
           return { content };
         }
 
+        if (hasTrailingReadClipboard) {
+          const clipboard =
+            await client.browsers.computer.readClipboard(session_id);
+          const content: Array<{ type: "text"; text: string }> = [];
+          if (executedActionCount > 0) {
+            content.push({
+              type: "text",
+              text: `Executed ${executedActionCount} action(s), then read clipboard.`,
+            });
+          }
+          content.push({
+            type: "text",
+            text: JSON.stringify(clipboard, null, 2),
+          });
+          return { content };
+        }
+
         if (hasTrailingGetPosition) {
           const position =
             await client.browsers.computer.getMousePosition(session_id);
           const content: Array<{ type: "text"; text: string }> = [];
-          if (batchActions.length > 0) {
+          if (executedActionCount > 0) {
             content.push({
               type: "text",
-              text: `Executed ${batchActions.length} action(s).`,
+              text: `Executed ${executedActionCount} action(s).`,
             });
           }
           content.push({
@@ -223,23 +304,11 @@ export function registerComputerActionTool(server: McpServer) {
           return { content };
         }
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Executed ${actions.length} action(s) successfully`,
-            },
-          ],
-        };
+        return textResponse(
+          `Executed ${executedActionCount} action(s) successfully`,
+        );
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error in computer_action: ${error instanceof Error ? error.message : String(error)}`,
-            },
-          ],
-        };
+        return toolErrorResponse("computer_action", "actions", error);
       }
     },
   );

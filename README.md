@@ -255,9 +255,9 @@ Many other MCP-capable tools accept:
 
 Configure these values wherever the tool expects MCP server settings.
 
-## Tools (12 total)
+## Tools (13 total)
 
-Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Four standalone tools handle high-frequency workflows.
+Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Five standalone tools handle high-frequency workflows.
 
 Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_DISABLED_TOOLSETS` to a comma-separated list. For example, `KERNEL_MCP_DISABLED_TOOLSETS=api_keys` prevents `manage_api_keys` from being registered.
 
@@ -274,7 +274,8 @@ Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_
 
 ### Standalone tools
 
-- `computer_action` - Mouse, keyboard, and screenshot controls for browser sessions (click, type, press_key, scroll, move, get_position, screenshot).
+- `computer_action` - Mouse, keyboard, clipboard, and screenshot controls for browser sessions (click, type, press_key, scroll, move, get_position, read_clipboard, write_clipboard, screenshot).
+- `browser_curl` - Send HTTP requests through an existing browser session's Chrome network stack.
 - `execute_playwright_code` - Execute Playwright/TypeScript code against a browser with automatic video replay and cleanup.
 - `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
 - `search_docs` - Search Kernel platform documentation and guides.
