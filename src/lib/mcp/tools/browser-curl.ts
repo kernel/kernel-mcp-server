@@ -5,10 +5,10 @@ import { errorResponse, jsonResponse } from "@/lib/mcp/responses";
 
 type BrowserCurlParams = Parameters<KernelClient["browsers"]["curl"]>[1];
 
-function validateCurlUrl(url: string) {
+function curlUrlValidationError(url: string) {
   const parsed = new URL(url);
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error("url must use http or https.");
+    return "url must use http or https.";
   }
 }
 
@@ -37,6 +37,7 @@ export function registerBrowserCurlTool(server: McpServer) {
         .optional(),
       timeout_ms: z
         .number()
+        .int()
         .describe("Request timeout in milliseconds.")
         .optional(),
     },
@@ -47,7 +48,8 @@ export function registerBrowserCurlTool(server: McpServer) {
       try {
         const curlRequest: { session_id: string } & BrowserCurlParams = params;
         const { session_id, ...curlParams } = curlRequest;
-        validateCurlUrl(curlParams.url);
+        const urlError = curlUrlValidationError(curlParams.url);
+        if (urlError) return errorResponse(`Error: ${urlError}`);
 
         const response = await client.browsers.curl(session_id, curlParams);
         return jsonResponse(response);
