@@ -13,13 +13,28 @@ import { paginationParams } from "@/lib/mcp/schemas";
 type ProfileListParams = NonNullable<
   Parameters<KernelClient["profiles"]["list"]>[0]
 >;
+type Profile = Awaited<ReturnType<KernelClient["profiles"]["retrieve"]>>;
 
-async function listProfiles(client: KernelClient) {
-  const profiles: Awaited<ReturnType<typeof client.profiles.retrieve>>[] = [];
-  for await (const profile of client.profiles.list()) {
+async function listProfiles(client: KernelClient, query?: ProfileListParams) {
+  const profiles: Profile[] = [];
+  for await (const profile of client.profiles.list(query)) {
     profiles.push(profile);
   }
   return profiles;
+}
+
+function fullProfileListResponse(profiles: Profile[]) {
+  return paginatedJsonResponse(
+    {
+      getPaginatedItems: () => profiles,
+      has_more: false,
+      next_offset: null,
+    },
+    {
+      emptyText:
+        "No profiles found. Use manage_profiles with action 'setup' to create one.",
+    },
+  );
 }
 
 export function registerProfileCapabilities(server: McpServer) {
@@ -130,6 +145,14 @@ export function registerProfileCapabilities(server: McpServer) {
             );
           }
           case "list": {
+            if (params.limit === undefined && params.offset === undefined) {
+              const profiles = await listProfiles(
+                client,
+                params.query ? { query: params.query } : undefined,
+              );
+              return fullProfileListResponse(profiles);
+            }
+
             const page = await client.profiles.list({
               ...(params.query && { query: params.query }),
               ...(params.limit !== undefined && { limit: params.limit }),

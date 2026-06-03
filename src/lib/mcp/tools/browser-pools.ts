@@ -54,6 +54,10 @@ function buildPoolConfigParams(
 ): BrowserConfigResult<BrowserPoolUpdateParams> {
   const browserConfig = buildBrowserCreateConfig(params);
   if (!browserConfig.ok) return browserConfig;
+  const chromePolicy =
+    params.chrome_policy && Object.keys(params.chrome_policy).length > 0
+      ? params.chrome_policy
+      : undefined;
 
   return {
     ok: true,
@@ -69,9 +73,7 @@ function buildPoolConfigParams(
       ...(params.fill_rate_per_minute !== undefined && {
         fill_rate_per_minute: params.fill_rate_per_minute,
       }),
-      ...(params.chrome_policy !== undefined && {
-        chrome_policy: params.chrome_policy,
-      }),
+      ...(chromePolicy && { chrome_policy: chromePolicy }),
       ...(params.kiosk_mode !== undefined && { kiosk_mode: params.kiosk_mode }),
       ...browserConfig.value,
     },
@@ -389,7 +391,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
             });
           }
           case "list": {
-            const pools = await client.browserPools.list();
+            const pools = (await client.browserPools.list()) ?? [];
             return pools.length > 0
               ? jsonResponse({
                   items: pools.map(summarizeBrowserPool),
