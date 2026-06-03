@@ -2,10 +2,13 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerKernelPrompts } from "@/lib/mcp/prompts";
 import { registerAPIKeyCapabilities } from "@/lib/mcp/tools/api-keys";
 import { registerAppCapabilities } from "@/lib/mcp/tools/apps";
-import { registerBrowserCurlTool } from "@/lib/mcp/tools/browser-curl";
+import { registerAuthConnectionTools } from "@/lib/mcp/tools/auth-connections";
 import { registerBrowserPoolCapabilities } from "@/lib/mcp/tools/browser-pools";
+import { registerBrowserCurlTool } from "@/lib/mcp/tools/browser-curl";
 import { registerBrowserCapabilities } from "@/lib/mcp/tools/browsers";
 import { registerComputerActionTool } from "@/lib/mcp/tools/computer-action";
+import { registerCredentialProviderTools } from "@/lib/mcp/tools/credential-providers";
+import { registerCredentialTools } from "@/lib/mcp/tools/credentials";
 import { registerDocsTools } from "@/lib/mcp/tools/docs";
 import { registerExtensionTools } from "@/lib/mcp/tools/extensions";
 import { registerPlaywrightTool } from "@/lib/mcp/tools/playwright";
@@ -30,6 +33,9 @@ const mcpToolRegistrations = [
   ["computer", registerComputerActionTool],
   ["shell", registerShellTool],
   ["playwright", registerPlaywrightTool],
+  ["auth_connections", registerAuthConnectionTools],
+  ["credentials", registerCredentialTools],
+  ["credential_providers", registerCredentialProviderTools],
 ] as const satisfies readonly (readonly [string, RegisterMcpToolset])[];
 
 type McpToolset = (typeof mcpToolRegistrations)[number][0];
