@@ -100,9 +100,7 @@ export function registerAppCapabilities(server: McpServer) {
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
-            return paginatedJsonResponse(page, {
-              emptyText: "No apps found",
-            });
+            return paginatedJsonResponse(page);
           }
           case "invoke": {
             if (!params.app_name || !params.action_name) {
@@ -165,9 +163,7 @@ export function registerAppCapabilities(server: McpServer) {
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
-            return paginatedJsonResponse(page, {
-              emptyText: "No deployments found",
-            });
+            return paginatedJsonResponse(page);
           }
           case "get_invocation": {
             if (!params.invocation_id)

@@ -4,13 +4,15 @@ type PaginatedPage<T> = {
   next_offset?: number | null;
 };
 
-type PaginatedJsonResponseOptions<T, U = T> = {
+type JsonItemsResponseOptions<T, U = T> = {
   mapItem?: (item: T) => U;
   note?: string;
-  emptyText?: string;
 };
 
-type ItemsJsonResponseOptions<T, U = T> = PaginatedJsonResponseOptions<T, U> & {
+type PaginatedJsonResponseOptions<T, U = T> = JsonItemsResponseOptions<T, U>;
+
+type ItemsJsonResponseOptions<T, U = T> = JsonItemsResponseOptions<T, U> & {
+  emptyText?: string;
   has_more?: boolean | null;
   next_offset?: number | null;
 };
@@ -43,8 +45,10 @@ export function paginatedJsonResponse<T, U = T>(
   page: PaginatedPage<T>,
   options: PaginatedJsonResponseOptions<T, U> = {},
 ) {
+  const { mapItem, note } = options;
   return itemsJsonResponse(page.getPaginatedItems(), {
-    ...options,
+    mapItem,
+    note,
     has_more: page.has_more,
     next_offset: page.next_offset,
   });

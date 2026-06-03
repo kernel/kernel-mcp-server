@@ -425,7 +425,6 @@ export function registerBrowserCapabilities(server: McpServer) {
             return paginatedJsonResponse(page, {
               mapItem: ({ cdp_ws_url: _cdpWsUrl, ...browser }) => browser,
               note: 'Use action "get" with session_id for full browser details.',
-              emptyText: "No browsers found",
             });
           }
           case "get": {
