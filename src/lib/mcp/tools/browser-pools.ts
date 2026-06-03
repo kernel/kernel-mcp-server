@@ -23,9 +23,6 @@ type BrowserPoolCreateParams = Parameters<
 type BrowserPoolUpdateParams = Parameters<
   KernelClient["browserPools"]["update"]
 >[1];
-type BrowserPoolUpdateBody = Omit<BrowserPoolUpdateParams, "size"> & {
-  size?: BrowserPoolUpdateParams["size"];
-};
 
 type BrowserPoolAction =
   | "create"
@@ -122,7 +119,7 @@ function actionFieldError(
 
 function buildPoolConfigParams(
   params: PoolConfigParams,
-): BrowserPoolUpdateBody {
+): BrowserPoolUpdateParams {
   const profile = buildBrowserProfile(params);
   const extensions = buildBrowserExtensions(params);
   const viewport = buildBrowserViewport(params);
@@ -163,7 +160,7 @@ function buildPoolCreateParams(
 
 function buildPoolUpdateParams(
   params: PoolConfigParams & { discard_all_idle?: boolean },
-) {
+): BrowserPoolUpdateParams {
   return {
     ...buildPoolConfigParams(params),
     ...(params.discard_all_idle !== undefined && {
@@ -371,10 +368,9 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
               );
             }
 
-            // Generated SDK types still require size, but pool PATCH accepts partial bodies.
             const pool = await client.browserPools.update(
               params.id_or_name,
-              updateParams as BrowserPoolUpdateParams,
+              updateParams,
             );
             return jsonResponse(pool);
           }
