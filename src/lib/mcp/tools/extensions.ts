@@ -2,9 +2,10 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
-  errorMessage,
-  jsonListResponse,
+  errorResponse,
+  itemsJsonResponse,
   textResponse,
+  toolErrorResponse,
 } from "@/lib/mcp/responses";
 
 export function registerExtensionTools(server: McpServer) {
@@ -27,20 +28,22 @@ export function registerExtensionTools(server: McpServer) {
         switch (params.action) {
           case "list": {
             const extensions = await client.extensions.list();
-            return jsonListResponse(extensions, "No extensions found");
+            return itemsJsonResponse(extensions ?? [], {
+              has_more: false,
+              next_offset: null,
+              emptyText: "No extensions found",
+            });
           }
           case "delete": {
             if (!params.id_or_name) {
-              return textResponse("Error: id_or_name is required for delete.");
+              return errorResponse("Error: id_or_name is required for delete.");
             }
             await client.extensions.delete(params.id_or_name);
             return textResponse("Extension deleted successfully");
           }
         }
       } catch (error) {
-        return textResponse(
-          `Error in manage_extensions (${params.action}): ${errorMessage(error)}`,
-        );
+        return toolErrorResponse("manage_extensions", params.action, error);
       }
     },
   );

@@ -1,7 +1,14 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
-import { errorMessage, jsonResponse, textResponse } from "@/lib/mcp/responses";
+import {
+  errorResponse,
+  jsonResponse,
+  paginatedJsonResponse,
+  textResponse,
+  toolErrorResponse,
+} from "@/lib/mcp/responses";
+import { paginationParams } from "@/lib/mcp/schemas";
 
 export function registerAPIKeyCapabilities(server: McpServer) {
   // manage_api_keys -- Create, list, get, update, and delete Kernel API keys
@@ -34,8 +41,14 @@ export function registerAPIKeyCapabilities(server: McpServer) {
           "(create) Days until expiry, up to 3650. Use null for no expiry.",
         )
         .optional(),
-      limit: z.number().describe("(list) Max results per page.").optional(),
-      offset: z.number().describe("(list) Pagination offset.").optional(),
+      ...paginationParams,
+    },
+    {
+      title: "Manage Kernel API keys",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
@@ -45,7 +58,7 @@ export function registerAPIKeyCapabilities(server: McpServer) {
         switch (params.action) {
           case "create": {
             if (!params.name) {
-              return textResponse("Error: name is required for create.");
+              return errorResponse("Error: name is required for create.");
             }
             const createParams: Parameters<typeof client.apiKeys.create>[0] = {
               name: params.name,
@@ -64,26 +77,21 @@ export function registerAPIKeyCapabilities(server: McpServer) {
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
-            const items = page.getPaginatedItems();
-            return jsonResponse({
-              items,
-              has_more: page.has_more,
-              next_offset: page.next_offset,
-            });
+            return paginatedJsonResponse(page);
           }
           case "get": {
             if (!params.api_key_id) {
-              return textResponse("Error: api_key_id is required for get.");
+              return errorResponse("Error: api_key_id is required for get.");
             }
             const apiKey = await client.apiKeys.retrieve(params.api_key_id);
             return jsonResponse(apiKey);
           }
           case "update": {
             if (!params.api_key_id) {
-              return textResponse("Error: api_key_id is required for update.");
+              return errorResponse("Error: api_key_id is required for update.");
             }
             if (!params.name) {
-              return textResponse("Error: name is required for update.");
+              return errorResponse("Error: name is required for update.");
             }
             const apiKey = await client.apiKeys.update(params.api_key_id, {
               name: params.name,
@@ -92,16 +100,14 @@ export function registerAPIKeyCapabilities(server: McpServer) {
           }
           case "delete": {
             if (!params.api_key_id) {
-              return textResponse("Error: api_key_id is required for delete.");
+              return errorResponse("Error: api_key_id is required for delete.");
             }
             await client.apiKeys.delete(params.api_key_id);
             return textResponse("API key deleted successfully");
           }
         }
       } catch (error) {
-        return textResponse(
-          `Error in manage_api_keys (${params.action}): ${errorMessage(error)}`,
-        );
+        return toolErrorResponse("manage_api_keys", params.action, error);
       }
     },
   );

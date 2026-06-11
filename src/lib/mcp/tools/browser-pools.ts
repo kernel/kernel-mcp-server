@@ -1,17 +1,18 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
-  buildBrowserExtensions,
-  buildBrowserProfile,
-  buildBrowserStartUrl,
-  buildBrowserViewport,
-  type BrowserExtensionParams,
-  type BrowserProfileParams,
-  type BrowserViewportParams,
+  buildBrowserCreateConfig,
+  type BrowserConfigResult,
+  type BrowserCreateConfigParams,
 } from "@/lib/mcp/browser-config";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
 import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
-import { errorMessage, jsonResponse, textResponse } from "@/lib/mcp/responses";
+import {
+  jsonResponse,
+  errorResponse,
+  textResponse,
+  toolErrorResponse,
+} from "@/lib/mcp/responses";
 
 type BrowserPoolCreateParams = Parameters<
   KernelClient["browserPools"]["create"]
@@ -19,152 +20,135 @@ type BrowserPoolCreateParams = Parameters<
 type BrowserPoolUpdateParams = Parameters<
   KernelClient["browserPools"]["update"]
 >[1];
-type BrowserPoolUpdateBody = Omit<BrowserPoolUpdateParams, "size"> & {
-  size?: BrowserPoolUpdateParams["size"];
+type BrowserPool = Awaited<
+  ReturnType<KernelClient["browserPools"]["retrieve"]>
+>;
+type BrowserPoolAcquireResponse = Awaited<
+  ReturnType<KernelClient["browserPools"]["acquire"]>
+>;
+
+type PoolConfigParams = BrowserCreateConfigParams & {
+  size?: number;
+  name?: string;
+  headless?: boolean;
+  stealth?: boolean;
+  timeout_seconds?: number;
+  proxy_id?: string;
+  fill_rate_per_minute?: number;
+  chrome_policy?: Record<string, unknown>;
+  kiosk_mode?: boolean;
 };
-
-type BrowserPoolAction =
-  | "create"
-  | "update"
-  | "list"
-  | "get"
-  | "delete"
-  | "flush"
-  | "acquire"
-  | "release";
-
-type PoolConfigParams = BrowserProfileParams &
-  BrowserExtensionParams &
-  BrowserViewportParams & {
-    size?: number;
-    name?: string;
-    headless?: boolean;
-    stealth?: boolean;
-    timeout_seconds?: number;
-    proxy_id?: string;
-    fill_rate_per_minute?: number;
-    start_url?: string;
-    chrome_policy?: Record<string, unknown>;
-    kiosk_mode?: boolean;
-  };
-
-const updateActions: readonly BrowserPoolAction[] = ["update"];
-const createUpdateActions: readonly BrowserPoolAction[] = ["create", "update"];
-const idOrNameActions: readonly BrowserPoolAction[] = [
-  "update",
-  "get",
-  "delete",
-  "flush",
-  "acquire",
-  "release",
-];
-const deleteActions: readonly BrowserPoolAction[] = ["delete"];
-const acquireActions: readonly BrowserPoolAction[] = ["acquire"];
-const releaseActions: readonly BrowserPoolAction[] = ["release"];
-
-const browserPoolFieldScopes = {
-  id_or_name: idOrNameActions,
-  size: createUpdateActions,
-  name: createUpdateActions,
-  headless: createUpdateActions,
-  stealth: createUpdateActions,
-  timeout_seconds: createUpdateActions,
-  profile_name: createUpdateActions,
-  profile_id: createUpdateActions,
-  save_profile_changes: createUpdateActions,
-  proxy_id: createUpdateActions,
-  fill_rate_per_minute: createUpdateActions,
-  start_url: createUpdateActions,
-  chrome_policy: createUpdateActions,
-  kiosk_mode: createUpdateActions,
-  extension_id: createUpdateActions,
-  extension_name: createUpdateActions,
-  viewport_width: createUpdateActions,
-  viewport_height: createUpdateActions,
-  viewport_refresh_rate: createUpdateActions,
-  discard_all_idle: updateActions,
-  force: deleteActions,
-  acquire_timeout_seconds: acquireActions,
-  session_id: releaseActions,
-  reuse: releaseActions,
-} satisfies Record<string, readonly BrowserPoolAction[]>;
-
-type BrowserPoolToolField = keyof typeof browserPoolFieldScopes;
-
-const scopedBrowserPoolFields = Object.keys(
-  browserPoolFieldScopes,
-) as BrowserPoolToolField[];
-
-function formatActionScope(field: BrowserPoolToolField) {
-  return browserPoolFieldScopes[field].join(", ");
-}
-
-function actionFieldError(
-  params: Partial<Record<BrowserPoolToolField, unknown>>,
-  action: BrowserPoolAction,
-) {
-  const unsupportedField = scopedBrowserPoolFields.find(
-    (field) =>
-      params[field] !== undefined &&
-      !browserPoolFieldScopes[field].includes(action),
-  );
-
-  return unsupportedField
-    ? `Error: ${unsupportedField} is only supported for ${formatActionScope(
-        unsupportedField,
-      )}.`
-    : undefined;
-}
 
 function buildPoolConfigParams(
   params: PoolConfigParams,
-): BrowserPoolUpdateBody {
-  const profile = buildBrowserProfile(params);
-  const extensions = buildBrowserExtensions(params);
-  const viewport = buildBrowserViewport(params);
-  const startUrl = buildBrowserStartUrl(params.start_url);
+): BrowserConfigResult<BrowserPoolUpdateParams> {
+  const browserConfig = buildBrowserCreateConfig(params);
+  if (!browserConfig.ok) return browserConfig;
+  const chromePolicy =
+    params.chrome_policy && Object.keys(params.chrome_policy).length > 0
+      ? params.chrome_policy
+      : undefined;
 
   return {
-    ...(params.size !== undefined && { size: params.size }),
-    ...(params.name && { name: params.name }),
-    ...(params.headless !== undefined && { headless: params.headless }),
-    ...(params.stealth !== undefined && { stealth: params.stealth }),
-    ...(params.timeout_seconds !== undefined && {
-      timeout_seconds: params.timeout_seconds,
-    }),
-    ...(profile && { profile }),
-    ...(params.proxy_id !== undefined && { proxy_id: params.proxy_id }),
-    ...(params.fill_rate_per_minute !== undefined && {
-      fill_rate_per_minute: params.fill_rate_per_minute,
-    }),
-    ...(startUrl !== undefined && { start_url: startUrl }),
-    ...(params.chrome_policy !== undefined && {
-      chrome_policy: params.chrome_policy,
-    }),
-    ...(params.kiosk_mode !== undefined && { kiosk_mode: params.kiosk_mode }),
-    ...(extensions && { extensions }),
-    ...(viewport && { viewport }),
+    ok: true,
+    value: {
+      ...(params.size !== undefined && { size: params.size }),
+      ...(params.name && { name: params.name }),
+      ...(params.headless !== undefined && { headless: params.headless }),
+      ...(params.stealth !== undefined && { stealth: params.stealth }),
+      ...(params.timeout_seconds !== undefined && {
+        timeout_seconds: params.timeout_seconds,
+      }),
+      ...(params.proxy_id !== undefined && { proxy_id: params.proxy_id }),
+      ...(params.fill_rate_per_minute !== undefined && {
+        fill_rate_per_minute: params.fill_rate_per_minute,
+      }),
+      ...(chromePolicy && { chrome_policy: chromePolicy }),
+      ...(params.kiosk_mode !== undefined && { kiosk_mode: params.kiosk_mode }),
+      ...browserConfig.value,
+    },
   };
 }
 
 function buildPoolCreateParams(
   params: PoolConfigParams,
-): BrowserPoolCreateParams {
+): BrowserConfigResult<BrowserPoolCreateParams> {
   if (params.size === undefined) {
-    throw new Error("size is required for create.");
+    return { ok: false, error: "Error: size is required for create." };
   }
 
-  return { ...buildPoolConfigParams(params), size: params.size };
+  const config = buildPoolConfigParams(params);
+  if (!config.ok) return config;
+
+  return { ok: true, value: { ...config.value, size: params.size } };
 }
 
 function buildPoolUpdateParams(
   params: PoolConfigParams & { discard_all_idle?: boolean },
-) {
+): BrowserConfigResult<BrowserPoolUpdateParams> {
+  const config = buildPoolConfigParams(params);
+  if (!config.ok) return config;
+
   return {
-    ...buildPoolConfigParams(params),
-    ...(params.discard_all_idle !== undefined && {
-      discard_all_idle: params.discard_all_idle,
-    }),
+    ok: true,
+    value: {
+      ...config.value,
+      ...(params.discard_all_idle !== undefined && {
+        discard_all_idle: params.discard_all_idle,
+      }),
+    },
+  };
+}
+
+function summarizeBrowserPool(pool: BrowserPool) {
+  const config = pool.browser_pool_config;
+  return {
+    id: pool.id,
+    name: pool.name,
+    created_at: pool.created_at,
+    counts: {
+      size: config.size,
+      available: pool.available_count,
+      acquired: pool.acquired_count,
+    },
+    config: {
+      headless: config.headless,
+      stealth: config.stealth,
+      kiosk_mode: config.kiosk_mode,
+      timeout_seconds: config.timeout_seconds,
+      fill_rate_per_minute: config.fill_rate_per_minute,
+      start_url: config.start_url,
+      profile: config.profile,
+      proxy_id: config.proxy_id,
+      viewport: config.viewport,
+      extensions: config.extensions,
+      chrome_policy_keys: config.chrome_policy
+        ? Object.keys(config.chrome_policy)
+        : undefined,
+    },
+  };
+}
+
+function poolNextActions(pool: BrowserPool) {
+  return [
+    `Use manage_browser_pools with action "acquire" and id_or_name "${pool.id}" to get a browser from this pool.`,
+    `Use manage_browser_pools with action "get" and id_or_name "${pool.id}" for full pool details.`,
+  ];
+}
+
+function summarizeAcquiredBrowser(browser: BrowserPoolAcquireResponse) {
+  return {
+    session_id: browser.session_id,
+    browser_live_view_url: browser.browser_live_view_url,
+    base_url: browser.base_url,
+    headless: browser.headless,
+    stealth: browser.stealth,
+    timeout_seconds: browser.timeout_seconds,
+    pool: browser.pool,
+    profile: browser.profile,
+    proxy_id: browser.proxy_id,
+    start_url: browser.start_url,
+    viewport: browser.viewport,
   };
 }
 
@@ -183,7 +167,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           mimeType: "application/json",
           text:
             pools && pools.length > 0
-              ? JSON.stringify(pools, null, 2)
+              ? JSON.stringify(pools.map(summarizeBrowserPool), null, 2)
               : "No browser pools found",
         },
       ],
@@ -201,7 +185,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
   // manage_browser_pools -- Create, update, list, get, delete, flush, acquire, and release browser pools
   server.tool(
     "manage_browser_pools",
-    'Manage pools of pre-warmed browser instances for fast acquisition. Use "create" to set up a pool, "update" to change pool configuration, "list"/"get" to inspect pools, "acquire" to get a browser from a pool, "release" to return it, "flush" to destroy idle browsers, or "delete" to remove a pool.',
+    'Manage pre-warmed browser pools when an agent needs fast browser acquisition or reusable session capacity. Use "list" for a compact pool inventory, "get" for full details, "acquire" before controlling a pooled browser, and "release" when the browser should return to the pool.',
     {
       action: z
         .enum([
@@ -223,6 +207,8 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
         .optional(),
       size: z
         .number()
+        .int()
+        .min(1)
         .describe(
           "(create, update) Number of browsers to maintain in the pool.",
         )
@@ -241,6 +227,8 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
         .optional(),
       timeout_seconds: z
         .number()
+        .int()
+        .min(1)
         .describe(
           "(create, update) Idle timeout for acquired browsers. Default 600.",
         )
@@ -300,18 +288,24 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
         .optional(),
       viewport_width: z
         .number()
+        .int()
+        .min(1)
         .describe(
           "(create, update) Window width in pixels. Must pair with viewport_height.",
         )
         .optional(),
       viewport_height: z
         .number()
+        .int()
+        .min(1)
         .describe(
           "(create, update) Window height in pixels. Must pair with viewport_width.",
         )
         .optional(),
       viewport_refresh_rate: z
         .number()
+        .int()
+        .min(1)
         .describe("(create, update) Display refresh rate in Hz.")
         .optional(),
       discard_all_idle: z
@@ -326,6 +320,8 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
         .optional(),
       acquire_timeout_seconds: z
         .number()
+        .int()
+        .min(0)
         .describe("(acquire) Max seconds to wait for a browser.")
         .optional(),
       session_id: z
@@ -344,84 +340,86 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
       try {
         switch (params.action) {
           case "create": {
-            const scopeError = actionFieldError(params, "create");
-            if (scopeError) return textResponse(scopeError);
+            const createParams = buildPoolCreateParams(params);
+            if (!createParams.ok) return errorResponse(createParams.error);
 
-            const pool = await client.browserPools.create(
-              buildPoolCreateParams(params),
-            );
-            if (!pool) return textResponse("Failed to create browser pool");
-            return jsonResponse(pool);
+            const pool = await client.browserPools.create(createParams.value);
+            if (!pool) return errorResponse("Failed to create browser pool");
+            return jsonResponse({
+              browser_pool: summarizeBrowserPool(pool),
+              next_actions: poolNextActions(pool),
+            });
           }
           case "update": {
-            const scopeError = actionFieldError(params, "update");
-            if (scopeError) return textResponse(scopeError);
             if (!params.id_or_name) {
-              return textResponse("Error: id_or_name is required for update.");
+              return errorResponse("Error: id_or_name is required for update.");
             }
 
             const updateParams = buildPoolUpdateParams(params);
-            if (Object.keys(updateParams).length === 0) {
-              return textResponse(
+            if (!updateParams.ok) return errorResponse(updateParams.error);
+            if (Object.keys(updateParams.value).length === 0) {
+              return errorResponse(
                 "Error: at least one update field is required.",
               );
             }
 
-            // Generated SDK types still require size, but pool PATCH accepts partial bodies.
             const pool = await client.browserPools.update(
               params.id_or_name,
-              updateParams as BrowserPoolUpdateParams,
+              updateParams.value,
             );
-            return jsonResponse(pool);
+            if (!pool) return errorResponse("Failed to update browser pool");
+            return jsonResponse({
+              browser_pool: summarizeBrowserPool(pool),
+              next_actions: [
+                ...poolNextActions(pool),
+                ...(params.discard_all_idle
+                  ? [
+                      "discard_all_idle was requested; idle browsers may be rebuilt before the next acquire.",
+                    ]
+                  : []),
+              ],
+            });
           }
           case "list": {
-            const scopeError = actionFieldError(params, "list");
-            if (scopeError) return textResponse(scopeError);
-
-            const pools = await client.browserPools.list();
-            return textResponse(
-              pools?.length > 0
-                ? JSON.stringify(pools, null, 2)
-                : "No browser pools found",
-            );
+            const pools = (await client.browserPools.list()) ?? [];
+            return pools.length > 0
+              ? jsonResponse({
+                  items: pools.map(summarizeBrowserPool),
+                  note: 'Use action "get" with id_or_name for full pool details.',
+                })
+              : textResponse("No browser pools found");
           }
           case "get": {
-            const scopeError = actionFieldError(params, "get");
-            if (scopeError) return textResponse(scopeError);
             if (!params.id_or_name)
-              return textResponse("Error: id_or_name is required for get.");
+              return errorResponse("Error: id_or_name is required for get.");
             const pool = await client.browserPools.retrieve(params.id_or_name);
             if (!pool)
-              return textResponse(
+              return errorResponse(
                 `Browser pool "${params.id_or_name}" not found`,
               );
             return jsonResponse(pool);
           }
           case "delete": {
-            const scopeError = actionFieldError(params, "delete");
-            if (scopeError) return textResponse(scopeError);
             if (!params.id_or_name)
-              return textResponse("Error: id_or_name is required for delete.");
+              return errorResponse("Error: id_or_name is required for delete.");
             await client.browserPools.delete(params.id_or_name, {
               ...(params.force !== undefined && { force: params.force }),
             });
             return textResponse("Browser pool deleted successfully");
           }
           case "flush": {
-            const scopeError = actionFieldError(params, "flush");
-            if (scopeError) return textResponse(scopeError);
             if (!params.id_or_name)
-              return textResponse("Error: id_or_name is required for flush.");
+              return errorResponse("Error: id_or_name is required for flush.");
             await client.browserPools.flush(params.id_or_name);
             return textResponse(
               "Pool flushed successfully. All idle browsers destroyed.",
             );
           }
           case "acquire": {
-            const scopeError = actionFieldError(params, "acquire");
-            if (scopeError) return textResponse(scopeError);
             if (!params.id_or_name)
-              return textResponse("Error: id_or_name is required for acquire.");
+              return errorResponse(
+                "Error: id_or_name is required for acquire.",
+              );
             const browser = await client.browserPools.acquire(
               params.id_or_name,
               {
@@ -431,16 +429,25 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
               },
             );
             if (!browser)
-              return textResponse("Failed to acquire browser from pool");
-            return jsonResponse(browser);
+              return errorResponse("Failed to acquire browser from pool");
+            return jsonResponse({
+              browser: summarizeAcquiredBrowser(browser),
+              next_actions: [
+                `Use computer_action with session_id "${browser.session_id}" to control this browser.`,
+                `When finished, use manage_browser_pools with action "release", id_or_name "${params.id_or_name}", and session_id "${browser.session_id}".`,
+                `Use manage_browsers with action "get" and session_id "${browser.session_id}" for full browser details.`,
+              ],
+            });
           }
           case "release": {
-            const scopeError = actionFieldError(params, "release");
-            if (scopeError) return textResponse(scopeError);
             if (!params.id_or_name)
-              return textResponse("Error: id_or_name is required for release.");
+              return errorResponse(
+                "Error: id_or_name is required for release.",
+              );
             if (!params.session_id)
-              return textResponse("Error: session_id is required for release.");
+              return errorResponse(
+                "Error: session_id is required for release.",
+              );
             await client.browserPools.release(params.id_or_name, {
               session_id: params.session_id,
               ...(params.reuse !== undefined && { reuse: params.reuse }),
@@ -449,11 +456,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           }
         }
       } catch (error) {
-        return textResponse(
-          `Error in manage_browser_pools (${params.action}): ${errorMessage(
-            error,
-          )}`,
-        );
+        return toolErrorResponse("manage_browser_pools", params.action, error);
       }
     },
   );

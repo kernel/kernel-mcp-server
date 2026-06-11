@@ -1,15 +1,20 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
-  buildBrowserExtensions,
-  buildBrowserProfile,
-  buildBrowserStartUrl,
-  buildBrowserViewport,
-  buildBrowserViewportUpdate,
+  buildBrowserCreateConfig,
+  buildBrowserUpdateConfig,
+  type BrowserConfigResult,
 } from "@/lib/mcp/browser-config";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
 import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
-import { errorMessage, jsonResponse, textResponse } from "@/lib/mcp/responses";
+import {
+  errorResponse,
+  jsonResponse,
+  paginatedJsonResponse,
+  textResponse,
+  toolErrorResponse,
+} from "@/lib/mcp/responses";
+import { paginationParams } from "@/lib/mcp/schemas";
 
 type BrowserCreateParams = NonNullable<
   Parameters<KernelClient["browsers"]["create"]>[0]
@@ -24,53 +29,6 @@ type TelemetryParams = {
   telemetry_interaction?: boolean;
 };
 
-type BrowserAction = "create" | "update" | "list" | "get" | "delete";
-
-const createActions: readonly BrowserAction[] = ["create"];
-const updateActions: readonly BrowserAction[] = ["update"];
-const createUpdateActions: readonly BrowserAction[] = ["create", "update"];
-const sessionIdActions: readonly BrowserAction[] = ["update", "get", "delete"];
-const listActions: readonly BrowserAction[] = ["list"];
-
-const browserFieldScopes = {
-  session_id: sessionIdActions,
-  start_url: createActions,
-  chrome_policy: createActions,
-  headless: createActions,
-  gpu: createActions,
-  stealth: createActions,
-  timeout_seconds: createActions,
-  profile_name: createUpdateActions,
-  profile_id: createUpdateActions,
-  save_profile_changes: createUpdateActions,
-  proxy_id: createUpdateActions,
-  clear_proxy: updateActions,
-  disable_default_proxy: updateActions,
-  kiosk_mode: createActions,
-  viewport_width: createUpdateActions,
-  viewport_height: createUpdateActions,
-  viewport_refresh_rate: createUpdateActions,
-  viewport_force: updateActions,
-  extension_id: createActions,
-  extension_name: createActions,
-  local_forward: createActions,
-  remote_forward: createActions,
-  status: listActions,
-  limit: listActions,
-  offset: listActions,
-  telemetry_enabled: createUpdateActions,
-  telemetry_console: createUpdateActions,
-  telemetry_network: createUpdateActions,
-  telemetry_page: createUpdateActions,
-  telemetry_interaction: createUpdateActions,
-} satisfies Record<string, readonly BrowserAction[]>;
-
-type BrowserToolField = keyof typeof browserFieldScopes;
-
-const scopedBrowserFields = Object.keys(
-  browserFieldScopes,
-) as BrowserToolField[];
-
 const telemetryCategories = [
   ["telemetry_console", "console"],
   ["telemetry_network", "network"],
@@ -78,58 +36,93 @@ const telemetryCategories = [
   ["telemetry_interaction", "interaction"],
 ] as const;
 
-function formatActionScope(field: BrowserToolField) {
-  return browserFieldScopes[field].join(", ");
-}
-
-function actionFieldError(
-  params: Partial<Record<BrowserToolField, unknown>>,
-  action: BrowserAction,
-) {
-  const unsupportedField = scopedBrowserFields.find(
-    (field) =>
-      params[field] !== undefined &&
-      !browserFieldScopes[field].includes(action),
-  );
-
-  return unsupportedField
-    ? `Error: ${unsupportedField} is only supported for ${formatActionScope(
-        unsupportedField,
-      )}.`
-    : undefined;
-}
-
 function buildTelemetry(
   params: TelemetryParams,
-): BrowserCreateParams["telemetry"] | BrowserUpdateParams["telemetry"] {
+): BrowserConfigResult<
+  BrowserCreateParams["telemetry"] | BrowserUpdateParams["telemetry"]
+> {
   const browser: NonNullable<
     NonNullable<BrowserCreateParams["telemetry"]>["browser"]
   > = {};
   let hasBrowserCategories = false;
+  let hasEnabledBrowserCategories = false;
 
   for (const [paramKey, category] of telemetryCategories) {
     const enabled = params[paramKey];
     if (enabled !== undefined) {
       browser[category] = { enabled };
       hasBrowserCategories = true;
+      if (enabled) hasEnabledBrowserCategories = true;
     }
   }
 
-  if (params.telemetry_enabled === false && hasBrowserCategories) {
-    throw new Error(
-      "telemetry_enabled=false cannot be combined with telemetry category settings.",
-    );
+  if (params.telemetry_enabled === false && hasEnabledBrowserCategories) {
+    return {
+      ok: false,
+      error:
+        "Error: telemetry_enabled=false cannot be combined with enabled telemetry categories.",
+    };
   }
 
   if (params.telemetry_enabled === undefined && !hasBrowserCategories) {
-    return undefined;
+    return { ok: true, value: undefined };
   }
 
   return {
-    ...(params.telemetry_enabled !== undefined && {
-      enabled: params.telemetry_enabled,
-    }),
-    ...(hasBrowserCategories && { browser }),
+    ok: true,
+    value: {
+      ...(params.telemetry_enabled !== undefined && {
+        enabled: params.telemetry_enabled,
+      }),
+      ...(hasBrowserCategories && { browser }),
+    },
+  };
+}
+
+function browserSessionNextActions(sessionId: string) {
+  return [
+    `Use computer_action with session_id "${sessionId}" to inspect or control the browser.`,
+    `Use manage_browsers with action "get" and session_id "${sessionId}" for full browser details.`,
+    `Use manage_browsers with action "delete" and session_id "${sessionId}" when the session is no longer needed.`,
+  ];
+}
+
+function buildSshPortForwardingInfo(
+  params: { local_forward?: string; remote_forward?: string },
+  sessionId: string,
+) {
+  if (!params.local_forward && !params.remote_forward) return undefined;
+
+  const sshParts = ["kernel browsers ssh", sessionId];
+  if (params.local_forward) sshParts.push(`-L ${params.local_forward}`);
+  if (params.remote_forward) sshParts.push(`-R ${params.remote_forward}`);
+
+  const remotePort = params.remote_forward
+    ? params.remote_forward.split(":")[0]
+    : undefined;
+  const localPort = params.local_forward
+    ? params.local_forward.split(":")[0]
+    : undefined;
+
+  return {
+    command: sshParts.join(" "),
+    prerequisites: [
+      "Kernel CLI: https://kernel.sh/docs/reference/cli",
+      "websocat: brew install websocat on macOS",
+    ],
+    remote_forward: remotePort
+      ? {
+          browser_vm_url: `http://localhost:${remotePort}`,
+          next_action: `Once the user has the tunnel running, use execute_playwright_code to navigate the browser to http://localhost:${remotePort}.`,
+        }
+      : undefined,
+    local_forward: localPort
+      ? {
+          local_url: `http://localhost:${localPort}`,
+          note: `Services inside the browser VM are accessible locally at localhost:${localPort} once the tunnel is running.`,
+        }
+      : undefined,
+    note: "SSH connections alone do not count as browser activity. Set an appropriate timeout or keep the live view open to prevent cleanup.",
   };
 }
 
@@ -167,7 +160,7 @@ export function registerBrowserCapabilities(server: McpServer) {
   // manage_browsers -- Create, update, list, get, and delete browser sessions
   server.tool(
     "manage_browsers",
-    'Manage browser sessions in the Kernel platform. Use action "create" to launch a new browser, "update" to modify supported session settings, "list" to see existing sessions, "get" to retrieve details about a specific session, or "delete" to terminate one. Created browsers run in isolated VMs and support headless/stealth modes, profiles, proxies, viewports, extensions, Chrome policy overrides, telemetry, start URLs, and SSH tunneling.',
+    'Manage browser sessions when an agent needs a live browser to inspect, automate, or debug web state. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, and "delete" when finished.',
     {
       action: z
         .enum(["create", "update", "list", "get", "delete"])
@@ -207,6 +200,9 @@ export function registerBrowserCapabilities(server: McpServer) {
         .optional(),
       timeout_seconds: z
         .number()
+        .int()
+        .min(10)
+        .max(259200)
         .describe(
           "(create) Inactivity timeout in seconds (max 259200 = 72h). Default 60.",
         )
@@ -251,18 +247,24 @@ export function registerBrowserCapabilities(server: McpServer) {
         .optional(),
       viewport_width: z
         .number()
+        .int()
+        .min(1)
         .describe(
           "(create, update) Window width in pixels. Must pair with viewport_height.",
         )
         .optional(),
       viewport_height: z
         .number()
+        .int()
+        .min(1)
         .describe(
           "(create, update) Window height in pixels. Must pair with viewport_width.",
         )
         .optional(),
       viewport_refresh_rate: z
         .number()
+        .int()
+        .min(1)
         .describe("(create, update) Display refresh rate in Hz.")
         .optional(),
       viewport_force: z
@@ -293,14 +295,7 @@ export function registerBrowserCapabilities(server: McpServer) {
         .enum(["active", "deleted", "all"])
         .describe('(list) Filter by status. Default "active".')
         .optional(),
-      limit: z
-        .number()
-        .describe("(list) Max results per page. Default 50.")
-        .optional(),
-      offset: z
-        .number()
-        .describe("(list) Pagination offset. Default 0.")
-        .optional(),
+      ...paginationParams,
       telemetry_enabled: z
         .boolean()
         .describe(
@@ -335,9 +330,6 @@ export function registerBrowserCapabilities(server: McpServer) {
       try {
         switch (params.action) {
           case "create": {
-            const scopeError = actionFieldError(params, "create");
-            if (scopeError) return textResponse(scopeError);
-
             const createParams: BrowserCreateParams = {};
             if (params.headless !== undefined)
               createParams.headless = params.headless;
@@ -348,63 +340,44 @@ export function registerBrowserCapabilities(server: McpServer) {
               createParams.timeout_seconds = params.timeout_seconds;
             if (params.kiosk_mode !== undefined)
               createParams.kiosk_mode = params.kiosk_mode;
-            const startUrl = buildBrowserStartUrl(params.start_url);
-            if (startUrl !== undefined) createParams.start_url = startUrl;
-            if (params.chrome_policy)
+            if (
+              params.chrome_policy &&
+              Object.keys(params.chrome_policy).length > 0
+            ) {
               createParams.chrome_policy = params.chrome_policy;
+            }
             if (params.proxy_id) createParams.proxy_id = params.proxy_id;
-            const profile = buildBrowserProfile(params);
-            if (profile) createParams.profile = profile;
-            const viewport = buildBrowserViewport(params);
-            if (viewport) createParams.viewport = viewport;
+            const browserConfig = buildBrowserCreateConfig(params);
+            if (!browserConfig.ok) return errorResponse(browserConfig.error);
+            Object.assign(createParams, browserConfig.value);
             const telemetry = buildTelemetry(params);
-            if (telemetry !== undefined) createParams.telemetry = telemetry;
-            const extensions = buildBrowserExtensions(params);
-            if (extensions) createParams.extensions = extensions;
+            if (!telemetry.ok) return errorResponse(telemetry.error);
+            if (telemetry.value !== undefined)
+              createParams.telemetry = telemetry.value;
 
             const browser = await client.browsers.create(createParams);
             if (!browser)
-              return textResponse("Failed to create browser session");
+              return errorResponse("Failed to create browser session");
 
-            let responseText = JSON.stringify(browser, null, 2);
-            if (params.local_forward || params.remote_forward) {
-              const sshParts = ["kernel browsers ssh", browser.session_id];
-              if (params.local_forward)
-                sshParts.push(`-L ${params.local_forward}`);
-              if (params.remote_forward)
-                sshParts.push(`-R ${params.remote_forward}`);
-              const sshCommand = sshParts.join(" ");
-
-              const remotePort = params.remote_forward
-                ? params.remote_forward.split(":")[0]
-                : null;
-              const localPort = params.local_forward
-                ? params.local_forward.split(":")[0]
-                : null;
-
-              responseText += `\n\n## SSH Port Forwarding\n\nRun this command in a terminal:\n\n\`\`\`bash\n${sshCommand}\n\`\`\`\n\nPrerequisites: [Kernel CLI](https://kernel.sh/docs/reference/cli) and [websocat](https://github.com/vi/websocat) (\`brew install websocat\` on macOS).`;
-
-              if (remotePort) {
-                responseText += `\n\nThis forwards the user's local port to port ${remotePort} inside the browser VM. Once the user has the tunnel running, use execute_playwright_code to navigate the browser to http://localhost:${remotePort}`;
-              }
-
-              if (localPort) {
-                responseText += `\n\nThis forwards port ${localPort} from the browser VM to the user's local machine. Once the user has the tunnel running, services inside the VM are accessible locally at localhost:${localPort}`;
-              }
-
-              responseText += `\n\nNote: SSH connections alone don't count as browser activity. Set an appropriate timeout or keep the live view open to prevent cleanup.`;
-            }
-            return textResponse(responseText);
+            const sshPortForwarding = buildSshPortForwardingInfo(
+              params,
+              browser.session_id,
+            );
+            return jsonResponse({
+              browser,
+              next_actions: browserSessionNextActions(browser.session_id),
+              ...(sshPortForwarding && {
+                ssh_port_forwarding: sshPortForwarding,
+              }),
+            });
           }
           case "update": {
-            const scopeError = actionFieldError(params, "update");
-            if (scopeError) return textResponse(scopeError);
             if (!params.session_id)
-              return textResponse(
+              return errorResponse(
                 "Error: session_id is required for update action.",
               );
             if (params.proxy_id && params.clear_proxy) {
-              return textResponse(
+              return errorResponse(
                 "Error: Cannot specify both proxy_id and clear_proxy.",
               );
             }
@@ -418,15 +391,16 @@ export function registerBrowserCapabilities(server: McpServer) {
             } else if (params.proxy_id !== undefined) {
               updateParams.proxy_id = params.proxy_id;
             }
-            const profile = buildBrowserProfile(params);
-            if (profile) updateParams.profile = profile;
-            const viewport = buildBrowserViewportUpdate(params);
-            if (viewport) updateParams.viewport = viewport;
+            const browserConfig = buildBrowserUpdateConfig(params);
+            if (!browserConfig.ok) return errorResponse(browserConfig.error);
+            Object.assign(updateParams, browserConfig.value);
             const telemetry = buildTelemetry(params);
-            if (telemetry !== undefined) updateParams.telemetry = telemetry;
+            if (!telemetry.ok) return errorResponse(telemetry.error);
+            if (telemetry.value !== undefined)
+              updateParams.telemetry = telemetry.value;
 
             if (Object.keys(updateParams).length === 0) {
-              return textResponse(
+              return errorResponse(
                 "Error: at least one update field is required.",
               );
             }
@@ -436,53 +410,38 @@ export function registerBrowserCapabilities(server: McpServer) {
               updateParams,
             );
             if (!browser)
-              return textResponse("Failed to update browser session");
-            return jsonResponse(browser);
+              return errorResponse("Failed to update browser session");
+            return jsonResponse({
+              browser,
+              next_actions: browserSessionNextActions(browser.session_id),
+            });
           }
           case "list": {
-            const scopeError = actionFieldError(params, "list");
-            if (scopeError) return textResponse(scopeError);
             const page = await client.browsers.list({
               ...(params.status && { status: params.status }),
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
-            const items = page
-              .getPaginatedItems()
-              .map((b) => ({ ...b, cdp_ws_url: undefined }));
-            return textResponse(
-              items.length > 0
-                ? JSON.stringify(
-                    {
-                      items,
-                      has_more: page.has_more,
-                      next_offset: page.next_offset,
-                    },
-                    null,
-                    2,
-                  )
-                : "No browsers found",
-            );
+            return paginatedJsonResponse(page, {
+              mapItem: ({ cdp_ws_url: _cdpWsUrl, ...browser }) => browser,
+              note: 'Use action "get" with session_id for full browser details.',
+            });
           }
           case "get": {
-            const scopeError = actionFieldError(params, "get");
-            if (scopeError) return textResponse(scopeError);
             if (!params.session_id)
-              return textResponse(
+              return errorResponse(
                 "Error: session_id is required for get action.",
               );
             const browser = await client.browsers.retrieve(params.session_id);
             if (!browser)
-              return textResponse(
+              return errorResponse(
                 `Browser session "${params.session_id}" not found`,
               );
             return jsonResponse(browser);
           }
           case "delete": {
-            const scopeError = actionFieldError(params, "delete");
-            if (scopeError) return textResponse(scopeError);
             if (!params.session_id)
-              return textResponse(
+              return errorResponse(
                 "Error: session_id is required for delete action.",
               );
             await client.browsers.deleteByID(params.session_id);
@@ -490,9 +449,7 @@ export function registerBrowserCapabilities(server: McpServer) {
           }
         }
       } catch (error) {
-        return textResponse(
-          `Error in manage_browsers (${params.action}): ${errorMessage(error)}`,
-        );
+        return toolErrorResponse("manage_browsers", params.action, error);
       }
     },
   );

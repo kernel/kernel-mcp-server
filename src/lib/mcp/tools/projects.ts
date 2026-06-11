@@ -2,11 +2,13 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
-  errorMessage,
+  errorResponse,
   jsonResponse,
   paginatedJsonResponse,
   textResponse,
+  toolErrorResponse,
 } from "@/lib/mcp/responses";
+import { paginationParams } from "@/lib/mcp/schemas";
 
 export function registerProjectCapabilities(server: McpServer) {
   // manage_projects -- Create, list, get, update, delete, and manage organization project limits
@@ -42,10 +44,11 @@ export function registerProjectCapabilities(server: McpServer) {
           "(list) Case-insensitive substring match against project name.",
         )
         .optional(),
-      limit: z.number().describe("(list) Max results per page.").optional(),
-      offset: z.number().describe("(list) Pagination offset.").optional(),
+      ...paginationParams,
       max_concurrent_invocations: z
         .number()
+        .int()
+        .min(0)
         .nullable()
         .describe(
           "(update_limits) Maximum concurrent app invocations for this project. Set 0 to remove the cap.",
@@ -53,6 +56,8 @@ export function registerProjectCapabilities(server: McpServer) {
         .optional(),
       max_concurrent_sessions: z
         .number()
+        .int()
+        .min(0)
         .nullable()
         .describe(
           "(update_limits) Maximum concurrent browser sessions for this project. Set 0 to remove the cap.",
@@ -60,6 +65,8 @@ export function registerProjectCapabilities(server: McpServer) {
         .optional(),
       max_pooled_sessions: z
         .number()
+        .int()
+        .min(0)
         .nullable()
         .describe(
           "(update_limits) Maximum pooled sessions capacity for this project. Set 0 to remove the cap.",
@@ -74,7 +81,7 @@ export function registerProjectCapabilities(server: McpServer) {
         switch (params.action) {
           case "create": {
             if (!params.name) {
-              return textResponse("Error: name is required for create.");
+              return errorResponse("Error: name is required for create.");
             }
             const project = await client.projects.create({ name: params.name });
             return jsonResponse(project);
@@ -89,17 +96,17 @@ export function registerProjectCapabilities(server: McpServer) {
           }
           case "get": {
             if (!params.project_id) {
-              return textResponse("Error: project_id is required for get.");
+              return errorResponse("Error: project_id is required for get.");
             }
             const project = await client.projects.retrieve(params.project_id);
             return jsonResponse(project);
           }
           case "update": {
             if (!params.project_id) {
-              return textResponse("Error: project_id is required for update.");
+              return errorResponse("Error: project_id is required for update.");
             }
             if (!params.name && !params.status) {
-              return textResponse(
+              return errorResponse(
                 "Error: name or status is required for update.",
               );
             }
@@ -115,14 +122,14 @@ export function registerProjectCapabilities(server: McpServer) {
           }
           case "delete": {
             if (!params.project_id) {
-              return textResponse("Error: project_id is required for delete.");
+              return errorResponse("Error: project_id is required for delete.");
             }
             await client.projects.delete(params.project_id);
             return textResponse("Project deleted successfully");
           }
           case "get_limits": {
             if (!params.project_id) {
-              return textResponse(
+              return errorResponse(
                 "Error: project_id is required for get_limits.",
               );
             }
@@ -133,7 +140,7 @@ export function registerProjectCapabilities(server: McpServer) {
           }
           case "update_limits": {
             if (!params.project_id) {
-              return textResponse(
+              return errorResponse(
                 "Error: project_id is required for update_limits.",
               );
             }
@@ -152,7 +159,7 @@ export function registerProjectCapabilities(server: McpServer) {
               updateParams.max_pooled_sessions = params.max_pooled_sessions;
             }
             if (Object.keys(updateParams).length === 0) {
-              return textResponse(
+              return errorResponse(
                 "Error: at least one limit field is required for update_limits.",
               );
             }
@@ -164,9 +171,7 @@ export function registerProjectCapabilities(server: McpServer) {
           }
         }
       } catch (error) {
-        return textResponse(
-          `Error in manage_projects (${params.action}): ${errorMessage(error)}`,
-        );
+        return toolErrorResponse("manage_projects", params.action, error);
       }
     },
   );

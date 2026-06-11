@@ -2,10 +2,11 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
-  errorMessage,
-  jsonListResponse,
+  errorResponse,
+  itemsJsonResponse,
   jsonResponse,
   textResponse,
+  toolErrorResponse,
 } from "@/lib/mcp/responses";
 
 const httpUrlSchema = z
@@ -85,12 +86,12 @@ export function registerProxyTools(server: McpServer) {
         switch (params.action) {
           case "create": {
             if (!params.type)
-              return textResponse("Error: type is required for create.");
+              return errorResponse("Error: type is required for create.");
             if (
               params.type === "custom" &&
               (!params.custom_host || !params.custom_port)
             ) {
-              return textResponse(
+              return errorResponse(
                 "Error: custom_host and custom_port are required for custom proxy type.",
               );
             }
@@ -122,23 +123,27 @@ export function registerProxyTools(server: McpServer) {
                     }),
                   };
             const proxy = await client.proxies.create(createParams);
-            if (!proxy) return textResponse("Failed to create proxy");
+            if (!proxy) return errorResponse("Failed to create proxy");
             return jsonResponse(proxy);
           }
           case "list": {
             const proxies = await client.proxies.list();
-            return jsonListResponse(proxies, "No proxies found");
+            return itemsJsonResponse(proxies ?? [], {
+              has_more: false,
+              next_offset: null,
+              emptyText: "No proxies found",
+            });
           }
           case "get": {
             if (!params.proxy_id) {
-              return textResponse("Error: proxy_id is required for get.");
+              return errorResponse("Error: proxy_id is required for get.");
             }
             const proxy = await client.proxies.retrieve(params.proxy_id);
             return jsonResponse(proxy);
           }
           case "check": {
             if (!params.proxy_id) {
-              return textResponse("Error: proxy_id is required for check.");
+              return errorResponse("Error: proxy_id is required for check.");
             }
             const result = await client.proxies.check(
               params.proxy_id,
@@ -148,15 +153,13 @@ export function registerProxyTools(server: McpServer) {
           }
           case "delete": {
             if (!params.proxy_id)
-              return textResponse("Error: proxy_id is required for delete.");
+              return errorResponse("Error: proxy_id is required for delete.");
             await client.proxies.delete(params.proxy_id);
             return textResponse("Proxy deleted successfully");
           }
         }
       } catch (error) {
-        return textResponse(
-          `Error in manage_proxies (${params.action}): ${errorMessage(error)}`,
-        );
+        return toolErrorResponse("manage_proxies", params.action, error);
       }
     },
   );

@@ -255,27 +255,30 @@ Many other MCP-capable tools accept:
 
 Configure these values wherever the tool expects MCP server settings.
 
-## Tools (15 total)
+## Tools (16 total)
 
-Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Seven standalone tools handle high-frequency workflows.
+Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Five standalone tools handle high-frequency workflows.
+
+Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_DISABLED_TOOLSETS` to a comma-separated list. For example, `KERNEL_MCP_DISABLED_TOOLSETS=api_keys` prevents `manage_api_keys` from being registered.
 
 ### manage\_\* tools
 
 - `manage_browsers` - Create, list, get, and delete browser sessions. Supports headless/stealth modes, profiles, proxies, viewports, extensions, and SSH tunneling.
 - `manage_profiles` - Setup (with guided live browser session), search/list with pagination, get, and delete browser profiles for persisting cookies and logins.
 - `manage_projects` - Create, list, get, update, and delete organization projects. Inspect and update per-project resource limits.
-- `manage_api_keys` - Create, list, get, update, and delete org-wide or project-scoped API keys.
+- `manage_api_keys` - Create, list, get, update, and delete org-wide or project-scoped API keys. Create returns the plaintext key once.
 - `manage_browser_pools` - Create, list, get, delete, and flush pools of pre-warmed browsers. Acquire and release browsers from pools.
 - `manage_proxies` - Create, list, get, check, and delete proxy configurations (datacenter, ISP, residential, mobile, custom).
 - `manage_extensions` - List and delete uploaded browser extensions.
 - `manage_apps` - List/search apps, invoke actions, get/list/delete deployments, and get invocation results.
+- `manage_auth_connections` - Create, list, get, delete managed auth connections; start login flows (returns a hosted URL and live view); submit MFA codes or SSO selections.
+- `manage_credentials` - Create, list, get, update, and delete stored credentials; fetch a current TOTP code for credentials with a configured totp_secret.
+- `manage_credential_providers` - Create, list, get, update, and delete external credential providers (e.g. 1Password); list available items and test the provider connection.
 
 ### Standalone tools
 
-- `browser_curl` - Run an HTTP request from inside a browser session's network context.
-- `read_browser_clipboard` - Read clipboard text from a browser session.
-- `write_browser_clipboard` - Write clipboard text to a browser session.
-- `computer_action` - Mouse, keyboard, and screenshot controls for browser sessions (click, type, press_key, scroll, move, get_position, screenshot).
+- `computer_action` - Mouse, keyboard, clipboard, and screenshot controls for browser sessions (click, type, press_key, scroll, move, get_position, read_clipboard, write_clipboard, screenshot).
+- `browser_curl` - Send HTTP requests through an existing browser session's Chrome network stack.
 - `execute_playwright_code` - Execute Playwright/TypeScript code against a browser with automatic video replay and cleanup.
 - `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
 - `search_docs` - Search Kernel platform documentation and guides.
