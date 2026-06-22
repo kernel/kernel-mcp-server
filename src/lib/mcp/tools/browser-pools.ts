@@ -433,11 +433,14 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
             );
             if (!browser)
               return errorResponse("Failed to acquire browser from pool");
+            // Prefer the stable pool id for the release hint (acquire may have
+            // been called by name); fall back to the caller's identifier.
+            const poolId = browser.pool?.id ?? params.id_or_name;
             return jsonResponse({
               browser: summarizeAcquiredBrowser(browser),
               next_actions: [
                 `Use computer_action with session_id "${browser.session_id}" to control this browser.`,
-                `When finished, use manage_browser_pools with action "release", id_or_name "${params.id_or_name}", and session_id "${browser.session_id}".`,
+                `When finished, use manage_browser_pools with action "release", id_or_name "${poolId}", and session_id "${browser.session_id}".`,
                 `Use manage_browsers with action "get" and session_id "${browser.session_id}" for full browser details.`,
               ],
             });
