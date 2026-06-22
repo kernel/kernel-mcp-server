@@ -257,6 +257,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
         .optional(),
       fill_rate_per_minute: z
         .number()
+        .int()
         .min(0)
         .describe(
           "(create, update) Pool fill rate percentage per minute. Default 10%.",
