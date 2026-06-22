@@ -255,9 +255,10 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
         .string()
         .describe("(create, update) Proxy for pool browsers.")
         .optional(),
+      // Percentage rate, not a count — the API accepts fractional values, so
+      // intentionally no .int() (unlike the size/timeout count fields).
       fill_rate_per_minute: z
         .number()
-        .int()
         .min(0)
         .describe(
           "(create, update) Pool fill rate percentage per minute. Default 10%.",
