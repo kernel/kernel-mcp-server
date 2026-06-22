@@ -59,7 +59,7 @@ function buildPoolConfigParams(
       ...(params.timeout_seconds !== undefined && {
         timeout_seconds: params.timeout_seconds,
       }),
-      ...(params.proxy_id !== undefined && { proxy_id: params.proxy_id }),
+      ...(params.proxy_id && { proxy_id: params.proxy_id }),
       ...(params.fill_rate_per_minute !== undefined && {
         fill_rate_per_minute: params.fill_rate_per_minute,
       }),
