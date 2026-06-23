@@ -20,6 +20,13 @@ export function registerPlaywrightTool(server: McpServer) {
         )
         .optional(),
     },
+    {
+      title: "Execute Playwright code",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     async ({ code, session_id }, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);
