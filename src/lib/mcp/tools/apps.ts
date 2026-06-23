@@ -92,7 +92,7 @@ export function registerAppCapabilities(server: McpServer) {
     {
       title: "Manage Kernel apps and invocations",
       readOnlyHint: false,
-      destructiveHint: false,
+      destructiveHint: true,
       idempotentHint: false,
       openWorldHint: true,
     },

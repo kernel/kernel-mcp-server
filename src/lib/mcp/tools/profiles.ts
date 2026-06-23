@@ -107,9 +107,10 @@ export function registerProfileCapabilities(server: McpServer) {
               return errorResponse(
                 "Error: profile_name is required for setup.",
               );
-            const existingProfiles = await listProfiles(client, {
-              query: params.profile_name,
-            });
+            // Scan all profiles for an exact name match: the list `query` is a
+            // search and may not reliably return an exact-named profile, which
+            // would let setup create a duplicate.
+            const existingProfiles = await listProfiles(client);
             const existingProfile = existingProfiles?.find(
               (p) => p.name === params.profile_name,
             );
