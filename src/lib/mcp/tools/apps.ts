@@ -6,6 +6,7 @@ import {
   errorResponse,
   jsonResponse,
   paginatedJsonResponse,
+  textResponse,
   toolErrorResponse,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
