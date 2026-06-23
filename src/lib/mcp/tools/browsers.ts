@@ -1,29 +1,25 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import {
+  buildBrowserCreateConfig,
+  buildBrowserUpdateConfig,
+  type BrowserConfigResult,
+} from "@/lib/mcp/browser-config";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
+import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
 import {
   errorResponse,
+  jsonResponse,
+  paginatedJsonResponse,
   textResponse,
   toolErrorResponse,
 } from "@/lib/mcp/responses";
+import { paginationParams } from "@/lib/mcp/schemas";
 
 type BrowserCreateParams = NonNullable<
   Parameters<KernelClient["browsers"]["create"]>[0]
 >;
 type BrowserUpdateParams = Parameters<KernelClient["browsers"]["update"]>[1];
-
-type ProfileParams = {
-  profile_name?: string;
-  profile_id?: string;
-  save_profile_changes?: boolean;
-};
-
-type ViewportParams = {
-  viewport_width?: number;
-  viewport_height?: number;
-  viewport_refresh_rate?: number;
-  viewport_force?: boolean;
-};
 
 type TelemetryParams = {
   telemetry_enabled?: boolean;
@@ -40,77 +36,11 @@ const telemetryCategories = [
   ["telemetry_interaction", "interaction"],
 ] as const;
 
-function buildProfile(params: ProfileParams): BrowserCreateParams["profile"] {
-  if (
-    params.save_profile_changes !== undefined &&
-    !params.profile_name &&
-    !params.profile_id
-  ) {
-    throw new Error(
-      "profile_name or profile_id is required when save_profile_changes is set.",
-    );
-  }
-  if (!params.profile_name && !params.profile_id) return undefined;
-  return {
-    ...(params.profile_name && { name: params.profile_name }),
-    ...(params.profile_id && { id: params.profile_id }),
-    ...(params.save_profile_changes !== undefined && {
-      save_changes: params.save_profile_changes,
-    }),
-  };
-}
-
-function buildViewportBase(
-  params: ViewportParams,
-): NonNullable<BrowserCreateParams["viewport"]> | undefined {
-  const width = params.viewport_width;
-  const height = params.viewport_height;
-  const hasWidth = width !== undefined;
-  const hasHeight = height !== undefined;
-  const hasViewportOptions =
-    hasWidth || hasHeight || params.viewport_refresh_rate !== undefined;
-
-  if (!hasViewportOptions) return undefined;
-  if (!hasWidth || !hasHeight) {
-    throw new Error(
-      "viewport_width and viewport_height must be provided together.",
-    );
-  }
-
-  return {
-    width,
-    height,
-    ...(params.viewport_refresh_rate !== undefined && {
-      refresh_rate: params.viewport_refresh_rate,
-    }),
-  };
-}
-
-function buildUpdateViewport(
-  params: ViewportParams,
-): BrowserUpdateParams["viewport"] {
-  const viewport = buildViewportBase(params);
-
-  if (!viewport) {
-    if (params.viewport_force !== undefined) {
-      throw new Error(
-        "viewport_width and viewport_height must be provided when viewport_force is set.",
-      );
-    }
-    return undefined;
-  }
-
-  return {
-    ...viewport,
-    ...(params.viewport_force !== undefined && {
-      force: params.viewport_force,
-    }),
-  };
-}
-
 function buildTelemetry(
   params: TelemetryParams,
-): BrowserCreateParams["telemetry"] {
+): BrowserConfigResult<
+  BrowserCreateParams["telemetry"] | BrowserUpdateParams["telemetry"]
+> {
   const browser: NonNullable<
     NonNullable<BrowserCreateParams["telemetry"]>["browser"]
   > = {};
@@ -127,20 +57,72 @@ function buildTelemetry(
   }
 
   if (params.telemetry_enabled === false && hasEnabledBrowserCategories) {
-    throw new Error(
-      "telemetry_enabled=false cannot be combined with enabled telemetry categories.",
-    );
+    return {
+      ok: false,
+      error:
+        "Error: telemetry_enabled=false cannot be combined with enabled telemetry categories.",
+    };
   }
 
   if (params.telemetry_enabled === undefined && !hasBrowserCategories) {
-    return undefined;
+    return { ok: true, value: undefined };
   }
 
   return {
-    ...(params.telemetry_enabled !== undefined && {
-      enabled: params.telemetry_enabled,
-    }),
-    ...(hasBrowserCategories && { browser }),
+    ok: true,
+    value: {
+      ...(params.telemetry_enabled !== undefined && {
+        enabled: params.telemetry_enabled,
+      }),
+      ...(hasBrowserCategories && { browser }),
+    },
+  };
+}
+
+function browserSessionNextActions(sessionId: string) {
+  return [
+    `Use computer_action with session_id "${sessionId}" to inspect or control the browser.`,
+    `Use manage_browsers with action "get" and session_id "${sessionId}" for full browser details.`,
+    `Use manage_browsers with action "delete" and session_id "${sessionId}" when the session is no longer needed.`,
+  ];
+}
+
+function buildSshPortForwardingInfo(
+  params: { local_forward?: string; remote_forward?: string },
+  sessionId: string,
+) {
+  if (!params.local_forward && !params.remote_forward) return undefined;
+
+  const sshParts = ["kernel browsers ssh", sessionId];
+  if (params.local_forward) sshParts.push(`-L ${params.local_forward}`);
+  if (params.remote_forward) sshParts.push(`-R ${params.remote_forward}`);
+
+  const remotePort = params.remote_forward
+    ? params.remote_forward.split(":")[0]
+    : undefined;
+  const localPort = params.local_forward
+    ? params.local_forward.split(":")[0]
+    : undefined;
+
+  return {
+    command: sshParts.join(" "),
+    prerequisites: [
+      "Kernel CLI: https://kernel.sh/docs/reference/cli",
+      "websocat: brew install websocat on macOS",
+    ],
+    remote_forward: remotePort
+      ? {
+          browser_vm_url: `http://localhost:${remotePort}`,
+          next_action: `Once the user has the tunnel running, use execute_playwright_code to navigate the browser to http://localhost:${remotePort}.`,
+        }
+      : undefined,
+    local_forward: localPort
+      ? {
+          local_url: `http://localhost:${localPort}`,
+          note: `Services inside the browser VM are accessible locally at localhost:${localPort} once the tunnel is running.`,
+        }
+      : undefined,
+    note: "SSH connections alone do not count as browser activity. Set an appropriate timeout or keep the live view open to prevent cleanup.",
   };
 }
 
@@ -151,51 +133,34 @@ export function registerBrowserCapabilities(server: McpServer) {
     }
 
     const client = createKernelClient(extra.authInfo.token);
-    const uriString = uri.toString();
+    const browsersPage = await client.browsers.list();
+    const items = browsersPage.getPaginatedItems();
+    return {
+      contents: [
+        {
+          uri: uri.toString(),
+          mimeType: "application/json",
+          text:
+            items.length > 0
+              ? JSON.stringify(items, null, 2)
+              : "No browsers found",
+        },
+      ],
+    };
+  });
 
-    if (uriString === "browsers://") {
-      // List all browsers
-      const browsersPage = await client.browsers.list();
-      const items = browsersPage.getPaginatedItems();
-      return {
-        contents: [
-          {
-            uri: "browsers://",
-            mimeType: "application/json",
-            text:
-              items.length > 0
-                ? JSON.stringify(items, null, 2)
-                : "No browsers found",
-          },
-        ],
-      };
-    } else if (uriString.startsWith("browsers://")) {
-      // Get specific browser by session ID
-      const sessionId = uriString.replace("browsers://", "");
-      const browser = await client.browsers.retrieve(sessionId);
-
-      if (!browser) {
-        throw new Error(`Browser session "${sessionId}" not found`);
-      }
-
-      return {
-        contents: [
-          {
-            uri: uriString,
-            mimeType: "application/json",
-            text: JSON.stringify(browser, null, 2),
-          },
-        ],
-      };
-    }
-
-    throw new Error(`Invalid browser URI: ${uriString}`);
+  registerJsonResourceTemplate(server, {
+    name: "browser",
+    uriTemplate: "browsers://{sessionId}",
+    variableName: "sessionId",
+    resourceLabel: "Browser session",
+    read: (client, sessionId) => client.browsers.retrieve(sessionId),
   });
 
   // manage_browsers -- Create, update, list, get, and delete browser sessions
   server.tool(
     "manage_browsers",
-    'Manage browser sessions in the Kernel platform. Use action "create" to launch a new browser, "update" to modify supported session settings, "list" to see existing sessions, "get" to retrieve details about a specific session, or "delete" to terminate one. Created browsers run in isolated VMs and support headless/stealth modes, profiles, proxies, viewports, extensions, Chrome policy overrides, telemetry, start URLs, and SSH tunneling.',
+    'Manage browser sessions when an agent needs a live browser to inspect, automate, or debug web state. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, and "delete" when finished.',
     {
       action: z
         .enum(["create", "update", "list", "get", "delete"])
@@ -235,6 +200,9 @@ export function registerBrowserCapabilities(server: McpServer) {
         .optional(),
       timeout_seconds: z
         .number()
+        .int()
+        .min(10)
+        .max(259200)
         .describe(
           "(create) Inactivity timeout in seconds (max 259200 = 72h). Default 60.",
         )
@@ -279,18 +247,24 @@ export function registerBrowserCapabilities(server: McpServer) {
         .optional(),
       viewport_width: z
         .number()
+        .int()
+        .min(1)
         .describe(
           "(create, update) Window width in pixels. Must pair with viewport_height.",
         )
         .optional(),
       viewport_height: z
         .number()
+        .int()
+        .min(1)
         .describe(
           "(create, update) Window height in pixels. Must pair with viewport_width.",
         )
         .optional(),
       viewport_refresh_rate: z
         .number()
+        .int()
+        .min(1)
         .describe("(create, update) Display refresh rate in Hz.")
         .optional(),
       viewport_force: z
@@ -321,14 +295,7 @@ export function registerBrowserCapabilities(server: McpServer) {
         .enum(["active", "deleted", "all"])
         .describe('(list) Filter by status. Default "active".')
         .optional(),
-      limit: z
-        .number()
-        .describe("(list) Max results per page. Default 50.")
-        .optional(),
-      offset: z
-        .number()
-        .describe("(list) Pagination offset. Default 0.")
-        .optional(),
+      ...paginationParams,
       telemetry_enabled: z
         .boolean()
         .describe(
@@ -370,17 +337,6 @@ export function registerBrowserCapabilities(server: McpServer) {
       try {
         switch (params.action) {
           case "create": {
-            if (params.profile_name && params.profile_id) {
-              return errorResponse(
-                "Error: Cannot specify both profile_name and profile_id.",
-              );
-            }
-            if (params.extension_id && params.extension_name) {
-              return errorResponse(
-                "Error: Cannot specify both extension_id and extension_name.",
-              );
-            }
-
             const createParams: BrowserCreateParams = {};
             if (params.headless !== undefined)
               createParams.headless = params.headless;
@@ -391,69 +347,42 @@ export function registerBrowserCapabilities(server: McpServer) {
               createParams.timeout_seconds = params.timeout_seconds;
             if (params.kiosk_mode !== undefined)
               createParams.kiosk_mode = params.kiosk_mode;
-            if (params.start_url) createParams.start_url = params.start_url;
-            if (params.chrome_policy)
+            if (
+              params.chrome_policy &&
+              Object.keys(params.chrome_policy).length > 0
+            ) {
               createParams.chrome_policy = params.chrome_policy;
-            if (params.proxy_id) createParams.proxy_id = params.proxy_id;
-            const profile = buildProfile(params);
-            if (profile) createParams.profile = profile;
-            const viewport = buildViewportBase(params);
-            if (viewport) createParams.viewport = viewport;
-            const telemetry = buildTelemetry(params);
-            if (telemetry !== undefined) createParams.telemetry = telemetry;
-            if (params.extension_id || params.extension_name) {
-              createParams.extensions = [
-                {
-                  ...(params.extension_id && { id: params.extension_id }),
-                  ...(params.extension_name && { name: params.extension_name }),
-                },
-              ];
             }
+            if (params.proxy_id) createParams.proxy_id = params.proxy_id;
+            const browserConfig = buildBrowserCreateConfig(params);
+            if (!browserConfig.ok) return errorResponse(browserConfig.error);
+            Object.assign(createParams, browserConfig.value);
+            const telemetry = buildTelemetry(params);
+            if (!telemetry.ok) return errorResponse(telemetry.error);
+            if (telemetry.value !== undefined)
+              createParams.telemetry = telemetry.value;
 
             const browser = await client.browsers.create(createParams);
             if (!browser)
               return errorResponse("Failed to create browser session");
 
-            let responseText = JSON.stringify(browser, null, 2);
-            if (params.local_forward || params.remote_forward) {
-              const sshParts = ["kernel browsers ssh", browser.session_id];
-              if (params.local_forward)
-                sshParts.push(`-L ${params.local_forward}`);
-              if (params.remote_forward)
-                sshParts.push(`-R ${params.remote_forward}`);
-              const sshCommand = sshParts.join(" ");
-
-              const remotePort = params.remote_forward
-                ? params.remote_forward.split(":")[0]
-                : null;
-              const localPort = params.local_forward
-                ? params.local_forward.split(":")[0]
-                : null;
-
-              responseText += `\n\n## SSH Port Forwarding\n\nRun this command in a terminal:\n\n\`\`\`bash\n${sshCommand}\n\`\`\`\n\nPrerequisites: [Kernel CLI](https://kernel.sh/docs/reference/cli) and [websocat](https://github.com/vi/websocat) (\`brew install websocat\` on macOS).`;
-
-              if (remotePort) {
-                responseText += `\n\nThis forwards the user's local port to port ${remotePort} inside the browser VM. Once the user has the tunnel running, use execute_playwright_code to navigate the browser to http://localhost:${remotePort}`;
-              }
-
-              if (localPort) {
-                responseText += `\n\nThis forwards port ${localPort} from the browser VM to the user's local machine. Once the user has the tunnel running, services inside the VM are accessible locally at localhost:${localPort}`;
-              }
-
-              responseText += `\n\nNote: SSH connections alone don't count as browser activity. Set an appropriate timeout or keep the live view open to prevent cleanup.`;
-            }
-            return textResponse(responseText);
+            const sshPortForwarding = buildSshPortForwardingInfo(
+              params,
+              browser.session_id,
+            );
+            return jsonResponse({
+              browser,
+              next_actions: browserSessionNextActions(browser.session_id),
+              ...(sshPortForwarding && {
+                ssh_port_forwarding: sshPortForwarding,
+              }),
+            });
           }
           case "update": {
             if (!params.session_id)
               return errorResponse(
                 "Error: session_id is required for update action.",
               );
-            if (params.profile_name && params.profile_id) {
-              return errorResponse(
-                "Error: Cannot specify both profile_name and profile_id.",
-              );
-            }
             if (params.proxy_id && params.clear_proxy) {
               return errorResponse(
                 "Error: Cannot specify both proxy_id and clear_proxy.",
@@ -469,12 +398,13 @@ export function registerBrowserCapabilities(server: McpServer) {
             } else if (params.proxy_id !== undefined) {
               updateParams.proxy_id = params.proxy_id;
             }
-            const profile = buildProfile(params);
-            if (profile) updateParams.profile = profile;
-            const viewport = buildUpdateViewport(params);
-            if (viewport) updateParams.viewport = viewport;
+            const browserConfig = buildBrowserUpdateConfig(params);
+            if (!browserConfig.ok) return errorResponse(browserConfig.error);
+            Object.assign(updateParams, browserConfig.value);
             const telemetry = buildTelemetry(params);
-            if (telemetry !== undefined) updateParams.telemetry = telemetry;
+            if (!telemetry.ok) return errorResponse(telemetry.error);
+            if (telemetry.value !== undefined)
+              updateParams.telemetry = telemetry.value;
 
             if (Object.keys(updateParams).length === 0) {
               return errorResponse(
@@ -488,7 +418,10 @@ export function registerBrowserCapabilities(server: McpServer) {
             );
             if (!browser)
               return errorResponse("Failed to update browser session");
-            return textResponse(JSON.stringify(browser, null, 2));
+            return jsonResponse({
+              browser,
+              next_actions: browserSessionNextActions(browser.session_id),
+            });
           }
           case "list": {
             const page = await client.browsers.list({
@@ -496,22 +429,10 @@ export function registerBrowserCapabilities(server: McpServer) {
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
-            const items = page
-              .getPaginatedItems()
-              .map((b) => ({ ...b, cdp_ws_url: undefined }));
-            return textResponse(
-              items.length > 0
-                ? JSON.stringify(
-                    {
-                      items,
-                      has_more: page.has_more,
-                      next_offset: page.next_offset,
-                    },
-                    null,
-                    2,
-                  )
-                : "No browsers found",
-            );
+            return paginatedJsonResponse(page, {
+              mapItem: ({ cdp_ws_url: _cdpWsUrl, ...browser }) => browser,
+              note: 'Use action "get" with session_id for full browser details.',
+            });
           }
           case "get": {
             if (!params.session_id)
@@ -523,7 +444,7 @@ export function registerBrowserCapabilities(server: McpServer) {
               return errorResponse(
                 `Browser session "${params.session_id}" not found`,
               );
-            return textResponse(JSON.stringify(browser, null, 2));
+            return jsonResponse(browser);
           }
           case "delete": {
             if (!params.session_id)

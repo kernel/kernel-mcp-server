@@ -4,15 +4,16 @@ export const paginationParams = {
   limit: z
     .number()
     .int()
+    .min(1)
+    .max(100)
     .describe(
-      "(list) Max results per page. Defaults to 20; API clamps to 1-100.",
+      "(list) Max results per page. Must be 1-100; API default varies by endpoint.",
     )
     .optional(),
   offset: z
     .number()
     .int()
-    .describe(
-      "(list) Pagination offset. Defaults to 0; API clamps negatives to 0.",
-    )
+    .min(0)
+    .describe("(list) Pagination offset. Must be 0 or greater.")
     .optional(),
 };

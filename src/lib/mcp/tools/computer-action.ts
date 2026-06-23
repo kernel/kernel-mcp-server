@@ -1,7 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
-import { errorResponse, jsonResponse, textResponse } from "@/lib/mcp/responses";
+import {
+  errorResponse,
+  jsonResponse,
+  textResponse,
+  toolErrorResponse,
+} from "@/lib/mcp/responses";
 
 type ComputerClient = KernelClient["browsers"]["computer"];
 type ComputerBatchAction = Parameters<
@@ -31,7 +36,7 @@ const computerActionSchema = z.object({
       y: z.number(),
       button: z.enum(["left", "right", "middle"]).optional(),
       click_type: z.enum(["down", "up", "click"]).optional(),
-      num_clicks: z.number().optional(),
+      num_clicks: z.number().int().min(1).optional(),
       hold_keys: z.array(z.string()).optional(),
     })
     .describe("Params for click_mouse action.")
@@ -47,7 +52,7 @@ const computerActionSchema = z.object({
   type_text: z
     .object({
       text: z.string(),
-      delay: z.number().optional(),
+      delay: z.number().int().min(0).optional(),
     })
     .describe("Params for type_text action.")
     .optional(),
@@ -56,7 +61,7 @@ const computerActionSchema = z.object({
       keys: z
         .array(z.string())
         .describe('X11 keysym names or combos like "Ctrl+t", "Return".'),
-      duration: z.number().optional(),
+      duration: z.number().int().min(0).optional(),
       hold_keys: z.array(z.string()).optional(),
     })
     .describe("Params for press_key action.")
@@ -77,9 +82,9 @@ const computerActionSchema = z.object({
         .array(z.array(z.number()))
         .describe("Ordered [x,y] pairs, at least 2 points."),
       button: z.enum(["left", "middle", "right"]).optional(),
-      delay: z.number().optional(),
-      steps_per_segment: z.number().optional(),
-      step_delay_ms: z.number().optional(),
+      delay: z.number().int().min(0).optional(),
+      steps_per_segment: z.number().int().min(1).optional(),
+      step_delay_ms: z.number().int().min(0).optional(),
       hold_keys: z.array(z.string()).optional(),
     })
     .describe("Params for drag_mouse action.")
@@ -92,7 +97,7 @@ const computerActionSchema = z.object({
     .optional(),
   sleep: z
     .object({
-      duration_ms: z.number(),
+      duration_ms: z.number().int().min(0),
     })
     .describe("Params for sleep action.")
     .optional(),
@@ -108,8 +113,8 @@ const computerActionSchema = z.object({
         .object({
           x: z.number(),
           y: z.number(),
-          width: z.number(),
-          height: z.number(),
+          width: z.number().int().min(1),
+          height: z.number().int().min(1),
         })
         .optional(),
     })
@@ -245,11 +250,12 @@ export function registerComputerActionTool(server: McpServer) {
   // computer_action -- Execute one or more computer actions on a browser session
   server.tool(
     "computer_action",
-    "Execute computer actions on a browser session. Pass a single action for simple operations (e.g. one click or one screenshot), or pass multiple actions to batch them into a single request for lower latency (e.g. click, type, press_key in one call). Use sleep actions between steps when the page needs time to react (e.g. after a click that triggers navigation or animation). IMPORTANT: Always include a screenshot as the last action so you can see the result of your actions. Action types: click_mouse, move_mouse, type_text, press_key, scroll, drag_mouse, set_cursor, sleep, write_clipboard, read_clipboard, screenshot, get_mouse_position. screenshot, get_mouse_position, and read_clipboard return data, so they must be the last action if included.",
+    "Execute computer actions on a browser session. Pass a single action for simple operations (e.g. one click or one screenshot), or pass multiple actions to batch them into a single request for lower latency (e.g. click, type, press_key in one call). Use sleep actions between steps when the page needs time to react (e.g. after a click that triggers navigation or animation). IMPORTANT: Always include a screenshot as the last action so you can see the result of your actions. Action types: click_mouse, move_mouse, type_text, press_key, scroll, drag_mouse, set_cursor, sleep, write_clipboard, read_clipboard, screenshot, get_mouse_position. screenshot, read_clipboard, and get_mouse_position return data, so they must be the last action if included.",
     {
       session_id: z.string().describe("Browser session ID."),
       actions: z
         .array(computerActionSchema)
+        .min(1)
         .describe(
           "Ordered list of actions. Use one action for simple operations or multiple for batched sequences.",
         ),
@@ -347,9 +353,7 @@ export function registerComputerActionTool(server: McpServer) {
           `Executed ${executedActionCount} action(s) successfully`,
         );
       } catch (error) {
-        return errorResponse(
-          `Error in computer_action: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        return toolErrorResponse("computer_action", "actions", error);
       }
     },
   );

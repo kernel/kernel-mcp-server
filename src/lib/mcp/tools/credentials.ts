@@ -116,7 +116,8 @@ export function registerCredentialTools(server: McpServer) {
                 totp_secret: params.totp_secret,
               }),
             });
-            if (!credential) return errorResponse("Failed to create credential");
+            if (!credential)
+              return errorResponse("Failed to create credential");
             return jsonResponse(credential);
           }
           case "update": {

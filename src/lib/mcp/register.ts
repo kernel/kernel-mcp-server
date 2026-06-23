@@ -48,6 +48,7 @@ const standaloneToolsetAliases: Partial<Record<string, McpToolset>> = {
   search_docs: "docs",
   execute_playwright_code: "playwright",
   exec_command: "shell",
+  browser_utilities: "browser_curl",
 };
 
 function isMcpToolset(value: string): value is McpToolset {
