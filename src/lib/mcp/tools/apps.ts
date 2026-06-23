@@ -102,6 +102,13 @@ export function registerAppCapabilities(server: McpServer) {
         .describe("(list_apps, list_deployments) Pagination offset. Default 0.")
         .optional(),
     },
+    {
+      title: "Manage Kernel apps and invocations",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);

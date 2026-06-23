@@ -254,6 +254,13 @@ export function registerComputerActionTool(server: McpServer) {
           "Ordered list of actions. Use one action for simple operations or multiple for batched sequences.",
         ),
     },
+    {
+      title: "Control browser (mouse, keyboard, screenshot)",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     async ({ session_id, actions }, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);

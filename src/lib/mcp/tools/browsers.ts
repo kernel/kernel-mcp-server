@@ -356,6 +356,13 @@ export function registerBrowserCapabilities(server: McpServer) {
         )
         .optional(),
     },
+    {
+      title: "Manage Kernel browser sessions",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);
