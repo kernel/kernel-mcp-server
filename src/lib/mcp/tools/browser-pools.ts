@@ -336,6 +336,13 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
         .describe("(release) Reuse browser instance or recreate. Default true.")
         .optional(),
     },
+    {
+      title: "Manage Kernel browser pools",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);

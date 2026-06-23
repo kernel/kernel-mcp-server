@@ -19,6 +19,13 @@ export function registerDocsTools(server: McpServer) {
           'Natural language search query (e.g., "how to deploy an app", "browser automation examples").',
         ),
     },
+    {
+      title: "Search Kernel documentation",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
     async ({ query }, extra) => {
       if (
         !process.env.MINTLIFY_ASSISTANT_API_TOKEN ||

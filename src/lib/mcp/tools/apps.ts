@@ -86,6 +86,13 @@ export function registerAppCapabilities(server: McpServer) {
         .optional(),
       ...paginationParams,
     },
+    {
+      title: "Manage Kernel apps and invocations",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);
