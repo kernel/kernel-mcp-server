@@ -25,6 +25,13 @@ export function registerShellTool(server: McpServer) {
         .optional(),
       as_root: z.boolean().describe("Run with root privileges.").optional(),
     },
+    {
+      title: "Run shell command in browser VM",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     async ({ session_id, command, args, cwd, timeout_sec, as_root }, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);

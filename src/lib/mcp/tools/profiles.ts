@@ -89,6 +89,13 @@ export function registerProfileCapabilities(server: McpServer) {
         .optional(),
       ...paginationParams,
     },
+    {
+      title: "Manage Kernel browser profiles",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);

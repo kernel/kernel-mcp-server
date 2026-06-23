@@ -20,6 +20,13 @@ export function registerExtensionTools(server: McpServer) {
         .describe("(delete) Extension ID or name to delete.")
         .optional(),
     },
+    {
+      title: "Manage Kernel browser extensions",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);

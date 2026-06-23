@@ -59,7 +59,7 @@ function buildPoolConfigParams(
       ...(params.timeout_seconds !== undefined && {
         timeout_seconds: params.timeout_seconds,
       }),
-      ...(params.proxy_id !== undefined && { proxy_id: params.proxy_id }),
+      ...(params.proxy_id && { proxy_id: params.proxy_id }),
       ...(params.fill_rate_per_minute !== undefined && {
         fill_rate_per_minute: params.fill_rate_per_minute,
       }),
@@ -255,8 +255,11 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
         .string()
         .describe("(create, update) Proxy for pool browsers.")
         .optional(),
+      // Percentage rate, not a count — the API accepts fractional values, so
+      // intentionally no .int() (unlike the size/timeout count fields).
       fill_rate_per_minute: z
         .number()
+        .min(0)
         .describe(
           "(create, update) Pool fill rate percentage per minute. Default 10%.",
         )
@@ -332,6 +335,13 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
         .boolean()
         .describe("(release) Reuse browser instance or recreate. Default true.")
         .optional(),
+    },
+    {
+      title: "Manage Kernel browser pools",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
@@ -430,11 +440,14 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
             );
             if (!browser)
               return errorResponse("Failed to acquire browser from pool");
+            // Prefer the stable pool id for the release hint (acquire may have
+            // been called by name); fall back to the caller's identifier.
+            const poolId = browser.pool?.id ?? params.id_or_name;
             return jsonResponse({
               browser: summarizeAcquiredBrowser(browser),
               next_actions: [
                 `Use computer_action with session_id "${browser.session_id}" to control this browser.`,
-                `When finished, use manage_browser_pools with action "release", id_or_name "${params.id_or_name}", and session_id "${browser.session_id}".`,
+                `When finished, use manage_browser_pools with action "release", id_or_name "${poolId}", and session_id "${browser.session_id}".`,
                 `Use manage_browsers with action "get" and session_id "${browser.session_id}" for full browser details.`,
               ],
             });

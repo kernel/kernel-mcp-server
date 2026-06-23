@@ -6,7 +6,6 @@ import {
   errorResponse,
   jsonResponse,
   paginatedJsonResponse,
-  textResponse,
   toolErrorResponse,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
@@ -88,6 +87,13 @@ export function registerAppCapabilities(server: McpServer) {
         .describe("(get_invocation) Invocation ID to retrieve.")
         .optional(),
       ...paginationParams,
+    },
+    {
+      title: "Manage Kernel apps and invocations",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");

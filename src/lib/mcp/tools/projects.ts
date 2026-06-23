@@ -73,6 +73,13 @@ export function registerProjectCapabilities(server: McpServer) {
         )
         .optional(),
     },
+    {
+      title: "Manage Kernel projects",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);

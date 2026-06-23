@@ -78,6 +78,13 @@ export function registerProxyTools(server: McpServer) {
         .describe("(create, custom type) Auth password.")
         .optional(),
     },
+    {
+      title: "Manage Kernel proxy configurations",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);
