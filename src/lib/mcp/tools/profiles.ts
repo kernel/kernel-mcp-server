@@ -5,6 +5,7 @@ import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
 import {
   errorResponse,
   itemsJsonResponse,
+  jsonResponse,
   paginatedJsonResponse,
   textResponse,
   toolErrorResponse,
@@ -24,12 +25,15 @@ async function listProfiles(client: KernelClient, query?: ProfileListParams) {
   return profiles;
 }
 
-function fullProfileListResponse(profiles: Profile[]) {
+function fullProfileListResponse(profiles: Profile[], query?: string) {
   return itemsJsonResponse(profiles, {
     has_more: false,
     next_offset: null,
-    emptyText:
-      "No profiles found. Use manage_profiles with action 'setup' to create one.",
+    // A search that matches nothing shouldn't claim the inventory is empty or
+    // suggest setup — other profiles may exist that just don't match the query.
+    emptyText: query
+      ? `No profiles match "${query}".`
+      : "No profiles found. Use manage_profiles with action 'setup' to create one.",
   });
 }
 
@@ -65,20 +69,18 @@ export function registerProfileCapabilities(server: McpServer) {
 
   server.tool(
     "manage_profiles",
-    'Manage browser profiles when an agent needs persistent cookies, login state, or reusable browser state. Use "setup" for a guided login session, "list" to find a profile, and "delete" only when a profile should be removed.',
+    'Manage browser profiles when an agent needs persistent cookies, login state, or reusable browser state. Use "setup" for a guided login session, "list" to find a profile, "get" to retrieve one, and "delete" only when a profile should be removed.',
     {
       action: z
-        .enum(["setup", "list", "delete"])
+        .enum(["setup", "list", "get", "delete"])
         .describe("Operation to perform."),
       profile_name: z
         .string()
-        .describe(
-          "(setup, delete) Profile name. For setup: 1-255 chars. For delete: name of profile to remove.",
-        )
+        .describe("(setup, get, delete) Profile name. For setup: 1-255 chars.")
         .optional(),
       profile_id: z
         .string()
-        .describe("(delete) Profile ID to delete. Alternative to profile_name.")
+        .describe("(get, delete) Profile ID. Alternative to profile_name.")
         .optional(),
       update_existing: z
         .boolean()
@@ -108,6 +110,9 @@ export function registerProfileCapabilities(server: McpServer) {
               return errorResponse(
                 "Error: profile_name is required for setup.",
               );
+            // Scan all profiles for an exact name match: the list `query` is a
+            // search and may not reliably return an exact-named profile, which
+            // would let setup create a duplicate.
             const existingProfiles = await listProfiles(client);
             const existingProfile = existingProfiles?.find(
               (p) => p.name === params.profile_name,
@@ -153,7 +158,7 @@ export function registerProfileCapabilities(server: McpServer) {
                 client,
                 params.query ? { query: params.query } : undefined,
               );
-              return fullProfileListResponse(profiles);
+              return fullProfileListResponse(profiles, params.query);
             }
 
             const page = await client.profiles.list({
@@ -161,7 +166,35 @@ export function registerProfileCapabilities(server: McpServer) {
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             } satisfies ProfileListParams);
-            return paginatedJsonResponse(page);
+            // On the first page of a search with no results, note the empty
+            // match so agents can tell a failed search from an empty org. Skip
+            // it past offset 0, where an empty page may just be beyond the
+            // matches rather than a true miss.
+            const emptySearch =
+              params.query &&
+              !params.offset &&
+              page.getPaginatedItems().length === 0;
+            return paginatedJsonResponse(
+              page,
+              emptySearch
+                ? { note: `No profiles match "${params.query}".` }
+                : {},
+            );
+          }
+          case "get": {
+            if (params.profile_name && params.profile_id) {
+              return errorResponse(
+                "Error: Cannot specify both profile_name and profile_id.",
+              );
+            }
+            const identifier = params.profile_name || params.profile_id;
+            if (!identifier) {
+              return errorResponse(
+                "Error: profile_name or profile_id is required for get.",
+              );
+            }
+            const profile = await client.profiles.retrieve(identifier);
+            return jsonResponse(profile);
           }
           case "delete": {
             if (params.profile_name && params.profile_id) {

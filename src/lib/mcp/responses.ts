@@ -29,15 +29,17 @@ export function itemsJsonResponse<T, U = T>(
   items: T[],
   options: ItemsJsonResponseOptions<T, U> = {},
 ) {
-  if (items.length === 0 && options.emptyText) {
-    return textResponse(options.emptyText);
-  }
+  // Keep the response shape uniform JSON for every list outcome. When empty,
+  // surface emptyText as a `note` (e.g. setup guidance) rather than swapping to
+  // a plain-text body, so agents always get { items, has_more, next_offset }.
+  const note =
+    items.length === 0 ? (options.emptyText ?? options.note) : options.note;
 
   return jsonResponse({
     items: options.mapItem ? items.map(options.mapItem) : items,
     has_more: options.has_more,
     next_offset: options.next_offset,
-    ...(options.note && { note: options.note }),
+    ...(note && { note }),
   });
 }
 
