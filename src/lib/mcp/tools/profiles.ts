@@ -25,12 +25,15 @@ async function listProfiles(client: KernelClient, query?: ProfileListParams) {
   return profiles;
 }
 
-function fullProfileListResponse(profiles: Profile[]) {
+function fullProfileListResponse(profiles: Profile[], query?: string) {
   return itemsJsonResponse(profiles, {
     has_more: false,
     next_offset: null,
-    emptyText:
-      "No profiles found. Use manage_profiles with action 'setup' to create one.",
+    // A search that matches nothing shouldn't claim the inventory is empty or
+    // suggest setup — other profiles may exist that just don't match the query.
+    emptyText: query
+      ? `No profiles match "${query}".`
+      : "No profiles found. Use manage_profiles with action 'setup' to create one.",
   });
 }
 
@@ -155,7 +158,7 @@ export function registerProfileCapabilities(server: McpServer) {
                 client,
                 params.query ? { query: params.query } : undefined,
               );
-              return fullProfileListResponse(profiles);
+              return fullProfileListResponse(profiles, params.query);
             }
 
             const page = await client.profiles.list({
