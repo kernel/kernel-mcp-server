@@ -166,7 +166,20 @@ export function registerProfileCapabilities(server: McpServer) {
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             } satisfies ProfileListParams);
-            return paginatedJsonResponse(page);
+            // On the first page of a search with no results, note the empty
+            // match so agents can tell a failed search from an empty org. Skip
+            // it past offset 0, where an empty page may just be beyond the
+            // matches rather than a true miss.
+            const emptySearch =
+              params.query &&
+              !params.offset &&
+              page.getPaginatedItems().length === 0;
+            return paginatedJsonResponse(
+              page,
+              emptySearch
+                ? { note: `No profiles match "${params.query}".` }
+                : {},
+            );
           }
           case "get": {
             if (params.profile_name && params.profile_id) {
