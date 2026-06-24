@@ -49,7 +49,6 @@ export function registerProjectCapabilities(server: McpServer) {
         .number()
         .int()
         .min(0)
-        .nullable()
         .describe(
           "(update_limits) Maximum concurrent app invocations for this project. Set 0 to remove the cap.",
         )
@@ -58,7 +57,6 @@ export function registerProjectCapabilities(server: McpServer) {
         .number()
         .int()
         .min(0)
-        .nullable()
         .describe(
           "(update_limits) Maximum concurrent browser sessions for this project. Set 0 to remove the cap.",
         )
@@ -67,7 +65,6 @@ export function registerProjectCapabilities(server: McpServer) {
         .number()
         .int()
         .min(0)
-        .nullable()
         .describe(
           "(update_limits) Maximum pooled sessions capacity for this project. Set 0 to remove the cap.",
         )
