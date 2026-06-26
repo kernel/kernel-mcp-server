@@ -8,6 +8,7 @@ import {
   textResponse,
   toolErrorResponse,
 } from "@/lib/mcp/responses";
+import { paginationParams } from "@/lib/mcp/schemas";
 
 const httpUrlSchema = z
   .string()
@@ -77,6 +78,7 @@ export function registerProxyTools(server: McpServer) {
         .string()
         .describe("(create, custom type) Auth password.")
         .optional(),
+      ...paginationParams,
     },
     {
       title: "Manage Kernel proxy configurations",
@@ -134,7 +136,10 @@ export function registerProxyTools(server: McpServer) {
             return jsonResponse(proxy);
           }
           case "list": {
-            const page = await client.proxies.list();
+            const page = await client.proxies.list({
+              ...(params.limit !== undefined && { limit: params.limit }),
+              ...(params.offset !== undefined && { offset: params.offset }),
+            });
             return itemsJsonResponse(page?.items ?? [], {
               has_more: page?.has_more ?? false,
               next_offset: page?.next_offset ?? null,
