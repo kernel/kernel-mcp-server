@@ -34,10 +34,10 @@ export function registerExtensionTools(server: McpServer) {
       try {
         switch (params.action) {
           case "list": {
-            const extensions = await client.extensions.list();
-            return itemsJsonResponse(extensions ?? [], {
-              has_more: false,
-              next_offset: null,
+            const page = await client.extensions.list();
+            return itemsJsonResponse(page?.items ?? [], {
+              has_more: page?.has_more ?? false,
+              next_offset: page?.next_offset ?? null,
               emptyText: "No extensions found",
             });
           }

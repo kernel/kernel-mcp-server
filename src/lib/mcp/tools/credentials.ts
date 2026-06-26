@@ -37,7 +37,7 @@ export function registerCredentialTools(server: McpServer) {
         )
         .optional(),
       values: z
-        .record(z.string())
+        .record(z.string(), z.string())
         .describe(
           "(create, update) Field name to value mapping (e.g. username, password). On update, merged with existing values.",
         )

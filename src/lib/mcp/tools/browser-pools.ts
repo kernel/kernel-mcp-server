@@ -27,7 +27,10 @@ type BrowserPoolAcquireResponse = Awaited<
   ReturnType<KernelClient["browserPools"]["acquire"]>
 >;
 
-type PoolConfigParams = BrowserCreateConfigParams & {
+type PoolConfigParams = Omit<
+  BrowserCreateConfigParams,
+  "save_profile_changes"
+> & {
   size?: number;
   name?: string;
   headless?: boolean;
@@ -159,14 +162,14 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
     }
 
     const client = createKernelClient(extra.authInfo.token);
-    const pools = await client.browserPools.list();
+    const pools = (await client.browserPools.list())?.items ?? [];
     return {
       contents: [
         {
           uri: uri.toString(),
           mimeType: "application/json",
           text:
-            pools && pools.length > 0
+            pools.length > 0
               ? JSON.stringify(pools.map(summarizeBrowserPool), null, 2)
               : "No browser pools found",
         },
@@ -243,12 +246,6 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
         .string()
         .describe(
           "(create, update) Profile ID to load into pool browsers. Cannot use with profile_name.",
-        )
-        .optional(),
-      save_profile_changes: z
-        .boolean()
-        .describe(
-          "(create, update) Save browser changes back to the selected profile when sessions end.",
         )
         .optional(),
       proxy_id: z
@@ -391,7 +388,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
             });
           }
           case "list": {
-            const pools = (await client.browserPools.list()) ?? [];
+            const pools = (await client.browserPools.list())?.items ?? [];
             return pools.length > 0
               ? jsonResponse({
                   items: pools.map(summarizeBrowserPool),

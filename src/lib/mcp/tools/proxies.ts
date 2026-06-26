@@ -134,10 +134,10 @@ export function registerProxyTools(server: McpServer) {
             return jsonResponse(proxy);
           }
           case "list": {
-            const proxies = await client.proxies.list();
-            return itemsJsonResponse(proxies ?? [], {
-              has_more: false,
-              next_offset: null,
+            const page = await client.proxies.list();
+            return itemsJsonResponse(page?.items ?? [], {
+              has_more: page?.has_more ?? false,
+              next_offset: page?.next_offset ?? null,
               emptyText: "No proxies found",
             });
           }
