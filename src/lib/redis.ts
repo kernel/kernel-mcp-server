@@ -9,9 +9,22 @@ if (redisTlsServerName && parsedRedisUrl?.protocol !== "rediss:") {
   throw new Error("REDIS_TLS_SERVER_NAME requires REDIS_URL to use rediss://");
 }
 
-// Modest backoff to smooth over first-hit cold connections
-const reconnectStrategy = (retries: number) =>
-  Math.min(500 + retries * 100, 2000);
+// Upper bound on connecting and on any single command, so an unreachable Redis
+// surfaces as an error instead of blocking the caller (e.g. OAuth token exchange).
+const CONNECT_TIMEOUT_MS = 5000;
+const COMMAND_TIMEOUT_MS = 5000;
+
+// Modest backoff to smooth over first-hit cold connections, but give up after a
+// bounded number of attempts rather than retrying forever while Redis is down.
+const MAX_RECONNECT_ATTEMPTS = 10;
+const reconnectStrategy = (retries: number) => {
+  if (retries > MAX_RECONNECT_ATTEMPTS) {
+    return new Error(
+      `Redis unavailable after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts`,
+    );
+  }
+  return Math.min(500 + retries * 100, 2000);
+};
 
 // Connect on first use
 let isConnected = false;
@@ -24,9 +37,11 @@ const client = createClient({
         host: parsedRedisUrl!.hostname,
         tls: true,
         servername: redisTlsServerName,
+        connectTimeout: CONNECT_TIMEOUT_MS,
         reconnectStrategy,
       }
     : {
+        connectTimeout: CONNECT_TIMEOUT_MS,
         reconnectStrategy,
       },
 });
@@ -179,14 +194,32 @@ function isTransientSocketError(error: unknown): boolean {
   );
 }
 
+async function withTimeout<T>(operation: () => Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new Error(`Redis command timed out after ${COMMAND_TIMEOUT_MS}ms`),
+        ),
+      COMMAND_TIMEOUT_MS,
+    );
+  });
+  try {
+    return await Promise.race([operation(), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function withReconnect<T>(operation: () => Promise<T>): Promise<T> {
   try {
-    return await operation();
+    return await withTimeout(operation);
   } catch (err) {
     if (isTransientSocketError(err)) {
       isConnected = false;
       await ensureConnected();
-      return await operation();
+      return await withTimeout(operation);
     }
     throw err;
   }
