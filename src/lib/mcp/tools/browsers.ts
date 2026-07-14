@@ -15,11 +15,18 @@ import {
   toolErrorResponse,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
+import {
+  TELEMETRY_EVENT_CATALOG,
+  telemetryEventCategories,
+} from "@/lib/mcp/telemetry";
 
 type BrowserCreateParams = NonNullable<
   Parameters<KernelClient["browsers"]["create"]>[0]
 >;
 type BrowserUpdateParams = Parameters<KernelClient["browsers"]["update"]>[1];
+type TelemetryEventsQuery = NonNullable<
+  Parameters<KernelClient["browsers"]["telemetry"]["events"]>[1]
+>;
 
 type TelemetryParams = {
   telemetry_enabled?: boolean;
@@ -76,6 +83,42 @@ function buildTelemetry(
       }),
       ...(hasBrowserCategories && { browser }),
     },
+  };
+}
+
+type TelemetryEnvelope = Awaited<
+  ReturnType<KernelClient["browsers"]["telemetry"]["events"]>
+>["items"][number];
+
+// Payload fields that can carry kilobytes per event (response bodies, header
+// maps). Dropped so a full page of events fits in an agent context window;
+// omitted_fields tells the agent what to fetch via the API/CLI if needed.
+const bulkyTelemetryDataFields = ["body", "headers", "post_data"] as const;
+
+function compactTelemetryEvent({ seq, event }: TelemetryEnvelope) {
+  const { ts, category, type, truncated } = event;
+  const data = "data" in event ? event.data : undefined;
+
+  let compactData: Record<string, unknown> | undefined;
+  let omittedFields: string[] | undefined;
+  if (data) {
+    compactData = { ...(data as Record<string, unknown>) };
+    for (const field of bulkyTelemetryDataFields) {
+      if (compactData[field] !== undefined) {
+        delete compactData[field];
+        (omittedFields ??= []).push(field);
+      }
+    }
+  }
+
+  return {
+    seq,
+    time: new Date(ts / 1000).toISOString(),
+    category,
+    type,
+    ...(compactData && { data: compactData }),
+    ...(truncated && { truncated }),
+    ...(omittedFields && { omitted_fields: omittedFields }),
   };
 }
 
@@ -299,21 +342,25 @@ export function registerBrowserCapabilities(server: McpServer) {
       telemetry_enabled: z
         .boolean()
         .describe(
-          "(create, update) Enable telemetry with VM defaults, or disable telemetry when false.",
+          "(create, update) Enable telemetry, or disable telemetry when false. Telemetry is off unless requested. The default category set is the lightweight operational bundle (control, connection, system, captcha) and does NOT include console, network, or page — enable those explicitly when you intend to debug page behavior.",
         )
         .optional(),
       telemetry_console: z
         .boolean()
-        .describe("(create, update) Enable or disable console telemetry.")
+        .describe(
+          "(create, update) Enable or disable console telemetry (console output and uncaught exceptions). Off by default; enable for debugging.",
+        )
         .optional(),
       telemetry_network: z
         .boolean()
-        .describe("(create, update) Enable or disable network telemetry.")
+        .describe(
+          "(create, update) Enable or disable network telemetry (request/response metadata). Off by default; enable for debugging.",
+        )
         .optional(),
       telemetry_page: z
         .boolean()
         .describe(
-          "(create, update) Enable or disable page lifecycle telemetry.",
+          "(create, update) Enable or disable page lifecycle telemetry (navigation, load, layout shifts, LCP). Off by default; enable for debugging.",
         )
         .optional(),
       telemetry_interaction: z
@@ -457,6 +504,132 @@ export function registerBrowserCapabilities(server: McpServer) {
         }
       } catch (error) {
         return toolErrorResponse("manage_browsers", params.action, error);
+      }
+    },
+  );
+
+  // get_browser_telemetry -- Read archived telemetry events for a session
+  server.tool(
+    "get_browser_telemetry",
+    `Read archived telemetry events for a browser session. Works while the session is active and after it is deleted, including events captured before telemetry was disabled. If the response reports status "telemetry_currently_disabled", widen or remove filters before enabling telemetry and reproducing: update an active browser, or recreate one that has ended. Page through long sessions with offset/next_offset instead of raising limit. ${TELEMETRY_EVENT_CATALOG}`,
+    {
+      session_id: z.string().describe("Browser session ID."),
+      categories: z
+        .array(z.enum(telemetryEventCategories))
+        .min(1)
+        .describe(
+          "Restrict results to these event categories. The filter applies within each page, so a filtered page can be empty while has_more is true.",
+        )
+        .optional(),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .describe("Max events per page (1-100). Default 100.")
+        .optional(),
+      offset: z
+        .number()
+        .int()
+        .min(0)
+        .describe(
+          "Pagination cursor: pass next_offset from the previous response to fetch the next page. Opaque — do not derive it from event seq values.",
+        )
+        .optional(),
+      since: z
+        .string()
+        .describe(
+          "Start of the window: an RFC-3339 timestamp or a duration like '30m' meaning that long ago. Defaults to the session's creation time. Ignored when offset is set; cannot be combined with order=desc.",
+        )
+        .optional(),
+      until: z
+        .string()
+        .describe(
+          "End of the window (exclusive): an RFC-3339 timestamp or a duration like '5m'.",
+        )
+        .optional(),
+      order: z
+        .enum(["asc", "desc"])
+        .describe(
+          "Read direction. asc (default) reads oldest first starting from since; desc reads newest first — useful for inspecting the end of a session.",
+        )
+        .optional(),
+    },
+    {
+      title: "Read browser telemetry events",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    async (params, extra) => {
+      if (!extra.authInfo) throw new Error("Authentication required");
+      const client = createKernelClient(extra.authInfo.token);
+
+      // Best-effort lookup for the session's telemetry config and creation
+      // time; when it fails we still read events but skip disambiguation.
+      const fetchBrowser = () =>
+        client.browsers.retrieve(params.session_id).catch(() => null);
+
+      try {
+        const query: TelemetryEventsQuery = { limit: params.limit ?? 100 };
+        if (params.categories) query.category = params.categories;
+        if (params.offset !== undefined) query.offset = params.offset;
+        if (params.since !== undefined) query.since = params.since;
+        if (params.until !== undefined) query.until = params.until;
+        if (params.order !== undefined) query.order = params.order;
+
+        let browser: Awaited<ReturnType<typeof fetchBrowser>> = null;
+        if (
+          query.offset === undefined &&
+          query.since === undefined &&
+          query.order !== "desc"
+        ) {
+          // The API's since default is only 5m; cover the whole session.
+          browser = await fetchBrowser();
+          query.since = browser?.created_at ?? "1970-01-01T00:00:00Z";
+        }
+
+        const page = await client.browsers.telemetry.events(
+          params.session_id,
+          query,
+        );
+        const items = page.getPaginatedItems().map(compactTelemetryEvent);
+
+        let status: "ok" | "telemetry_currently_disabled" | "no_events" = "ok";
+        let note: string | undefined;
+        if (items.length === 0) {
+          if (page.has_more) {
+            note =
+              "This page had no matching events, but more are archived — continue paging with next_offset.";
+          } else {
+            browser ??= await fetchBrowser();
+            if (browser && !browser.telemetry) {
+              status = "telemetry_currently_disabled";
+              note =
+                "No archived events matched this window and filter, and telemetry is currently disabled. Widen since/until or drop the categories filter before reproducing: update this active browser with telemetry_enabled=true plus telemetry_console, telemetry_network, and telemetry_page.";
+            } else {
+              status = "no_events";
+              note = browser
+                ? "No archived events matched this window and filter. Widen since/until or drop the categories filter."
+                : "No archived events matched, and the session could not be fetched. Widen since/until or drop the categories filter; if the session has ended and telemetry was not enabled, recreate it with telemetry enabled (including console, network, and page) and reproduce the issue.";
+            }
+          }
+        }
+
+        // Compact serialization: a full page of events would waste a large
+        // share of its size on pretty-printing indentation.
+        return textResponse(
+          JSON.stringify({
+            status,
+            items,
+            has_more: page.has_more,
+            next_offset: page.next_offset,
+            ...(note && { note }),
+          }),
+        );
+      } catch (error) {
+        return toolErrorResponse("get_browser_telemetry", "events", error);
       }
     },
   );

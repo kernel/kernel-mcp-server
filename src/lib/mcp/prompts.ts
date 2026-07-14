@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { TELEMETRY_EVENT_CATALOG } from "@/lib/mcp/telemetry";
 
 export function registerKernelPrompts(server: McpServer) {
   // MCP Prompt explaining Kernel concepts
@@ -128,7 +129,23 @@ kernel browsers process --help
 kernel browsers playwright --help
 \`\`\`
 
-**MCP Exception:** The \`computer_action\` MCP tool with action "screenshot" is useful since it returns images directly to the agent.
+**MCP Exceptions:** The \`computer_action\` MCP tool with action "screenshot" is useful since it returns images directly to the agent, and \`get_browser_telemetry\` reads structured telemetry events (see below).
+
+---
+
+## Telemetry Events (structured signal — works even after the session is deleted)
+
+**Check telemetry first when it's available** — it's the fastest way to pinpoint failures.
+
+**Gotcha: telemetry is opt-in and must have been enabled when the relevant activity occurred.** Always try \`get_browser_telemetry\` first because archived events survive telemetry being disabled and the session being deleted. \`manage_browsers\` action "get" shows only the current telemetry config, so a null \`telemetry\` field means capture is off now, not that the archive is necessarily empty. The default bundle (control/connection/system/captcha) also omits the debug-critical categories. For an active browser, use \`manage_browsers\` action "update" to enable \`telemetry_console\`, \`telemetry_network\`, and \`telemetry_page\`, then reproduce the issue. Recreate the browser only if the original session has ended.
+
+**Flow:**
+1. \`get_browser_telemetry\` with session_id "${session_id}" — filter with categories ["console", "network", "page"] to cut noise, or order "desc" to inspect the end of the session
+2. Scan for \`console_error\`, \`network_loading_failed\`, \`network_response\` with non-2xx status, and \`captcha_*\` outcomes
+3. Correlate event timestamps with the failing automation step
+4. Page with \`next_offset\` while \`has_more\` is true
+
+${TELEMETRY_EVENT_CATALOG}
 
 ---
 
@@ -224,6 +241,7 @@ These are **normal** and don't indicate problems:
 ## Debugging Checklist
 
 - [ ] Session exists and is active
+- [ ] Telemetry events reviewed (if any were captured)
 - [ ] Screenshot shows expected content (or reveals error)
 - [ ] Current URL is as expected
 - [ ] Supervisor logs show all services running
@@ -237,11 +255,12 @@ These are **normal** and don't indicate problems:
 
 Based on your issue "${issue_description}", start with:
 
-1. **Get browser info** to confirm session is active
-2. **Take screenshot** to see current state
-3. **Check page URL** to see if on error page
-4. **Test network** if seeing connection errors
-5. **Review logs** for specific error patterns`;
+1. **Get browser info** to confirm session is active and check whether telemetry was enabled
+2. **Read telemetry events**; if needed, enable telemetry on an active session and reproduce
+3. **Take screenshot** to see current state
+4. **Check page URL** to see if on error page
+5. **Test network** if seeing connection errors
+6. **Review logs** for specific error patterns`;
 
       return {
         messages: [
