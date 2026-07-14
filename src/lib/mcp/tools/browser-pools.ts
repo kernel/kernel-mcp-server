@@ -402,6 +402,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
             return paginatedJsonResponse(page, {
               mapItem: summarizeBrowserPool,
               note: 'Use action "get" with id_or_name for full pool details.',
+              emptyText: "No browser pools found",
             });
           }
           case "get": {

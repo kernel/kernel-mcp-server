@@ -3,8 +3,8 @@ import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
   errorResponse,
-  itemsJsonResponse,
   jsonResponse,
+  paginatedJsonResponse,
   textResponse,
   toolErrorResponse,
 } from "@/lib/mcp/responses";
@@ -140,9 +140,7 @@ export function registerProxyTools(server: McpServer) {
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
-            return itemsJsonResponse(page.getPaginatedItems(), {
-              has_more: page.has_more,
-              next_offset: page.next_offset,
+            return paginatedJsonResponse(page, {
               emptyText: "No proxies found",
             });
           }
