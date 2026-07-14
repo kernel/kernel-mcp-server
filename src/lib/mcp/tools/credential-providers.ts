@@ -4,9 +4,11 @@ import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
   errorResponse,
   jsonResponse,
+  paginatedJsonResponse,
   textResponse,
   toolErrorResponse,
 } from "@/lib/mcp/responses";
+import { paginationParams } from "@/lib/mcp/schemas";
 
 export function registerCredentialProviderTools(server: McpServer) {
   // manage_credential_providers -- Manage external credential providers
@@ -31,6 +33,7 @@ export function registerCredentialProviderTools(server: McpServer) {
           "(get, update, delete, list_items, test) Credential provider ID.",
         )
         .optional(),
+      ...paginationParams,
       name: z
         .string()
         .describe("(create, update) Human-readable name (unique per org).")
@@ -80,8 +83,11 @@ export function registerCredentialProviderTools(server: McpServer) {
       try {
         switch (params.action) {
           case "list": {
-            const providers = await client.credentialProviders.list();
-            return jsonResponse(providers);
+            const page = await client.credentialProviders.list({
+              ...(params.limit !== undefined && { limit: params.limit }),
+              ...(params.offset !== undefined && { offset: params.offset }),
+            });
+            return paginatedJsonResponse(page);
           }
           case "get": {
             if (!params.id)
