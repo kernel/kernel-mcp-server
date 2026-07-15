@@ -96,7 +96,7 @@ type TelemetryEnvelope = Awaited<
 const bulkyTelemetryDataFields = ["body", "headers", "post_data"] as const;
 
 function compactTelemetryEvent({ seq, event }: TelemetryEnvelope) {
-  const { ts, category, type, truncated } = event;
+  const { ts, category, type, source, truncated } = event;
   const data = "data" in event ? event.data : undefined;
 
   let compactData: Record<string, unknown> | undefined;
@@ -113,9 +113,13 @@ function compactTelemetryEvent({ seq, event }: TelemetryEnvelope) {
 
   return {
     seq,
+    // Raw ts (Unix microseconds) is kept alongside the readable time so exact
+    // event boundaries can be fed back as since/until.
+    ts,
     time: new Date(ts / 1000).toISOString(),
     category,
     type,
+    source,
     ...(compactData && { data: compactData }),
     ...(truncated && { truncated }),
     ...(omittedFields && { omitted_fields: omittedFields }),
@@ -564,6 +568,11 @@ export function registerBrowserCapabilities(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
+      if (params.since !== undefined && params.order === "desc") {
+        return errorResponse(
+          "Error in get_browser_telemetry (events): since cannot be combined with order=desc. Use until to bound a newest-first read, or order=asc with since.",
+        );
+      }
       const client = createKernelClient(extra.authInfo.token);
 
       // Best-effort lookup for the session's telemetry config and creation
@@ -589,6 +598,14 @@ export function registerBrowserCapabilities(server: McpServer) {
           browser = await fetchBrowser();
           query.since = browser?.created_at ?? "1970-01-01T00:00:00Z";
         }
+        // When the read covers the whole session with no filters (asc from
+        // creation, or desc from the newest event), an empty result means the
+        // archive is empty — there is nothing to widen.
+        const fullSessionRead =
+          params.offset === undefined &&
+          params.since === undefined &&
+          params.until === undefined &&
+          params.categories === undefined;
 
         const page = await client.browsers.telemetry.events(
           params.session_id,
@@ -603,16 +620,18 @@ export function registerBrowserCapabilities(server: McpServer) {
             note =
               "This page had no matching events, but more are archived — continue paging with next_offset.";
           } else {
+            const emptyReason = fullSessionRead
+              ? "No telemetry events are archived for this session"
+              : "No archived events matched this window and filter — widen since/until or drop the categories filter";
             browser ??= await fetchBrowser();
             if (browser && !browser.telemetry) {
               status = "telemetry_currently_disabled";
-              note =
-                "No archived events matched this window and filter, and telemetry is currently disabled. Widen since/until or drop the categories filter before reproducing: update this active browser with telemetry_enabled=true plus telemetry_console, telemetry_network, and telemetry_page.";
+              note = `${emptyReason}. Telemetry is currently disabled: update this active browser with telemetry_enabled=true plus telemetry_console, telemetry_network, and telemetry_page, then reproduce the issue.`;
             } else {
               status = "no_events";
               note = browser
-                ? "No archived events matched this window and filter. Widen since/until or drop the categories filter."
-                : "No archived events matched, and the session could not be fetched. Widen since/until or drop the categories filter; if the session has ended and telemetry was not enabled, recreate it with telemetry enabled (including console, network, and page) and reproduce the issue.";
+                ? `${emptyReason}.`
+                : `${emptyReason}, and the session could not be fetched. If the session has ended and telemetry was not enabled, recreate it with telemetry enabled (including console, network, and page) and reproduce the issue.`;
             }
           }
         }
