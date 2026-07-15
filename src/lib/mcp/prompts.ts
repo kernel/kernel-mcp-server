@@ -135,9 +135,9 @@ kernel browsers playwright --help
 
 ## Telemetry Events (structured signal — works even after the session is deleted)
 
-When telemetry was captured, it's usually the fastest way to pinpoint a failure — read it before reaching for screenshots or logs.
+When telemetry was captured, it's usually the fastest way to pinpoint a failure — read it before reaching for screenshots or logs. If the session has been deleted, it's the only signal still available: every CLI command in this guide needs a live session.
 
-Start broad: call \`get_browser_telemetry\` with session_id "${session_id}" and no filters. That reads the whole session and definitively answers whether anything was archived. Narrow only when the output is too large to scan: \`categories\` to isolate a signal you've already spotted, order "desc" to inspect the end of the session, \`since\`/\`until\` to bracket the failing step. Correlate event timestamps with the failing automation step, and page with \`next_offset\` while \`has_more\` is true.
+Start broad: call \`get_browser_telemetry\` with session_id "${session_id}" and no filters. That reads the whole session and definitively answers whether anything was archived. Narrow only when the output is too large to scan: \`categories\` to isolate a signal you've already spotted, \`order\` "desc" to inspect the end of the session, \`since\`/\`until\` to bracket the failing step. Correlate event timestamps with the failing automation step, and page with \`next_offset\` while \`has_more\` is true.
 
 **Gotcha: telemetry is opt-in and only covers activity that happened while capture was on.** Archived events survive telemetry being disabled and the session being deleted, so the archive — not the current config — is the ground truth: \`manage_browsers\` action "get" showing a null \`telemetry\` field means capture is off now, not that nothing was recorded. The default bundle (control/connection/system/captcha) also omits the debug-critical categories. To capture new evidence on an active browser, use \`manage_browsers\` action "update" to enable \`telemetry_console\`, \`telemetry_network\`, and \`telemetry_page\`, then reproduce the issue; recreate the browser only if the session has ended.
 
@@ -251,8 +251,8 @@ These are **normal** and don't indicate problems:
 
 Based on your issue "${issue_description}", start with:
 
-1. **Get browser info** to confirm session is active and check whether telemetry was enabled
-2. **Read telemetry events**; if needed, enable telemetry on an active session and reproduce
+1. **Read telemetry events** — works whether or not the session still exists; if the archive is empty and the session is active, enable the debug categories and reproduce
+2. **Get browser info** to confirm the session is active before using the CLI commands
 3. **Take screenshot** to see current state
 4. **Check page URL** to see if on error page
 5. **Test network** if seeing connection errors
