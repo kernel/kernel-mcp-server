@@ -624,7 +624,13 @@ export function registerBrowserCapabilities(server: McpServer) {
               ? "No telemetry events are archived for this session"
               : "No archived events matched this window and filter — widen since/until or drop the categories filter";
             browser ??= await fetchBrowser();
-            const telemetryDisabled = browser !== null && !browser.telemetry;
+            // A cleared config serializes as {} (not null), so "disabled" means
+            // no category is currently enabled rather than a nullish field.
+            const telemetryDisabled =
+              browser !== null &&
+              !Object.values(browser.telemetry?.browser ?? {}).some(
+                (category) => category?.enabled,
+              );
             const enableHint =
               "update this active browser with telemetry_enabled=true plus the categories your investigation needs (telemetry_enabled alone captures only the default bundle, not console/network/page), then reproduce the issue";
             // Only a full-session read proves the archive is empty; a filter
