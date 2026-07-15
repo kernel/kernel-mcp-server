@@ -135,15 +135,11 @@ kernel browsers playwright --help
 
 ## Telemetry Events (structured signal — works even after the session is deleted)
 
-**Check telemetry first when it's available** — it's the fastest way to pinpoint failures.
+When telemetry was captured, it's usually the fastest way to pinpoint a failure — read it before reaching for screenshots or logs.
 
-**Gotcha: telemetry is opt-in and must have been enabled when the relevant activity occurred.** Always try \`get_browser_telemetry\` first because archived events survive telemetry being disabled and the session being deleted. \`manage_browsers\` action "get" shows only the current telemetry config, so a null \`telemetry\` field means capture is off now, not that the archive is necessarily empty. The default bundle (control/connection/system/captcha) also omits the debug-critical categories. For an active browser, use \`manage_browsers\` action "update" to enable \`telemetry_console\`, \`telemetry_network\`, and \`telemetry_page\`, then reproduce the issue. Recreate the browser only if the original session has ended.
+Start broad: call \`get_browser_telemetry\` with session_id "${session_id}" and no filters. That reads the whole session and definitively answers whether anything was archived. Narrow only when the output is too large to scan: \`categories\` to isolate a signal you've already spotted, order "desc" to inspect the end of the session, \`since\`/\`until\` to bracket the failing step. Correlate event timestamps with the failing automation step, and page with \`next_offset\` while \`has_more\` is true.
 
-**Flow:**
-1. \`get_browser_telemetry\` with session_id "${session_id}" — filter with categories ["console", "network", "page"] to cut noise, or order "desc" to inspect the end of the session
-2. Scan for \`console_error\`, \`network_loading_failed\`, \`network_response\` with non-2xx status, and \`captcha_*\` outcomes
-3. Correlate event timestamps with the failing automation step
-4. Page with \`next_offset\` while \`has_more\` is true
+**Gotcha: telemetry is opt-in and only covers activity that happened while capture was on.** Archived events survive telemetry being disabled and the session being deleted, so the archive — not the current config — is the ground truth: \`manage_browsers\` action "get" showing a null \`telemetry\` field means capture is off now, not that nothing was recorded. The default bundle (control/connection/system/captcha) also omits the debug-critical categories. To capture new evidence on an active browser, use \`manage_browsers\` action "update" to enable \`telemetry_console\`, \`telemetry_network\`, and \`telemetry_page\`, then reproduce the issue; recreate the browser only if the session has ended.
 
 ${TELEMETRY_EVENT_CATALOG}
 
