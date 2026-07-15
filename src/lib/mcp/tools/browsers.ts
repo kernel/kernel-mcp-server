@@ -625,17 +625,19 @@ export function registerBrowserCapabilities(server: McpServer) {
               : "No archived events matched this window and filter — widen since/until or drop the categories filter";
             browser ??= await fetchBrowser();
             const telemetryDisabled = browser !== null && !browser.telemetry;
+            const enableHint =
+              "update this active browser with telemetry_enabled=true plus the categories your investigation needs (telemetry_enabled alone captures only the default bundle, not console/network/page), then reproduce the issue";
             // Only a full-session read proves the archive is empty; a filter
             // miss stays no_events so the status alone can't be misread.
             if (telemetryDisabled && fullSessionRead) {
               status = "telemetry_currently_disabled";
-              note = `${emptyReason}. Telemetry is currently disabled: update this active browser with telemetry_enabled=true plus telemetry_console, telemetry_network, and telemetry_page, then reproduce the issue.`;
+              note = `No telemetry events are archived for this session and telemetry is currently disabled. To capture evidence, ${enableHint}.`;
             } else {
               status = "no_events";
               if (!browser) {
-                note = `${emptyReason}, and the session could not be fetched. If the session has ended and telemetry was not enabled, recreate it with telemetry enabled (including console, network, and page) and reproduce the issue.`;
+                note = `${emptyReason}, and the session could not be fetched. If the session has ended and telemetry was not enabled, recreate it with the telemetry categories your investigation needs and reproduce the issue.`;
               } else if (telemetryDisabled) {
-                note = `${emptyReason}. Telemetry is also currently disabled — if an unfiltered read is empty too, update this active browser with telemetry_enabled=true plus telemetry_console, telemetry_network, and telemetry_page, then reproduce the issue.`;
+                note = `${emptyReason}. Telemetry is also currently disabled — if an unfiltered read is empty too, ${enableHint}.`;
               } else {
                 note = `${emptyReason}.`;
               }
