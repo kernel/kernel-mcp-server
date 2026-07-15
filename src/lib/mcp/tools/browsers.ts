@@ -592,9 +592,12 @@ export function registerBrowserCapabilities(server: McpServer) {
         if (
           query.offset === undefined &&
           query.since === undefined &&
+          query.until === undefined &&
           query.order !== "desc"
         ) {
-          // The API's since default is only 5m; cover the whole session.
+          // The API's since default is only 5m; cover the whole session. Not
+          // needed for until-only reads (the API starts those at the stream
+          // head), and injecting since there can invert the window.
           browser = await fetchBrowser();
           query.since = browser?.created_at ?? "1970-01-01T00:00:00Z";
         }
