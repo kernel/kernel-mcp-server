@@ -370,7 +370,7 @@ export function registerBrowserCapabilities(server: McpServer) {
       telemetry_interaction: z
         .boolean()
         .describe(
-          "(create, update) Enable or disable user interaction telemetry.",
+          "(create, update) Enable or disable user interaction telemetry (clicks, keys, scrolls). Off by default; enable for debugging.",
         )
         .optional(),
     },
