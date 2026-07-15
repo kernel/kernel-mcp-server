@@ -3,11 +3,12 @@ import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
   errorResponse,
-  itemsJsonResponse,
   jsonResponse,
+  paginatedJsonResponse,
   textResponse,
   toolErrorResponse,
 } from "@/lib/mcp/responses";
+import { paginationParams } from "@/lib/mcp/schemas";
 
 const httpUrlSchema = z
   .string()
@@ -77,6 +78,7 @@ export function registerProxyTools(server: McpServer) {
         .string()
         .describe("(create, custom type) Auth password.")
         .optional(),
+      ...paginationParams,
     },
     {
       title: "Manage Kernel proxy configurations",
@@ -134,10 +136,11 @@ export function registerProxyTools(server: McpServer) {
             return jsonResponse(proxy);
           }
           case "list": {
-            const proxies = await client.proxies.list();
-            return itemsJsonResponse(proxies ?? [], {
-              has_more: false,
-              next_offset: null,
+            const page = await client.proxies.list({
+              ...(params.limit !== undefined && { limit: params.limit }),
+              ...(params.offset !== undefined && { offset: params.offset }),
+            });
+            return paginatedJsonResponse(page, {
               emptyText: "No proxies found",
             });
           }

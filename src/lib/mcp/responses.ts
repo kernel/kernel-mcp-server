@@ -9,7 +9,9 @@ type JsonItemsResponseOptions<T, U = T> = {
   note?: string;
 };
 
-type PaginatedJsonResponseOptions<T, U = T> = JsonItemsResponseOptions<T, U>;
+type PaginatedJsonResponseOptions<T, U = T> = JsonItemsResponseOptions<T, U> & {
+  emptyText?: string;
+};
 
 type ItemsJsonResponseOptions<T, U = T> = JsonItemsResponseOptions<T, U> & {
   emptyText?: string;
@@ -47,10 +49,8 @@ export function paginatedJsonResponse<T, U = T>(
   page: PaginatedPage<T>,
   options: PaginatedJsonResponseOptions<T, U> = {},
 ) {
-  const { mapItem, note } = options;
   return itemsJsonResponse(page.getPaginatedItems(), {
-    mapItem,
-    note,
+    ...options,
     has_more: page.has_more,
     next_offset: page.next_offset,
   });

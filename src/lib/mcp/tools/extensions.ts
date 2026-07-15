@@ -3,10 +3,11 @@ import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
   errorResponse,
-  itemsJsonResponse,
+  paginatedJsonResponse,
   textResponse,
   toolErrorResponse,
 } from "@/lib/mcp/responses";
+import { paginationParams } from "@/lib/mcp/schemas";
 
 export function registerExtensionTools(server: McpServer) {
   // manage_extensions -- List and delete browser extensions
@@ -19,6 +20,7 @@ export function registerExtensionTools(server: McpServer) {
         .string()
         .describe("(delete) Extension ID or name to delete.")
         .optional(),
+      ...paginationParams,
     },
     {
       title: "Manage Kernel browser extensions",
@@ -34,10 +36,11 @@ export function registerExtensionTools(server: McpServer) {
       try {
         switch (params.action) {
           case "list": {
-            const extensions = await client.extensions.list();
-            return itemsJsonResponse(extensions ?? [], {
-              has_more: false,
-              next_offset: null,
+            const page = await client.extensions.list({
+              ...(params.limit !== undefined && { limit: params.limit }),
+              ...(params.offset !== undefined && { offset: params.offset }),
+            });
+            return paginatedJsonResponse(page, {
               emptyText: "No extensions found",
             });
           }
