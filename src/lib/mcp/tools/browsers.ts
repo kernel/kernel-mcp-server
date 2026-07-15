@@ -624,14 +624,21 @@ export function registerBrowserCapabilities(server: McpServer) {
               ? "No telemetry events are archived for this session"
               : "No archived events matched this window and filter — widen since/until or drop the categories filter";
             browser ??= await fetchBrowser();
-            if (browser && !browser.telemetry) {
+            const telemetryDisabled = browser !== null && !browser.telemetry;
+            // Only a full-session read proves the archive is empty; a filter
+            // miss stays no_events so the status alone can't be misread.
+            if (telemetryDisabled && fullSessionRead) {
               status = "telemetry_currently_disabled";
               note = `${emptyReason}. Telemetry is currently disabled: update this active browser with telemetry_enabled=true plus telemetry_console, telemetry_network, and telemetry_page, then reproduce the issue.`;
             } else {
               status = "no_events";
-              note = browser
-                ? `${emptyReason}.`
-                : `${emptyReason}, and the session could not be fetched. If the session has ended and telemetry was not enabled, recreate it with telemetry enabled (including console, network, and page) and reproduce the issue.`;
+              if (!browser) {
+                note = `${emptyReason}, and the session could not be fetched. If the session has ended and telemetry was not enabled, recreate it with telemetry enabled (including console, network, and page) and reproduce the issue.`;
+              } else if (telemetryDisabled) {
+                note = `${emptyReason}. Telemetry is also currently disabled — if an unfiltered read is empty too, update this active browser with telemetry_enabled=true plus telemetry_console, telemetry_network, and telemetry_page, then reproduce the issue.`;
+              } else {
+                note = `${emptyReason}.`;
+              }
             }
           }
         }
