@@ -164,7 +164,6 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
     }
 
     const client = createKernelClient(extra.authInfo.token);
-    // Resources take no pagination params, so collect every page.
     const pools = [];
     for await (const pool of client.browserPools.list()) {
       pools.push(pool);
