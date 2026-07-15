@@ -515,7 +515,7 @@ export function registerBrowserCapabilities(server: McpServer) {
   // get_browser_telemetry -- Read archived telemetry events for a session
   server.tool(
     "get_browser_telemetry",
-    `Read archived telemetry events for a browser session. Works while the session is active and after it is deleted, including events captured before telemetry was disabled. If the response reports status "telemetry_currently_disabled", widen or remove filters before enabling telemetry and reproducing: update an active browser, or recreate one that has ended. Page through long sessions with offset/next_offset instead of raising limit. ${TELEMETRY_EVENT_CATALOG}`,
+    `Read archived telemetry events for a browser session. Works while the session is active and after it is deleted, including events captured before telemetry was disabled. Empty results include a status and note explaining what to do next. Page through long sessions with offset/next_offset instead of raising limit. ${TELEMETRY_EVENT_CATALOG}`,
     {
       session_id: z.string().describe("Browser session ID."),
       categories: z
