@@ -279,7 +279,7 @@ Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_
 
 - `computer_action` - Mouse, keyboard, clipboard, and screenshot controls for browser sessions (click, type, press_key, scroll, move, get_position, read_clipboard, write_clipboard, screenshot).
 - `browser_curl` - Send HTTP requests through an existing browser session's Chrome network stack.
-- `execute_playwright_code` - Execute Playwright/TypeScript code against a browser, with automatic cleanup of browsers it creates.
+- `execute_playwright_code` - Execute Playwright/TypeScript code against an existing browser session. Does not create or delete browsers - use `manage_browsers` for session lifecycle.
 - `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
 - `search_docs` - Search Kernel platform documentation and guides.
 
@@ -320,8 +320,9 @@ Assistant: I'll execute your web-scraper action with reddit.com as the target.
 
 ```
 Human: Go to example.com and get me the page title
-Assistant: I'll execute Playwright code to navigate to the site and retrieve the title.
-[Uses execute_playwright_code tool with code: "await page.goto('https://example.com'); return await page.title();"]
+Assistant: I'll create a browser session, then execute Playwright code against it to navigate to the site and retrieve the title.
+[Uses manage_browsers tool with action: "create" to get a session_id]
+[Uses execute_playwright_code tool with session_id and code: "await page.goto('https://example.com'); return await page.title();"]
 Returns: { success: true, result: "Example Domain" }
 ```
 

@@ -6,7 +6,7 @@ export function registerPlaywrightTool(server: McpServer) {
   // execute_playwright_code -- Run Playwright/TypeScript code against a browser
   server.tool(
     "execute_playwright_code",
-    'Execute Playwright/TypeScript automation code against a Kernel browser session. If session_id is provided, uses that existing browser; otherwise creates a new one. Auto-cleans up browsers it creates. Use computer_action with action "screenshot" instead of page.screenshot() in code.',
+    'Execute Playwright/TypeScript automation code against an existing Kernel browser session. Does not create or delete browsers -- use manage_browsers to manage session lifecycle. Use computer_action with action "screenshot" instead of page.screenshot() in code.',
     {
       code: z
         .string()
@@ -15,10 +15,7 @@ export function registerPlaywrightTool(server: McpServer) {
         ),
       session_id: z
         .string()
-        .describe(
-          "Existing browser session ID. If omitted, a new browser is created and cleaned up after execution.",
-        )
-        .optional(),
+        .describe("Browser session ID to execute the code against."),
     },
     {
       title: "Execute Playwright code",
@@ -30,28 +27,14 @@ export function registerPlaywrightTool(server: McpServer) {
     async ({ code, session_id }, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(extra.authInfo.token);
-      const shouldCleanup = !session_id;
-      let activeSessionId = session_id;
 
       try {
         if (!code || typeof code !== "string")
           throw new Error("code is required and must be a string");
 
-        if (!activeSessionId) {
-          const created = await client.browsers.create({ stealth: true });
-          if (!created?.session_id)
-            throw new Error("Failed to create browser session");
-          activeSessionId = created.session_id;
-        }
-
-        const response = await client.browsers.playwright.execute(
-          activeSessionId,
-          { code },
-        );
-
-        if (shouldCleanup) {
-          await client.browsers.deleteByID(activeSessionId);
-        }
+        const response = await client.browsers.playwright.execute(session_id, {
+          code,
+        });
 
         return {
           content: [
@@ -72,11 +55,6 @@ export function registerPlaywrightTool(server: McpServer) {
           ],
         };
       } catch (error) {
-        try {
-          if (shouldCleanup && activeSessionId)
-            await client.browsers.deleteByID(activeSessionId);
-        } catch {}
-
         return {
           content: [
             {
