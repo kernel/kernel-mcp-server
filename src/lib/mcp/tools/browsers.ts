@@ -228,6 +228,20 @@ async function readBrowserTelemetry(
   const page = await client.browsers.telemetry.events(params.session_id, query);
   const items = page.getPaginatedItems().map(compactTelemetryEvent);
 
+  // Counter-steer the pagination reflex: an unfiltered ascending read starts
+  // at session creation, so an agent chasing a recent failure should flip to
+  // desc rather than page through the whole archive oldest-first. Applies to
+  // offset-continuation pages too — that's the agent already deep in a page
+  // walk. Category, since, and until filters signal a deliberate bracket.
+  const ascPagingNote =
+    page.has_more &&
+    params.categories === undefined &&
+    params.since === undefined &&
+    params.until === undefined &&
+    query.order !== "desc"
+      ? 'Reading oldest-first from session start. If the end of the session matters most, use order "desc" instead of paging.'
+      : undefined;
+
   const note =
     items.length === 0
       ? await summarizeEmptyTelemetryResult(client, {
@@ -236,7 +250,7 @@ async function readBrowserTelemetry(
           fullSessionRead,
           soleSince: unfilteredExceptSince ? params.since : undefined,
         })
-      : undefined;
+      : ascPagingNote;
 
   // Single-line JSON rather than the pretty-printed house helpers: a page
   // carries up to 100 events and indentation would inflate the token cost.
@@ -494,7 +508,7 @@ export function registerBrowserCapabilities(server: McpServer) {
       order: z
         .enum(["asc", "desc"])
         .describe(
-          "(get_telemetry) Read direction. asc (default) reads oldest first; desc reads newest first. Preserve it while paging.",
+          "(get_telemetry) Read direction. asc (default) reads oldest first from session start; desc reads newest first. Prefer desc when diagnosing a recent failure in a long session — it reaches the end without paging. Preserve it while paging.",
         )
         .optional(),
       telemetry_enabled: z
