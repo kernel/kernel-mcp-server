@@ -654,7 +654,9 @@ export function registerBrowserCapabilities(server: McpServer) {
                 "Error: since cannot be combined with order=desc. Use until to bound a newest-first read, or order=asc with since.",
               );
             }
-            return readBrowserTelemetry(client, {
+            // Awaited so API failures resolve to toolErrorResponse below
+            // instead of escaping the try as an unhandled rejection.
+            return await readBrowserTelemetry(client, {
               session_id: params.session_id,
               categories: params.categories,
               limit: params.limit,
