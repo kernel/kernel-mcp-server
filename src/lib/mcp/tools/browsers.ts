@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { NotFoundError } from "@onkernel/sdk";
 import { z } from "zod";
 import {
   buildBrowserCreateConfig,
@@ -100,29 +101,44 @@ const omittedTelemetryDataFields: ReadonlySet<string> = new Set([
 ]);
 const maxTelemetryDataFieldBytes = 8 * 1024;
 
-function summarizeEmptyTelemetryResult({
-  hasMore,
-  fullSessionRead,
-  telemetryDisabled,
-}: {
-  hasMore: boolean;
-  fullSessionRead: boolean;
-  telemetryDisabled: boolean;
-}) {
+async function summarizeEmptyTelemetryResult(
+  client: KernelClient,
+  {
+    sessionId,
+    hasMore,
+    fullSessionRead,
+  }: { sessionId: string; hasMore: boolean; fullSessionRead: boolean },
+) {
   if (hasMore) {
-    return {
-      status: "ok" as const,
-      note: "No matching events on this page; continue with next_offset.",
-    };
+    return "No matching events on this page; continue with next_offset.";
   }
 
-  const note = fullSessionRead
-    ? "No telemetry events are archived for this session."
+  // Best-effort capture-state hint for terminal empties. Deleted sessions 404
+  // here, which is fine: their capture state is no longer actionable. The GET
+  // response never carries a null telemetry config — the API resolves
+  // enabled:true to explicit per-category flags and serializes cleared
+  // telemetry as an empty config — so "no enabled category" is the disabled
+  // signal.
+  const browser = await client.browsers
+    .retrieve(sessionId)
+    .catch((error: unknown) => {
+      if (error instanceof NotFoundError) return null;
+      throw error;
+    });
+  const telemetryDisabled =
+    browser !== null &&
+    !Object.values(browser.telemetry?.browser ?? {}).some(
+      (category) => category?.enabled,
+    );
+
+  if (fullSessionRead) {
+    return telemetryDisabled
+      ? "No telemetry events are archived for this session. Telemetry is currently disabled."
+      : "No telemetry events are archived for this session.";
+  }
+  return telemetryDisabled
+    ? "No events matched this query. Broaden the categories or time window before changing capture settings; capture is currently disabled, so no new events are being archived."
     : "No events matched this query.";
-  return {
-    status: "no_events" as const,
-    note: telemetryDisabled ? `${note} Telemetry is currently disabled.` : note,
-  };
 }
 
 function compactTelemetryEvent({ seq, event }: TelemetryEnvelope) {
@@ -175,9 +191,6 @@ async function readBrowserTelemetry(
   client: KernelClient,
   params: BrowserTelemetryReadParams,
 ) {
-  const fetchBrowser = () =>
-    client.browsers.retrieve(params.session_id).catch(() => null);
-
   const query: TelemetryEventsQuery = { limit: params.limit ?? 100 };
   if (params.categories) query.category = params.categories;
   if (params.offset !== undefined) query.offset = params.offset;
@@ -185,17 +198,21 @@ async function readBrowserTelemetry(
   if (params.until !== undefined) query.until = params.until;
   if (params.order !== undefined) query.order = params.order;
 
-  let browser: Awaited<ReturnType<typeof fetchBrowser>> = null;
-  // Avoid the API's five-minute default; until-only reads already start at the stream head.
+  // Avoid the API's five-minute since default. The archive can't predate the
+  // session, so the epoch reads the full session without a browser lookup.
+  // Until-only reads already start at the stream head, and desc reads anchor
+  // at the stream tail, so neither needs the override.
   if (
     query.offset === undefined &&
     query.since === undefined &&
     query.until === undefined &&
     query.order !== "desc"
   ) {
-    browser = await fetchBrowser();
-    query.since = browser?.created_at ?? "1970-01-01T00:00:00Z";
+    query.since = "1970-01-01T00:00:00Z";
   }
+  // Unlike the since override, this keys off categories: an unbounded read
+  // (asc from the epoch, or desc from the stream tail) that comes back empty
+  // proves the archive is empty, while a filtered miss proves nothing.
   const fullSessionRead =
     params.offset === undefined &&
     params.since === undefined &&
@@ -205,25 +222,19 @@ async function readBrowserTelemetry(
   const page = await client.browsers.telemetry.events(params.session_id, query);
   const items = page.getPaginatedItems().map(compactTelemetryEvent);
 
-  let status: "ok" | "no_events" = "ok";
-  let note: string | undefined;
-  if (items.length === 0) {
-    if (!page.has_more) browser ??= await fetchBrowser();
-    const telemetryDisabled =
-      browser !== null &&
-      !Object.values(browser.telemetry?.browser ?? {}).some(
-        (category) => category?.enabled,
-      );
-    ({ status, note } = summarizeEmptyTelemetryResult({
-      hasMore: Boolean(page.has_more),
-      fullSessionRead,
-      telemetryDisabled,
-    }));
-  }
+  const note =
+    items.length === 0
+      ? await summarizeEmptyTelemetryResult(client, {
+          sessionId: params.session_id,
+          hasMore: Boolean(page.has_more),
+          fullSessionRead,
+        })
+      : undefined;
 
+  // Single-line JSON rather than the pretty-printed house helpers: a page
+  // carries up to 100 events and indentation would inflate the token cost.
   return textResponse(
     JSON.stringify({
-      status,
       items,
       has_more: page.has_more,
       next_offset: page.next_offset,
