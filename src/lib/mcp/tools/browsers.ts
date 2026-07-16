@@ -90,12 +90,42 @@ type TelemetryEnvelope = Awaited<
   ReturnType<KernelClient["browsers"]["telemetry"]["events"]>
 >["items"][number];
 
-// Payload fields that can carry kilobytes per event (response bodies, header
-// maps). Dropped so a full page of events fits in an agent context window;
-// omitted_fields tells the agent what to fetch via the API/CLI if needed.
-const bulkyTelemetryDataFields = ["body", "headers", "post_data"] as const;
+// Payload fields that are always omitted, even when small. The size limit
+// catches new high-volume fields that are added to telemetry later.
+const omittedTelemetryDataFields: ReadonlySet<string> = new Set([
+  "body",
+  "headers",
+  "post_data",
+  "png",
+]);
+const maxTelemetryDataFieldBytes = 8 * 1024;
 
-function compactTelemetryEvent({ seq, event }: TelemetryEnvelope) {
+export function summarizeEmptyTelemetryResult({
+  hasMore,
+  fullSessionRead,
+  telemetryDisabled,
+}: {
+  hasMore: boolean;
+  fullSessionRead: boolean;
+  telemetryDisabled: boolean;
+}) {
+  if (hasMore) {
+    return {
+      status: "ok" as const,
+      note: "No matching events on this page; continue with next_offset.",
+    };
+  }
+
+  const note = fullSessionRead
+    ? "No telemetry events are archived for this session."
+    : "No events matched this query.";
+  return {
+    status: "no_events" as const,
+    note: telemetryDisabled ? `${note} Telemetry is currently disabled.` : note,
+  };
+}
+
+export function compactTelemetryEvent({ seq, event }: TelemetryEnvelope) {
   const { ts, category, type, source, truncated } = event;
   const data = "data" in event ? event.data : undefined;
 
@@ -103,8 +133,13 @@ function compactTelemetryEvent({ seq, event }: TelemetryEnvelope) {
   let omittedFields: string[] | undefined;
   if (data) {
     compactData = { ...(data as Record<string, unknown>) };
-    for (const field of bulkyTelemetryDataFields) {
-      if (compactData[field] !== undefined) {
+    for (const [field, value] of Object.entries(compactData)) {
+      const alwaysOmit = omittedTelemetryDataFields.has(field);
+      const serialized = alwaysOmit ? undefined : JSON.stringify(value);
+      const oversized =
+        serialized !== undefined &&
+        Buffer.byteLength(serialized, "utf8") > maxTelemetryDataFieldBytes;
+      if (alwaysOmit || oversized) {
         delete compactData[field];
         (omittedFields ??= []).push(field);
       }
@@ -616,42 +651,20 @@ export function registerBrowserCapabilities(server: McpServer) {
         );
         const items = page.getPaginatedItems().map(compactTelemetryEvent);
 
-        let status: "ok" | "telemetry_currently_disabled" | "no_events" = "ok";
+        let status: "ok" | "no_events" = "ok";
         let note: string | undefined;
         if (items.length === 0) {
-          if (page.has_more) {
-            note =
-              "This page had no matching events, but more are archived — continue paging with next_offset.";
-          } else {
-            const emptyReason = fullSessionRead
-              ? "No telemetry events are archived for this session"
-              : "No archived events matched this window and filter — widen since/until or drop the categories filter";
-            browser ??= await fetchBrowser();
-            // A cleared config serializes as {} (not null), so "disabled" means
-            // no category is currently enabled rather than a nullish field.
-            const telemetryDisabled =
-              browser !== null &&
-              !Object.values(browser.telemetry?.browser ?? {}).some(
-                (category) => category?.enabled,
-              );
-            const enableHint =
-              "update this active browser with telemetry_enabled=true plus the categories your investigation needs (telemetry_enabled alone captures only the default bundle, not console/network/page), then reproduce the issue";
-            // Only a full-session read proves the archive is empty; a filter
-            // miss stays no_events so the status alone can't be misread.
-            if (telemetryDisabled && fullSessionRead) {
-              status = "telemetry_currently_disabled";
-              note = `No telemetry events are archived for this session and telemetry is currently disabled. To capture evidence, ${enableHint}.`;
-            } else {
-              status = "no_events";
-              if (!browser) {
-                note = `${emptyReason}, and the session could not be fetched. If the session has ended and telemetry was not enabled, recreate it with the telemetry categories your investigation needs and reproduce the issue.`;
-              } else if (telemetryDisabled) {
-                note = `${emptyReason}. Telemetry is also currently disabled — if an unfiltered read is empty too, ${enableHint}.`;
-              } else {
-                note = `${emptyReason}.`;
-              }
-            }
-          }
+          if (!page.has_more) browser ??= await fetchBrowser();
+          const telemetryDisabled =
+            browser !== null &&
+            !Object.values(browser.telemetry?.browser ?? {}).some(
+              (category) => category?.enabled,
+            );
+          ({ status, note } = summarizeEmptyTelemetryResult({
+            hasMore: Boolean(page.has_more),
+            fullSessionRead,
+            telemetryDisabled,
+          }));
         }
 
         // Compact serialization: a full page of events would waste a large
