@@ -100,7 +100,7 @@ const omittedTelemetryDataFields: ReadonlySet<string> = new Set([
 ]);
 const maxTelemetryDataFieldBytes = 8 * 1024;
 
-export function summarizeEmptyTelemetryResult({
+function summarizeEmptyTelemetryResult({
   hasMore,
   fullSessionRead,
   telemetryDisabled,
@@ -125,7 +125,7 @@ export function summarizeEmptyTelemetryResult({
   };
 }
 
-export function compactTelemetryEvent({ seq, event }: TelemetryEnvelope) {
+function compactTelemetryEvent({ seq, event }: TelemetryEnvelope) {
   const { ts, category, type, source, truncated } = event;
   const data = "data" in event ? event.data : undefined;
 
