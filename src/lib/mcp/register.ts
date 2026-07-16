@@ -15,6 +15,7 @@ import { registerPlaywrightTool } from "@/lib/mcp/tools/playwright";
 import { registerProfileCapabilities } from "@/lib/mcp/tools/profiles";
 import { registerProjectCapabilities } from "@/lib/mcp/tools/projects";
 import { registerProxyTools } from "@/lib/mcp/tools/proxies";
+import { registerReplayTools } from "@/lib/mcp/tools/replays";
 import { registerShellTool } from "@/lib/mcp/tools/shell";
 
 type RegisterMcpToolset = (server: McpServer) => void;
@@ -33,6 +34,7 @@ const mcpToolRegistrations = [
   ["computer", registerComputerActionTool],
   ["shell", registerShellTool],
   ["playwright", registerPlaywrightTool],
+  ["replays", registerReplayTools],
   ["auth_connections", registerAuthConnectionTools],
   ["credentials", registerCredentialTools],
   ["credential_providers", registerCredentialProviderTools],
