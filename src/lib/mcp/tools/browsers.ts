@@ -150,27 +150,12 @@ async function summarizeEmptyTelemetryResult(
     : "No events matched this query.";
 }
 
-function compactTelemetryEvent({ seq, event }: TelemetryEnvelope) {
+function telemetryEventResponse(
+  { seq, event }: TelemetryEnvelope,
+  data: Record<string, unknown> | undefined,
+  omittedFields: string[] | undefined,
+) {
   const { ts, category, type, source, truncated } = event;
-  const data = "data" in event ? event.data : undefined;
-
-  let compactData: Record<string, unknown> | undefined;
-  let omittedFields: string[] | undefined;
-  if (data) {
-    compactData = { ...(data as Record<string, unknown>) };
-    for (const [field, value] of Object.entries(compactData)) {
-      const alwaysOmit = omittedTelemetryDataFields.has(field);
-      const serialized = alwaysOmit ? undefined : JSON.stringify(value);
-      const oversized =
-        serialized !== undefined &&
-        Buffer.byteLength(serialized, "utf8") > maxTelemetryDataFieldBytes;
-      if (alwaysOmit || oversized) {
-        delete compactData[field];
-        (omittedFields ??= []).push(field);
-      }
-    }
-  }
-
   return {
     seq,
     // Raw ts (Unix microseconds) is kept alongside the readable time so exact
@@ -180,10 +165,84 @@ function compactTelemetryEvent({ seq, event }: TelemetryEnvelope) {
     category,
     type,
     source,
-    ...(compactData && { data: compactData }),
+    ...(data && { data }),
     ...(truncated && { truncated }),
     ...(omittedFields && { omitted_fields: omittedFields }),
   };
+}
+
+function telemetryEventData(envelope: TelemetryEnvelope) {
+  const { event } = envelope;
+  return "data" in event
+    ? { ...(event.data as Record<string, unknown>) }
+    : undefined;
+}
+
+function compactTelemetryEvent(envelope: TelemetryEnvelope) {
+  const data = telemetryEventData(envelope);
+
+  let omittedFields: string[] | undefined;
+  if (data) {
+    for (const [field, value] of Object.entries(data)) {
+      const alwaysOmit = omittedTelemetryDataFields.has(field);
+      const serialized = alwaysOmit ? undefined : JSON.stringify(value);
+      const oversized =
+        serialized !== undefined &&
+        Buffer.byteLength(serialized, "utf8") > maxTelemetryDataFieldBytes;
+      if (alwaysOmit || oversized) {
+        delete data[field];
+        (omittedFields ??= []).push(field);
+      }
+    }
+  }
+
+  return telemetryEventResponse(envelope, data, omittedFields);
+}
+
+// Full-payload counterpart to compactTelemetryEvent: only screenshot png is
+// dropped (base64 image data is unusable in a text response and can run to
+// hundreds of KB), everything else passes through uncompacted.
+function rawTelemetryEvent(envelope: TelemetryEnvelope) {
+  const data = telemetryEventData(envelope);
+
+  let omittedFields: string[] | undefined;
+  if (data && "png" in data) {
+    delete data.png;
+    omittedFields = ["png"];
+  }
+
+  return telemetryEventResponse(envelope, data, omittedFields);
+}
+
+async function readBrowserTelemetryEvent(
+  client: KernelClient,
+  sessionId: string,
+  seq: number,
+) {
+  // Event seq values are assigned by the instance and embedded in the record
+  // body, while offset addresses the underlying stream position; the two run
+  // at a locally constant drift. Probe near the target, measure the drift
+  // from what comes back, and re-anchor — one correction normally lands it.
+  let offset = Math.max(seq - 1, 0);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const page = await client.browsers.telemetry.events(sessionId, {
+      offset,
+      limit: 3,
+    });
+    const items = page.getPaginatedItems();
+    const match = items.find((item) => item.seq === seq);
+    if (match) {
+      return textResponse(JSON.stringify(rawTelemetryEvent(match)));
+    }
+    const first = items[0];
+    if (!first) break; // past the stream tail; nothing to measure drift from
+    const corrected = Math.max(offset + (seq - first.seq), 0);
+    if (corrected === offset) break; // clamped at the stream head
+    offset = corrected;
+  }
+  return errorResponse(
+    `Error: no archived telemetry event with seq ${seq}. Use get_telemetry to find event seq values.`,
+  );
 }
 
 type BrowserTelemetryReadParams = {
@@ -331,15 +390,23 @@ export function registerBrowserCapabilities(server: McpServer) {
   // manage_browsers -- Manage browser sessions and read archived telemetry
   server.tool(
     "manage_browsers",
-    'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished.',
+    'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, "get_telemetry_event" to fetch one event\'s full payload, and "delete" when finished.',
     {
       action: z
-        .enum(["create", "update", "list", "get", "get_telemetry", "delete"])
+        .enum([
+          "create",
+          "update",
+          "list",
+          "get",
+          "get_telemetry",
+          "get_telemetry_event",
+          "delete",
+        ])
         .describe("Operation to perform."),
       session_id: z
         .string()
         .describe(
-          "Browser session ID. Required for update, get, get_telemetry, and delete actions.",
+          "Browser session ID. Required for update, get, get_telemetry, get_telemetry_event, and delete actions.",
         )
         .optional(),
       start_url: z
@@ -495,6 +562,14 @@ export function registerBrowserCapabilities(server: McpServer) {
         .enum(["asc", "desc"])
         .describe(
           "(get_telemetry) Read direction. asc (default) reads oldest first; desc reads newest first. Preserve it while paging.",
+        )
+        .optional(),
+      seq: z
+        .number()
+        .int()
+        .min(0)
+        .describe(
+          "(get_telemetry_event) Sequence number of the event to fetch, taken from a get_telemetry result. Returns the event with its full payload, including fields get_telemetry omits (headers, body, post_data, oversized fields); screenshot png data stays omitted.",
         )
         .optional(),
       telemetry_enabled: z
@@ -670,6 +745,21 @@ export function registerBrowserCapabilities(server: McpServer) {
               until: params.until,
               order: params.order,
             });
+          }
+          case "get_telemetry_event": {
+            if (!params.session_id)
+              return errorResponse(
+                "Error: session_id is required for get_telemetry_event action.",
+              );
+            if (params.seq === undefined)
+              return errorResponse(
+                "Error: seq is required for get_telemetry_event action.",
+              );
+            return await readBrowserTelemetryEvent(
+              client,
+              params.session_id,
+              params.seq,
+            );
           }
           case "delete": {
             if (!params.session_id)
