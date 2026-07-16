@@ -255,15 +255,15 @@ Many other MCP-capable tools accept:
 
 Configure these values wherever the tool expects MCP server settings.
 
-## Tools (17 total)
+## Tools (16 total)
 
-Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Six standalone tools handle high-frequency workflows.
+Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Five standalone tools handle high-frequency workflows.
 
 Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_DISABLED_TOOLSETS` to a comma-separated list. For example, `KERNEL_MCP_DISABLED_TOOLSETS=api_keys` prevents `manage_api_keys` from being registered.
 
 ### manage\_\* tools
 
-- `manage_browsers` - Create, list, get, and delete browser sessions. Supports headless/stealth modes, profiles, proxies, viewports, extensions, and SSH tunneling.
+- `manage_browsers` - Create, update, list, get, and delete browser sessions, and read archived telemetry for active or deleted sessions. Supports headless/stealth modes, profiles, proxies, viewports, extensions, and SSH tunneling.
 - `manage_profiles` - Setup (with guided live browser session), search/list with pagination, get, and delete browser profiles for persisting cookies and logins.
 - `manage_projects` - Create, list, get, update, and delete organization projects. Inspect and update per-project resource limits.
 - `manage_api_keys` - Create, list, get, update, and delete org-wide or project-scoped API keys. Create returns the plaintext key once.
@@ -281,7 +281,6 @@ Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_
 - `browser_curl` - Send HTTP requests through an existing browser session's Chrome network stack.
 - `execute_playwright_code` - Execute Playwright/TypeScript code against a browser with automatic video replay and cleanup.
 - `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
-- `get_browser_telemetry` - Read archived telemetry events for a browser session (console, network, page lifecycle, captcha outcomes, VM health). Works for active and deleted sessions, with category filters, time windows, and pagination.
 - `search_docs` - Search Kernel platform documentation and guides.
 
 ## Resources

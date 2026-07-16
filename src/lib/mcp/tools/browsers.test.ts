@@ -1,12 +1,35 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   compactTelemetryEvent,
+  registerBrowserCapabilities,
   summarizeEmptyTelemetryResult,
 } from "./browsers";
 
 const source = { kind: "cdp" as const };
 const ts = 1_750_000_000_000_000;
+
+test("exposes telemetry through manage_browsers", () => {
+  const toolNames: string[] = [];
+  let actionSchema:
+    | { safeParse(value: unknown): { success: boolean } }
+    | undefined;
+  const server = {
+    resource() {},
+    tool(name: string, _description: string, schema: Record<string, unknown>) {
+      toolNames.push(name);
+      actionSchema = schema.action as typeof actionSchema;
+    },
+  } as unknown as McpServer;
+
+  registerBrowserCapabilities(server);
+
+  assert.deepEqual(toolNames, ["manage_browsers"]);
+  assert.ok(actionSchema);
+  assert.equal(actionSchema.safeParse("get_telemetry").success, true);
+  assert.equal(actionSchema.safeParse("get_browser_telemetry").success, false);
+});
 
 test("omits known high-volume telemetry fields", () => {
   const request = compactTelemetryEvent({
