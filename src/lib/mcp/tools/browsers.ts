@@ -113,12 +113,6 @@ async function summarizeEmptyTelemetryResult(
     return "No matching events on this page; continue with next_offset.";
   }
 
-  // Best-effort capture-state hint for terminal empties. Deleted sessions 404
-  // here, which is fine: their capture state is no longer actionable. The GET
-  // response never carries a null telemetry config — the API resolves
-  // enabled:true to explicit per-category flags and serializes cleared
-  // telemetry as an empty config — so "no enabled category" is the disabled
-  // signal.
   const browser = await client.browsers
     .retrieve(sessionId)
     .catch((error: unknown) => {
@@ -198,10 +192,8 @@ async function readBrowserTelemetry(
   if (params.until !== undefined) query.until = params.until;
   if (params.order !== undefined) query.order = params.order;
 
-  // Avoid the API's five-minute since default. The archive can't predate the
-  // session, so the epoch reads the full session without a browser lookup.
-  // Until-only reads already start at the stream head, and desc reads anchor
-  // at the stream tail, so neither needs the override.
+  // Avoid the API's five-minute default; until-only reads already start at
+  // the stream head and desc reads anchor at the stream tail.
   if (
     query.offset === undefined &&
     query.since === undefined &&
@@ -210,9 +202,6 @@ async function readBrowserTelemetry(
   ) {
     query.since = "1970-01-01T00:00:00Z";
   }
-  // Unlike the since override, this keys off categories: an unbounded read
-  // (asc from the epoch, or desc from the stream tail) that comes back empty
-  // proves the archive is empty, while a filtered miss proves nothing.
   const fullSessionRead =
     params.offset === undefined &&
     params.since === undefined &&
@@ -231,8 +220,6 @@ async function readBrowserTelemetry(
         })
       : undefined;
 
-  // Single-line JSON rather than the pretty-printed house helpers: a page
-  // carries up to 100 events and indentation would inflate the token cost.
   return textResponse(
     JSON.stringify({
       items,
@@ -654,8 +641,6 @@ export function registerBrowserCapabilities(server: McpServer) {
                 "Error: since cannot be combined with order=desc. Use until to bound a newest-first read, or order=asc with since.",
               );
             }
-            // Awaited so API failures resolve to toolErrorResponse below
-            // instead of escaping the try as an unhandled rejection.
             return await readBrowserTelemetry(client, {
               session_id: params.session_id,
               categories: params.categories,
