@@ -107,7 +107,13 @@ async function summarizeEmptyTelemetryResult(
     sessionId,
     hasMore,
     fullSessionRead,
-  }: { sessionId: string; hasMore: boolean; fullSessionRead: boolean },
+    soleSince,
+  }: {
+    sessionId: string;
+    hasMore: boolean;
+    fullSessionRead: boolean;
+    soleSince?: string;
+  },
 ) {
   if (hasMore) {
     return "No matching events on this page; continue with next_offset.";
@@ -125,7 +131,16 @@ async function summarizeEmptyTelemetryResult(
       (category) => category?.enabled,
     );
 
-  if (fullSessionRead) {
+  // An explicit since at or before the session's creation also covers the
+  // whole archive. Duration-style values ("10m") fail Date.parse and stay on
+  // the windowed wording, as do deleted sessions (null browser).
+  const coversFullSession =
+    fullSessionRead ||
+    (soleSince !== undefined &&
+      browser !== null &&
+      Date.parse(soleSince) <= Date.parse(browser.created_at));
+
+  if (coversFullSession) {
     return telemetryDisabled
       ? "No telemetry events are archived for this session. Telemetry is currently disabled."
       : "No telemetry events are archived for this session.";
@@ -204,11 +219,11 @@ async function readBrowserTelemetry(
   ) {
     query.since = "1970-01-01T00:00:00Z";
   }
-  const fullSessionRead =
+  const unfilteredExceptSince =
     params.offset === undefined &&
-    params.since === undefined &&
     params.until === undefined &&
     params.categories === undefined;
+  const fullSessionRead = unfilteredExceptSince && params.since === undefined;
 
   const page = await client.browsers.telemetry.events(params.session_id, query);
   const items = page.getPaginatedItems().map(compactTelemetryEvent);
@@ -219,6 +234,7 @@ async function readBrowserTelemetry(
           sessionId: params.session_id,
           hasMore: Boolean(page.has_more),
           fullSessionRead,
+          soleSince: unfilteredExceptSince ? params.since : undefined,
         })
       : undefined;
 
