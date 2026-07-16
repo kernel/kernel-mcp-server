@@ -20,7 +20,7 @@ The Kernel MCP Server bridges AI assistants (like Claude, Cursor, or other MCP-c
 - 📊 Monitor deployments and track invocations
 - 🔍 Search Kernel documentation and inject context
 - 💻 Execute arbitrary Playwright code against live browsers
-- 🎥 Automatically record video replays of browser automation
+- 🎥 Record video replays of browser automation
 
 **Open-source & fully-managed** — the complete codebase is available here, and we run the production instance so you don't need to deploy anything.
 
@@ -279,7 +279,7 @@ Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_
 
 - `computer_action` - Mouse, keyboard, clipboard, and screenshot controls for browser sessions (click, type, press_key, scroll, move, get_position, read_clipboard, write_clipboard, screenshot).
 - `browser_curl` - Send HTTP requests through an existing browser session's Chrome network stack.
-- `execute_playwright_code` - Execute Playwright/TypeScript code against a browser with automatic video replay and cleanup.
+- `execute_playwright_code` - Execute Playwright/TypeScript code against a browser, with automatic cleanup of browsers it creates.
 - `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
 - `search_docs` - Search Kernel platform documentation and guides.
 
@@ -322,7 +322,7 @@ Assistant: I'll execute your web-scraper action with reddit.com as the target.
 Human: Go to example.com and get me the page title
 Assistant: I'll execute Playwright code to navigate to the site and retrieve the title.
 [Uses execute_playwright_code tool with code: "await page.goto('https://example.com'); return await page.title();"]
-Returns: { success: true, result: "Example Domain", replay_url: "https://..." }
+Returns: { success: true, result: "Example Domain" }
 ```
 
 ### Set up browser profiles for authentication
