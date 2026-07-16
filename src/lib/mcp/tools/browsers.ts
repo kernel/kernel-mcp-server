@@ -192,8 +192,10 @@ async function readBrowserTelemetry(
   if (params.until !== undefined) query.until = params.until;
   if (params.order !== undefined) query.order = params.order;
 
-  // Avoid the API's five-minute default; until-only reads already start at
-  // the stream head and desc reads anchor at the stream tail.
+  // Avoid the API's five-minute default. The archive can't predate the
+  // session, so the epoch reads the full session without a browser lookup;
+  // until-only reads already start at the stream head and desc reads anchor
+  // at the stream tail.
   if (
     query.offset === undefined &&
     query.since === undefined &&
@@ -220,6 +222,8 @@ async function readBrowserTelemetry(
         })
       : undefined;
 
+  // Single-line JSON rather than the pretty-printed house helpers: a page
+  // carries up to 100 events and indentation would inflate the token cost.
   return textResponse(
     JSON.stringify({
       items,
