@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { NotFoundError } from "@onkernel/sdk";
 import { z } from "zod";
 import {
   buildBrowserCreateConfig,
@@ -15,11 +16,18 @@ import {
   toolErrorResponse,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
+import {
+  TELEMETRY_EVENT_CATALOG,
+  telemetryEventCategories,
+} from "@/lib/mcp/telemetry";
 
 type BrowserCreateParams = NonNullable<
   Parameters<KernelClient["browsers"]["create"]>[0]
 >;
 type BrowserUpdateParams = Parameters<KernelClient["browsers"]["update"]>[1];
+type TelemetryEventsQuery = NonNullable<
+  Parameters<KernelClient["browsers"]["telemetry"]["events"]>[1]
+>;
 
 type TelemetryParams = {
   telemetry_enabled?: boolean;
@@ -77,6 +85,183 @@ function buildTelemetry(
       ...(hasBrowserCategories && { browser }),
     },
   };
+}
+
+type TelemetryEnvelope = Awaited<
+  ReturnType<KernelClient["browsers"]["telemetry"]["events"]>
+>["items"][number];
+
+// Payload fields that are always omitted, even when small. The size limit
+// catches new high-volume fields that are added to telemetry later.
+const omittedTelemetryDataFields: ReadonlySet<string> = new Set([
+  "body",
+  "headers",
+  "post_data",
+  "png",
+]);
+const maxTelemetryDataFieldBytes = 8 * 1024;
+
+async function summarizeEmptyTelemetryResult(
+  client: KernelClient,
+  {
+    sessionId,
+    hasMore,
+    fullSessionRead,
+    soleSince,
+  }: {
+    sessionId: string;
+    hasMore: boolean;
+    fullSessionRead: boolean;
+    soleSince?: string;
+  },
+) {
+  if (hasMore) {
+    return "No matching events on this page; continue with next_offset.";
+  }
+
+  const browser = await client.browsers
+    .retrieve(sessionId)
+    .catch((error: unknown) => {
+      if (error instanceof NotFoundError) return null;
+      throw error;
+    });
+  const telemetryDisabled =
+    browser !== null &&
+    !Object.values(browser.telemetry?.browser ?? {}).some(
+      (category) => category?.enabled,
+    );
+
+  // An explicit since at or before the session's creation also covers the
+  // whole archive. Duration-style values ("10m") fail Date.parse and stay on
+  // the windowed wording, as do deleted sessions (null browser).
+  const coversFullSession =
+    fullSessionRead ||
+    (soleSince !== undefined &&
+      browser !== null &&
+      Date.parse(soleSince) <= Date.parse(browser.created_at));
+
+  if (coversFullSession) {
+    return telemetryDisabled
+      ? "No telemetry events are archived for this session. Telemetry is currently disabled."
+      : "No telemetry events are archived for this session.";
+  }
+  return telemetryDisabled
+    ? "No events matched this query. Broaden the categories or time window before changing capture settings; capture is currently disabled, so no new events are being archived."
+    : "No events matched this query.";
+}
+
+function compactTelemetryEvent({ seq, event }: TelemetryEnvelope) {
+  const { ts, category, type, source, truncated } = event;
+  const data = "data" in event ? event.data : undefined;
+
+  let compactData: Record<string, unknown> | undefined;
+  let omittedFields: string[] | undefined;
+  if (data) {
+    compactData = { ...(data as Record<string, unknown>) };
+    for (const [field, value] of Object.entries(compactData)) {
+      const alwaysOmit = omittedTelemetryDataFields.has(field);
+      const serialized = alwaysOmit ? undefined : JSON.stringify(value);
+      const oversized =
+        serialized !== undefined &&
+        Buffer.byteLength(serialized, "utf8") > maxTelemetryDataFieldBytes;
+      if (alwaysOmit || oversized) {
+        delete compactData[field];
+        (omittedFields ??= []).push(field);
+      }
+    }
+  }
+
+  return {
+    seq,
+    // Raw ts (Unix microseconds) is kept alongside the readable time so exact
+    // event boundaries can be fed back as since/until.
+    ts,
+    time: new Date(ts / 1000).toISOString(),
+    category,
+    type,
+    source,
+    ...(compactData && { data: compactData }),
+    ...(truncated && { truncated }),
+    ...(omittedFields && { omitted_fields: omittedFields }),
+  };
+}
+
+type BrowserTelemetryReadParams = {
+  session_id: string;
+  categories?: TelemetryEventsQuery["category"];
+  limit?: number;
+  offset?: number;
+  since?: string;
+  until?: string;
+  order?: "asc" | "desc";
+};
+
+async function readBrowserTelemetry(
+  client: KernelClient,
+  params: BrowserTelemetryReadParams,
+) {
+  const query: TelemetryEventsQuery = { limit: params.limit ?? 100 };
+  if (params.categories) query.category = params.categories;
+  if (params.offset !== undefined) query.offset = params.offset;
+  if (params.since !== undefined) query.since = params.since;
+  if (params.until !== undefined) query.until = params.until;
+  if (params.order !== undefined) query.order = params.order;
+
+  // Avoid the API's five-minute default. The archive can't predate the
+  // session, so the epoch reads the full session without a browser lookup;
+  // until-only reads already start at the stream head and desc reads anchor
+  // at the stream tail.
+  if (
+    query.offset === undefined &&
+    query.since === undefined &&
+    query.until === undefined &&
+    query.order !== "desc"
+  ) {
+    query.since = "1970-01-01T00:00:00Z";
+  }
+  const unfilteredExceptSince =
+    params.offset === undefined &&
+    params.until === undefined &&
+    params.categories === undefined;
+  const fullSessionRead = unfilteredExceptSince && params.since === undefined;
+
+  const page = await client.browsers.telemetry.events(params.session_id, query);
+  const items = page.getPaginatedItems().map(compactTelemetryEvent);
+
+  // Counter-steer the pagination reflex: an unfiltered ascending read starts
+  // at session creation, so an agent chasing a recent failure should flip to
+  // desc rather than page through the whole archive oldest-first. Applies to
+  // offset-continuation pages too — that's the agent already deep in a page
+  // walk. Category, since, and until filters signal a deliberate bracket.
+  const ascPagingNote =
+    page.has_more &&
+    params.categories === undefined &&
+    params.since === undefined &&
+    params.until === undefined &&
+    query.order !== "desc"
+      ? 'Reading oldest-first from session start. If the end of the session matters most, use order "desc" instead of paging.'
+      : undefined;
+
+  const note =
+    items.length === 0
+      ? await summarizeEmptyTelemetryResult(client, {
+          sessionId: params.session_id,
+          hasMore: Boolean(page.has_more),
+          fullSessionRead,
+          soleSince: unfilteredExceptSince ? params.since : undefined,
+        })
+      : ascPagingNote;
+
+  // Single-line JSON rather than the pretty-printed house helpers: a page
+  // carries up to 100 events and indentation would inflate the token cost.
+  return textResponse(
+    JSON.stringify({
+      items,
+      has_more: page.has_more,
+      next_offset: page.next_offset,
+      ...(note && { note }),
+    }),
+  );
 }
 
 function browserSessionNextActions(sessionId: string) {
@@ -157,18 +342,18 @@ export function registerBrowserCapabilities(server: McpServer) {
     read: (client, sessionId) => client.browsers.retrieve(sessionId),
   });
 
-  // manage_browsers -- Create, update, list, get, and delete browser sessions
+  // manage_browsers -- Manage browser sessions and read archived telemetry
   server.tool(
     "manage_browsers",
-    'Manage browser sessions when an agent needs a live browser to inspect, automate, or debug web state. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, and "delete" when finished.',
+    'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished.',
     {
       action: z
-        .enum(["create", "update", "list", "get", "delete"])
+        .enum(["create", "update", "list", "get", "get_telemetry", "delete"])
         .describe("Operation to perform."),
       session_id: z
         .string()
         .describe(
-          "Browser session ID. Required for update, get, and delete actions.",
+          "Browser session ID. Required for update, get, get_telemetry, and delete actions.",
         )
         .optional(),
       start_url: z
@@ -295,31 +480,65 @@ export function registerBrowserCapabilities(server: McpServer) {
         .enum(["active", "deleted", "all"])
         .describe('(list) Filter by status. Default "active".')
         .optional(),
-      ...paginationParams,
+      limit: paginationParams.limit.describe(
+        "(list, get_telemetry) Max results per page (1-100). get_telemetry defaults to 100; the list default is set by the API.",
+      ),
+      offset: paginationParams.offset.describe(
+        "(list) Numeric pagination offset. (get_telemetry) Opaque cursor: pass next_offset from the previous response and preserve categories, until, and order. Do not derive it from event seq values.",
+      ),
+      categories: z
+        .array(z.enum(telemetryEventCategories))
+        .min(1)
+        .describe(
+          `(get_telemetry) Restrict results to these event categories. A filtered page can be empty while has_more is true. ${TELEMETRY_EVENT_CATALOG}`,
+        )
+        .optional(),
+      since: z
+        .string()
+        .describe(
+          "(get_telemetry) Start of the window: an RFC-3339 timestamp or a duration like '30m' meaning that long ago. Defaults to session creation. Ignored when offset is set; cannot be combined with order=desc.",
+        )
+        .optional(),
+      until: z
+        .string()
+        .describe(
+          "(get_telemetry) End of the window (exclusive): an RFC-3339 timestamp or a duration like '5m'. Preserve it while paging.",
+        )
+        .optional(),
+      order: z
+        .enum(["asc", "desc"])
+        .describe(
+          "(get_telemetry) Read direction. asc (default) reads oldest first from session start; desc reads newest first. Prefer desc when diagnosing a recent failure in a long session — it reaches the end without paging. Preserve it while paging.",
+        )
+        .optional(),
       telemetry_enabled: z
         .boolean()
         .describe(
-          "(create, update) Enable telemetry with VM defaults, or disable telemetry when false.",
+          "(create, update) Enable telemetry, or disable telemetry when false. Telemetry is off unless requested. The default category set is the lightweight operational bundle (control, connection, system, captcha) and does NOT include console, network, or page — enable those explicitly when you intend to debug page behavior.",
         )
         .optional(),
       telemetry_console: z
         .boolean()
-        .describe("(create, update) Enable or disable console telemetry.")
+        .describe(
+          "(create, update) Enable or disable console telemetry (console output and uncaught exceptions). Off by default; enable for debugging.",
+        )
         .optional(),
       telemetry_network: z
         .boolean()
-        .describe("(create, update) Enable or disable network telemetry.")
+        .describe(
+          "(create, update) Enable or disable network telemetry (request/response metadata). Off by default; enable for debugging.",
+        )
         .optional(),
       telemetry_page: z
         .boolean()
         .describe(
-          "(create, update) Enable or disable page lifecycle telemetry.",
+          "(create, update) Enable or disable page lifecycle telemetry (navigation, load, layout shifts, LCP). Off by default; enable for debugging.",
         )
         .optional(),
       telemetry_interaction: z
         .boolean()
         .describe(
-          "(create, update) Enable or disable user interaction telemetry.",
+          "(create, update) Enable or disable user interaction telemetry (clicks, keys, scrolls). Off by default; enable for debugging.",
         )
         .optional(),
     },
@@ -445,6 +664,26 @@ export function registerBrowserCapabilities(server: McpServer) {
                 `Browser session "${params.session_id}" not found`,
               );
             return jsonResponse(browser);
+          }
+          case "get_telemetry": {
+            if (!params.session_id)
+              return errorResponse(
+                "Error: session_id is required for get_telemetry action.",
+              );
+            if (params.since !== undefined && params.order === "desc") {
+              return errorResponse(
+                "Error: since cannot be combined with order=desc. Use until to bound a newest-first read, or order=asc with since.",
+              );
+            }
+            return await readBrowserTelemetry(client, {
+              session_id: params.session_id,
+              categories: params.categories,
+              limit: params.limit,
+              offset: params.offset,
+              since: params.since,
+              until: params.until,
+              order: params.order,
+            });
           }
           case "delete": {
             if (!params.session_id)

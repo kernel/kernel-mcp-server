@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { TELEMETRY_EVENT_CATALOG } from "@/lib/mcp/telemetry";
 
 export function registerKernelPrompts(server: McpServer) {
   // MCP Prompt explaining Kernel concepts
@@ -128,7 +129,19 @@ kernel browsers process --help
 kernel browsers playwright --help
 \`\`\`
 
-**MCP Exception:** The \`computer_action\` MCP tool with action "screenshot" is useful since it returns images directly to the agent.
+**MCP Exceptions:** The \`computer_action\` MCP tool with action "screenshot" is useful since it returns images directly to the agent, and \`manage_browsers\` with action "get_telemetry" reads structured telemetry events (see below).
+
+---
+
+## Telemetry Events (structured signal — works even after the session is deleted)
+
+When telemetry was captured, it's usually the fastest way to pinpoint a failure — read it before reaching for screenshots or logs. If the session has been deleted, it's the only signal still available: every CLI command in this guide needs a live session.
+
+Start broad: call \`manage_browsers\` with action "get_telemetry", session_id "${session_id}", and no filters. That starts at session creation and returns the first page (up to 100 events); page with \`next_offset\` as \`offset\` while \`has_more\` is true, preserving \`categories\`, \`until\`, and \`order\`. An empty unfiltered read is definitive: nothing was archived. Narrow when the output is too large to scan or you already know where to look: \`categories\` to isolate a signal you've spotted, \`order\` "desc" when the end of the session matters most, \`since\`/\`until\` to bracket a known failing step. Correlate event timestamps with the failing automation step.
+
+**Gotcha: telemetry is opt-in and only covers activity that happened while capture was on.** Archived events survive telemetry being disabled and the session being deleted, so the archive — not the current config — is the ground truth: \`manage_browsers\` action "get" showing no enabled \`telemetry\` categories means capture is off now, not that nothing was recorded. The default bundle (control/connection/system/captcha) also omits the debug-critical categories. To capture new evidence on an active browser, use \`manage_browsers\` action "update" to enable \`telemetry_console\`, \`telemetry_network\`, and \`telemetry_page\`, then reproduce the issue; recreate the browser only if the session has ended.
+
+${TELEMETRY_EVENT_CATALOG}
 
 ---
 
@@ -224,6 +237,7 @@ These are **normal** and don't indicate problems:
 ## Debugging Checklist
 
 - [ ] Session exists and is active
+- [ ] Telemetry events reviewed (if any were captured)
 - [ ] Screenshot shows expected content (or reveals error)
 - [ ] Current URL is as expected
 - [ ] Supervisor logs show all services running
@@ -237,11 +251,12 @@ These are **normal** and don't indicate problems:
 
 Based on your issue "${issue_description}", start with:
 
-1. **Get browser info** to confirm session is active
-2. **Take screenshot** to see current state
-3. **Check page URL** to see if on error page
-4. **Test network** if seeing connection errors
-5. **Review logs** for specific error patterns`;
+1. **Read telemetry events** — works whether or not the session still exists; if the archive is empty and the session is active, enable the debug categories and reproduce
+2. **Get browser info** to confirm the session is active before using the CLI commands
+3. **Take screenshot** to see current state
+4. **Check page URL** to see if on error page
+5. **Test network** if seeing connection errors
+6. **Review logs** for specific error patterns`;
 
       return {
         messages: [
