@@ -269,7 +269,7 @@ Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_
 - `manage_api_keys` - Create, list, get, update, and delete org-wide or project-scoped API keys. Create returns the plaintext key once.
 - `manage_browser_pools` - Create, list, get, delete, and flush pools of pre-warmed browsers. Acquire and release browsers from pools.
 - `manage_proxies` - Create, list, get, check, and delete proxy configurations (datacenter, ISP, residential, mobile, custom).
-- `manage_replays` - Start, stop, and list video replay recordings for a browser session. Session-scoped: start once, run your automation, then stop.
+- `manage_replays` - Start, stop, and list video replay recordings for a browser session. Session-scoped: start once, run your automation, then stop. Requires a paid Kernel plan.
 - `manage_extensions` - List and delete uploaded browser extensions.
 - `manage_apps` - List/search apps, invoke actions, get/list/delete deployments, and get invocation results.
 - `manage_auth_connections` - Create, list, get, delete managed auth connections; start login flows (returns a hosted URL and live view); submit MFA codes or SSO selections.

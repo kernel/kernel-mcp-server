@@ -13,7 +13,7 @@ export function registerReplayTools(server: McpServer) {
   // manage_replays -- Start, stop, and list video replay recordings for a session
   server.tool(
     "manage_replays",
-    'Manage video replay recordings for a browser session. Use "start" to begin recording a session (returns a replay_id and a viewable URL), "stop" to end a recording and persist the video, or "list" to see all replays for a session with their view URLs. Recording is session-scoped: start once, run your automation, then stop -- rather than recording each action separately.',
+    'Manage video replay recordings for a browser session. Use "start" to begin recording a session (returns a replay_id and a viewable URL), "stop" to end a recording and persist the video, or "list" to see all replays for a session with their view URLs. Recording is session-scoped: start once, run your automation, then stop -- rather than recording each action separately. Requires a paid Kernel plan; not available on the free tier.',
     {
       action: z
         .enum(["start", "stop", "list"])
