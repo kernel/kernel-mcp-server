@@ -6,7 +6,7 @@ export function registerPlaywrightTool(server: McpServer) {
   // execute_playwright_code -- Run Playwright/TypeScript code against a browser
   server.tool(
     "execute_playwright_code",
-    'Execute Playwright/TypeScript automation code against an existing Kernel browser session. Does not create or delete browsers -- use manage_browsers to manage session lifecycle. Use computer_action with action "screenshot" instead of page.screenshot() in code.',
+    "Execute Playwright/TypeScript automation code against an existing Kernel browser session. Does not create or delete browsers -- use manage_browsers to manage session lifecycle.",
     {
       code: z
         .string()
