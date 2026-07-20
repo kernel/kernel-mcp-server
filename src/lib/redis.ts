@@ -9,18 +9,20 @@ if (redisTlsServerName && parsedRedisUrl?.protocol !== "rediss:") {
   throw new Error("REDIS_TLS_SERVER_NAME requires REDIS_URL to use rediss://");
 }
 
-// Upper bound on connecting and on any single command, so an unreachable Redis
-// surfaces as an error instead of blocking the caller (e.g. OAuth token exchange).
-const CONNECT_TIMEOUT_MS = 5000;
+// Upper bound on any single command, so an unreachable Redis surfaces as an
+// error instead of blocking the caller (e.g. OAuth token exchange).
 const COMMAND_TIMEOUT_MS = 5000;
 
-// Modest backoff to smooth over first-hit cold connections, but give up after a
-// bounded number of attempts rather than retrying forever while Redis is down.
-const MAX_RECONNECT_ATTEMPTS = 10;
+// connect() makes one attempt per connectTimeout and consults reconnectStrategy
+// between attempts. Bounding both caps how long connect() can block: an
+// unreachable Redis fails after ~MAX_CONNECT_ATTEMPTS x CONNECT_TIMEOUT_MS
+// instead of retrying forever, while a healthy connect still returns in <1s.
+const CONNECT_TIMEOUT_MS = 3000;
+const MAX_CONNECT_ATTEMPTS = 2;
 const reconnectStrategy = (retries: number) => {
-  if (retries >= MAX_RECONNECT_ATTEMPTS) {
+  if (retries >= MAX_CONNECT_ATTEMPTS - 1) {
     return new Error(
-      `Redis unavailable after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts`,
+      `Redis unavailable after ${MAX_CONNECT_ATTEMPTS} connect attempts`,
     );
   }
   return Math.min(500 + retries * 100, 2000);
@@ -66,37 +68,22 @@ async function ensureConnected(): Promise<void> {
   // A single in-flight connect is shared so concurrent callers don't each open
   // (and later tear down) the singleton socket out from under one another.
   if (connectPromise) return await connectPromise;
-  connectPromise = connectWithTimeout().finally(() => {
+  connectPromise = openConnection().finally(() => {
     connectPromise = null;
   });
   return await connectPromise;
 }
 
-// connect() drives the reconnect loop, so against an unreachable Redis it blocks
-// for the whole reconnect budget. Cap the wait so callers fail within the same
-// ceiling as a command instead of after every reconnect attempt.
-async function connectWithTimeout(): Promise<void> {
-  // Clear any half-open socket from a prior failed connect before retrying.
+async function openConnection(): Promise<void> {
+  // A prior failed connect leaves the socket flagged open; clear it first so
+  // connect() doesn't throw "Socket already opened". connect() bounds itself via
+  // connectTimeout and reconnectStrategy, so no external deadline is needed.
   if (client.isOpen) resetClient();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const connect = client.connect();
-  connect.catch(() => {}); // swallow a late rejection if the deadline wins
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () =>
-        reject(
-          new Error(`Redis connect timed out after ${CONNECT_TIMEOUT_MS}ms`),
-        ),
-      CONNECT_TIMEOUT_MS,
-    );
-  });
   try {
-    await Promise.race([connect, deadline]);
+    await client.connect();
   } catch (err) {
     resetClient();
     throw err;
-  } finally {
-    if (timer) clearTimeout(timer);
   }
 }
 
