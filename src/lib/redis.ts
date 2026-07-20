@@ -18,7 +18,7 @@ const COMMAND_TIMEOUT_MS = 5000;
 // bounded number of attempts rather than retrying forever while Redis is down.
 const MAX_RECONNECT_ATTEMPTS = 10;
 const reconnectStrategy = (retries: number) => {
-  if (retries > MAX_RECONNECT_ATTEMPTS) {
+  if (retries >= MAX_RECONNECT_ATTEMPTS) {
     return new Error(
       `Redis unavailable after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts`,
     );
@@ -64,19 +64,40 @@ async function ensureConnected(): Promise<void> {
   if ((client as any).isReady) return;
   if (client.isOpen && isConnected) return;
   if (connectPromise) return await connectPromise;
-  connectPromise = client
-    .connect()
-    .then(() => {
-      // 'ready' event will flip isConnected when the client can process commands
-    })
-    .catch((err) => {
-      isConnected = false;
-      throw err;
-    })
-    .finally(() => {
-      connectPromise = null;
-    });
+  connectPromise = connectWithTimeout().finally(() => {
+    connectPromise = null;
+  });
   return await connectPromise;
+}
+
+// connect() drives the reconnect loop, so against an unreachable Redis it blocks
+// for the whole reconnect budget. Cap the wait so callers fail within the same
+// ceiling as a command instead of after every reconnect attempt.
+async function connectWithTimeout(): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const connect = client.connect();
+  connect.catch(() => {}); // swallow a late rejection if the deadline wins
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new Error(`Redis connect timed out after ${CONNECT_TIMEOUT_MS}ms`),
+        ),
+      CONNECT_TIMEOUT_MS,
+    );
+  });
+  try {
+    await Promise.race([connect, deadline]);
+  } catch (err) {
+    isConnected = false;
+    // Stop the in-flight reconnect loop so the next call starts from a clean socket
+    try {
+      client.destroy();
+    } catch {}
+    throw err;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 // Hash JWT using HMAC-SHA256 with CLERK_SECRET_KEY for secure Redis storage
@@ -196,6 +217,8 @@ function isTransientSocketError(error: unknown): boolean {
 
 async function withTimeout<T>(operation: () => Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const op = operation();
+  op.catch(() => {}); // if the timeout wins, the command may still settle later
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(
       () =>
@@ -206,7 +229,7 @@ async function withTimeout<T>(operation: () => Promise<T>): Promise<T> {
     );
   });
   try {
-    return await Promise.race([operation(), timeout]);
+    return await Promise.race([op, timeout]);
   } finally {
     if (timer) clearTimeout(timer);
   }
