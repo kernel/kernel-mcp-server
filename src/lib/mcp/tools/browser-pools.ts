@@ -10,9 +10,11 @@ import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
 import {
   jsonResponse,
   errorResponse,
+  paginatedJsonResponse,
   textResponse,
   toolErrorResponse,
 } from "@/lib/mcp/responses";
+import { paginationParams } from "@/lib/mcp/schemas";
 
 type BrowserPoolCreateParams = Parameters<
   KernelClient["browserPools"]["create"]
@@ -27,7 +29,10 @@ type BrowserPoolAcquireResponse = Awaited<
   ReturnType<KernelClient["browserPools"]["acquire"]>
 >;
 
-type PoolConfigParams = BrowserCreateConfigParams & {
+type PoolConfigParams = Omit<
+  BrowserCreateConfigParams,
+  "save_profile_changes"
+> & {
   size?: number;
   name?: string;
   headless?: boolean;
@@ -159,14 +164,17 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
     }
 
     const client = createKernelClient(extra.authInfo.token);
-    const pools = await client.browserPools.list();
+    const pools = [];
+    for await (const pool of client.browserPools.list()) {
+      pools.push(pool);
+    }
     return {
       contents: [
         {
           uri: uri.toString(),
           mimeType: "application/json",
           text:
-            pools && pools.length > 0
+            pools.length > 0
               ? JSON.stringify(pools.map(summarizeBrowserPool), null, 2)
               : "No browser pools found",
         },
@@ -243,12 +251,6 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
         .string()
         .describe(
           "(create, update) Profile ID to load into pool browsers. Cannot use with profile_name.",
-        )
-        .optional(),
-      save_profile_changes: z
-        .boolean()
-        .describe(
-          "(create, update) Save browser changes back to the selected profile when sessions end.",
         )
         .optional(),
       proxy_id: z
@@ -335,6 +337,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
         .boolean()
         .describe("(release) Reuse browser instance or recreate. Default true.")
         .optional(),
+      ...paginationParams,
     },
     {
       title: "Manage Kernel browser pools",
@@ -391,13 +394,15 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
             });
           }
           case "list": {
-            const pools = (await client.browserPools.list()) ?? [];
-            return pools.length > 0
-              ? jsonResponse({
-                  items: pools.map(summarizeBrowserPool),
-                  note: 'Use action "get" with id_or_name for full pool details.',
-                })
-              : textResponse("No browser pools found");
+            const page = await client.browserPools.list({
+              ...(params.limit !== undefined && { limit: params.limit }),
+              ...(params.offset !== undefined && { offset: params.offset }),
+            });
+            return paginatedJsonResponse(page, {
+              mapItem: summarizeBrowserPool,
+              note: 'Use action "get" with id_or_name for full pool details.',
+              emptyText: "No browser pools found",
+            });
           }
           case "get": {
             if (!params.id_or_name)
