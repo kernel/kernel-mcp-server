@@ -9,12 +9,26 @@ if (redisTlsServerName && parsedRedisUrl?.protocol !== "rediss:") {
   throw new Error("REDIS_TLS_SERVER_NAME requires REDIS_URL to use rediss://");
 }
 
-// Modest backoff to smooth over first-hit cold connections
-const reconnectStrategy = (retries: number) =>
-  Math.min(500 + retries * 100, 2000);
+// Upper bound on any single command, so an unreachable Redis surfaces as an
+// error instead of blocking the caller (e.g. OAuth token exchange).
+const COMMAND_TIMEOUT_MS = 5000;
 
-// Connect on first use
-let isConnected = false;
+// connect() makes one attempt per connectTimeout and consults reconnectStrategy
+// between attempts. Bounding both caps how long connect() can block: an
+// unreachable Redis fails after ~MAX_CONNECT_ATTEMPTS x CONNECT_TIMEOUT_MS
+// instead of retrying forever, while a healthy connect still returns in <1s.
+const CONNECT_TIMEOUT_MS = 3000;
+const MAX_CONNECT_ATTEMPTS = 2;
+const reconnectStrategy = (retries: number) => {
+  if (retries >= MAX_CONNECT_ATTEMPTS - 1) {
+    return new Error(
+      `Redis unavailable after ${MAX_CONNECT_ATTEMPTS} connect attempts`,
+    );
+  }
+  return Math.min(500 + retries * 100, 2000);
+};
+
+// Connect on first use; client.isReady is the source of truth for connection state
 let connectPromise: Promise<void> | null = null;
 
 const client = createClient({
@@ -24,44 +38,53 @@ const client = createClient({
         host: parsedRedisUrl!.hostname,
         tls: true,
         servername: redisTlsServerName,
+        connectTimeout: CONNECT_TIMEOUT_MS,
         reconnectStrategy,
       }
     : {
+        connectTimeout: CONNECT_TIMEOUT_MS,
         reconnectStrategy,
       },
 });
 
 client.on("error", (err) => {
-  // Reset connection state so the next command will re-connect
-  isConnected = false;
   console.error("Redis Client Error", err);
 });
-client.on("end", () => {
-  isConnected = false;
-});
-client.on("ready", () => {
-  isConnected = true;
-});
+
+// node-redis leaves the socket flagged open after a connect fully fails or a
+// command stalls, so a plain reconnect would throw "Socket already opened".
+// Tear the client down to a known-clean state; destroy() throws when the socket
+// is already closed, which is exactly the state we want, so ignore that.
+function resetClient(): void {
+  if (client.isOpen) {
+    try {
+      client.destroy();
+    } catch {}
+  }
+}
 
 async function ensureConnected(): Promise<void> {
-  // Prefer the client's readiness state when available
-  // @ts-ignore node-redis exposes isReady at runtime
-  if ((client as any).isReady) return;
-  if (client.isOpen && isConnected) return;
+  if (client.isReady) return;
+  // A single in-flight connect is shared so concurrent callers don't each open
+  // (and later tear down) the singleton socket out from under one another.
   if (connectPromise) return await connectPromise;
-  connectPromise = client
-    .connect()
-    .then(() => {
-      // 'ready' event will flip isConnected when the client can process commands
-    })
-    .catch((err) => {
-      isConnected = false;
-      throw err;
-    })
-    .finally(() => {
-      connectPromise = null;
-    });
+  connectPromise = openConnection().finally(() => {
+    connectPromise = null;
+  });
   return await connectPromise;
+}
+
+async function openConnection(): Promise<void> {
+  // A prior failed connect leaves the socket flagged open; clear it first so
+  // connect() doesn't throw "Socket already opened". connect() bounds itself via
+  // connectTimeout and reconnectStrategy, so no external deadline is needed.
+  if (client.isOpen) resetClient();
+  try {
+    await client.connect();
+  } catch (err) {
+    resetClient();
+    throw err;
+  }
 }
 
 // Hash JWT using HMAC-SHA256 with CLERK_SECRET_KEY for secure Redis storage
@@ -179,14 +202,43 @@ function isTransientSocketError(error: unknown): boolean {
   );
 }
 
+class RedisCommandTimeoutError extends Error {}
+
+async function withTimeout<T>(operation: () => Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const op = operation();
+  op.catch(() => {}); // if the timeout wins, the command may still settle later
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new RedisCommandTimeoutError(
+            `Redis command timed out after ${COMMAND_TIMEOUT_MS}ms`,
+          ),
+        ),
+      COMMAND_TIMEOUT_MS,
+    );
+  });
+  try {
+    return await Promise.race([op, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function withReconnect<T>(operation: () => Promise<T>): Promise<T> {
   try {
-    return await operation();
+    return await withTimeout(operation);
   } catch (err) {
-    if (isTransientSocketError(err)) {
-      isConnected = false;
+    // A timed-out command leaves a stalled socket that still reports ready, so
+    // reset before retrying to force a fresh connection rather than reusing it.
+    if (
+      isTransientSocketError(err) ||
+      err instanceof RedisCommandTimeoutError
+    ) {
+      resetClient();
       await ensureConnected();
-      return await operation();
+      return await withTimeout(operation);
     }
     throw err;
   }
