@@ -26,8 +26,7 @@ const reconnectStrategy = (retries: number) => {
   return Math.min(500 + retries * 100, 2000);
 };
 
-// Connect on first use
-let isConnected = false;
+// Connect on first use; client.isReady is the source of truth for connection state
 let connectPromise: Promise<void> | null = null;
 
 const client = createClient({
@@ -47,22 +46,25 @@ const client = createClient({
 });
 
 client.on("error", (err) => {
-  // Reset connection state so the next command will re-connect
-  isConnected = false;
   console.error("Redis Client Error", err);
 });
-client.on("end", () => {
-  isConnected = false;
-});
-client.on("ready", () => {
-  isConnected = true;
-});
+
+// node-redis leaves the socket flagged open after a connect fully fails or a
+// command stalls, so a plain reconnect would throw "Socket already opened".
+// Tear the client down to a known-clean state; destroy() throws when the socket
+// is already closed, which is exactly the state we want, so ignore that.
+function resetClient(): void {
+  if (client.isOpen) {
+    try {
+      client.destroy();
+    } catch {}
+  }
+}
 
 async function ensureConnected(): Promise<void> {
-  // Prefer the client's readiness state when available
-  // @ts-ignore node-redis exposes isReady at runtime
-  if ((client as any).isReady) return;
-  if (client.isOpen && isConnected) return;
+  if (client.isReady) return;
+  // A single in-flight connect is shared so concurrent callers don't each open
+  // (and later tear down) the singleton socket out from under one another.
   if (connectPromise) return await connectPromise;
   connectPromise = connectWithTimeout().finally(() => {
     connectPromise = null;
@@ -74,6 +76,8 @@ async function ensureConnected(): Promise<void> {
 // for the whole reconnect budget. Cap the wait so callers fail within the same
 // ceiling as a command instead of after every reconnect attempt.
 async function connectWithTimeout(): Promise<void> {
+  // Clear any half-open socket from a prior failed connect before retrying.
+  if (client.isOpen) resetClient();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const connect = client.connect();
   connect.catch(() => {}); // swallow a late rejection if the deadline wins
@@ -89,11 +93,7 @@ async function connectWithTimeout(): Promise<void> {
   try {
     await Promise.race([connect, deadline]);
   } catch (err) {
-    isConnected = false;
-    // Stop the in-flight reconnect loop so the next call starts from a clean socket
-    try {
-      client.destroy();
-    } catch {}
+    resetClient();
     throw err;
   } finally {
     if (timer) clearTimeout(timer);
@@ -215,6 +215,8 @@ function isTransientSocketError(error: unknown): boolean {
   );
 }
 
+class RedisCommandTimeoutError extends Error {}
+
 async function withTimeout<T>(operation: () => Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const op = operation();
@@ -223,7 +225,9 @@ async function withTimeout<T>(operation: () => Promise<T>): Promise<T> {
     timer = setTimeout(
       () =>
         reject(
-          new Error(`Redis command timed out after ${COMMAND_TIMEOUT_MS}ms`),
+          new RedisCommandTimeoutError(
+            `Redis command timed out after ${COMMAND_TIMEOUT_MS}ms`,
+          ),
         ),
       COMMAND_TIMEOUT_MS,
     );
@@ -239,8 +243,13 @@ async function withReconnect<T>(operation: () => Promise<T>): Promise<T> {
   try {
     return await withTimeout(operation);
   } catch (err) {
-    if (isTransientSocketError(err)) {
-      isConnected = false;
+    // A timed-out command leaves a stalled socket that still reports ready, so
+    // reset before retrying to force a fresh connection rather than reusing it.
+    if (
+      isTransientSocketError(err) ||
+      err instanceof RedisCommandTimeoutError
+    ) {
+      resetClient();
       await ensureConnected();
       return await withTimeout(operation);
     }
