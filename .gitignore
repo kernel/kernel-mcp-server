@@ -106,3 +106,6 @@ Makefile
 
 # private key
 mcp-key.pem
+
+# TypeScript incremental build cache
+tsconfig.tsbuildinfo
