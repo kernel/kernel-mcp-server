@@ -11,7 +11,7 @@ export function registerPlaywrightTool(server: McpServer) {
       code: z
         .string()
         .describe(
-          'Playwright/TypeScript code with a `page` object in scope; the value you `return` is sent back. Example: `await page.goto(\'https://example.com\'); return await page.title();` Return only what you need — prefer a targeted selector (e.g. `await page.locator(\'h1\').innerText()`) or a region-scoped snapshot (e.g. `await page.locator(\'main\').ariaSnapshot()`) rather than dumping the whole page.',
+          'Playwright/TypeScript code with `page`, `context`, and `browser` objects in scope; the value you `return` is sent back. Example: `await page.goto(\'https://example.com\'); return await page.title();` Return only what you need — prefer a targeted selector (e.g. `await page.locator(\'h1\').innerText()`) or a region-scoped snapshot (e.g. `await page.locator(\'main\').ariaSnapshot()`) rather than dumping the whole page.',
         ),
       session_id: z
         .string()
