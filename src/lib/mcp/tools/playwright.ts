@@ -2,18 +2,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 
-// Cap per-field output so a single call can't flood the model's context. Whole-page
-// reads (innerText/ariaSnapshot on body) routinely run tens to hundreds of KB.
-const MAX_FIELD_CHARS = 25_000;
-
-function cap(value: unknown): unknown {
-  if (value === undefined || value === null) return value;
-  const text = typeof value === "string" ? value : JSON.stringify(value);
-  if (text.length <= MAX_FIELD_CHARS) return value;
-  const dropped = text.length - MAX_FIELD_CHARS;
-  return `${text.slice(0, MAX_FIELD_CHARS)}\n\n[output truncated: showing ${MAX_FIELD_CHARS} of ${text.length} chars, ${dropped} dropped. Return a targeted selector instead of a whole-page read.]`;
-}
-
 export function registerPlaywrightTool(server: McpServer) {
   // execute_playwright_code -- Run Playwright/TypeScript code against a browser
   server.tool(
@@ -56,10 +44,10 @@ export function registerPlaywrightTool(server: McpServer) {
               text: JSON.stringify(
                 {
                   success: response.success,
-                  result: cap(response.result),
-                  error: cap(response.error),
-                  stdout: cap(response.stdout),
-                  stderr: cap(response.stderr),
+                  result: response.result,
+                  error: response.error,
+                  stdout: response.stdout,
+                  stderr: response.stderr,
                 },
                 null,
                 2,
