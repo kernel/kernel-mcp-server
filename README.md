@@ -20,7 +20,7 @@ The Kernel MCP Server bridges AI assistants (like Claude, Cursor, or other MCP-c
 - 📊 Monitor deployments and track invocations
 - 🔍 Search Kernel documentation and inject context
 - 💻 Execute arbitrary Playwright code against live browsers
-- 🎥 Automatically record video replays of browser automation
+- 🎥 Record MP4 video replays of browser automation
 
 **Open-source & fully-managed** — the complete codebase is available here, and we run the production instance so you don't need to deploy anything.
 
@@ -269,6 +269,7 @@ Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_
 - `manage_api_keys` - Create, list, get, update, and delete org-wide or project-scoped API keys. Create returns the plaintext key once.
 - `manage_browser_pools` - Create, list, get, delete, and flush pools of pre-warmed browsers. Acquire and release browsers from pools.
 - `manage_proxies` - Create, list, get, check, and delete proxy configurations (datacenter, ISP, residential, mobile, custom).
+- `manage_replays` - Start, stop, and list MP4 video replay recordings for a browser session. Session-scoped: start once, run your automation, then stop. Requires a paid Kernel plan.
 - `manage_extensions` - List and delete uploaded browser extensions.
 - `manage_apps` - List/search apps, invoke actions, get/list/delete deployments, and get invocation results.
 - `manage_auth_connections` - Create, list, get, delete managed auth connections; start login flows (returns a hosted URL and live view); submit MFA codes or SSO selections.
@@ -279,7 +280,7 @@ Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_
 
 - `computer_action` - Mouse, keyboard, clipboard, and screenshot controls for browser sessions (click, type, press_key, scroll, move, get_position, read_clipboard, write_clipboard, screenshot).
 - `browser_curl` - Send HTTP requests through an existing browser session's Chrome network stack.
-- `execute_playwright_code` - Execute Playwright/TypeScript code against a browser with automatic video replay and cleanup.
+- `execute_playwright_code` - Execute Playwright/TypeScript code against an existing browser session. Does not create or delete browsers - use `manage_browsers` for session lifecycle.
 - `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
 - `search_docs` - Search Kernel platform documentation and guides.
 
@@ -320,9 +321,10 @@ Assistant: I'll execute your web-scraper action with reddit.com as the target.
 
 ```
 Human: Go to example.com and get me the page title
-Assistant: I'll execute Playwright code to navigate to the site and retrieve the title.
-[Uses execute_playwright_code tool with code: "await page.goto('https://example.com'); return await page.title();"]
-Returns: { success: true, result: "Example Domain", replay_url: "https://..." }
+Assistant: I'll create a browser session, then execute Playwright code against it to navigate to the site and retrieve the title.
+[Uses manage_browsers tool with action: "create" to get a session_id]
+[Uses execute_playwright_code tool with session_id and code: "await page.goto('https://example.com'); return await page.title();"]
+Returns: { success: true, result: "Example Domain" }
 ```
 
 ### Set up browser profiles for authentication
