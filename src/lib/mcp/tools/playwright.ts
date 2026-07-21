@@ -23,14 +23,7 @@ export function registerPlaywrightTool(server: McpServer) {
       code: z
         .string()
         .describe(
-          [
-            'Playwright/TypeScript code with a `page` object in scope. Example: "await page.goto(\\"https://example.com\\"); return await page.title();"',
-            "Return only what you need, and orient before you extract — work broad-and-cheap to narrow-and-specific so you never dump a whole page:",
-            "1. ORIENT (do this first on an unfamiliar page): return a small overview, e.g. `return { url: page.url(), title: await page.title(), headings: await page.locator('h1,h2,h3').allInnerTexts() }`. For a structural map, evaluateAll over landmarks and return each region's role + accessible name + control count (not its text), e.g. `return await page.locator('main,nav,header,footer,aside,section,form').evaluateAll(els => els.map(e => ({ region: e.getAttribute('role') || e.tagName.toLowerCase(), label: (e.getAttribute('aria-label') || e.querySelector('h1,h2,h3')?.textContent || '').trim().slice(0,60), controls: e.querySelectorAll('a,button,input,select,textarea').length })))`.",
-            "2. SCOPE: pick the one region that matters, then `await page.locator(SELECTOR).ariaSnapshot()` for its interactive tree.",
-            "3. EXTRACT: pull the value with a targeted locator, e.g. `await page.locator(SELECTOR).innerText()`.",
-            "Do NOT call `innerText()` or `ariaSnapshot()` on `body` — whole-page reads are large and get truncated.",
-          ].join(" "),
+          'Playwright/TypeScript code with a `page` object in scope. Example: "await page.goto(\\"https://example.com\\"); return await page.title();" Tip: return only what you need — prefer a targeted selector (e.g. `await page.locator(SELECTOR).innerText()`) and scope reads to a region (e.g. `await page.locator("main").ariaSnapshot()`) rather than dumping the whole page.',
         ),
       session_id: z
         .string()
