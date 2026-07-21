@@ -11,7 +11,7 @@ export function registerPlaywrightTool(server: McpServer) {
       code: z
         .string()
         .describe(
-          'Playwright/TypeScript code with a `page` object in scope. Example: "await page.goto(\\"https://example.com\\"); return await page.title();" Tip: Use `await page._snapshotForAI()` for a comprehensive page state snapshot.',
+          'Playwright/TypeScript code with a `page` object in scope. Example: "await page.goto(\\"https://example.com\\"); return await page.title();" Tip: Use `await page.locator("body").ariaSnapshot()` for a comprehensive accessibility-tree snapshot of the page.',
         ),
       session_id: z
         .string()
