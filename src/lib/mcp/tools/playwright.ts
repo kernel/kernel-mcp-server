@@ -15,6 +15,7 @@ export function registerPlaywrightTool(server: McpServer) {
         ),
       session_id: z
         .string()
+        .min(1, "session_id is required")
         .describe("Browser session ID to execute the code against."),
     },
     {
