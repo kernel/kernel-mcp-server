@@ -8,6 +8,10 @@ const isPublicRoute = createRouteMatcher([
   "/register",
   "/authorize",
   "/token",
+  // Public only at this narrow relay boundary. The route itself accepts an
+  // unauthenticated single-use exchange and validates scoped managed-auth JWTs
+  // for retrieve, submit, and events.
+  "/managed-auth-proxy/auth/connections/(.*)",
 ]);
 
 export default clerkMiddleware(async (auth, req) => {

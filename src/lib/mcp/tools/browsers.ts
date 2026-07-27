@@ -266,6 +266,7 @@ async function readBrowserTelemetry(
 
 function browserSessionNextActions(sessionId: string) {
   return [
+    `Use show_browser_live_view with session_id "${sessionId}" to display an embedded live view of this browser to the user.`,
     `Use computer_action with session_id "${sessionId}" to inspect or control the browser.`,
     `Use manage_browsers with action "get" and session_id "${sessionId}" for full browser details.`,
     `Use manage_browsers with action "delete" and session_id "${sessionId}" when the session is no longer needed.`,
@@ -345,7 +346,7 @@ export function registerBrowserCapabilities(server: McpServer) {
   // manage_browsers -- Manage browser sessions and read archived telemetry
   server.tool(
     "manage_browsers",
-    'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished.',
+    'Manage browser sessions and their archived telemetry. Before creating a browser for a site that requires login, first call manage_auth_connections(action="list", domain_filter=...), inspect all pages, ask the user to choose if multiple profiles match, and use the returned authenticated profile_name. Never create a fresh browser when an authenticated managed-auth profile is available. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished.',
     {
       action: z
         .enum(["create", "update", "list", "get", "get_telemetry", "delete"])
@@ -395,7 +396,7 @@ export function registerBrowserCapabilities(server: McpServer) {
       profile_name: z
         .string()
         .describe(
-          "(create, update) Profile name to load saved cookies/logins. Cannot use with profile_id.",
+          "(create, update) Profile name to load saved cookies/logins. For protected sites, obtain this from manage_auth_connections after domain-filtered discovery and user selection. Continue only when that connection is AUTHENTICATED. Cannot use with profile_id.",
         )
         .optional(),
       profile_id: z

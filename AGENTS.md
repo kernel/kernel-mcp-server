@@ -141,10 +141,10 @@ The `KERNEL_API_KEY` env var is passed as the Bearer token and forwarded to the 
 
 ### Services overview
 
-| Service | Required | Notes |
-|---------|----------|-------|
-| Next.js dev server (port 3002) | Yes | `make dev` — the MCP server itself |
-| Clerk (SaaS) | Yes | OAuth 2.1 auth — config injected via `op run` |
-| Redis | Yes | OAuth org-context storage — URL injected via `op run` |
-| Kernel Platform API (SaaS) | Yes | Backend for all MCP tools — reached via SDK |
-| Mintlify (SaaS) | Optional | Only for `search_docs` tool |
+| Service                        | Required | Notes                                                 |
+| ------------------------------ | -------- | ----------------------------------------------------- |
+| Next.js dev server (port 3002) | Yes      | `make dev` — the MCP server itself                    |
+| Clerk (SaaS)                   | Yes      | OAuth 2.1 auth — config injected via `op run`         |
+| Redis                          | Yes      | OAuth org-context storage — URL injected via `op run` |
+| Kernel Platform API (SaaS)     | Yes      | Backend for all MCP tools — reached via SDK           |
+| Mintlify (SaaS)                | Optional | Only for `search_docs` tool                           |

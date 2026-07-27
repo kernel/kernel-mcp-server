@@ -257,7 +257,7 @@ Configure these values wherever the tool expects MCP server settings.
 
 ## Tools (16 total)
 
-Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Five standalone tools handle high-frequency workflows.
+Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Standalone tools handle high-frequency and interactive workflows.
 
 Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_DISABLED_TOOLSETS` to a comma-separated list. For example, `KERNEL_MCP_DISABLED_TOOLSETS=api_keys` prevents `manage_api_keys` from being registered.
 
@@ -272,7 +272,7 @@ Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_
 - `manage_replays` - Start, stop, and list MP4 video replay recordings for a browser session. Session-scoped: start once, run your automation, then stop. Requires a paid Kernel plan.
 - `manage_extensions` - List and delete uploaded browser extensions.
 - `manage_apps` - List/search apps, invoke actions, get/list/delete deployments, and get invocation results.
-- `manage_auth_connections` - Create, list, get, delete managed auth connections; start login flows (returns a hosted URL and live view); submit MFA codes or SSO selections.
+- `manage_auth_connections` - List and get sanitized managed-auth connections. Use domain-filtered `list` as the discovery entrypoint; connection mutations stay in the secure App boundary.
 - `manage_credentials` - Create, list, get, update, and delete stored credentials; fetch a current TOTP code for credentials with a configured totp_secret.
 - `manage_credential_providers` - Create, list, get, update, and delete external credential providers (e.g. 1Password); list available items and test the provider connection.
 
@@ -283,6 +283,7 @@ Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_
 - `execute_playwright_code` - Execute Playwright/TypeScript code against an existing browser session. Does not create or delete browsers - use `manage_browsers` for session lifecycle.
 - `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
 - `search_docs` - Search Kernel platform documentation and guides.
+- `open_auth_login` - Open a secure interactive Managed Auth MCP App after user consent. Credentials and MFA never enter MCP/model traffic.
 
 ## Resources
 
@@ -326,6 +327,19 @@ Assistant: I'll create a browser session, then execute Playwright code against i
 [Uses execute_playwright_code tool with session_id and code: "await page.goto('https://example.com'); return await page.title();"]
 Returns: { success: true, result: "Example Domain" }
 ```
+
+### Use managed authentication for a protected site
+
+1. Call `manage_auth_connections` with `action: "list"` and `domain_filter`.
+2. Fetch all pages. If multiple profiles match, ask the user which profile to use.
+3. If the selected connection needs auth, explain why and wait for consent before calling `open_auth_login`.
+4. The user enters credentials/MFA only in the secure MCP App. Never ask for them in chat.
+5. Re-fetch the connection and create the browser with its `profile_name` only after it reports `AUTHENTICATED`.
+
+If no App appears, ask the user to confirm that before retrying `open_auth_login` with
+`text_only: true`. That compatibility path returns a capability-bearing hosted login URL as
+user-audience text. Returning the URL does not mean login succeeded; always verify the
+connection afterward.
 
 ### Set up browser profiles for authentication
 

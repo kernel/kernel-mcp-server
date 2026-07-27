@@ -15,5 +15,11 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      - name: Check managed-auth App bundle
+        run: bun run check:managed-auth-app
+
       - name: Type check
-        run: bunx tsc --noEmit
+        run: bunx tsc --noEmit --incremental false
+
+      - name: Test
+        run: bun test

@@ -3,6 +3,7 @@ import { registerKernelPrompts } from "@/lib/mcp/prompts";
 import { registerAPIKeyCapabilities } from "@/lib/mcp/tools/api-keys";
 import { registerAppCapabilities } from "@/lib/mcp/tools/apps";
 import { registerAuthConnectionTools } from "@/lib/mcp/tools/auth-connections";
+import { registerAuthLoginApp } from "@/lib/mcp/tools/auth-login-app";
 import { registerBrowserPoolCapabilities } from "@/lib/mcp/tools/browser-pools";
 import { registerBrowserCurlTool } from "@/lib/mcp/tools/browser-curl";
 import { registerBrowserCapabilities } from "@/lib/mcp/tools/browsers";
@@ -11,6 +12,7 @@ import { registerCredentialProviderTools } from "@/lib/mcp/tools/credential-prov
 import { registerCredentialTools } from "@/lib/mcp/tools/credentials";
 import { registerDocsTools } from "@/lib/mcp/tools/docs";
 import { registerExtensionTools } from "@/lib/mcp/tools/extensions";
+import { registerLiveViewApp } from "@/lib/mcp/tools/live-view-app";
 import { registerPlaywrightTool } from "@/lib/mcp/tools/playwright";
 import { registerProfileCapabilities } from "@/lib/mcp/tools/profiles";
 import { registerProjectCapabilities } from "@/lib/mcp/tools/projects";
@@ -20,10 +22,16 @@ import { registerShellTool } from "@/lib/mcp/tools/shell";
 
 type RegisterMcpToolset = (server: McpServer) => void;
 
+function registerManagedAuthCapabilities(server: McpServer) {
+  registerAuthConnectionTools(server);
+  registerAuthLoginApp(server);
+}
+
 const mcpToolRegistrations = [
   ["profiles", registerProfileCapabilities],
   ["docs", registerDocsTools],
   ["browsers", registerBrowserCapabilities],
+  ["live_view_app", registerLiveViewApp],
   ["projects", registerProjectCapabilities],
   ["api_keys", registerAPIKeyCapabilities],
   ["browser_pools", registerBrowserPoolCapabilities],
@@ -35,7 +43,7 @@ const mcpToolRegistrations = [
   ["shell", registerShellTool],
   ["playwright", registerPlaywrightTool],
   ["replays", registerReplayTools],
-  ["auth_connections", registerAuthConnectionTools],
+  ["auth_connections", registerManagedAuthCapabilities],
   ["credentials", registerCredentialTools],
   ["credential_providers", registerCredentialProviderTools],
 ] as const satisfies readonly (readonly [string, RegisterMcpToolset])[];
@@ -51,6 +59,8 @@ const standaloneToolsetAliases: Partial<Record<string, McpToolset>> = {
   execute_playwright_code: "playwright",
   exec_command: "shell",
   browser_utilities: "browser_curl",
+  show_browser_live_view: "live_view_app",
+  open_auth_login: "auth_connections",
 };
 
 function isMcpToolset(value: string): value is McpToolset {
