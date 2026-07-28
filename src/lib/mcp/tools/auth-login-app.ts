@@ -13,7 +13,7 @@ import {
 import { errorResponse } from "@/lib/mcp/responses";
 
 export const MANAGED_AUTH_RESOURCE_URI =
-  "ui://kernel/managed-auth-login-v6.html";
+  "ui://kernel/managed-auth-login-v7.html";
 export const MANAGED_AUTH_MIME_TYPE = "text/html;profile=mcp-app";
 
 export function managedAuthAppOrigin(): string {
@@ -143,7 +143,7 @@ export function registerAuthLoginApp(server: McpServer) {
     {
       title: "Open secure managed-auth login",
       description:
-        'Display a secure Kernel login panel after the user consents. Before calling: use manage_auth_connections(action="list", domain_filter=...) across all pages, reason about the result, and ask the user which profile to use if needed. Never ask for passwords, credentials, OTPs, or MFA values in conversation. The user enters them only in the panel. After completion, re-fetch the connection and continue only when status is AUTHENTICATED. This call does not create or start a flow until the user clicks Continue. Use text_only=true only after the user confirms no App appeared; that compatibility fallback exposes a capability-bearing hosted URL as user-audience text.',
+        'Display a secure Kernel login panel after the user consents. Before calling: use manage_auth_connections(action="list", domain_filter=...) across all pages, reason about the result, and ask the user which profile to use if needed. Never ask for passwords, credentials, OTPs, or MFA values in conversation. The user enters them only in the panel. Immediately follow this tool result\'s next_action and repeat its read-only wait while pending; continue only when it returns authenticated. This call does not create or start a flow until the user clicks Continue. Use text_only=true only after the user confirms no App appeared; that compatibility fallback exposes a capability-bearing hosted URL as user-audience text.',
       inputSchema: {
         ...authLoginInputSchema,
         text_only: z.boolean().default(false),
@@ -179,7 +179,7 @@ export function registerAuthLoginApp(server: McpServer) {
           }> = [
             {
               type: "text",
-              text: `Secure managed authentication is ${result.state === "already_authenticated" ? "already complete" : "ready"} for connection ${result.connection.id}. Expiry: ${result.connection.flow_expires_at ?? "not applicable"}. Do not claim success from this response. After the user completes login, re-fetch with manage_auth_connections and continue only if status is AUTHENTICATED.`,
+              text: `Secure managed authentication is ${result.state === "already_authenticated" ? "already complete" : "ready"} for connection ${result.connection.id}. Expiry: ${result.connection.flow_expires_at ?? "not applicable"}. Do not claim success from this response. Immediately call manage_auth_connections with action=wait, id=${result.connection.id}, and wait_seconds=25; repeat while pending and continue only when it returns authenticated.`,
             },
           ];
           if (result.hosted_url) {
@@ -201,21 +201,39 @@ export function registerAuthLoginApp(server: McpServer) {
           };
         }
 
-        const connection =
+        const reauthConnection =
           input.mode === "reauth"
             ? toSafeAuthConnection(
                 await client.auth.connections.retrieve(input.connection_id!),
               )
-            : {
-                domain: input.domain!,
-                profile_name: input.profile_name!,
-              };
+            : null;
+        const connection = reauthConnection ?? {
+          domain: input.domain!,
+          profile_name: input.profile_name!,
+        };
+        const waitArguments = reauthConnection
+          ? {
+              action: "wait",
+              id: input.connection_id!,
+              wait_seconds: 25,
+              required_flow_type: "REAUTH",
+              ...(reauthConnection.status === "AUTHENTICATED" &&
+                reauthConnection.flow_status !== "IN_PROGRESS" && {
+                  previous_flow_expires_at: reauthConnection.flow_expires_at,
+                }),
+            }
+          : {
+              action: "wait",
+              domain_filter: input.domain!,
+              profile_name: input.profile_name!,
+              wait_seconds: 25,
+            };
         const appCapability = issueAppCapability(extra.authInfo.token);
         return {
           content: [
             {
               type: "text" as const,
-              text: "A secure Kernel login panel was requested. Do not claim that it rendered or that authentication succeeded. Never ask for credentials in conversation. Wait for the App to report completion, then re-fetch and verify the connection before continuing.",
+              text: `A secure Kernel login panel was requested. Do not claim that it rendered or that authentication succeeded. Never ask for credentials in conversation. Immediately call manage_auth_connections with ${JSON.stringify(waitArguments)}. While it returns state=pending, call it again with the same arguments instead of asking the user to report completion. Continue the pending task only after it returns state=authenticated.`,
             },
           ],
           structuredContent: {
@@ -224,6 +242,10 @@ export function registerAuthLoginApp(server: McpServer) {
             mode: input.mode,
             connection,
             text_only: false,
+            next_action: {
+              tool: "manage_auth_connections",
+              arguments: waitArguments,
+            },
             // MCP Apps structuredContent is delivered to the View but is not
             // added to model context. Claude currently strips tool-result
             // _meta from launcher notifications, so duplicate this short-lived,

@@ -306,7 +306,7 @@ const AUTH_QA_HARNESS_HTML = /* html */ `<!DOCTYPE html>
         text_only: false,
       };
       launcher = await callTool("open_auth_login", input);
-      const resource = await rpc("resources/read", { uri: "ui://kernel/managed-auth-login-v6.html" });
+      const resource = await rpc("resources/read", { uri: "ui://kernel/managed-auth-login-v7.html" });
       frame.srcdoc = resource.contents[0].text;
       log("Secure App resource rendered.");
     } catch (error) { log("ERROR: " + error.message); }
@@ -390,7 +390,9 @@ Bun.serve({
           if (m.method === "resources/read") detail += ` uri=${m.params?.uri}`;
           if (m.method === "initialize") {
             const client = m.params?.clientInfo;
-            detail += ` client=${client?.name}@${client?.version} extensions=${JSON.stringify(
+            detail += ` client=${client?.name}@${client?.version} protocol=${m.params?.protocolVersion ?? "unknown"} tasks=${JSON.stringify(
+              m.params?.capabilities?.tasks ?? null,
+            )} extensions=${JSON.stringify(
               m.params?.capabilities?.extensions ?? null,
             )}`;
           }

@@ -84,6 +84,19 @@ export interface BeginAuthLoginResult {
   hosted_url?: string;
 }
 
+export interface AuthWaitSelector {
+  connectionId?: string;
+  domain?: string;
+  profileName?: string;
+  requiredFlowType?: "LOGIN" | "REAUTH";
+  previousFlowExpiresAt?: string | null;
+}
+
+export interface AuthWaitResult {
+  state: "authenticated" | "failed" | "pending";
+  connection?: SafeAuthConnection;
+}
+
 const TERMINAL_ERROR_MESSAGES: Partial<
   Record<NonNullable<ManagedAuth["flow_status"]>, string>
 > = {
@@ -121,6 +134,115 @@ export function hasLiveAuthFlow(
   if (!connection.flow_expires_at) return false;
   const expiresAt = Date.parse(connection.flow_expires_at);
   return Number.isFinite(expiresAt) && expiresAt > now.getTime();
+}
+
+async function findAuthConnection(
+  client: KernelClient,
+  selector: AuthWaitSelector,
+): Promise<ManagedAuth | null> {
+  if (selector.connectionId) {
+    return await client.auth.connections.retrieve(selector.connectionId);
+  }
+  if (!selector.domain || !selector.profileName) {
+    throw new AuthLoginStartError(
+      "Waiting for managed authentication requires a connection ID or an exact domain and profile name.",
+    );
+  }
+
+  const page = await client.auth.connections.list({
+    domain: selector.domain,
+    profile_name: selector.profileName,
+    limit: 100,
+  });
+  const matches = page
+    .getPaginatedItems()
+    .filter(
+      (item) =>
+        item.domain === selector.domain &&
+        item.profile_name === selector.profileName,
+    );
+  if (matches.length > 1 || (matches.length > 0 && page.hasNextPage())) {
+    throw new AuthLoginStartError(
+      "Multiple managed-auth connections matched while waiting. Select a connection explicitly.",
+    );
+  }
+  return matches[0] ?? null;
+}
+
+function authWaitDelay(milliseconds: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("Managed-auth wait was cancelled."));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("Managed-auth wait was cancelled."));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+export async function waitForAuthConnection(
+  client: KernelClient,
+  selector: AuthWaitSelector,
+  options: {
+    timeoutMs?: number;
+    pollIntervalMs?: number;
+    signal?: AbortSignal;
+  } = {},
+): Promise<AuthWaitResult> {
+  const timeoutMs = Math.max(0, options.timeoutMs ?? 25_000);
+  const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? 1_000);
+  const deadline = Date.now() + timeoutMs;
+  let observedQuery = false;
+  let latest: SafeAuthConnection | undefined;
+
+  do {
+    if (options.signal?.aborted) {
+      throw new Error("Managed-auth wait was cancelled.");
+    }
+    try {
+      const connection = await findAuthConnection(client, selector);
+      observedQuery = true;
+      if (connection) {
+        latest = toSafeAuthConnection(connection);
+        const requiredFlowCompleted = selector.requiredFlowType
+          ? latest.flow_status === "SUCCESS" &&
+            latest.flow_type === selector.requiredFlowType &&
+            (selector.previousFlowExpiresAt === undefined ||
+              latest.flow_expires_at !== selector.previousFlowExpiresAt)
+          : true;
+        if (latest.status === "AUTHENTICATED" && requiredFlowCompleted) {
+          return { state: "authenticated", connection: latest };
+        }
+        if (
+          latest.flow_status === "FAILED" ||
+          latest.flow_status === "EXPIRED" ||
+          latest.flow_status === "CANCELED"
+        ) {
+          return { state: "failed", connection: latest };
+        }
+      }
+    } catch (error) {
+      if (error instanceof AuthLoginStartError) throw error;
+    }
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await authWaitDelay(Math.min(pollIntervalMs, remaining), options.signal);
+  } while (Date.now() <= deadline);
+
+  if (!observedQuery) {
+    throw new AuthLoginStartError(
+      "Managed authentication status could not be checked. Retry the wait operation.",
+    );
+  }
+  return { state: "pending", ...(latest && { connection: latest }) };
 }
 
 export function deriveAuthNextAction({

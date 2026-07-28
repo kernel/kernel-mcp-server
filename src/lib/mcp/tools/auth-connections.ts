@@ -2,8 +2,10 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
+  AuthLoginStartError,
   deriveAuthNextAction,
   toSafeAuthConnection,
+  waitForAuthConnection,
 } from "@/lib/mcp/tools/managed-auth-state";
 import { errorResponse } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
@@ -23,21 +25,39 @@ function safeJsonResponse(value: unknown) {
 export function registerAuthConnectionTools(server: McpServer) {
   server.tool(
     "manage_auth_connections",
-    'Discover sanitized Kernel managed-auth connections. Start every protected-site task with action="list" and domain_filter. Reason over all pages: use an AUTHENTICATED profile with manage_browsers, ask the user to choose when multiple profiles match, or ask for consent before calling open_auth_login for a new login/re-auth. Never ask the user to send passwords, OTPs, or MFA values in conversation. Connection creation, deletion, login, and credential mutation are intentionally outside this model-facing discovery tool. Actions: list, get.',
+    'Discover and wait for sanitized Kernel managed-auth connections. Start every protected-site task with action="list" and domain_filter. Reason over all pages: use an AUTHENTICATED profile with manage_browsers, ask the user to choose when multiple profiles match, or ask for consent before calling open_auth_login for a new login/re-auth. After open_auth_login, immediately follow its next_action by calling action="wait"; repeat while state is pending so the current agent turn resumes automatically when authentication completes. Never ask the user to send passwords, OTPs, or MFA values in conversation. Connection creation, deletion, login, and credential mutation are intentionally outside this model-facing tool. Actions: list, get, wait.',
     {
-      action: z.enum(["list", "get"]).describe("Discovery operation."),
+      action: z.enum(["list", "get", "wait"]).describe("Read operation."),
       id: z
         .string()
-        .describe("Auth connection ID. Required for get.")
+        .describe("Auth connection ID. Required for get and re-auth wait.")
         .optional(),
       profile_name: z
         .string()
-        .describe("(list) Filter by profile_name.")
+        .describe("Exact profile_name filter for list or new-login wait.")
         .optional(),
       domain_filter: z
         .string()
         .describe(
-          "(list) Domain to match. Always set this when discovering a profile for a protected site.",
+          "Domain to match for list or new-login wait. Always set this when discovering a profile for a protected site.",
+        )
+        .optional(),
+      wait_seconds: z
+        .number()
+        .int()
+        .min(1)
+        .max(30)
+        .describe("(wait) Long-poll duration. Defaults to 25 seconds.")
+        .optional(),
+      required_flow_type: z
+        .enum(["LOGIN", "REAUTH"])
+        .describe("(wait) Require this newly completed flow type.")
+        .optional(),
+      previous_flow_expires_at: z
+        .string()
+        .nullable()
+        .describe(
+          "(wait) Baseline flow expiry supplied by open_auth_login; do not modify.",
         )
         .optional(),
       ...paginationParams,
@@ -95,10 +115,48 @@ export function registerAuthConnectionTools(server: McpServer) {
                   : "Do not continue the protected action. Ask for consent, then use open_auth_login to authenticate securely.",
             });
           }
+          case "wait": {
+            if (!params.id && (!params.domain_filter || !params.profile_name)) {
+              return errorResponse(
+                "Error: wait requires id, or both domain_filter and profile_name.",
+              );
+            }
+            const result = await waitForAuthConnection(
+              client,
+              {
+                ...(params.id && { connectionId: params.id }),
+                ...(params.domain_filter && { domain: params.domain_filter }),
+                ...(params.profile_name && {
+                  profileName: params.profile_name,
+                }),
+                ...(params.required_flow_type && {
+                  requiredFlowType: params.required_flow_type,
+                }),
+                ...(params.previous_flow_expires_at !== undefined && {
+                  previousFlowExpiresAt: params.previous_flow_expires_at,
+                }),
+              },
+              {
+                timeoutMs: (params.wait_seconds ?? 25) * 1_000,
+                signal: extra.signal,
+              },
+            );
+            return safeJsonResponse({
+              ...result,
+              instruction:
+                result.state === "authenticated"
+                  ? "Authentication is verified. Continue the pending task now, using this profile_name when creating the browser."
+                  : result.state === "failed"
+                    ? "Authentication did not complete. Explain the safe error and ask whether to retry open_auth_login."
+                    : "Authentication is still pending. Immediately call manage_auth_connections with action=wait and the same selector again. Do not ask the user to report completion.",
+            });
+          }
         }
-      } catch {
+      } catch (error) {
         return errorResponse(
-          `Managed-auth ${params.action} failed. Retry or choose a different recovery option.`,
+          error instanceof AuthLoginStartError
+            ? error.safeMessage
+            : `Managed-auth ${params.action} failed. Retry or choose a different recovery option.`,
         );
       }
     },

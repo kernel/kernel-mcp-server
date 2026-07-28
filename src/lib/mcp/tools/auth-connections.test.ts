@@ -6,6 +6,7 @@ import {
   beginAuthLogin,
   deriveAuthNextAction,
   toSafeAuthConnection,
+  waitForAuthConnection,
 } from "@/lib/mcp/tools/managed-auth-state";
 import type { ManagedAuth } from "@onkernel/sdk/resources/auth/connections";
 
@@ -121,6 +122,7 @@ describe("managed-auth safe responses", () => {
     registerAuthConnectionTools(server);
     expect(schema?.action.safeParse("list").success).toBe(true);
     expect(schema?.action.safeParse("get").success).toBe(true);
+    expect(schema?.action.safeParse("wait").success).toBe(true);
     expect(schema?.action.safeParse("create").success).toBe(false);
     expect(schema?.action.safeParse("delete").success).toBe(false);
     expect(schema?.action.safeParse("login").success).toBe(false);
@@ -219,6 +221,92 @@ describe("managed-auth safe responses", () => {
     expect(
       finalContinuation.next_action?.arguments.include_matches_from_prior_pages,
     ).toBe(true);
+  });
+});
+
+describe("managed-auth wait", () => {
+  test("long-polls until an exact connection is authenticated", async () => {
+    const states = [
+      connection({ flow_status: "IN_PROGRESS" }),
+      connection({ status: "AUTHENTICATED", flow_status: "SUCCESS" }),
+    ];
+    let calls = 0;
+    const client = {
+      auth: {
+        connections: {
+          retrieve: async () => states[Math.min(calls++, states.length - 1)],
+        },
+      },
+    } as unknown as KernelClient;
+
+    const result = await waitForAuthConnection(
+      client,
+      { connectionId: "conn_1" },
+      { timeoutMs: 50, pollIntervalMs: 1 },
+    );
+    expect(result.state).toBe("authenticated");
+    expect(calls).toBe(2);
+    assertNoSecrets(result);
+  });
+
+  test("does not accept stale authenticated state while re-auth is pending", async () => {
+    const stale = connection({
+      status: "AUTHENTICATED",
+      flow_status: "SUCCESS",
+      flow_type: "REAUTH",
+      flow_expires_at: "2026-01-01T00:00:00Z",
+    });
+    const client = {
+      auth: { connections: { retrieve: async () => stale } },
+    } as unknown as KernelClient;
+    const result = await waitForAuthConnection(
+      client,
+      {
+        connectionId: stale.id,
+        requiredFlowType: "REAUTH",
+        previousFlowExpiresAt: stale.flow_expires_at,
+      },
+      { timeoutMs: 0 },
+    );
+    expect(result.state).toBe("pending");
+  });
+
+  test("returns safe failure and pending states", async () => {
+    const failedClient = {
+      auth: {
+        connections: {
+          retrieve: async () =>
+            connection({
+              flow_status: "FAILED",
+              error_message: "raw site/API failure with secret",
+            }),
+        },
+      },
+    } as unknown as KernelClient;
+    const failed = await waitForAuthConnection(
+      failedClient,
+      { connectionId: "conn_1" },
+      { timeoutMs: 0 },
+    );
+    expect(failed.state).toBe("failed");
+    assertNoSecrets(failed);
+
+    const pendingClient = {
+      auth: {
+        connections: {
+          list: async () => ({
+            getPaginatedItems: () => [],
+            hasNextPage: () => false,
+          }),
+        },
+      },
+    } as unknown as KernelClient;
+    const pending = await waitForAuthConnection(
+      pendingClient,
+      { domain: "example.com", profileName: "work" },
+      { timeoutMs: 0 },
+    );
+    expect(pending).toEqual({ state: "pending" });
   });
 });
 

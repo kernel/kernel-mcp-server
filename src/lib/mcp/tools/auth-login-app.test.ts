@@ -122,6 +122,15 @@ describe("managed-auth MCP App registration", () => {
       mode: "new_login",
       connection: { domain: "example.com", profile_name: "work" },
       text_only: false,
+      next_action: {
+        tool: "manage_auth_connections",
+        arguments: {
+          action: "wait",
+          domain_filter: "example.com",
+          profile_name: "work",
+          wait_seconds: 25,
+        },
+      },
       app_capability: expect.any(String),
     });
     expect(JSON.stringify(result)).not.toContain("?code=");
@@ -155,11 +164,14 @@ describe("managed-auth MCP App registration", () => {
     );
   });
 
-  test("terminal model context excludes internal identifiers and auto-notifies the agent", () => {
+  test("terminal model context excludes internal identifiers and never writes the prompt", () => {
     expect(MANAGED_AUTH_APP_HTML).toContain("profile_name");
-    expect(MANAGED_AUTH_APP_HTML).toContain("Agent notified");
+    expect(MANAGED_AUTH_APP_HTML).toContain(
+      "Connection status saved for Claude",
+    );
     expect(MANAGED_AUTH_APP_HTML).toContain("Close panel");
-    expect(MANAGED_AUTH_APP_HTML).not.toContain("You can close this panel");
+    expect(MANAGED_AUTH_APP_HTML).not.toContain('sendRequest("ui/message"');
+    expect(MANAGED_AUTH_APP_HTML).not.toContain("Agent notified");
     expect(MANAGED_AUTH_APP_HTML).not.toContain("Continue agent");
     expect(MANAGED_AUTH_APP_HTML).not.toContain("connectionId");
     expect(MANAGED_AUTH_APP_HTML).not.toContain("claimedOutcome");

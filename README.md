@@ -333,8 +333,9 @@ Returns: { success: true, result: "Example Domain" }
 1. Call `manage_auth_connections` with `action: "list"` and `domain_filter`.
 2. Fetch all pages. If multiple profiles match, ask the user which profile to use.
 3. If the selected connection needs auth, explain why and wait for consent before calling `open_auth_login`.
-4. The user enters credentials/MFA only in the secure MCP App. Never ask for them in chat.
-5. Re-fetch the connection and create the browser with its `profile_name` only after it reports `AUTHENTICATED`.
+4. Immediately follow the launcher's `next_action`: long-poll `manage_auth_connections` with `action: "wait"`, repeating while it reports `pending`.
+5. The user enters credentials/MFA only in the secure MCP App. Never ask for them in chat.
+6. When the wait returns `authenticated`, continue the pending task and create the browser with the verified `profile_name`.
 
 If no App appears, ask the user to confirm that before retrying `open_auth_login` with
 `text_only: true`. That compatibility path returns a capability-bearing hosted login URL as

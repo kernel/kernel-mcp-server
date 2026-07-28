@@ -8,16 +8,17 @@ The managed-auth flow is discovery-first and fail-closed:
 manage_auth_connections(action="list", domain_filter=...)
   -> ask the user to choose/consent
   -> open_auth_login(...)
+  -> agent immediately starts manage_auth_connections(action="wait")
   -> user clicks Continue in the App
   -> begin_auth_login (app-only)
   -> bundled KernelManagedAuth uses the scoped relay
-  -> get_auth_login_status (app-only)
-  -> Continue agent
-  -> agent re-fetches and proceeds only if AUTHENTICATED
+  -> App publishes verified status with ui/update-model-context
+  -> read-only wait returns authenticated
+  -> agent continues the pending task automatically
 ```
 
 `open_auth_login` does not create a connection or flow until the user clicks Continue. The
-single-file `ui://kernel/managed-auth-login-v6.html` resource bundles
+single-file `ui://kernel/managed-auth-login-v7.html` resource bundles
 `@onkernel/managed-auth-react`; it never iframes the hosted page. Passwords, MFA values,
 managed-auth JWTs, and the Kernel/MCP bearer token never pass through tool calls. The handoff
 code and hosted fallback URL exist only in the app-only `begin_auth_login` result `_meta`.
@@ -27,7 +28,7 @@ exchange, retrieve, submit, and events paths and forwards only managed-auth scop
 For clients without Apps, first confirm that no panel appeared, then call `open_auth_login`
 with `text_only: true`. This explicit compatibility exception places the full hosted URL
 (including its embedded handoff capability) in user-audience text. It never emits a separate
-`handoff_code`, and the agent must re-fetch the connection instead of treating URL creation
+`handoff_code`, and the agent must run the same read-only wait instead of treating URL creation
 as successful authentication.
 
 Local QA:
