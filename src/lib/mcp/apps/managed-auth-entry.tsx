@@ -65,6 +65,7 @@ type BeginResult = {
 let nextRequestId = 1;
 const pendingRequests = new Map<number, PendingRequest>();
 let destroyed = false;
+let collapsed = false;
 let reactRoot: Root | null = null;
 let completeToolInput: JsonObject | null = null;
 let launcherToolResult: JsonObject | null = null;
@@ -134,7 +135,9 @@ function applyHostContext(context: JsonObject | undefined) {
 
 function reportSize() {
   sendNotification("ui/notifications/size-changed", {
-    height: Math.max(document.documentElement.scrollHeight, 360),
+    height: collapsed
+      ? 1
+      : Math.max(document.documentElement.scrollHeight, 360),
   });
 }
 
@@ -247,6 +250,7 @@ function ManagedAuthApp() {
   const [agentNotification, setAgentNotification] = useState<
     "idle" | "sending" | "sent" | "failed"
   >("idle");
+  const [dismissed, setDismissed] = useState(false);
   const [statusText, setStatusText] = useState("");
   const [embeddedInitFailed, setEmbeddedInitFailed] = useState(false);
   const [embeddedRetryRequired, setEmbeddedRetryRequired] = useState(false);
@@ -527,6 +531,16 @@ function ManagedAuthApp() {
     }
   });
 
+  function closePanel() {
+    collapsed = true;
+    setDismissed(true);
+    window.setTimeout(reportSize, 0);
+  }
+
+  if (dismissed) {
+    return <div aria-hidden="true" style={{ height: 0, overflow: "hidden" }} />;
+  }
+
   if (!launcher.input || !launcher.result) {
     return <div className="kernel-app-loading">Preparing secure login…</div>;
   }
@@ -569,12 +583,15 @@ function ManagedAuthApp() {
                 >
                   Notify agent
                 </button>
+              ) : agentNotification === "sent" ? (
+                <>
+                  <p className="kernel-app-status">Agent notified.</p>
+                  <button className="kernel-app-button" onClick={closePanel}>
+                    Close panel
+                  </button>
+                </>
               ) : (
-                <p className="kernel-app-status">
-                  {agentNotification === "sent"
-                    ? "Agent notified. You can close this panel."
-                    : "Notifying agent…"}
-                </p>
+                <p className="kernel-app-status">Notifying agent…</p>
               )}
             </div>
           </Shell>

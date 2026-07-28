@@ -17,7 +17,7 @@ manage_auth_connections(action="list", domain_filter=...)
 ```
 
 `open_auth_login` does not create a connection or flow until the user clicks Continue. The
-single-file `ui://kernel/managed-auth-login-v5.html` resource bundles
+single-file `ui://kernel/managed-auth-login-v6.html` resource bundles
 `@onkernel/managed-auth-react`; it never iframes the hosted page. Passwords, MFA values,
 managed-auth JWTs, and the Kernel/MCP bearer token never pass through tool calls. The handoff
 code and hosted fallback URL exist only in the app-only `begin_auth_login` result `_meta`.
