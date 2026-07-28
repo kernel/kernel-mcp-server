@@ -13,7 +13,7 @@ import {
 import { errorResponse } from "@/lib/mcp/responses";
 
 export const MANAGED_AUTH_RESOURCE_URI =
-  "ui://kernel/managed-auth-login-v4.html";
+  "ui://kernel/managed-auth-login-v5.html";
 export const MANAGED_AUTH_MIME_TYPE = "text/html;profile=mcp-app";
 
 export function managedAuthAppOrigin(): string {

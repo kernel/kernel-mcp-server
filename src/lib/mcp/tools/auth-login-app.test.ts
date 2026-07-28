@@ -155,8 +155,10 @@ describe("managed-auth MCP App registration", () => {
     );
   });
 
-  test("terminal model context excludes internal identifiers", () => {
+  test("terminal model context excludes internal identifiers and auto-notifies the agent", () => {
     expect(MANAGED_AUTH_APP_HTML).toContain("profile_name");
+    expect(MANAGED_AUTH_APP_HTML).toContain("Agent notified");
+    expect(MANAGED_AUTH_APP_HTML).not.toContain("Continue agent");
     expect(MANAGED_AUTH_APP_HTML).not.toContain("connectionId");
     expect(MANAGED_AUTH_APP_HTML).not.toContain("claimedOutcome");
     expect(MANAGED_AUTH_APP_HTML).not.toContain("resumeId");

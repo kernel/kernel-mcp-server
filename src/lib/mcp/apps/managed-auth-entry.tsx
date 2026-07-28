@@ -244,6 +244,9 @@ function ManagedAuthApp() {
   const [beginResult, setBeginResult] = useState<BeginResult | null>(null);
   const [starting, setStarting] = useState(false);
   const [terminal, setTerminal] = useState<"success" | "failure" | null>(null);
+  const [agentNotification, setAgentNotification] = useState<
+    "idle" | "sending" | "sent" | "failed"
+  >("idle");
   const [statusText, setStatusText] = useState("");
   const [embeddedInitFailed, setEmbeddedInitFailed] = useState(false);
   const [embeddedRetryRequired, setEmbeddedRetryRequired] = useState(false);
@@ -395,7 +398,32 @@ function ManagedAuthApp() {
         structuredContent: context.structuredContent,
       });
     } catch {
-      // The visible Continue agent action remains available as a fallback.
+      // ui/message below still carries the sanitized terminal status.
+    }
+  }
+
+  async function notifyAgent(outcome: "success" | "failure") {
+    if (!resumeId || destroyed) {
+      setAgentNotification("failed");
+      return;
+    }
+    setAgentNotification("sending");
+    await publishTerminal(outcome);
+    const messageKey = `kernel-managed-auth-message:${resumeId}:${outcome}`;
+    if (!claimOneShot(messageKey)) {
+      setAgentNotification("sent");
+      return;
+    }
+    const context = terminalContext(outcome);
+    try {
+      await sendRequest("ui/message", {
+        role: "user",
+        content: [{ type: "text", text: context.text }],
+      });
+      setAgentNotification("sent");
+    } catch {
+      releaseOneShot(messageKey);
+      setAgentNotification("failed");
     }
   }
 
@@ -404,7 +432,7 @@ function ManagedAuthApp() {
     if (pollTimer.current !== null) window.clearTimeout(pollTimer.current);
     setTerminal(outcome);
     setStatusText("");
-    void publishTerminal(outcome);
+    void notifyAgent(outcome);
   }
 
   async function checkStatus() {
@@ -499,23 +527,6 @@ function ManagedAuthApp() {
     }
   });
 
-  async function continueAgent() {
-    if (!resumeId || !terminal) return;
-    const messageKey = `kernel-managed-auth-message:${resumeId}:${terminal}`;
-    if (!claimOneShot(messageKey)) return;
-    const context = terminalContext(terminal);
-    try {
-      await sendRequest("ui/message", {
-        role: "user",
-        content: [{ type: "text", text: context.text }],
-      });
-      setStatusText("Agent notified.");
-    } catch {
-      releaseOneShot(messageKey);
-      setStatusText("Tell the agent to verify the connection and continue.");
-    }
-  }
-
   if (!launcher.input || !launcher.result) {
     return <div className="kernel-app-loading">Preparing secure login…</div>;
   }
@@ -551,10 +562,20 @@ function ManagedAuthApp() {
               />
             )}
             <div className="kernel-app-actions">
-              <button className="kernel-app-button" onClick={continueAgent}>
-                Continue agent
-              </button>
-              {statusText && <p className="kernel-app-status">{statusText}</p>}
+              {agentNotification === "failed" ? (
+                <button
+                  className="kernel-app-button"
+                  onClick={() => void notifyAgent(terminal)}
+                >
+                  Notify agent
+                </button>
+              ) : (
+                <p className="kernel-app-status">
+                  {agentNotification === "sent"
+                    ? "Agent notified. You can close this panel."
+                    : "Notifying agent…"}
+                </p>
+              )}
             </div>
           </Shell>
         </LocalizationProvider>

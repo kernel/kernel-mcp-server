@@ -306,7 +306,7 @@ const AUTH_QA_HARNESS_HTML = /* html */ `<!DOCTYPE html>
         text_only: false,
       };
       launcher = await callTool("open_auth_login", input);
-      const resource = await rpc("resources/read", { uri: "ui://kernel/managed-auth-login-v4.html" });
+      const resource = await rpc("resources/read", { uri: "ui://kernel/managed-auth-login-v5.html" });
       frame.srcdoc = resource.contents[0].text;
       log("Secure App resource rendered.");
     } catch (error) { log("ERROR: " + error.message); }
