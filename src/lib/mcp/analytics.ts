@@ -1,4 +1,4 @@
-import { instrument } from "@posthog/mcp";
+import { instrument, PostHogMCPAnalyticsProperty } from "@posthog/mcp";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { PostHog } from "posthog-node";
 
@@ -19,6 +19,14 @@ const posthog = projectToken
       flushInterval: 0,
     })
   : null;
+
+// Tools that take or return credentials. Their arguments carry arbitrary field/value
+// maps (e.g. manage_credentials `values`) that key-name redaction can't cover.
+const CREDENTIAL_TOOLS = new Set([
+  "manage_api_keys",
+  "manage_credentials",
+  "manage_proxies",
+]);
 
 function clerkUserId(extra?: Record<string, unknown>): string | null {
   const authInfo = extra?.authInfo as
@@ -44,6 +52,22 @@ export function instrumentMcpAnalytics(server: McpServer) {
     identify: async (_request, extra) => {
       const userId = clerkUserId(extra);
       return userId ? { distinctId: userId } : null;
+    },
+    beforeSend: (event) => {
+      const properties = event.properties;
+      if (!properties) return event;
+
+      // Every tool serializes its result to a JSON string (see jsonResponse), so the
+      // SDK's key-name redaction can't see inside it — a created API key or a TOTP
+      // code would go out verbatim. Keep the call metadata, drop the payload.
+      delete properties[PostHogMCPAnalyticsProperty.Response];
+
+      const toolName = properties[PostHogMCPAnalyticsProperty.ToolName];
+      if (typeof toolName === "string" && CREDENTIAL_TOOLS.has(toolName)) {
+        delete properties[PostHogMCPAnalyticsProperty.Parameters];
+      }
+
+      return event;
     },
   });
 }
