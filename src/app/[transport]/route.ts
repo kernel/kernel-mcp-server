@@ -150,6 +150,9 @@ export async function POST(req: NextRequest): Promise<Response> {
 
   const headers = new Headers(response.headers);
   headers.set(MCP_SESSION_HEADER, sessionId);
+  // Preflight allows the header; a browser only gets to read it if the response that
+  // carries it says so too.
+  headers.set("Access-Control-Expose-Headers", MCP_SESSION_HEADER);
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
