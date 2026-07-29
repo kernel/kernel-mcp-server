@@ -21,9 +21,11 @@ const posthog = projectToken
   : null;
 
 // Tools that take or return credentials. Their arguments carry arbitrary field/value
-// maps (e.g. manage_credentials `values`) that key-name redaction can't cover.
+// maps (`manage_credentials` values, `manage_auth_connections` fields) that key-name
+// redaction can't cover.
 const CREDENTIAL_TOOLS = new Set([
   "manage_api_keys",
+  "manage_auth_connections",
   "manage_credentials",
   "manage_proxies",
 ]);
