@@ -5,6 +5,7 @@ import {
 import { verifyToken } from "@clerk/nextjs/server";
 import { NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
+import { flushMcpAnalytics, instrumentMcpAnalytics } from "@/lib/mcp/analytics";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
 
 export async function OPTIONS(_req: NextRequest): Promise<Response> {
@@ -43,6 +44,7 @@ function createAuthErrorResponse(
 
 // Create MCP handler with tools
 const handler = createMcpHandler((server) => {
+  instrumentMcpAnalytics(server);
   registerMcpCapabilities(server);
 });
 
@@ -118,9 +120,13 @@ async function handleAuthenticatedRequest(req: NextRequest): Promise<Response> {
 }
 
 export async function GET(req: NextRequest): Promise<Response> {
-  return await handleAuthenticatedRequest(req);
+  const response = await handleAuthenticatedRequest(req);
+  await flushMcpAnalytics();
+  return response;
 }
 
 export async function POST(req: NextRequest): Promise<Response> {
-  return await handleAuthenticatedRequest(req);
+  const response = await handleAuthenticatedRequest(req);
+  await flushMcpAnalytics();
+  return response;
 }
