@@ -1,4 +1,10 @@
-import { instrument, PostHogMCPAnalyticsProperty } from "@posthog/mcp";
+import {
+  encodeSessionId,
+  instrument,
+  MCP_SESSION_HEADER,
+  newSessionId,
+  PostHogMCPAnalyticsProperty,
+} from "@posthog/mcp";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { PostHog } from "posthog-node";
 
@@ -71,6 +77,37 @@ export function instrumentMcpAnalytics(server: McpServer) {
 
       return event;
     },
+  });
+}
+
+type InitializeRequestBody = {
+  method?: string;
+  params?: { clientInfo?: { name?: string; version?: string } };
+};
+
+/**
+ * mcp-handler answers over SSE with a stateless transport, so it never issues an
+ * `Mcp-Session-Id`. Left alone every request becomes its own PostHog session and the
+ * client name is lost after the handshake. Mint the SDK's session token on the
+ * initialize request instead: it goes back to the client on the response, the client
+ * replays it, and any instance decodes the same session id and client info out of it.
+ *
+ * Returns the token, or null when there's nothing to mint. Safe on the stateless
+ * transport, which ignores an incoming session id.
+ */
+export async function mintMcpSessionId(req: Request): Promise<string | null> {
+  if (!posthog || req.headers.get(MCP_SESSION_HEADER)) return null;
+
+  const body = (await req
+    .clone()
+    .json()
+    .catch(() => null)) as InitializeRequestBody | null;
+  if (body?.method !== "initialize") return null;
+
+  return encodeSessionId({
+    sessionId: newSessionId(),
+    clientName: body.params?.clientInfo?.name,
+    clientVersion: body.params?.clientInfo?.version,
   });
 }
 

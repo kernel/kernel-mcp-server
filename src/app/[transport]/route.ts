@@ -1,3 +1,4 @@
+import { MCP_SESSION_HEADER } from "@posthog/mcp";
 import {
   createMcpHandler,
   experimental_withMcpAuth as withMcpAuth,
@@ -5,7 +6,11 @@ import {
 import { verifyToken } from "@clerk/nextjs/server";
 import { after, NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
-import { flushMcpAnalytics, instrumentMcpAnalytics } from "@/lib/mcp/analytics";
+import {
+  flushMcpAnalytics,
+  instrumentMcpAnalytics,
+  mintMcpSessionId,
+} from "@/lib/mcp/analytics";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
 
 export async function OPTIONS(_req: NextRequest): Promise<Response> {
@@ -14,7 +19,8 @@ export async function OPTIONS(_req: NextRequest): Promise<Response> {
     headers: {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Allow-Headers": `Content-Type, Authorization, ${MCP_SESSION_HEADER}`,
+      "Access-Control-Expose-Headers": MCP_SESSION_HEADER,
     },
   });
 }
@@ -126,5 +132,27 @@ export async function GET(req: NextRequest): Promise<Response> {
 
 export async function POST(req: NextRequest): Promise<Response> {
   after(flushMcpAnalytics);
-  return await handleAuthenticatedRequest(req);
+
+  const sessionId = await mintMcpSessionId(req);
+  if (!sessionId) return await handleAuthenticatedRequest(req);
+
+  // Pass the token in on the handshake too, so the initialize event lands in the same
+  // session as the calls that follow it.
+  const requestHeaders = new Headers(req.headers);
+  requestHeaders.set(MCP_SESSION_HEADER, sessionId);
+  const response = await handleAuthenticatedRequest(
+    new NextRequest(req.url, {
+      method: req.method,
+      headers: requestHeaders,
+      body: await req.text(),
+    }),
+  );
+
+  const headers = new Headers(response.headers);
+  headers.set(MCP_SESSION_HEADER, sessionId);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
