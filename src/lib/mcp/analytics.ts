@@ -35,6 +35,9 @@ export function instrumentMcpAnalytics(server: McpServer) {
   if (!posthog) return;
 
   instrument(server, posthog, {
+    // Intent capture injects a required `context` argument into every tool schema.
+    // Left off so the public tool surface is unchanged.
+    context: false,
     // The transport is stateless on Vercel, so a session id is not stable across
     // requests. Attribute to the Clerk user when the request carries a JWT; API-key
     // requests stay session-scoped.
@@ -46,7 +49,8 @@ export function instrumentMcpAnalytics(server: McpServer) {
 }
 
 /**
- * Sends queued events before the serverless invocation is frozen.
+ * Drains queued events after the response has been sent, so capture never adds
+ * latency to a tool call.
  */
 export async function flushMcpAnalytics() {
   if (!posthog) return;

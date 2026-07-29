@@ -3,7 +3,7 @@ import {
   experimental_withMcpAuth as withMcpAuth,
 } from "mcp-handler";
 import { verifyToken } from "@clerk/nextjs/server";
-import { NextRequest } from "next/server";
+import { after, NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
 import { flushMcpAnalytics, instrumentMcpAnalytics } from "@/lib/mcp/analytics";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
@@ -120,13 +120,11 @@ async function handleAuthenticatedRequest(req: NextRequest): Promise<Response> {
 }
 
 export async function GET(req: NextRequest): Promise<Response> {
-  const response = await handleAuthenticatedRequest(req);
-  await flushMcpAnalytics();
-  return response;
+  after(flushMcpAnalytics);
+  return await handleAuthenticatedRequest(req);
 }
 
 export async function POST(req: NextRequest): Promise<Response> {
-  const response = await handleAuthenticatedRequest(req);
-  await flushMcpAnalytics();
-  return response;
+  after(flushMcpAnalytics);
+  return await handleAuthenticatedRequest(req);
 }
