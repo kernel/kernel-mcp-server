@@ -1,10 +1,8 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MANAGED_AUTH_APP_HTML } from "@/lib/mcp/apps/generated/managed-auth-app";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
-  clientSupportsMcpApps,
   initializeDeclaresMcpApps,
   mcpAppsGateError,
 } from "@/lib/mcp/tools/mcp-apps-gate";
@@ -42,62 +40,6 @@ export function managedAuthResourceMeta() {
       },
     },
   };
-}
-
-const APP_CAPABILITY_TTL_MS = 60 * 60 * 1000;
-
-function appSigningSecret(): string {
-  const secret =
-    process.env.MCP_APP_SIGNING_SECRET ?? process.env.CLERK_SECRET_KEY;
-  if (!secret) throw new Error("MCP App signing secret is not configured");
-  return secret;
-}
-
-function authTokenHash(authToken: string): string {
-  return createHash("sha256").update(authToken).digest("base64url");
-}
-
-function issueAppCapability(authToken: string): string {
-  const payload = Buffer.from(
-    JSON.stringify({
-      auth: authTokenHash(authToken),
-      exp: Date.now() + APP_CAPABILITY_TTL_MS,
-    }),
-  ).toString("base64url");
-  const signature = createHmac("sha256", appSigningSecret())
-    .update(payload)
-    .digest("base64url");
-  return `${payload}.${signature}`;
-}
-
-function validAppCapability(capability: string, authToken: string): boolean {
-  const [payload, signature, extra] = capability.split(".");
-  if (!payload || !signature || extra) return false;
-  const expected = createHmac("sha256", appSigningSecret())
-    .update(payload)
-    .digest();
-  let actual: Buffer;
-  try {
-    actual = Buffer.from(signature, "base64url");
-  } catch {
-    return false;
-  }
-  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
-    return false;
-  }
-  try {
-    const claims = JSON.parse(Buffer.from(payload, "base64url").toString()) as {
-      auth?: unknown;
-      exp?: unknown;
-    };
-    return (
-      claims.auth === authTokenHash(authToken) &&
-      typeof claims.exp === "number" &&
-      claims.exp > Date.now()
-    );
-  } catch {
-    return false;
-  }
 }
 
 const authLoginInputSchema = {
@@ -254,16 +196,6 @@ export function registerAuthLoginApp(server: McpServer) {
               profile_name: input.profile_name!,
               wait_seconds: 25,
             };
-        // The delete authorization capability is App-only: issue it solely to
-        // hosts that declared MCP Apps support, and keep it in _meta (which
-        // hosts do not add to model context). It never goes in
-        // structuredContent, which non-Apps hosts may surface to the model.
-        const appCapability = (await clientSupportsMcpApps(
-          server,
-          extra.authInfo.token,
-        ))
-          ? issueAppCapability(extra.authInfo.token)
-          : null;
         return {
           content: [
             {
@@ -282,13 +214,6 @@ export function registerAuthLoginApp(server: McpServer) {
               arguments: waitArguments,
             },
           },
-          ...(appCapability && {
-            _meta: {
-              auth_login_launcher: {
-                app_capability: appCapability,
-              },
-            },
-          }),
         };
       } catch (error) {
         return errorResponse(
@@ -419,52 +344,6 @@ export function registerAuthLoginApp(server: McpServer) {
         return errorResponse(
           "Managed authentication status could not be refreshed. Retry shortly.",
         );
-      }
-    },
-  );
-
-  server.registerTool(
-    "delete_auth_login_connection",
-    {
-      title: "Delete managed-auth connection (app-only)",
-      description:
-        "Delete the managed-auth connection created by the secure App, including QA cleanup.",
-      inputSchema: {
-        connection_id: z.string().min(1),
-        app_capability: z.string().min(1),
-      },
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: true,
-        openWorldHint: true,
-      },
-      _meta: { ui: { visibility: ["app"] } },
-    },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
-      const gateError = await mcpAppsGateError(
-        server,
-        extra.authInfo.token,
-        MCP_APPS_GATE_DENIED_MESSAGE,
-      );
-      if (gateError) return errorResponse(gateError);
-      if (!validAppCapability(params.app_capability, extra.authInfo.token)) {
-        return errorResponse("Secure App authorization is invalid or expired.");
-      }
-      const client = createKernelClient(extra.authInfo.token);
-      try {
-        await client.auth.connections.delete(params.connection_id);
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Managed-auth connection deleted.",
-            },
-          ],
-        };
-      } catch {
-        return errorResponse("Managed-auth connection could not be deleted.");
       }
     },
   );

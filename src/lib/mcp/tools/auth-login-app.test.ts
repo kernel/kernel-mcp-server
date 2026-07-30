@@ -95,8 +95,6 @@ function captureRegistration({ appsSupport = true } = {}) {
 }
 
 describe("managed-auth MCP App registration", () => {
-  process.env.MCP_APP_SIGNING_SECRET = "test-app-signing-secret";
-
   test("uses exact resource MIME, URI, and CSP on registration and read", async () => {
     process.env.MANAGED_AUTH_APP_ORIGIN = "http://localhost:3002";
     const captured = captureRegistration();
@@ -130,26 +128,11 @@ describe("managed-auth MCP App registration", () => {
     expect(
       tools.get("get_auth_login_status")?.config._meta.ui.visibility,
     ).toEqual(["app"]);
-    expect(
-      tools.get("delete_auth_login_connection")?.config._meta.ui.visibility,
-    ).toEqual(["app"]);
+    expect(tools.has("delete_auth_login_connection")).toBe(false);
   });
 
-  test("app-only tool schemas reject empty identifiers", () => {
+  test("app-only tool schema rejects an empty connection identifier", () => {
     const { tools } = captureRegistration();
-    const deleteSchema = z.object(
-      tools.get("delete_auth_login_connection")!.config.inputSchema,
-    );
-    expect(
-      deleteSchema.safeParse({
-        connection_id: "conn_1",
-        app_capability: "",
-      }).success,
-    ).toBe(false);
-    expect(
-      deleteSchema.safeParse({ connection_id: "", app_capability: "cap" })
-        .success,
-    ).toBe(false);
     const statusSchema = z.object(
       tools.get("get_auth_login_status")!.config.inputSchema,
     );
@@ -203,28 +186,7 @@ describe("managed-auth MCP App registration", () => {
     expect(JSON.stringify(result)).not.toContain("?code=");
     expect(JSON.stringify(result)).not.toContain("handoff_code");
     expect(JSON.stringify(result)).not.toContain("hosted_url");
-    // The delete authorization capability travels only in _meta, never in
-    // model-visible content or structuredContent.
-    expect(result._meta.auth_login_launcher.app_capability).toBeString();
-    expect(JSON.stringify(result.content)).not.toContain("app_capability");
-    expect(JSON.stringify(result.structuredContent)).not.toContain(
-      "app_capability",
-    );
-  });
-
-  test("launcher issues no app_capability to hosts without MCP Apps support", async () => {
-    const { tools } = captureRegistration({ appsSupport: false });
-    const result = await tools.get("open_auth_login")!.handler(
-      {
-        mode: "new_login",
-        domain: "example.com",
-        profile_name: "work",
-        text_only: false,
-      },
-      { authInfo: { token: "unused-api-key" } },
-    );
     expect(result._meta).toBeUndefined();
-    expect(JSON.stringify(result)).not.toContain("app_capability");
   });
 
   test("app-only tools fail closed on hosts without MCP Apps support", async () => {
@@ -232,10 +194,6 @@ describe("managed-auth MCP App registration", () => {
     const calls: Array<[string, any]> = [
       ["begin_auth_login", { mode: "reauth", connection_id: "conn_1" }],
       ["get_auth_login_status", { connection_id: "conn_1" }],
-      [
-        "delete_auth_login_connection",
-        { connection_id: "conn_1", app_capability: "forged" },
-      ],
     ];
     for (const [name, params] of calls) {
       const result = await tools.get(name)!.handler(params, {
@@ -252,30 +210,31 @@ describe("managed-auth MCP App registration", () => {
     // Simulates the streamable-HTTP path: no client capabilities on the
     // per-request server, but the route layer recorded the capability.
     redisMarkerPresent = true;
+    kernelClientFactory = () => ({
+      auth: {
+        connections: {
+          retrieve: async () => ({
+            id: "conn_1",
+            domain: "example.com",
+            profile_name: "work",
+            status: "AUTHENTICATED",
+          }),
+        },
+      },
+    });
     try {
       const { tools } = captureRegistration({ appsSupport: false });
       const result = await tools
-        .get("delete_auth_login_connection")!
+        .get("get_auth_login_status")!
         .handler(
-          { connection_id: "conn_1", app_capability: "forged" },
+          { connection_id: "conn_1" },
           { authInfo: { token: "unused-api-key" } },
         );
-      // Past the gate: fails on the forged capability, not the gate.
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain("authorization is invalid");
-
-      const launcher = await tools.get("open_auth_login")!.handler(
-        {
-          mode: "new_login",
-          domain: "example.com",
-          profile_name: "work",
-          text_only: false,
-        },
-        { authInfo: { token: "unused-api-key" } },
-      );
-      expect(launcher._meta.auth_login_launcher.app_capability).toBeString();
+      expect(result.isError).toBeUndefined();
+      expect(result.structuredContent.kind).toBe("kernel.managed_auth.status");
     } finally {
       redisMarkerPresent = false;
+      resetKernelClientFactory();
     }
   });
 
@@ -466,19 +425,6 @@ describe("managed-auth MCP App registration", () => {
     } finally {
       resetKernelClientFactory();
     }
-  });
-
-  test("destructive app-only cleanup rejects calls without the private launcher capability", async () => {
-    const { tools } = captureRegistration();
-    const result = await tools.get("delete_auth_login_connection")!.handler(
-      {
-        connection_id: "connection-id",
-        app_capability: "not-valid",
-      },
-      { authInfo: { token: "unused-api-key" } },
-    );
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("authorization is invalid");
   });
 
   test("bundle is self-contained and has no hosted iframe", () => {
