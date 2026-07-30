@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import { errorResponse, toolErrorResponse } from "@/lib/mcp/responses";
+import { mcpAppsGateError } from "@/lib/mcp/tools/mcp-apps-gate";
 
 /**
  * MCP Apps (SEP-1865) prototype: an embedded view of a Kernel browser
@@ -546,6 +547,15 @@ export function registerLiveViewApp(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
+      // Hidden from the model via visibility: ["app"], but hosts without MCP
+      // Apps support may ignore that hint. Fail closed like the other
+      // app-only tools so the model cannot poll screenshots directly.
+      const gateError = await mcpAppsGateError(
+        server,
+        extra.authInfo.token,
+        "This tool is only available to the embedded Kernel live view App on MCP Apps-capable hosts and cannot be called by the model. Use computer_action with a screenshot action instead.",
+      );
+      if (gateError) return errorResponse(gateError);
       const client = createKernelClient(extra.authInfo.token);
       try {
         const screenshotResponse =

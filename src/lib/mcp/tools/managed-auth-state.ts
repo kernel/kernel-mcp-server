@@ -228,6 +228,17 @@ export async function waitForAuthConnection(
         const flowGuarded =
           selector.requiredFlowType !== undefined ||
           selector.previousFlowExpiresAt !== undefined;
+        const flowFailed =
+          latest.flow_status === "FAILED" ||
+          latest.flow_status === "EXPIRED" ||
+          latest.flow_status === "CANCELED";
+        // A terminal failure observed only after this wait saw the flow live
+        // is authoritative even when the connection still reads AUTHENTICATED
+        // (e.g. a failed re-auth keeps its previous session): the App shows
+        // the failure, so the wait must not report success. A terminal
+        // failure with no live flow observed predates this wait and leaves
+        // the authenticated state usable.
+        const observedFlowFailed = observedLiveFlow && flowFailed;
         const requiredFlowCompleted =
           !flowGuarded ||
           (latest.flow_status === "SUCCESS" &&
@@ -241,15 +252,12 @@ export async function waitForAuthConnection(
         if (
           latest.status === "AUTHENTICATED" &&
           !hasLiveAuthFlow(latest) &&
+          !observedFlowFailed &&
           requiredFlowCompleted
         ) {
           return { state: "authenticated", connection: latest };
         }
-        if (
-          latest.flow_status === "FAILED" ||
-          latest.flow_status === "EXPIRED" ||
-          latest.flow_status === "CANCELED"
-        ) {
+        if (flowFailed) {
           // In flow-guarded mode a terminal flow matching the baseline predates
           // this wait (e.g. an old failed attempt); keep polling for the new
           // flow instead of reporting a stale failure.
@@ -369,6 +377,20 @@ export function deriveAuthNextAction({
 
   const connection = items[0];
   if (connection.status === "AUTHENTICATED") {
+    if (hasLiveAuthFlow(connection)) {
+      return {
+        selection: { domain_filter, outcome: "single" },
+        next_action: {
+          tool: "manage_auth_connections",
+          arguments: {
+            action: "wait",
+            id: connection.id,
+          },
+          reason:
+            "This connection is authenticated but an authentication flow is still in progress. Wait for it to complete before creating a browser.",
+        },
+      };
+    }
     return {
       selection: { domain_filter, outcome: "single" },
       next_action: {

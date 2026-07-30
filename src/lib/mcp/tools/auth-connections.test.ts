@@ -187,6 +187,26 @@ describe("managed-auth safe responses", () => {
     expect(authenticated.next_action?.tool).toBe("manage_browsers");
     expect(authenticated.next_action?.arguments.profile_name).toBe("work");
 
+    const liveReauth = deriveAuthNextAction({
+      items: [
+        {
+          ...safe,
+          status: "AUTHENTICATED",
+          flow_status: "IN_PROGRESS",
+          flow_type: "REAUTH",
+          flow_expires_at: "2099-01-01T00:00:00Z",
+        },
+      ],
+      hasMore: false,
+      nextOffset: null,
+      domainFilter: "example.com",
+    });
+    expect(liveReauth.next_action?.tool).toBe("manage_auth_connections");
+    expect(liveReauth.next_action?.arguments).toEqual({
+      action: "wait",
+      id: "conn_1",
+    });
+
     const multiple = deriveAuthNextAction({
       items: [safe, { ...safe, id: "conn_2", profile_name: "personal" }],
       hasMore: false,
@@ -318,6 +338,62 @@ describe("managed-auth wait", () => {
       client,
       { connectionId: "conn_1" },
       { timeoutMs: 50, pollIntervalMs: 1 },
+    );
+    expect(result.state).toBe("authenticated");
+  });
+
+  test("reports failure when an observed live flow fails on an authenticated connection, even without a flow guard", async () => {
+    // A failed re-auth keeps the previous session, so the connection still
+    // reads AUTHENTICATED. Because this wait saw the flow live, the failure
+    // is authoritative: the App shows it, so the wait must not resume the
+    // agent with a stale success.
+    const states = [
+      connection({
+        status: "AUTHENTICATED",
+        flow_status: "IN_PROGRESS",
+        flow_type: "REAUTH",
+        flow_expires_at: "2099-01-01T00:00:00Z",
+      }),
+      connection({
+        status: "AUTHENTICATED",
+        flow_status: "FAILED",
+        flow_type: "REAUTH",
+        flow_expires_at: "2099-01-01T00:00:00Z",
+      }),
+    ];
+    let calls = 0;
+    const client = {
+      auth: {
+        connections: {
+          retrieve: async () => states[Math.min(calls++, states.length - 1)],
+        },
+      },
+    } as unknown as KernelClient;
+    const result = await waitForAuthConnection(
+      client,
+      { connectionId: "conn_1" },
+      { timeoutMs: 50, pollIntervalMs: 1 },
+    );
+    expect(result.state).toBe("failed");
+  });
+
+  test("still accepts authenticated state with a stale terminal failure, without any flow guard", async () => {
+    // No live flow observed during this wait: the failed flow predates it,
+    // so the connection's authenticated state is usable (duplicate-recovery
+    // path).
+    const stale = connection({
+      status: "AUTHENTICATED",
+      flow_status: "FAILED",
+      flow_type: "REAUTH",
+      flow_expires_at: "2026-01-01T00:00:00Z",
+    });
+    const client = {
+      auth: { connections: { retrieve: async () => stale } },
+    } as unknown as KernelClient;
+    const result = await waitForAuthConnection(
+      client,
+      { connectionId: stale.id },
+      { timeoutMs: 0 },
     );
     expect(result.state).toBe("authenticated");
   });

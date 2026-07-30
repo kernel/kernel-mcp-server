@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import { MANAGED_AUTH_APP_HTML } from "@/lib/mcp/apps/generated/managed-auth-app";
 import {
   initializeDeclaresMcpApps,
@@ -132,6 +133,27 @@ describe("managed-auth MCP App registration", () => {
     expect(
       tools.get("delete_auth_login_connection")?.config._meta.ui.visibility,
     ).toEqual(["app"]);
+  });
+
+  test("app-only tool schemas reject empty identifiers", () => {
+    const { tools } = captureRegistration();
+    const deleteSchema = z.object(
+      tools.get("delete_auth_login_connection")!.config.inputSchema,
+    );
+    expect(
+      deleteSchema.safeParse({
+        connection_id: "conn_1",
+        app_capability: "",
+      }).success,
+    ).toBe(false);
+    expect(
+      deleteSchema.safeParse({ connection_id: "", app_capability: "cap" })
+        .success,
+    ).toBe(false);
+    const statusSchema = z.object(
+      tools.get("get_auth_login_status")!.config.inputSchema,
+    );
+    expect(statusSchema.safeParse({ connection_id: "" }).success).toBe(false);
   });
 
   test("normal launcher creates no backend flow or managed-auth handoff", async () => {
