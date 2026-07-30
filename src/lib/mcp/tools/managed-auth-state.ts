@@ -137,9 +137,14 @@ export function hasLiveAuthFlow(
   now = new Date(),
 ): boolean {
   if (connection.flow_status !== "IN_PROGRESS") return false;
-  if (!connection.flow_expires_at) return false;
+  if (!connection.flow_expires_at) {
+    // Expiry unknown: assume the flow is live rather than accepting a stale
+    // pre-flow state while a (re-)auth may still be running.
+    return true;
+  }
   const expiresAt = Date.parse(connection.flow_expires_at);
-  return Number.isFinite(expiresAt) && expiresAt > now.getTime();
+  if (!Number.isFinite(expiresAt)) return true;
+  return expiresAt > now.getTime();
 }
 
 async function findAuthConnection(
@@ -258,15 +263,16 @@ export async function waitForAuthConnection(
           return { state: "authenticated", connection: latest };
         }
         if (flowFailed) {
-          // In flow-guarded mode a terminal flow matching the baseline predates
-          // this wait (e.g. an old failed attempt); keep polling for the new
-          // flow instead of reporting a stale failure.
-          const terminalIsBaseline =
-            flowGuarded &&
+          // A terminal flow this wait never saw live predates it: an old failed
+          // attempt (the common case when the user is about to click Continue
+          // for a retry), or one matching the caller's baseline. Keep polling
+          // for the new flow instead of reporting a stale failure.
+          const terminalIsStale =
             !observedLiveFlow &&
-            selector.previousFlowExpiresAt !== undefined &&
-            latest.flow_expires_at === selector.previousFlowExpiresAt;
-          if (!terminalIsBaseline) {
+            (selector.previousFlowExpiresAt !== undefined
+              ? latest.flow_expires_at === selector.previousFlowExpiresAt
+              : !flowGuarded);
+          if (!terminalIsStale) {
             return { state: "failed", connection: latest };
           }
         }

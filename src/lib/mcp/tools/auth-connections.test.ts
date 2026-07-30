@@ -559,8 +559,92 @@ describe("managed-auth wait", () => {
     expect(result.state).toBe("pending");
   });
 
+  test("unguarded wait polls past an old failed flow until the new flow succeeds", async () => {
+    // New-login path: the agent long-polls before the App starts a flow, so
+    // an old FAILED flow on the connection must not abort the wait.
+    const states = [
+      connection({
+        flow_status: "FAILED",
+        flow_expires_at: "2026-01-01T00:00:00Z",
+      }),
+      connection({
+        flow_status: "IN_PROGRESS",
+        flow_expires_at: "2099-01-01T00:00:00Z",
+      }),
+      connection({
+        status: "AUTHENTICATED",
+        flow_status: "SUCCESS",
+        flow_expires_at: "2099-01-01T00:00:00Z",
+      }),
+    ];
+    let calls = 0;
+    const client = {
+      auth: {
+        connections: {
+          retrieve: async () => states[Math.min(calls++, states.length - 1)],
+        },
+      },
+    } as unknown as KernelClient;
+    const result = await waitForAuthConnection(
+      client,
+      { connectionId: "conn_1" },
+      { timeoutMs: 50, pollIntervalMs: 1 },
+    );
+    expect(result.state).toBe("authenticated");
+    expect(calls).toBe(3);
+  });
+
+  test("treats an in-progress flow with unknown expiry as live", async () => {
+    // Missing flow_expires_at must not let a wait accept the stale pre-flow
+    // authenticated state while a re-auth may still be running.
+    const unknownExpiry = connection({
+      status: "AUTHENTICATED",
+      flow_status: "IN_PROGRESS",
+      flow_type: "REAUTH",
+      flow_expires_at: undefined,
+    });
+    const client = {
+      auth: { connections: { retrieve: async () => unknownExpiry } },
+    } as unknown as KernelClient;
+    const result = await waitForAuthConnection(
+      client,
+      { connectionId: unknownExpiry.id },
+      { timeoutMs: 0 },
+    );
+    expect(result.state).toBe("pending");
+  });
+
   test("returns safe failure and pending states", async () => {
+    // A flow this wait saw live and then fail is reported as a safe failure.
+    const states = [
+      connection({
+        flow_status: "IN_PROGRESS",
+        flow_expires_at: "2099-01-01T00:00:00Z",
+      }),
+      connection({
+        flow_status: "FAILED",
+        error_message: "raw site/API failure with secret",
+      }),
+    ];
+    let calls = 0;
     const failedClient = {
+      auth: {
+        connections: {
+          retrieve: async () => states[Math.min(calls++, states.length - 1)],
+        },
+      },
+    } as unknown as KernelClient;
+    const failed = await waitForAuthConnection(
+      failedClient,
+      { connectionId: "conn_1" },
+      { timeoutMs: 50, pollIntervalMs: 1 },
+    );
+    expect(failed.state).toBe("failed");
+    assertNoSecrets(failed);
+
+    // A terminal failure the wait never saw live predates it (e.g. an old
+    // failed attempt before the user clicked Continue): keep polling.
+    const staleClient = {
       auth: {
         connections: {
           retrieve: async () =>
@@ -571,13 +655,13 @@ describe("managed-auth wait", () => {
         },
       },
     } as unknown as KernelClient;
-    const failed = await waitForAuthConnection(
-      failedClient,
+    const stale = await waitForAuthConnection(
+      staleClient,
       { connectionId: "conn_1" },
       { timeoutMs: 0 },
     );
-    expect(failed.state).toBe("failed");
-    assertNoSecrets(failed);
+    expect(stale.state).toBe("pending");
+    assertNoSecrets(stale);
 
     const pendingClient = {
       auth: {

@@ -106,8 +106,8 @@ const authLoginInputSchema = {
   domain: z.string().optional(),
   profile_name: z.string().optional(),
   save_credentials: z.boolean().optional(),
-  proxy_id: z.string().optional(),
-  proxy_name: z.string().optional(),
+  proxy_id: z.string().min(1).optional(),
+  proxy_name: z.string().min(1).optional(),
 };
 
 function inputFromParams(params: AuthLoginInput): AuthLoginInput {

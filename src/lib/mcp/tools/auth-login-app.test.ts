@@ -156,6 +156,23 @@ describe("managed-auth MCP App registration", () => {
     expect(statusSchema.safeParse({ connection_id: "" }).success).toBe(false);
   });
 
+  test("login schemas reject empty proxy identifiers", () => {
+    const { tools } = captureRegistration();
+    const base = {
+      mode: "new_login",
+      domain: "example.com",
+      profile_name: "work",
+    };
+    for (const name of ["open_auth_login", "begin_auth_login"]) {
+      const schema = z.object(tools.get(name)!.config.inputSchema);
+      expect(schema.safeParse({ ...base, proxy_id: "" }).success).toBe(false);
+      expect(schema.safeParse({ ...base, proxy_name: "" }).success).toBe(false);
+      expect(schema.safeParse({ ...base, proxy_id: "proxy_1" }).success).toBe(
+        true,
+      );
+    }
+  });
+
   test("normal launcher creates no backend flow or managed-auth handoff", async () => {
     const { tools } = captureRegistration();
     const result = await tools.get("open_auth_login")!.handler(
