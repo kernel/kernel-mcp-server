@@ -480,6 +480,42 @@ describe("managed-auth wait", () => {
     expect(result.state).toBe("authenticated");
   });
 
+  test("timeline identity completes a null-expiry baseline when polling misses the live flow", async () => {
+    const completed = connection({
+      status: "AUTHENTICATED",
+      flow_status: "SUCCESS",
+      flow_type: "REAUTH",
+      flow_expires_at: null,
+    });
+    const client = {
+      auth: {
+        connections: {
+          retrieve: async () => completed,
+          timeline: async () => ({
+            getPaginatedItems: () => [
+              {
+                id: "flow_new",
+                type: "reauth",
+                status: "SUCCESS",
+                timestamp: "2026-01-02T00:00:00Z",
+              },
+            ],
+          }),
+        },
+      },
+    } as unknown as KernelClient;
+    const result = await waitForAuthConnection(
+      client,
+      {
+        connectionId: completed.id,
+        previousFlowExpiresAt: null,
+        previousFlowEventId: "flow_old",
+      },
+      { timeoutMs: 0 },
+    );
+    expect(result.state).toBe("authenticated");
+  });
+
   test("baseline-guarded wait stays pending on the stale pre-flow success", async () => {
     const stale = connection({
       status: "AUTHENTICATED",

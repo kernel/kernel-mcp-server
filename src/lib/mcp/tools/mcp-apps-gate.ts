@@ -10,24 +10,20 @@ export const MCP_APPS_EXTENSION = "io.modelcontextprotocol/ui";
 const MCP_APPS_MARKER_TTL_SECONDS = 24 * 60 * 60;
 
 /**
- * Whether a JSON-RPC payload (single message or batch) is an initialize that
- * declares MCP Apps support. The route layer uses this to record the client
- * capability, because the stateless streamable-HTTP transport does not expose
- * it to later requests.
+ * Whether a JSON-RPC payload is a standalone initialize request that declares
+ * MCP Apps support. Mixed batches fail closed so they cannot self-attest and
+ * invoke an app-only tool in the same HTTP request.
  */
 export function initializeDeclaresMcpApps(body: unknown): boolean {
-  const messages = Array.isArray(body) ? body : [body];
-  return messages.some((message) => {
-    if (!message || typeof message !== "object") return false;
-    const request = message as {
-      method?: unknown;
-      params?: { capabilities?: { extensions?: Record<string, unknown> } };
-    };
-    return (
-      request.method === "initialize" &&
-      Boolean(request.params?.capabilities?.extensions?.[MCP_APPS_EXTENSION])
-    );
-  });
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+  const request = body as {
+    method?: unknown;
+    params?: { capabilities?: { extensions?: Record<string, unknown> } };
+  };
+  return (
+    request.method === "initialize" &&
+    Boolean(request.params?.capabilities?.extensions?.[MCP_APPS_EXTENSION])
+  );
 }
 
 /**

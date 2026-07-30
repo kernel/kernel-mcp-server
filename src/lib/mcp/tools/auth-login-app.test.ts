@@ -271,7 +271,7 @@ describe("managed-auth MCP App registration", () => {
           },
         },
       ]),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       initializeDeclaresMcpApps({
         jsonrpc: "2.0",
@@ -332,6 +332,52 @@ describe("managed-auth MCP App registration", () => {
       expect(JSON.stringify(result.structuredContent)).not.toContain(
         "required_flow_type",
       );
+    } finally {
+      resetKernelClientFactory();
+    }
+  });
+
+  test("reauth launcher includes a timeline baseline when flow expiry is null", async () => {
+    kernelClientFactory = () => ({
+      auth: {
+        connections: {
+          retrieve: async () => ({
+            id: "conn_1",
+            domain: "example.com",
+            profile_name: "work",
+            status: "AUTHENTICATED",
+            flow_status: "SUCCESS",
+            flow_type: "LOGIN",
+            flow_expires_at: null,
+          }),
+          timeline: async () => ({
+            getPaginatedItems: () => [
+              {
+                id: "flow_old",
+                type: "login",
+                status: "SUCCESS",
+                timestamp: "2026-01-01T00:00:00Z",
+              },
+            ],
+          }),
+        },
+      },
+    });
+    try {
+      const { tools } = captureRegistration();
+      const result = await tools
+        .get("open_auth_login")!
+        .handler(
+          { mode: "reauth", connection_id: "conn_1", text_only: false },
+          { authInfo: { token: "unused-api-key" } },
+        );
+      expect(result.structuredContent.next_action.arguments).toEqual({
+        action: "wait",
+        id: "conn_1",
+        wait_seconds: 25,
+        previous_flow_expires_at: null,
+        previous_flow_event_id: "flow_old",
+      });
     } finally {
       resetKernelClientFactory();
     }

@@ -62,6 +62,14 @@ export function registerAuthConnectionTools(server: McpServer) {
           "(wait) Baseline flow expiry supplied by open_auth_login; do not modify.",
         )
         .optional(),
+      previous_flow_event_id: z
+        .string()
+        .min(1)
+        .nullable()
+        .describe(
+          "(wait) Baseline timeline event supplied by open_auth_login; do not modify.",
+        )
+        .optional(),
       ...paginationParams,
     },
     {
@@ -142,6 +150,9 @@ export function registerAuthConnectionTools(server: McpServer) {
                 }),
                 ...(params.previous_flow_expires_at !== undefined && {
                   previousFlowExpiresAt: params.previous_flow_expires_at,
+                }),
+                ...(params.previous_flow_event_id !== undefined && {
+                  previousFlowEventId: params.previous_flow_event_id,
                 }),
               },
               {

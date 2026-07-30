@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MANAGED_AUTH_APP_HTML } from "@/lib/mcp/apps/generated/managed-auth-app";
-import { createKernelClient } from "@/lib/mcp/kernel-client";
+import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
 import {
   initializeDeclaresMcpApps,
   mcpAppsGateError,
@@ -51,6 +51,25 @@ const authLoginInputSchema = {
   proxy_id: z.string().min(1).optional(),
   proxy_name: z.string().min(1).optional(),
 };
+
+async function latestAuthFlowEventId(
+  client: KernelClient,
+  connectionId: string,
+): Promise<string | null | undefined> {
+  try {
+    const page = await client.auth.connections.timeline(connectionId, {
+      limit: 10,
+    });
+    return (
+      page
+        .getPaginatedItems()
+        .find((event) => event.type === "login" || event.type === "reauth")
+        ?.id ?? null
+    );
+  } catch {
+    return undefined;
+  }
+}
 
 function inputFromParams(params: AuthLoginInput): AuthLoginInput {
   return {
@@ -124,6 +143,9 @@ export function registerAuthLoginApp(server: McpServer) {
 
       try {
         if (params.text_only) {
+          const previousFlowEventId = input.connection_id
+            ? await latestAuthFlowEventId(client, input.connection_id)
+            : undefined;
           const result = await beginAuthLogin(client, input);
           // Guard the wait with the pre-flow baseline captured by begin so a
           // completed flow from before this call is never accepted as the new
@@ -136,6 +158,9 @@ export function registerAuthLoginApp(server: McpServer) {
             wait_seconds: 25,
             ...(result.started_new_flow && {
               previous_flow_expires_at: result.previous_flow_expires_at,
+              ...(previousFlowEventId !== undefined && {
+                previous_flow_event_id: previousFlowEventId,
+              }),
             }),
           };
           const content: Array<{
@@ -177,6 +202,10 @@ export function registerAuthLoginApp(server: McpServer) {
           domain: input.domain!,
           profile_name: input.profile_name!,
         };
+        const previousFlowEventId =
+          reauthConnection && !hasLiveAuthFlow(reauthConnection)
+            ? await latestAuthFlowEventId(client, reauthConnection.id)
+            : undefined;
         const waitArguments = reauthConnection
           ? {
               action: "wait",
@@ -188,6 +217,9 @@ export function registerAuthLoginApp(server: McpServer) {
               // observes that flow, so no baseline is needed.
               ...(!hasLiveAuthFlow(reauthConnection) && {
                 previous_flow_expires_at: reauthConnection.flow_expires_at,
+                ...(previousFlowEventId !== undefined && {
+                  previous_flow_event_id: previousFlowEventId,
+                }),
               }),
             }
           : {

@@ -96,6 +96,7 @@ export interface AuthWaitSelector {
   profileName?: string;
   requiredFlowType?: "LOGIN" | "REAUTH";
   previousFlowExpiresAt?: string | null;
+  previousFlowEventId?: string | null;
 }
 
 export interface AuthWaitResult {
@@ -180,6 +181,18 @@ async function findAuthConnection(
   return matches[0] ?? null;
 }
 
+async function latestAuthFlowEvent(client: KernelClient, connectionId: string) {
+  const page = await client.auth.connections.timeline(connectionId, {
+    limit: 10,
+  });
+  return (
+    page
+      .getPaginatedItems()
+      .find((event) => event.type === "login" || event.type === "reauth") ??
+    null
+  );
+}
+
 function authWaitDelay(milliseconds: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
     if (signal?.aborted) {
@@ -212,6 +225,9 @@ export async function waitForAuthConnection(
   const deadline = Date.now() + timeoutMs;
   let observedQuery = false;
   let observedLiveFlow = false;
+  let observedNewFlow = false;
+  let observedNewFlowSucceeded = false;
+  let observedNewFlowFailed = false;
   let latest: SafeAuthConnection | undefined;
 
   do {
@@ -224,16 +240,40 @@ export async function waitForAuthConnection(
       if (connection) {
         latest = toSafeAuthConnection(connection);
         if (hasLiveAuthFlow(latest)) observedLiveFlow = true;
+        if (
+          selector.previousFlowEventId !== undefined &&
+          selector.connectionId
+        ) {
+          try {
+            const event = await latestAuthFlowEvent(
+              client,
+              selector.connectionId,
+            );
+            if (event && event.id !== selector.previousFlowEventId) {
+              observedNewFlow = true;
+              observedNewFlowSucceeded = event.status === "SUCCESS";
+              observedNewFlowFailed =
+                event.status === "FAILED" ||
+                event.status === "EXPIRED" ||
+                event.status === "CANCELED";
+            }
+          } catch {
+            // Keep polling with the connection-level guards when timeline
+            // lookup is transiently unavailable.
+          }
+        }
         // A wait is flow-guarded when the caller supplied a baseline (and/or a
         // required flow type): only a flow that completed after that baseline
         // counts. The flow type is never assumed ahead of time — the server
         // chooses LOGIN vs REAUTH — so any successful new flow satisfies the
-        // guard. The observed-live-flow backstop covers servers that clear
-        // flow_expires_at once a flow reaches a terminal state.
+        // guard. Timeline identity closes the case where the API clears
+        // flow_expires_at before polling observes the in-progress state.
         const flowGuarded =
           selector.requiredFlowType !== undefined ||
-          selector.previousFlowExpiresAt !== undefined;
+          selector.previousFlowExpiresAt !== undefined ||
+          selector.previousFlowEventId !== undefined;
         const flowFailed =
+          observedNewFlowFailed ||
           latest.flow_status === "FAILED" ||
           latest.flow_status === "EXPIRED" ||
           latest.flow_status === "CANCELED";
@@ -243,15 +283,18 @@ export async function waitForAuthConnection(
         // the failure, so the wait must not report success. A terminal
         // failure with no live flow observed predates this wait and leaves
         // the authenticated state usable.
-        const observedFlowFailed = observedLiveFlow && flowFailed;
+        const observedFlowFailed =
+          (observedLiveFlow || observedNewFlow) && flowFailed;
         const requiredFlowCompleted =
           !flowGuarded ||
+          observedNewFlowSucceeded ||
           (latest.flow_status === "SUCCESS" &&
             (selector.requiredFlowType === undefined ||
               latest.flow_type === selector.requiredFlowType) &&
             (selector.previousFlowExpiresAt === undefined ||
               latest.flow_expires_at !== selector.previousFlowExpiresAt ||
-              observedLiveFlow));
+              observedLiveFlow) &&
+            (selector.previousFlowEventId === undefined || observedNewFlow));
         // AUTHENTICATED with a live in-progress flow means a (re-)auth is
         // still running: report pending instead of the stale pre-flow state.
         if (
