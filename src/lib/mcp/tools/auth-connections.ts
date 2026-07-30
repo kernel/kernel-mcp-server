@@ -4,6 +4,7 @@ import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
   AuthLoginStartError,
   deriveAuthNextAction,
+  hasLiveAuthFlow,
   toSafeAuthConnection,
   waitForAuthConnection,
 } from "@/lib/mcp/tools/managed-auth-state";
@@ -108,11 +109,17 @@ export function registerAuthConnectionTools(server: McpServer) {
             const connection = await client.auth.connections.retrieve(
               params.id,
             );
+            const safe = toSafeAuthConnection(connection);
             return safeJsonResponse({
-              connection: toSafeAuthConnection(connection),
+              connection: safe,
               instruction:
                 connection.status === "AUTHENTICATED"
-                  ? "Authentication is verified. Use this profile_name when creating the browser."
+                  ? // Match waitForAuthConnection: a live in-progress flow means
+                    // a (re-)auth is still running, so the current state is not
+                    // settled yet.
+                    hasLiveAuthFlow(safe)
+                    ? "An authentication flow is still in progress for this connection. Call manage_auth_connections with action=wait and this id; create the browser only after it returns authenticated."
+                    : "Authentication is verified. Use this profile_name when creating the browser."
                   : "Do not continue the protected action. Ask for consent, then use open_auth_login to authenticate securely.",
             });
           }

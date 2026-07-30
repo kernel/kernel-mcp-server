@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import { registerLiveViewApp } from "@/lib/mcp/tools/live-view-app";
 
 // Tests that exercise API-backed handlers substitute a fake Kernel client.
@@ -78,6 +79,15 @@ function fakeScreenshotClient() {
 }
 
 describe("live view MCP App", () => {
+  test("live view tool schemas reject an empty session_id", () => {
+    const { tools } = captureRegistration();
+    for (const name of ["show_browser_live_view", "capture_live_view_frame"]) {
+      const schema = z.object(tools.get(name)!.config.inputSchema);
+      expect(schema.safeParse({ session_id: "" }).success).toBe(false);
+      expect(schema.safeParse({ session_id: "sess_1" }).success).toBe(true);
+    }
+  });
+
   test("capture_live_view_frame fails closed on hosts without MCP Apps support", async () => {
     redisMarkerPresent = false;
     const { tools } = captureRegistration({ appsSupport: false });

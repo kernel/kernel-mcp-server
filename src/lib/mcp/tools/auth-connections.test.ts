@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import type { KernelClient } from "@/lib/mcp/kernel-client";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAuthConnectionTools } from "@/lib/mcp/tools/auth-connections";
@@ -9,6 +9,21 @@ import {
   waitForAuthConnection,
 } from "@/lib/mcp/tools/managed-auth-state";
 import type { ManagedAuth } from "@onkernel/sdk/resources/auth/connections";
+
+// Handler-level tests substitute a fake Kernel client; the default stub
+// errors if any API method is actually invoked.
+const unusedKernelClient = new Proxy(
+  {},
+  {
+    get: () => {
+      throw new Error("unexpected Kernel client use");
+    },
+  },
+);
+let kernelClientFactory: (token: string) => any = () => unusedKernelClient;
+mock.module("@/lib/mcp/kernel-client", () => ({
+  createKernelClient: (token: string) => kernelClientFactory(token),
+}));
 
 function connection(overrides: Partial<ManagedAuth> = {}): ManagedAuth {
   return {
@@ -135,6 +150,40 @@ describe("managed-auth safe responses", () => {
     expect(schema?.credential_name).toBeUndefined();
     expect(schema?.credential_provider).toBeUndefined();
     expect(schema?.credential_path).toBeUndefined();
+  });
+
+  test("get waits out a live in-progress flow on an authenticated connection", async () => {
+    let handler: ((params: any, extra: any) => Promise<any>) | undefined;
+    const server = {
+      tool(...args: any[]) {
+        handler = args[args.length - 1];
+      },
+    } as unknown as McpServer;
+    registerAuthConnectionTools(server);
+    kernelClientFactory = () => ({
+      auth: {
+        connections: {
+          retrieve: async () =>
+            connection({
+              status: "AUTHENTICATED",
+              flow_status: "IN_PROGRESS",
+              flow_type: "REAUTH",
+              flow_expires_at: "2099-01-01T00:00:00Z",
+            }),
+        },
+      },
+    });
+    try {
+      const result = await handler!(
+        { action: "get", id: "conn_1" },
+        { authInfo: { token: "test-token" } },
+      );
+      expect(result.structuredContent.instruction).toContain("in progress");
+      expect(result.structuredContent.instruction).not.toContain("verified");
+      assertNoSecrets(result);
+    } finally {
+      kernelClientFactory = () => unusedKernelClient;
+    }
   });
 
   test("allowlists fields and replaces raw errors", () => {

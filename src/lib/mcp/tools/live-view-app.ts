@@ -460,6 +460,7 @@ export function registerLiveViewApp(server: McpServer) {
       inputSchema: {
         session_id: z
           .string()
+          .min(1)
           .describe("Browser session ID to display (from manage_browsers)."),
       },
       annotations: {
@@ -531,6 +532,7 @@ export function registerLiveViewApp(server: McpServer) {
       inputSchema: {
         session_id: z
           .string()
+          .min(1)
           .describe("Browser session ID to capture a frame from."),
       },
       annotations: {
