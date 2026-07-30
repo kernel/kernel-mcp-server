@@ -80,6 +80,12 @@ export interface BeginAuthLoginResult {
   connection: SafeAuthConnection;
   started_new_flow: boolean;
   resume_id: string;
+  /**
+   * The connection's flow_expires_at captured before any new flow was started.
+   * Waiters use it as a baseline so a completed flow from before this begin
+   * call is never mistaken for the newly requested one.
+   */
+  previous_flow_expires_at: string | null;
   handoff_code?: string;
   hosted_url?: string;
 }
@@ -200,6 +206,7 @@ export async function waitForAuthConnection(
   const pollIntervalMs = Math.max(1, options.pollIntervalMs ?? 1_000);
   const deadline = Date.now() + timeoutMs;
   let observedQuery = false;
+  let observedLiveFlow = false;
   let latest: SafeAuthConnection | undefined;
 
   do {
@@ -211,13 +218,31 @@ export async function waitForAuthConnection(
       observedQuery = true;
       if (connection) {
         latest = toSafeAuthConnection(connection);
-        const requiredFlowCompleted = selector.requiredFlowType
-          ? latest.flow_status === "SUCCESS" &&
-            latest.flow_type === selector.requiredFlowType &&
+        if (hasLiveAuthFlow(latest)) observedLiveFlow = true;
+        // A wait is flow-guarded when the caller supplied a baseline (and/or a
+        // required flow type): only a flow that completed after that baseline
+        // counts. The flow type is never assumed ahead of time — the server
+        // chooses LOGIN vs REAUTH — so any successful new flow satisfies the
+        // guard. The observed-live-flow backstop covers servers that clear
+        // flow_expires_at once a flow reaches a terminal state.
+        const flowGuarded =
+          selector.requiredFlowType !== undefined ||
+          selector.previousFlowExpiresAt !== undefined;
+        const requiredFlowCompleted =
+          !flowGuarded ||
+          (latest.flow_status === "SUCCESS" &&
+            (selector.requiredFlowType === undefined ||
+              latest.flow_type === selector.requiredFlowType) &&
             (selector.previousFlowExpiresAt === undefined ||
-              latest.flow_expires_at !== selector.previousFlowExpiresAt)
-          : true;
-        if (latest.status === "AUTHENTICATED" && requiredFlowCompleted) {
+              latest.flow_expires_at !== selector.previousFlowExpiresAt ||
+              observedLiveFlow));
+        // AUTHENTICATED with a live in-progress flow means a (re-)auth is
+        // still running: report pending instead of the stale pre-flow state.
+        if (
+          latest.status === "AUTHENTICATED" &&
+          !hasLiveAuthFlow(latest) &&
+          requiredFlowCompleted
+        ) {
           return { state: "authenticated", connection: latest };
         }
         if (
@@ -225,7 +250,17 @@ export async function waitForAuthConnection(
           latest.flow_status === "EXPIRED" ||
           latest.flow_status === "CANCELED"
         ) {
-          return { state: "failed", connection: latest };
+          // In flow-guarded mode a terminal flow matching the baseline predates
+          // this wait (e.g. an old failed attempt); keep polling for the new
+          // flow instead of reporting a stale failure.
+          const terminalIsBaseline =
+            flowGuarded &&
+            !observedLiveFlow &&
+            selector.previousFlowExpiresAt !== undefined &&
+            latest.flow_expires_at === selector.previousFlowExpiresAt;
+          if (!terminalIsBaseline) {
+            return { state: "failed", connection: latest };
+          }
         }
       }
     } catch (error) {
@@ -443,6 +478,7 @@ function readyResult(
   connection: ManagedAuth,
   options: {
     startedNewFlow: boolean;
+    previousFlowExpiresAt: string | null;
     handoffCode?: string;
     hostedUrl?: string;
   },
@@ -456,6 +492,7 @@ function readyResult(
     connection: toSafeAuthConnection(connection),
     started_new_flow: options.startedNewFlow,
     resume_id: randomResumeId(),
+    previous_flow_expires_at: options.previousFlowExpiresAt,
     ...(options.handoffCode && { handoff_code: options.handoffCode }),
     ...(options.hostedUrl && { hosted_url: options.hostedUrl }),
   };
@@ -498,11 +535,16 @@ export async function beginAuthLogin(
     connection = await client.auth.connections.retrieve(input.connection_id!);
   }
 
+  const previousFlowExpiresAt = connection.flow_expires_at ?? null;
+
   if (hasLiveAuthFlow(connection, now)) {
     // Handoff codes embedded in hosted_url are single-use. An existing flow may
     // already have redeemed its code in another panel, so reopening is strictly
     // observation-only until the API can mint a fresh resume capability.
-    return readyResult(connection, { startedNewFlow: false });
+    return readyResult(connection, {
+      startedNewFlow: false,
+      previousFlowExpiresAt,
+    });
   }
 
   if (input.mode === "new_login" && connection.status === "AUTHENTICATED") {
@@ -511,6 +553,7 @@ export async function beginAuthLogin(
       connection: toSafeAuthConnection(connection),
       started_new_flow: false,
       resume_id: randomResumeId(),
+      previous_flow_expires_at: previousFlowExpiresAt,
     };
   }
 
@@ -536,6 +579,7 @@ export async function beginAuthLogin(
     }
     return readyResult(current, {
       startedNewFlow: true,
+      previousFlowExpiresAt,
       handoffCode: login.handoff_code,
       hostedUrl: login.hosted_url,
     });

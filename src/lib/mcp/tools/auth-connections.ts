@@ -30,6 +30,7 @@ export function registerAuthConnectionTools(server: McpServer) {
       action: z.enum(["list", "get", "wait"]).describe("Read operation."),
       id: z
         .string()
+        .min(1)
         .describe("Auth connection ID. Required for get and re-auth wait.")
         .optional(),
       profile_name: z

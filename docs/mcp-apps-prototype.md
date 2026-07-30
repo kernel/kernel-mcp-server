@@ -21,15 +21,34 @@ manage_auth_connections(action="list", domain_filter=...)
 single-file `ui://kernel/managed-auth-login-v7.html` resource bundles
 `@onkernel/managed-auth-react`; it never iframes the hosted page. Passwords, MFA values,
 managed-auth JWTs, and the Kernel/MCP bearer token never pass through tool calls. The handoff
-code and hosted fallback URL exist only in the app-only `begin_auth_login` result `_meta`.
+code and hosted fallback URL exist only in the app-only `begin_auth_login` result (`_meta`,
+duplicated into `structuredContent.app_private` because some hosts strip tool-result `_meta`).
+App-only tools fail closed: `begin_auth_login`, `get_auth_login_status`, and
+`delete_auth_login_connection` execute only when the connected client declared the
+`io.modelcontextprotocol/ui` extension during initialize, so on hosts without MCP Apps
+support the model cannot call them to bypass user consent or pull App-private material into
+its context. The delete-authorizing `app_capability` is likewise issued only to
+MCP Apps-capable clients and travels only in the launcher result `_meta`.
+Because the streamable-HTTP transport is stateless (one `McpServer` per request), the route
+layer (`src/app/[transport]/route.ts`) observes each `initialize` body and records the
+declared capability per bearer token in Redis (sliding TTL, bound to the token lifetime for
+OAuth tokens); persistent SSE transports are checked directly through the SDK server.
 The component sends credential input directly to `/managed-auth-proxy`, which accepts only
 exchange, retrieve, submit, and events paths and forwards only managed-auth scoped JWTs.
+
+The bundled App resource is byte-checked in CI (`bun run check:managed-auth-app`) and Bun's
+minifier output can change between releases, so CI pins Bun (see `.github/workflows/ci.yml`).
+Regenerate the bundle with that exact Bun version after editing
+`src/lib/mcp/apps/managed-auth-entry.tsx`: `bun run build:managed-auth-app`.
 
 For clients without Apps, first confirm that no panel appeared, then call `open_auth_login`
 with `text_only: true`. This explicit compatibility exception places the full hosted URL
 (including its embedded handoff capability) in user-audience text. It never emits a separate
 `handoff_code`, and the agent must run the same read-only wait instead of treating URL creation
-as successful authentication.
+as successful authentication. The wait is guarded by the pre-flow `previous_flow_expires_at`
+baseline captured at begin time, and a connection that is `AUTHENTICATED` while a flow is
+still `IN_PROGRESS` reads as pending — stale pre-flow state is never accepted as the result
+of a re-auth.
 
 Local QA:
 

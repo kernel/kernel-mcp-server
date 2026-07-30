@@ -148,6 +148,57 @@ export async function setOrgIdForJwt({
 
 export { client as redisClient };
 
+// MCP Apps capability markers. The streamable-HTTP transport is stateless
+// (one McpServer per request), so a client's declared
+// `io.modelcontextprotocol/ui` capability from initialize is not visible to
+// later tool calls on the same connection. The route layer records it here,
+// keyed by the bearer token, so app-only tools can fail closed on hosts that
+// never declared MCP Apps support.
+const MCP_APPS_KEY_PREFIX = "mcp-apps:";
+
+function hashBearerToken(token: string): string {
+  const secretKey = process.env.CLERK_SECRET_KEY;
+  if (!secretKey) {
+    throw new Error("CLERK_SECRET_KEY environment variable must be set");
+  }
+  return createHmac("sha256", secretKey).update(token).digest("hex");
+}
+
+export async function markMcpAppsClient({
+  token,
+  ttlSeconds,
+}: {
+  token: string;
+  ttlSeconds: number;
+}): Promise<void> {
+  await ensureConnected();
+  const key = `${MCP_APPS_KEY_PREFIX}${hashBearerToken(token)}`;
+  await withReconnect(() =>
+    client.setEx(key, Math.max(60, Math.floor(ttlSeconds)), "1"),
+  );
+}
+
+/**
+ * Whether the bearer token's client declared MCP Apps support at initialize.
+ * Sliding expiration: active App sessions keep the marker alive.
+ */
+export async function hasMcpAppsClient({
+  token,
+  ttlSeconds,
+}: {
+  token: string;
+  ttlSeconds: number;
+}): Promise<boolean> {
+  await ensureConnected();
+  const key = `${MCP_APPS_KEY_PREFIX}${hashBearerToken(token)}`;
+  const value = await withReconnect(() => client.get(key));
+  if (value === null) return false;
+  await withReconnect(() =>
+    client.expire(key, Math.max(60, Math.floor(ttlSeconds))),
+  );
+  return true;
+}
+
 export async function setOrgIdForRefreshToken({
   refreshToken,
   orgId,

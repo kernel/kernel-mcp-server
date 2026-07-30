@@ -1,19 +1,46 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { MANAGED_AUTH_APP_HTML } from "@/lib/mcp/apps/generated/managed-auth-app";
 import {
+  initializeDeclaresMcpApps,
   MANAGED_AUTH_MIME_TYPE,
   MANAGED_AUTH_RESOURCE_URI,
   managedAuthResourceMeta,
   registerAuthLoginApp,
 } from "@/lib/mcp/tools/auth-login-app";
 
+// Tests that exercise API-backed handlers substitute a fake Kernel client.
+// The default stub errors if any API method is actually invoked.
+const unusedKernelClient = new Proxy(
+  {},
+  {
+    get: () => {
+      throw new Error("unexpected Kernel client use");
+    },
+  },
+);
+let kernelClientFactory: (token: string) => any = () => unusedKernelClient;
+function resetKernelClientFactory() {
+  kernelClientFactory = () => unusedKernelClient;
+}
+
+// The capability gate falls back to a Redis marker (recorded by the route
+// layer at initialize) on stateless transports. Tests control it directly.
+let redisMarkerPresent = false;
+mock.module("@/lib/redis", () => ({
+  hasMcpAppsClient: async () => redisMarkerPresent,
+  markMcpAppsClient: async () => {},
+}));
+mock.module("@/lib/mcp/kernel-client", () => ({
+  createKernelClient: (token: string) => kernelClientFactory(token),
+}));
+
 type ToolRegistration = {
   config: Record<string, any>;
   handler: (params: any, extra: any) => Promise<any>;
 };
 
-function captureRegistration() {
+function captureRegistration({ appsSupport = true } = {}) {
   const tools = new Map<string, ToolRegistration>();
   let resource:
     | {
@@ -22,20 +49,22 @@ function captureRegistration() {
         handler: (uri: URL) => Promise<any>;
       }
     | undefined;
-  const appCapability = {
-    extensions: {
-      "io.modelcontextprotocol/ui": {
-        mimeTypes: [MANAGED_AUTH_MIME_TYPE],
-      },
-    },
-  };
+  const clientCapabilities = appsSupport
+    ? {
+        extensions: {
+          "io.modelcontextprotocol/ui": {
+            mimeTypes: [MANAGED_AUTH_MIME_TYPE],
+          },
+        },
+      }
+    : {};
   const registrationHandle = () => ({
     enable() {},
     disable() {},
   });
   const server = {
     server: {
-      getClientCapabilities: () => appCapability,
+      getClientCapabilities: () => clientCapabilities,
     },
     registerResource(
       _name: string,
@@ -131,16 +160,273 @@ describe("managed-auth MCP App registration", () => {
           wait_seconds: 25,
         },
       },
-      app_capability: expect.any(String),
     });
     expect(JSON.stringify(result)).not.toContain("?code=");
     expect(JSON.stringify(result)).not.toContain("handoff_code");
     expect(JSON.stringify(result)).not.toContain("hosted_url");
+    // The delete authorization capability travels only in _meta, never in
+    // model-visible content or structuredContent.
     expect(result._meta.auth_login_launcher.app_capability).toBeString();
     expect(JSON.stringify(result.content)).not.toContain("app_capability");
-    expect(result.structuredContent.app_capability).toBe(
-      result._meta.auth_login_launcher.app_capability,
+    expect(JSON.stringify(result.structuredContent)).not.toContain(
+      "app_capability",
     );
+  });
+
+  test("launcher issues no app_capability to hosts without MCP Apps support", async () => {
+    const { tools } = captureRegistration({ appsSupport: false });
+    const result = await tools.get("open_auth_login")!.handler(
+      {
+        mode: "new_login",
+        domain: "example.com",
+        profile_name: "work",
+        text_only: false,
+      },
+      { authInfo: { token: "unused-api-key" } },
+    );
+    expect(result._meta).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain("app_capability");
+  });
+
+  test("app-only tools fail closed on hosts without MCP Apps support", async () => {
+    const { tools } = captureRegistration({ appsSupport: false });
+    const calls: Array<[string, any]> = [
+      ["begin_auth_login", { mode: "reauth", connection_id: "conn_1" }],
+      ["get_auth_login_status", { connection_id: "conn_1" }],
+      [
+        "delete_auth_login_connection",
+        { connection_id: "conn_1", app_capability: "forged" },
+      ],
+    ];
+    for (const [name, params] of calls) {
+      const result = await tools.get(name)!.handler(params, {
+        authInfo: { token: "unused-api-key" },
+      });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("MCP Apps-capable hosts");
+      expect(JSON.stringify(result)).not.toContain("handoff_code");
+      expect(JSON.stringify(result)).not.toContain("hosted_url");
+    }
+  });
+
+  test("stateless transports pass the gate via the recorded initialize marker", async () => {
+    // Simulates the streamable-HTTP path: no client capabilities on the
+    // per-request server, but the route layer recorded the capability.
+    redisMarkerPresent = true;
+    try {
+      const { tools } = captureRegistration({ appsSupport: false });
+      const result = await tools
+        .get("delete_auth_login_connection")!
+        .handler(
+          { connection_id: "conn_1", app_capability: "forged" },
+          { authInfo: { token: "unused-api-key" } },
+        );
+      // Past the gate: fails on the forged capability, not the gate.
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("authorization is invalid");
+
+      const launcher = await tools.get("open_auth_login")!.handler(
+        {
+          mode: "new_login",
+          domain: "example.com",
+          profile_name: "work",
+          text_only: false,
+        },
+        { authInfo: { token: "unused-api-key" } },
+      );
+      expect(launcher._meta.auth_login_launcher.app_capability).toBeString();
+    } finally {
+      redisMarkerPresent = false;
+    }
+  });
+
+  test("detects MCP Apps declarations in initialize payloads", () => {
+    expect(
+      initializeDeclaresMcpApps({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: {
+            extensions: {
+              "io.modelcontextprotocol/ui": {
+                mimeTypes: [MANAGED_AUTH_MIME_TYPE],
+              },
+            },
+          },
+          clientInfo: { name: "qa", version: "1" },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      initializeDeclaresMcpApps([
+        { jsonrpc: "2.0", method: "notifications/initialized" },
+        {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            capabilities: {
+              extensions: { "io.modelcontextprotocol/ui": {} },
+            },
+          },
+        },
+      ]),
+    ).toBe(true);
+    expect(
+      initializeDeclaresMcpApps({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { capabilities: {} },
+      }),
+    ).toBe(false);
+    expect(
+      initializeDeclaresMcpApps({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "begin_auth_login",
+          arguments: {
+            capabilities: {
+              extensions: { "io.modelcontextprotocol/ui": {} },
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(initializeDeclaresMcpApps(null)).toBe(false);
+    expect(initializeDeclaresMcpApps("not json")).toBe(false);
+  });
+
+  test("reauth launcher guards the wait with the pre-flow baseline, never a guessed flow type", async () => {
+    kernelClientFactory = () => ({
+      auth: {
+        connections: {
+          retrieve: async () => ({
+            id: "conn_1",
+            domain: "example.com",
+            profile_name: "work",
+            status: "AUTHENTICATED",
+            flow_status: "SUCCESS",
+            flow_type: "LOGIN",
+            flow_expires_at: "2026-01-01T00:00:00Z",
+          }),
+        },
+      },
+    });
+    try {
+      const { tools } = captureRegistration();
+      const result = await tools
+        .get("open_auth_login")!
+        .handler(
+          { mode: "reauth", connection_id: "conn_1", text_only: false },
+          { authInfo: { token: "unused-api-key" } },
+        );
+      expect(result.structuredContent.next_action.arguments).toEqual({
+        action: "wait",
+        id: "conn_1",
+        wait_seconds: 25,
+        previous_flow_expires_at: "2026-01-01T00:00:00Z",
+      });
+      expect(JSON.stringify(result.structuredContent)).not.toContain(
+        "required_flow_type",
+      );
+    } finally {
+      resetKernelClientFactory();
+    }
+  });
+
+  test("reauth launcher observing a live flow emits no baseline guard", async () => {
+    kernelClientFactory = () => ({
+      auth: {
+        connections: {
+          retrieve: async () => ({
+            id: "conn_1",
+            domain: "example.com",
+            profile_name: "work",
+            status: "AUTHENTICATED",
+            flow_status: "IN_PROGRESS",
+            flow_type: "REAUTH",
+            flow_expires_at: "2099-01-01T00:00:00Z",
+          }),
+        },
+      },
+    });
+    try {
+      const { tools } = captureRegistration();
+      const result = await tools
+        .get("open_auth_login")!
+        .handler(
+          { mode: "reauth", connection_id: "conn_1", text_only: false },
+          { authInfo: { token: "unused-api-key" } },
+        );
+      expect(result.structuredContent.next_action.arguments).toEqual({
+        action: "wait",
+        id: "conn_1",
+        wait_seconds: 25,
+      });
+    } finally {
+      resetKernelClientFactory();
+    }
+  });
+
+  test("text_only fallback emits baseline-guarded wait arguments and keeps handoff material out of model content", async () => {
+    const initial = {
+      id: "conn_1",
+      domain: "example.com",
+      profile_name: "work",
+      status: "NEEDS_AUTH",
+      flow_status: "FAILED",
+      flow_type: "LOGIN",
+      flow_expires_at: "2020-01-01T00:00:00Z",
+    };
+    kernelClientFactory = () => ({
+      auth: {
+        connections: {
+          retrieve: async () => initial,
+          login: async () => ({
+            id: "conn_1",
+            flow_type: "LOGIN",
+            flow_expires_at: "2099-01-01T00:00:00Z",
+            hosted_url:
+              "https://managed-auth.onkernel.com/login/conn_1?code=handoff-secret",
+            handoff_code: "handoff-secret",
+          }),
+        },
+      },
+    });
+    try {
+      const { tools } = captureRegistration({ appsSupport: false });
+      const result = await tools
+        .get("open_auth_login")!
+        .handler(
+          { mode: "reauth", connection_id: "conn_1", text_only: true },
+          { authInfo: { token: "unused-api-key" } },
+        );
+      expect(result.content[0].text).toContain(
+        JSON.stringify({
+          action: "wait",
+          id: "conn_1",
+          wait_seconds: 25,
+          previous_flow_expires_at: "2020-01-01T00:00:00Z",
+        }),
+      );
+      // The hosted URL is delivered only as user-audience text; nothing
+      // capability-bearing appears in structuredContent.
+      expect(result.content[1].text).toContain("handoff-secret");
+      expect(result.content[1].annotations).toEqual({ audience: ["user"] });
+      expect(JSON.stringify(result.structuredContent)).not.toContain(
+        "handoff-secret",
+      );
+      expect(JSON.stringify(result.structuredContent)).not.toContain(
+        "hosted_url",
+      );
+    } finally {
+      resetKernelClientFactory();
+    }
   });
 
   test("destructive app-only cleanup rejects calls without the private launcher capability", async () => {

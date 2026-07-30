@@ -6,6 +6,30 @@ import { verifyToken } from "@clerk/nextjs/server";
 import { NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
+import { initializeDeclaresMcpApps } from "@/lib/mcp/tools/auth-login-app";
+import { markMcpAppsClient } from "@/lib/redis";
+
+// The streamable-HTTP transport is stateless (one McpServer per request), so
+// the client's declared MCP Apps capability is invisible to later tool calls.
+// Observe initialize here — where the bearer token is available — and record
+// the capability per token so app-only tools can fail closed on hosts that
+// never declared MCP Apps support.
+async function recordMcpAppsCapability(
+  req: NextRequest,
+  token: string,
+  ttlSeconds: number,
+): Promise<void> {
+  if (req.method !== "POST") return;
+  try {
+    const body = await req.clone().json();
+    if (!initializeDeclaresMcpApps(body)) return;
+    await markMcpAppsClient({ token, ttlSeconds });
+  } catch (error) {
+    // Never block the initialize handshake on the marker; gated tools fail
+    // closed if the record is missing.
+    console.error("Failed to record MCP Apps capability:", error);
+  }
+}
 
 export async function OPTIONS(_req: NextRequest): Promise<Response> {
   return new Response(null, {
@@ -59,6 +83,9 @@ async function handleAuthenticatedRequest(req: NextRequest): Promise<Response> {
   }
 
   if (!isValidJwtFormat(token)) {
+    // Static API keys have no expiry; use a long sliding TTL (refreshed on
+    // every gated app-only call and on re-initialize).
+    await recordMcpAppsCapability(req, token, 24 * 60 * 60);
     const authHandler = withMcpAuth(
       handler,
       async () => ({
@@ -86,6 +113,14 @@ async function handleAuthenticatedRequest(req: NextRequest): Promise<Response> {
         "Invalid token: No user ID found in token payload",
       );
     }
+
+    // Bind the capability marker to this token's own lifetime: when the token
+    // dies the client must re-authenticate (and re-initialize) anyway.
+    const tokenTtlSeconds =
+      typeof payload.exp === "number"
+        ? Math.max(60, payload.exp - Math.floor(Date.now() / 1000))
+        : 60 * 60;
+    await recordMcpAppsCapability(req, token, tokenTtlSeconds);
 
     // Create authenticated handler with auth info
     const authHandler = withMcpAuth(

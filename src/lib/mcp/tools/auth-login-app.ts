@@ -3,14 +3,80 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MANAGED_AUTH_APP_HTML } from "@/lib/mcp/apps/generated/managed-auth-app";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
+import { hasMcpAppsClient } from "@/lib/redis";
 import {
   AuthLoginStartError,
   beginAuthLogin,
   type AuthLoginInput,
+  hasLiveAuthFlow,
   toSafeAuthConnection,
   validateAuthLoginInput,
 } from "@/lib/mcp/tools/managed-auth-state";
 import { errorResponse } from "@/lib/mcp/responses";
+
+// MCP Apps (SEP-1865) extension identifier. Clients that render MCP Apps
+// declare it in their initialize capabilities.
+const MCP_APPS_EXTENSION = "io.modelcontextprotocol/ui";
+
+// Sliding TTL for the Redis capability marker. Long enough that an active App
+// never loses it mid-flow; refreshed on every gated call.
+const MCP_APPS_MARKER_TTL_SECONDS = 24 * 60 * 60;
+
+/**
+ * Whether a JSON-RPC payload (single message or batch) is an initialize that
+ * declares MCP Apps support. The route layer uses this to record the client
+ * capability, because the stateless streamable-HTTP transport does not expose
+ * it to later requests.
+ */
+export function initializeDeclaresMcpApps(body: unknown): boolean {
+  const messages = Array.isArray(body) ? body : [body];
+  return messages.some((message) => {
+    if (!message || typeof message !== "object") return false;
+    const request = message as {
+      method?: unknown;
+      params?: { capabilities?: { extensions?: Record<string, unknown> } };
+    };
+    return (
+      request.method === "initialize" &&
+      Boolean(request.params?.capabilities?.extensions?.[MCP_APPS_EXTENSION])
+    );
+  });
+}
+
+/**
+ * App-only tools are hidden from the model via `_meta.ui.visibility`, but that
+ * is a hint hosts without MCP Apps support are free to ignore. Fail closed:
+ * only execute them when the connected client actually declared the MCP Apps
+ * extension. Persistent transports (SSE) expose client capabilities directly;
+ * on the stateless streamable-HTTP transport the route layer records the
+ * declared capability per bearer token at initialize time.
+ */
+async function clientSupportsMcpApps(
+  server: McpServer,
+  authToken: string,
+): Promise<boolean> {
+  const capabilities = server.server.getClientCapabilities() as
+    | { extensions?: Record<string, unknown> }
+    | undefined;
+  if (capabilities?.extensions?.[MCP_APPS_EXTENSION]) return true;
+  try {
+    return await hasMcpAppsClient({
+      token: authToken,
+      ttlSeconds: MCP_APPS_MARKER_TTL_SECONDS,
+    });
+  } catch (error) {
+    console.error("MCP Apps capability check failed; failing closed:", error);
+    return false;
+  }
+}
+
+async function mcpAppsGateError(
+  server: McpServer,
+  authToken: string,
+): Promise<string | null> {
+  if (await clientSupportsMcpApps(server, authToken)) return null;
+  return "This tool is only available to the secure Kernel login App on MCP Apps-capable hosts and cannot be called by the model. To authenticate without the App, call open_auth_login with text_only=true after the user confirms that no panel appeared.";
+}
 
 export const MANAGED_AUTH_RESOURCE_URI =
   "ui://kernel/managed-auth-login-v7.html";
@@ -91,7 +157,7 @@ function validAppCapability(capability: string, authToken: string): boolean {
 
 const authLoginInputSchema = {
   mode: z.enum(["new_login", "reauth"]),
-  connection_id: z.string().optional(),
+  connection_id: z.string().min(1).optional(),
   domain: z.string().optional(),
   profile_name: z.string().optional(),
   save_credentials: z.boolean().optional(),
@@ -172,6 +238,19 @@ export function registerAuthLoginApp(server: McpServer) {
       try {
         if (params.text_only) {
           const result = await beginAuthLogin(client, input);
+          // Guard the wait with the pre-flow baseline captured by begin so a
+          // completed flow from before this call is never accepted as the new
+          // one. When begin only observes an already-live flow, the wait
+          // tracks that flow directly (a live in-progress flow reads as
+          // pending even on an AUTHENTICATED connection).
+          const waitArguments: Record<string, unknown> = {
+            action: "wait",
+            id: result.connection.id,
+            wait_seconds: 25,
+            ...(result.started_new_flow && {
+              previous_flow_expires_at: result.previous_flow_expires_at,
+            }),
+          };
           const content: Array<{
             type: "text";
             text: string;
@@ -179,7 +258,7 @@ export function registerAuthLoginApp(server: McpServer) {
           }> = [
             {
               type: "text",
-              text: `Secure managed authentication is ${result.state === "already_authenticated" ? "already complete" : "ready"} for connection ${result.connection.id}. Expiry: ${result.connection.flow_expires_at ?? "not applicable"}. Do not claim success from this response. Immediately call manage_auth_connections with action=wait, id=${result.connection.id}, and wait_seconds=25; repeat while pending and continue only when it returns authenticated.`,
+              text: `Secure managed authentication is ${result.state === "already_authenticated" ? "already complete" : "ready"} for connection ${result.connection.id}. Expiry: ${result.connection.flow_expires_at ?? "not applicable"}. Do not claim success from this response. Immediately call manage_auth_connections with ${JSON.stringify(waitArguments)}; repeat with the same arguments while it returns state=pending and continue only when it returns state=authenticated.`,
             },
           ];
           if (result.hosted_url) {
@@ -216,11 +295,13 @@ export function registerAuthLoginApp(server: McpServer) {
               action: "wait",
               id: input.connection_id!,
               wait_seconds: 25,
-              required_flow_type: "REAUTH",
-              ...(reauthConnection.status === "AUTHENTICATED" &&
-                reauthConnection.flow_status !== "IN_PROGRESS" && {
-                  previous_flow_expires_at: reauthConnection.flow_expires_at,
-                }),
+              // The server chooses LOGIN vs REAUTH when the flow starts, so
+              // never guess a required flow type here. Guard on the pre-flow
+              // baseline instead. When a flow is already live the wait simply
+              // observes that flow, so no baseline is needed.
+              ...(!hasLiveAuthFlow(reauthConnection) && {
+                previous_flow_expires_at: reauthConnection.flow_expires_at,
+              }),
             }
           : {
               action: "wait",
@@ -228,7 +309,16 @@ export function registerAuthLoginApp(server: McpServer) {
               profile_name: input.profile_name!,
               wait_seconds: 25,
             };
-        const appCapability = issueAppCapability(extra.authInfo.token);
+        // The delete authorization capability is App-only: issue it solely to
+        // hosts that declared MCP Apps support, and keep it in _meta (which
+        // hosts do not add to model context). It never goes in
+        // structuredContent, which non-Apps hosts may surface to the model.
+        const appCapability = (await clientSupportsMcpApps(
+          server,
+          extra.authInfo.token,
+        ))
+          ? issueAppCapability(extra.authInfo.token)
+          : null;
         return {
           content: [
             {
@@ -246,17 +336,14 @@ export function registerAuthLoginApp(server: McpServer) {
               tool: "manage_auth_connections",
               arguments: waitArguments,
             },
-            // MCP Apps structuredContent is delivered to the View but is not
-            // added to model context. Claude currently strips tool-result
-            // _meta from launcher notifications, so duplicate this short-lived,
-            // API-token-bound capability here for host compatibility.
-            app_capability: appCapability,
           },
-          _meta: {
-            auth_login_launcher: {
-              app_capability: appCapability,
+          ...(appCapability && {
+            _meta: {
+              auth_login_launcher: {
+                app_capability: appCapability,
+              },
             },
-          },
+          }),
         };
       } catch (error) {
         return errorResponse(
@@ -285,6 +372,8 @@ export function registerAuthLoginApp(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
+      const gateError = await mcpAppsGateError(server, extra.authInfo.token);
+      if (gateError) return errorResponse(gateError);
       const input = inputFromParams(params);
       const validationError = validateAuthLoginInput(input);
       if (validationError) return errorResponse(`Error: ${validationError}`);
@@ -313,9 +402,11 @@ export function registerAuthLoginApp(server: McpServer) {
             connection: result.connection,
             started_new_flow: result.started_new_flow,
             resume_id: result.resume_id,
-            // This helper is visibility:["app"] and cannot be called by the
-            // model on compliant hosts. Duplicate App-private flow material
-            // here because Claude may omit tool-result _meta.
+            // Execution is gated on the client's MCP Apps capability, so
+            // this result only reaches hosts that deliver visibility:["app"]
+            // tool results to the View rather than the model. The
+            // structuredContent duplicate exists because Claude may omit
+            // tool-result _meta.
             app_private: appPrivate,
           },
           _meta: {
@@ -339,7 +430,7 @@ export function registerAuthLoginApp(server: McpServer) {
       description:
         "Read sanitized managed-auth status for the secure login App.",
       inputSchema: {
-        connection_id: z.string(),
+        connection_id: z.string().min(1),
       },
       annotations: {
         readOnlyHint: true,
@@ -351,6 +442,8 @@ export function registerAuthLoginApp(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
+      const gateError = await mcpAppsGateError(server, extra.authInfo.token);
+      if (gateError) return errorResponse(gateError);
       const client = createKernelClient(extra.authInfo.token);
       try {
         const connection = toSafeAuthConnection(
@@ -384,7 +477,7 @@ export function registerAuthLoginApp(server: McpServer) {
       description:
         "Delete the managed-auth connection created by the secure App, including QA cleanup.",
       inputSchema: {
-        connection_id: z.string(),
+        connection_id: z.string().min(1),
         app_capability: z.string(),
       },
       annotations: {
@@ -397,6 +490,8 @@ export function registerAuthLoginApp(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
+      const gateError = await mcpAppsGateError(server, extra.authInfo.token);
+      if (gateError) return errorResponse(gateError);
       if (!validAppCapability(params.app_capability, extra.authInfo.token)) {
         return errorResponse("Secure App authorization is invalid or expired.");
       }

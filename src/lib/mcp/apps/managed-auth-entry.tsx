@@ -64,6 +64,12 @@ type BeginResult = {
 
 let nextRequestId = 1;
 const pendingRequests = new Map<number, PendingRequest>();
+// Reply target origin learned from the first validated host message. Outbound
+// messages can carry capability-bearing URLs (the hosted fallback via
+// ui/open-link), so once the host's origin is known we stop broadcasting to
+// "*". The "*" fallback only exists because opaque-origin sandbox iframes
+// cannot know the host origin before the first inbound message.
+let hostOrigin: string | null = null;
 let destroyed = false;
 let collapsed = false;
 let reactRoot: Root | null = null;
@@ -91,16 +97,25 @@ function notifyStateChanged() {
   for (const listener of listeners) listener();
 }
 
+function postToHost(message: JsonObject) {
+  // The "*" fallback is only reachable before the host's first inbound
+  // message (opaque-origin sandboxes cannot know the host origin earlier);
+  // those early messages are the ui/initialize handshake and carry no
+  // capability-bearing data. Everything after is pinned to hostOrigin.
+  // nosemgrep
+  window.parent.postMessage(message, hostOrigin ?? "*");
+}
+
 function sendRequest(method: string, params: JsonObject): Promise<unknown> {
   const id = nextRequestId++;
   return new Promise((resolve, reject) => {
     pendingRequests.set(id, { resolve, reject });
-    window.parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+    postToHost({ jsonrpc: "2.0", id, method, params });
   });
 }
 
 function sendNotification(method: string, params: JsonObject) {
-  window.parent.postMessage({ jsonrpc: "2.0", method, params }, "*");
+  postToHost({ jsonrpc: "2.0", method, params });
 }
 
 function callTool(name: string, args: JsonObject): Promise<BeginResult> {
@@ -134,6 +149,11 @@ function reportSize() {
 
 window.addEventListener("message", (event: MessageEvent) => {
   if (event.source !== window.parent) return;
+  // Pin replies to the host's origin once known. Ignore "null" (opaque
+  // origins): they cannot be targeted, so the "*" fallback stays in effect.
+  if (!hostOrigin && event.origin && event.origin !== "null") {
+    hostOrigin = event.origin;
+  }
   const message = event.data as
     | {
         jsonrpc?: string;
@@ -167,18 +187,12 @@ window.addEventListener("message", (event: MessageEvent) => {
     listeners.clear();
     reactRoot?.unmount();
     reactRoot = null;
-    window.parent.postMessage(
-      { jsonrpc: "2.0", id: message.id, result: {} },
-      "*",
-    );
+    postToHost({ jsonrpc: "2.0", id: message.id, result: {} });
     return;
   }
 
   if (message.id !== undefined && message.method) {
-    window.parent.postMessage(
-      { jsonrpc: "2.0", id: message.id, result: {} },
-      "*",
-    );
+    postToHost({ jsonrpc: "2.0", id: message.id, result: {} });
     return;
   }
 

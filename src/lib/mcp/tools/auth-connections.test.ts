@@ -271,6 +271,169 @@ describe("managed-auth wait", () => {
     expect(result.state).toBe("pending");
   });
 
+  test("treats authenticated with a live re-auth flow as pending, even without a flow guard", async () => {
+    // Text-only re-auth of an AUTHENTICATED connection: the wait must not
+    // accept the pre-flow authenticated state while the new flow runs.
+    const liveReauth = connection({
+      status: "AUTHENTICATED",
+      flow_status: "IN_PROGRESS",
+      flow_type: "REAUTH",
+      flow_expires_at: "2099-01-01T00:00:00Z",
+    });
+    const client = {
+      auth: { connections: { retrieve: async () => liveReauth } },
+    } as unknown as KernelClient;
+    const result = await waitForAuthConnection(
+      client,
+      { connectionId: liveReauth.id },
+      { timeoutMs: 0 },
+    );
+    expect(result.state).toBe("pending");
+  });
+
+  test("accepts authenticated once the live flow succeeds, without any flow guard", async () => {
+    const states = [
+      connection({
+        status: "AUTHENTICATED",
+        flow_status: "IN_PROGRESS",
+        flow_type: "REAUTH",
+        flow_expires_at: "2099-01-01T00:00:00Z",
+      }),
+      connection({
+        status: "AUTHENTICATED",
+        flow_status: "SUCCESS",
+        flow_type: "REAUTH",
+        flow_expires_at: "2099-01-01T00:00:00Z",
+      }),
+    ];
+    let calls = 0;
+    const client = {
+      auth: {
+        connections: {
+          retrieve: async () => states[Math.min(calls++, states.length - 1)],
+        },
+      },
+    } as unknown as KernelClient;
+    const result = await waitForAuthConnection(
+      client,
+      { connectionId: "conn_1" },
+      { timeoutMs: 50, pollIntervalMs: 1 },
+    );
+    expect(result.state).toBe("authenticated");
+  });
+
+  test("baseline-guarded reauth wait completes when the server reports flow_type LOGIN", async () => {
+    // The server chooses the flow type; a reauth-mode wait must accept any
+    // successful new flow instead of assuming REAUTH.
+    const states = [
+      connection({
+        status: "NEEDS_AUTH",
+        flow_status: "IN_PROGRESS",
+        flow_type: "LOGIN",
+        flow_expires_at: "2099-01-01T00:00:00Z",
+      }),
+      connection({
+        status: "AUTHENTICATED",
+        flow_status: "SUCCESS",
+        flow_type: "LOGIN",
+        flow_expires_at: "2099-01-01T00:00:00Z",
+      }),
+    ];
+    let calls = 0;
+    const client = {
+      auth: {
+        connections: {
+          retrieve: async () => states[Math.min(calls++, states.length - 1)],
+        },
+      },
+    } as unknown as KernelClient;
+    const result = await waitForAuthConnection(
+      client,
+      { connectionId: "conn_1", previousFlowExpiresAt: null },
+      { timeoutMs: 50, pollIntervalMs: 1 },
+    );
+    expect(result.state).toBe("authenticated");
+  });
+
+  test("baseline-guarded wait stays pending on the stale pre-flow success", async () => {
+    const stale = connection({
+      status: "AUTHENTICATED",
+      flow_status: "SUCCESS",
+      flow_type: "LOGIN",
+      flow_expires_at: "2026-01-01T00:00:00Z",
+    });
+    const client = {
+      auth: { connections: { retrieve: async () => stale } },
+    } as unknown as KernelClient;
+    const result = await waitForAuthConnection(
+      client,
+      {
+        connectionId: stale.id,
+        previousFlowExpiresAt: stale.flow_expires_at,
+      },
+      { timeoutMs: 0 },
+    );
+    expect(result.state).toBe("pending");
+  });
+
+  test("baseline-guarded wait accepts success after observing the new live flow, even if the expiry matches the baseline", async () => {
+    // Backstop for servers that keep (or clear) flow_expires_at once a flow
+    // reaches a terminal state: having observed the new in-progress flow is
+    // proof the success is not the stale pre-flow one.
+    const states = [
+      connection({
+        status: "AUTHENTICATED",
+        flow_status: "IN_PROGRESS",
+        flow_type: "REAUTH",
+        flow_expires_at: "2099-01-01T00:00:00Z",
+      }),
+      connection({
+        status: "AUTHENTICATED",
+        flow_status: "SUCCESS",
+        flow_type: "REAUTH",
+        flow_expires_at: "2099-01-01T00:00:00Z",
+      }),
+    ];
+    let calls = 0;
+    const client = {
+      auth: {
+        connections: {
+          retrieve: async () => states[Math.min(calls++, states.length - 1)],
+        },
+      },
+    } as unknown as KernelClient;
+    const result = await waitForAuthConnection(
+      client,
+      {
+        connectionId: "conn_1",
+        previousFlowExpiresAt: "2099-01-01T00:00:00Z",
+      },
+      { timeoutMs: 50, pollIntervalMs: 1 },
+    );
+    expect(result.state).toBe("authenticated");
+  });
+
+  test("baseline-guarded wait does not fail on a terminal flow that predates the baseline", async () => {
+    const oldFailure = connection({
+      status: "NEEDS_AUTH",
+      flow_status: "FAILED",
+      flow_type: "LOGIN",
+      flow_expires_at: "2020-01-01T00:00:00Z",
+    });
+    const client = {
+      auth: { connections: { retrieve: async () => oldFailure } },
+    } as unknown as KernelClient;
+    const result = await waitForAuthConnection(
+      client,
+      {
+        connectionId: oldFailure.id,
+        previousFlowExpiresAt: "2020-01-01T00:00:00Z",
+      },
+      { timeoutMs: 0 },
+    );
+    expect(result.state).toBe("pending");
+  });
+
   test("returns safe failure and pending states", async () => {
     const failedClient = {
       auth: {

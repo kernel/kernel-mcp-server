@@ -177,6 +177,8 @@ const LIVE_VIEW_HTML = /* html */ `<!DOCTYPE html>
         };
 
         window.addEventListener("message", function (event) {
+          // Only the embedding host frame may drive this view.
+          if (event.source !== window.parent) return;
           var msg = event.data;
           if (!msg || msg.jsonrpc !== "2.0") return;
           // Response to one of our requests
