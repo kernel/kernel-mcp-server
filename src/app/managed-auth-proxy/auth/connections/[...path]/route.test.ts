@@ -72,6 +72,22 @@ describe("managed-auth relay", () => {
     expectCors(apiKey);
   });
 
+  test("rejects expired scoped JWTs at the relay boundary", async () => {
+    const expired = jwt({
+      iss: "kernel-api",
+      managed_auth_session_id: "session_1",
+      exp: 1700000000, // 2023-11-14, in the past
+    });
+    const response = await proxyManagedAuthRequest(
+      request("/managed-auth-proxy/auth/connections/c_1", {
+        headers: { authorization: `Bearer ${expired}` },
+      }),
+      ["c_1"],
+    );
+    expect(response.status).toBe(401);
+    expectCors(response);
+  });
+
   test("allows unauthenticated exchange and strips cookies and arbitrary headers", async () => {
     let forwarded: RequestInit | undefined;
     const upstream = async (_url: URL | RequestInfo, init?: RequestInit) => {

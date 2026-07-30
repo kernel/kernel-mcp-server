@@ -114,13 +114,10 @@ async function handleAuthenticatedRequest(req: NextRequest): Promise<Response> {
       );
     }
 
-    // Bind the capability marker to this token's own lifetime: when the token
-    // dies the client must re-authenticate (and re-initialize) anyway.
-    const tokenTtlSeconds =
-      typeof payload.exp === "number"
-        ? Math.max(60, payload.exp - Math.floor(Date.now() / 1000))
-        : 60 * 60;
-    await recordMcpAppsCapability(req, token, tokenTtlSeconds);
+    // The marker is keyed by the session (sid), which survives access-token
+    // refresh, so bind it to the long sliding TTL (refreshed on every gated
+    // app-only call) rather than this one token's lifetime.
+    await recordMcpAppsCapability(req, token, 24 * 60 * 60);
 
     // Create authenticated handler with auth info
     const authHandler = withMcpAuth(

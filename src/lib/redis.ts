@@ -1,5 +1,6 @@
 import { createClient } from "redis";
 import { createHmac } from "crypto";
+import { mcpAppsMarkerSubject } from "@/lib/mcp-apps-marker";
 
 const redisUrl = process.env.REDIS_URL;
 const redisTlsServerName = process.env.REDIS_TLS_SERVER_NAME;
@@ -156,14 +157,6 @@ export { client as redisClient };
 // never declared MCP Apps support.
 const MCP_APPS_KEY_PREFIX = "mcp-apps:";
 
-function hashBearerToken(token: string): string {
-  const secretKey = process.env.CLERK_SECRET_KEY;
-  if (!secretKey) {
-    throw new Error("CLERK_SECRET_KEY environment variable must be set");
-  }
-  return createHmac("sha256", secretKey).update(token).digest("hex");
-}
-
 export async function markMcpAppsClient({
   token,
   ttlSeconds,
@@ -172,7 +165,7 @@ export async function markMcpAppsClient({
   ttlSeconds: number;
 }): Promise<void> {
   await ensureConnected();
-  const key = `${MCP_APPS_KEY_PREFIX}${hashBearerToken(token)}`;
+  const key = `${MCP_APPS_KEY_PREFIX}${mcpAppsMarkerSubject(token)}`;
   await withReconnect(() =>
     client.setEx(key, Math.max(60, Math.floor(ttlSeconds)), "1"),
   );
@@ -190,7 +183,7 @@ export async function hasMcpAppsClient({
   ttlSeconds: number;
 }): Promise<boolean> {
   await ensureConnected();
-  const key = `${MCP_APPS_KEY_PREFIX}${hashBearerToken(token)}`;
+  const key = `${MCP_APPS_KEY_PREFIX}${mcpAppsMarkerSubject(token)}`;
   const value = await withReconnect(() => client.get(key));
   if (value === null) return false;
   await withReconnect(() =>

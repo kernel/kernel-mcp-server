@@ -57,7 +57,10 @@ function managedAuthAuthorization(request: Request): string | null {
     claims?.iss !== "kernel-api" ||
     typeof claims.managed_auth_session_id !== "string" ||
     !claims.managed_auth_session_id ||
-    typeof claims.exp !== "number"
+    typeof claims.exp !== "number" ||
+    // Reject expired session JWTs at the relay boundary instead of
+    // forwarding them upstream.
+    claims.exp * 1000 <= Date.now()
   ) {
     return null;
   }
