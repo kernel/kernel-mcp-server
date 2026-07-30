@@ -65,9 +65,15 @@ export function registerAuthConnectionTools(server: McpServer) {
       previous_flow_event_id: z
         .string()
         .min(1)
-        .nullable()
         .describe(
           "(wait) Baseline timeline event supplied by open_auth_login; do not modify.",
+        )
+        .optional(),
+      flow_wait_started_at: z
+        .string()
+        .min(1)
+        .describe(
+          "(wait) Baseline timestamp supplied by open_auth_login; do not modify.",
         )
         .optional(),
       ...paginationParams,
@@ -153,6 +159,9 @@ export function registerAuthConnectionTools(server: McpServer) {
                 }),
                 ...(params.previous_flow_event_id !== undefined && {
                   previousFlowEventId: params.previous_flow_event_id,
+                }),
+                ...(params.flow_wait_started_at !== undefined && {
+                  flowWaitStartedAt: params.flow_wait_started_at,
                 }),
               },
               {

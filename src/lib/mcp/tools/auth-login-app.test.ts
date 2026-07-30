@@ -377,6 +377,7 @@ describe("managed-auth MCP App registration", () => {
         wait_seconds: 25,
         previous_flow_expires_at: null,
         previous_flow_event_id: "flow_old",
+        flow_wait_started_at: expect.any(String),
       });
     } finally {
       resetKernelClientFactory();
@@ -483,6 +484,8 @@ describe("managed-auth MCP App registration", () => {
 
   test("terminal model context excludes internal identifiers and never writes the prompt", () => {
     expect(MANAGED_AUTH_APP_HTML).toContain("profile_name");
+    expect(MANAGED_AUTH_APP_HTML).toContain("manage_auth_connections");
+    expect(MANAGED_AUTH_APP_HTML).toContain("flow_wait_started_at");
     expect(MANAGED_AUTH_APP_HTML).toContain(
       "Connection status saved for Claude",
     );

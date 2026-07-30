@@ -509,11 +509,47 @@ describe("managed-auth wait", () => {
       {
         connectionId: completed.id,
         previousFlowExpiresAt: null,
-        previousFlowEventId: "flow_old",
+        flowWaitStartedAt: "2026-01-01T00:00:00Z",
       },
       { timeoutMs: 0 },
     );
     expect(result.state).toBe("authenticated");
+  });
+
+  test("timeline timestamp ignores a stale event when no prior event id exists", async () => {
+    const stale = connection({
+      status: "AUTHENTICATED",
+      flow_status: "SUCCESS",
+      flow_type: "REAUTH",
+      flow_expires_at: null,
+    });
+    const client = {
+      auth: {
+        connections: {
+          retrieve: async () => stale,
+          timeline: async () => ({
+            getPaginatedItems: () => [
+              {
+                id: "flow_old",
+                type: "reauth",
+                status: "SUCCESS",
+                timestamp: "2026-01-01T00:00:00Z",
+              },
+            ],
+          }),
+        },
+      },
+    } as unknown as KernelClient;
+    const result = await waitForAuthConnection(
+      client,
+      {
+        connectionId: stale.id,
+        previousFlowExpiresAt: null,
+        flowWaitStartedAt: "2026-01-02T00:00:00Z",
+      },
+      { timeoutMs: 0 },
+    );
+    expect(result.state).toBe("pending");
   });
 
   test("baseline-guarded wait stays pending on the stale pre-flow success", async () => {

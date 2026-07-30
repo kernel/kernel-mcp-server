@@ -52,20 +52,21 @@ const authLoginInputSchema = {
   proxy_name: z.string().min(1).optional(),
 };
 
-async function latestAuthFlowEventId(
+async function authFlowWaitBaseline(
   client: KernelClient,
   connectionId: string,
-): Promise<string | null | undefined> {
+): Promise<{ eventId?: string; startedAt: string } | undefined> {
   try {
     const page = await client.auth.connections.timeline(connectionId, {
       limit: 10,
     });
-    return (
-      page
-        .getPaginatedItems()
-        .find((event) => event.type === "login" || event.type === "reauth")
-        ?.id ?? null
-    );
+    const eventId = page
+      .getPaginatedItems()
+      .find((event) => event.type === "login" || event.type === "reauth")?.id;
+    return {
+      ...(eventId && { eventId }),
+      startedAt: new Date().toISOString(),
+    };
   } catch {
     return undefined;
   }
@@ -143,8 +144,8 @@ export function registerAuthLoginApp(server: McpServer) {
 
       try {
         if (params.text_only) {
-          const previousFlowEventId = input.connection_id
-            ? await latestAuthFlowEventId(client, input.connection_id)
+          const flowWaitBaseline = input.connection_id
+            ? await authFlowWaitBaseline(client, input.connection_id)
             : undefined;
           const result = await beginAuthLogin(client, input);
           // Guard the wait with the pre-flow baseline captured by begin so a
@@ -158,8 +159,11 @@ export function registerAuthLoginApp(server: McpServer) {
             wait_seconds: 25,
             ...(result.started_new_flow && {
               previous_flow_expires_at: result.previous_flow_expires_at,
-              ...(previousFlowEventId !== undefined && {
-                previous_flow_event_id: previousFlowEventId,
+              ...(flowWaitBaseline && {
+                ...(flowWaitBaseline.eventId && {
+                  previous_flow_event_id: flowWaitBaseline.eventId,
+                }),
+                flow_wait_started_at: flowWaitBaseline.startedAt,
               }),
             }),
           };
@@ -202,9 +206,9 @@ export function registerAuthLoginApp(server: McpServer) {
           domain: input.domain!,
           profile_name: input.profile_name!,
         };
-        const previousFlowEventId =
+        const flowWaitBaseline =
           reauthConnection && !hasLiveAuthFlow(reauthConnection)
-            ? await latestAuthFlowEventId(client, reauthConnection.id)
+            ? await authFlowWaitBaseline(client, reauthConnection.id)
             : undefined;
         const waitArguments = reauthConnection
           ? {
@@ -217,8 +221,11 @@ export function registerAuthLoginApp(server: McpServer) {
               // observes that flow, so no baseline is needed.
               ...(!hasLiveAuthFlow(reauthConnection) && {
                 previous_flow_expires_at: reauthConnection.flow_expires_at,
-                ...(previousFlowEventId !== undefined && {
-                  previous_flow_event_id: previousFlowEventId,
+                ...(flowWaitBaseline && {
+                  ...(flowWaitBaseline.eventId && {
+                    previous_flow_event_id: flowWaitBaseline.eventId,
+                  }),
+                  flow_wait_started_at: flowWaitBaseline.startedAt,
                 }),
               }),
             }

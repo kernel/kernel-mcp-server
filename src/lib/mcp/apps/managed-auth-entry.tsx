@@ -61,6 +61,11 @@ type BeginResult = {
   };
   isError?: boolean;
 };
+type WaitToolResult = {
+  structuredContent?: {
+    state?: "authenticated" | "failed" | "pending";
+  };
+};
 
 let nextRequestId = 1;
 const pendingRequests = new Map<number, PendingRequest>();
@@ -118,11 +123,11 @@ function sendNotification(method: string, params: JsonObject) {
   postToHost({ jsonrpc: "2.0", method, params });
 }
 
-function callTool(name: string, args: JsonObject): Promise<BeginResult> {
+function callTool<T = BeginResult>(name: string, args: JsonObject): Promise<T> {
   return sendRequest("tools/call", {
     name,
     arguments: args,
-  }) as Promise<BeginResult>;
+  }) as Promise<T>;
 }
 
 function applyHostContext(context: JsonObject | undefined) {
@@ -247,6 +252,38 @@ function sanitizeBeginArguments(input: JsonObject): JsonObject {
   );
 }
 
+function waitArgumentsFromLauncher(
+  content: JsonObject | undefined,
+): JsonObject | null {
+  const nextAction = content?.next_action as
+    | { tool?: unknown; arguments?: JsonObject }
+    | undefined;
+  if (
+    nextAction?.tool !== "manage_auth_connections" ||
+    nextAction.arguments?.action !== "wait"
+  ) {
+    return null;
+  }
+  const allowed = [
+    "action",
+    "id",
+    "domain_filter",
+    "profile_name",
+    "required_flow_type",
+    "previous_flow_expires_at",
+    "previous_flow_event_id",
+    "flow_wait_started_at",
+  ];
+  return {
+    ...Object.fromEntries(
+      allowed
+        .filter((key) => nextAction.arguments?.[key] !== undefined)
+        .map((key) => [key, nextAction.arguments?.[key]]),
+    ),
+    wait_seconds: 1,
+  };
+}
+
 function ManagedAuthApp() {
   const launcher = useLauncherData();
   const [beginResult, setBeginResult] = useState<BeginResult | null>(null);
@@ -266,6 +303,7 @@ function ManagedAuthApp() {
   const launcherContent = launcher.result?.structuredContent as
     | {
         connection?: { domain?: string; profile_name?: string };
+        next_action?: { tool?: string; arguments?: JsonObject };
       }
     | undefined;
   const targetDomain =
@@ -277,6 +315,9 @@ function ManagedAuthApp() {
   const privateAuth =
     beginResult?._meta?.auth_login ??
     beginResult?.structuredContent?.app_private;
+  const waitArguments = waitArgumentsFromLauncher(
+    launcher.result?.structuredContent as JsonObject | undefined,
+  );
 
   const appearance = useMemo(
     () => ({ theme: launcher.theme, layout: { skipPrimeStep: true } }),
@@ -427,29 +468,41 @@ function ManagedAuthApp() {
       });
       const current = result.structuredContent?.connection;
       if (!current) throw new Error("No connection status returned");
-      if (
-        current.flow_status === "FAILED" ||
-        current.flow_status === "EXPIRED" ||
-        current.flow_status === "CANCELED"
-      ) {
-        finish("failure");
-        return;
-      }
       const expiresAt = current.flow_expires_at
         ? Date.parse(current.flow_expires_at)
         : Number.NaN;
-      if (
-        current.flow_status !== "SUCCESS" &&
-        Number.isFinite(expiresAt) &&
-        expiresAt <= Date.now()
-      ) {
+      const statusClaimsFailure =
+        current.flow_status === "FAILED" ||
+        current.flow_status === "EXPIRED" ||
+        current.flow_status === "CANCELED" ||
+        (current.flow_status !== "SUCCESS" &&
+          Number.isFinite(expiresAt) &&
+          expiresAt <= Date.now());
+      const statusClaimsSuccess =
+        current.flow_status === "SUCCESS" && current.status === "AUTHENTICATED";
+      if ((statusClaimsFailure || statusClaimsSuccess) && waitArguments) {
+        const wait = await callTool<WaitToolResult>(
+          "manage_auth_connections",
+          waitArguments,
+        );
+        const waitState = wait.structuredContent?.state;
+        if (waitState === "authenticated") {
+          finish("success");
+          return;
+        }
+        if (waitState === "failed") {
+          finish("failure");
+          return;
+        }
+        setStatusText("Secure login is still in progress…");
+        pollTimer.current = window.setTimeout(checkStatus, 2000);
+        return;
+      }
+      if (statusClaimsFailure) {
         finish("failure");
         return;
       }
-      if (
-        current.flow_status === "SUCCESS" &&
-        current.status === "AUTHENTICATED"
-      ) {
+      if (statusClaimsSuccess) {
         finish("success");
         return;
       }

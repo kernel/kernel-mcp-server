@@ -96,7 +96,8 @@ export interface AuthWaitSelector {
   profileName?: string;
   requiredFlowType?: "LOGIN" | "REAUTH";
   previousFlowExpiresAt?: string | null;
-  previousFlowEventId?: string | null;
+  previousFlowEventId?: string;
+  flowWaitStartedAt?: string;
 }
 
 export interface AuthWaitResult {
@@ -241,7 +242,8 @@ export async function waitForAuthConnection(
         latest = toSafeAuthConnection(connection);
         if (hasLiveAuthFlow(latest)) observedLiveFlow = true;
         if (
-          selector.previousFlowEventId !== undefined &&
+          (selector.previousFlowEventId !== undefined ||
+            selector.flowWaitStartedAt !== undefined) &&
           selector.connectionId
         ) {
           try {
@@ -249,7 +251,20 @@ export async function waitForAuthConnection(
               client,
               selector.connectionId,
             );
-            if (event && event.id !== selector.previousFlowEventId) {
+            const eventTimestamp = event
+              ? Date.parse(event.timestamp)
+              : Number.NaN;
+            const waitStartedAt = selector.flowWaitStartedAt
+              ? Date.parse(selector.flowWaitStartedAt)
+              : Number.NaN;
+            const isNewEvent = event
+              ? selector.previousFlowEventId !== undefined
+                ? event.id !== selector.previousFlowEventId
+                : Number.isFinite(eventTimestamp) &&
+                  Number.isFinite(waitStartedAt) &&
+                  eventTimestamp >= waitStartedAt
+              : false;
+            if (event && isNewEvent) {
               observedNewFlow = true;
               observedNewFlowSucceeded = event.status === "SUCCESS";
               observedNewFlowFailed =
@@ -271,7 +286,8 @@ export async function waitForAuthConnection(
         const flowGuarded =
           selector.requiredFlowType !== undefined ||
           selector.previousFlowExpiresAt !== undefined ||
-          selector.previousFlowEventId !== undefined;
+          selector.previousFlowEventId !== undefined ||
+          selector.flowWaitStartedAt !== undefined;
         const flowFailed =
           observedNewFlowFailed ||
           latest.flow_status === "FAILED" ||
@@ -294,7 +310,9 @@ export async function waitForAuthConnection(
             (selector.previousFlowExpiresAt === undefined ||
               latest.flow_expires_at !== selector.previousFlowExpiresAt ||
               observedLiveFlow) &&
-            (selector.previousFlowEventId === undefined || observedNewFlow));
+            ((selector.previousFlowEventId === undefined &&
+              selector.flowWaitStartedAt === undefined) ||
+              observedNewFlow));
         // AUTHENTICATED with a live in-progress flow means a (re-)auth is
         // still running: report pending instead of the stale pre-flow state.
         if (
