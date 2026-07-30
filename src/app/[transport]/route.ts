@@ -145,6 +145,7 @@ export async function POST(req: NextRequest): Promise<Response> {
       method: req.method,
       headers: requestHeaders,
       body: await req.text(),
+      signal: req.signal,
     }),
   );
 

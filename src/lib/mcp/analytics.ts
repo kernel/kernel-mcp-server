@@ -3,6 +3,7 @@ import {
   instrument,
   MCP_SESSION_HEADER,
   newSessionId,
+  PostHogMCPAnalyticsEvent,
   PostHogMCPAnalyticsProperty,
 } from "@posthog/mcp";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -20,18 +21,35 @@ if (!projectToken && process.env.NODE_ENV !== "production") {
 const posthog = projectToken
   ? new PostHog(projectToken, {
       host: process.env.POSTHOG_HOST ?? "https://us.i.posthog.com",
-      enableExceptionAutocapture: true,
       flushAt: 1,
       flushInterval: 0,
     })
   : null;
 
-function clerkUserId(extra?: Record<string, unknown>): string | null {
-  const authInfo = extra?.authInfo as
-    | { extra?: { userId?: string | null } }
-    | undefined;
-  return authInfo?.extra?.userId ?? null;
-}
+// Every property this integration sends. An allow-list rather than a deny-list so a
+// property the pinned SDK doesn't emit today — a renamed payload field, a new one —
+// can't start flowing on an upgrade. Deliberately absent: $mcp_parameters and
+// $mcp_response (call payloads), $mcp_error_message (the text a failed tool returned),
+// and $mcp_intent / $mcp_intent_source (agent-written, and intent capture is off).
+const SENT_PROPERTIES = new Set<string>([
+  "$groups",
+  "$process_person_profile",
+  PostHogMCPAnalyticsProperty.ClientName,
+  PostHogMCPAnalyticsProperty.ClientVersion,
+  PostHogMCPAnalyticsProperty.DurationMs,
+  PostHogMCPAnalyticsProperty.ErrorType,
+  PostHogMCPAnalyticsProperty.IsError,
+  PostHogMCPAnalyticsProperty.ListedToolNames,
+  PostHogMCPAnalyticsProperty.ProtocolVersion,
+  PostHogMCPAnalyticsProperty.ResourceName,
+  PostHogMCPAnalyticsProperty.ServerName,
+  PostHogMCPAnalyticsProperty.ServerVersion,
+  PostHogMCPAnalyticsProperty.SessionId,
+  PostHogMCPAnalyticsProperty.Source,
+  PostHogMCPAnalyticsProperty.ToolCategory,
+  PostHogMCPAnalyticsProperty.ToolDescription,
+  PostHogMCPAnalyticsProperty.ToolName,
+]);
 
 /**
  * Captures every tool call, tools/list, and initialize handled by the server as a
@@ -44,24 +62,29 @@ export function instrumentMcpAnalytics(server: McpServer) {
     // Intent capture injects a required `context` argument into every tool schema.
     // Left off so the public tool surface is unchanged.
     context: false,
-    // The transport is stateless on Vercel, so a session id is not stable across
-    // requests. Attribute to the Clerk user when the request carries a JWT; API-key
-    // requests stay session-scoped.
-    identify: async (_request, extra) => {
-      const userId = clerkUserId(extra);
-      return userId ? { distinctId: userId } : null;
-    },
-    // Neither side of a call is safe to capture. Results are serialized to a JSON
-    // string (see jsonResponse) so the SDK's key-name redaction can't see inside them,
-    // and arguments carry free-form input — credential field maps, curl headers and
-    // bodies, typed text, shell commands, Playwright source. Keep the call metadata
-    // (tool, latency, error, client, session) and drop both payloads.
+    // A failed tool call otherwise fans out into a second `$exception` event whose
+    // `$exception_list` is built from the text the tool returned.
+    enableExceptionAutocapture: false,
+    // Events are attributed to the analytics session, with no person created. The only
+    // id this server holds is the Clerk subject, while every other producer in these
+    // projects identifies people by their Kernel user id — identifying on the subject
+    // would mint a second profile per person. Resolving the Kernel user id needs an
+    // API that doesn't exist yet, so user-level reporting is out of scope until then.
+    identify: null,
+    // No part of a call is safe to capture: arguments carry free-form input (credential
+    // field maps, curl headers and bodies, typed text, shell commands, Playwright
+    // source), results are serialized to a JSON string (see jsonResponse) so the SDK's
+    // key-name redaction can't see inside them, and a tool's error text is whatever
+    // upstream returned. Send call metadata only.
     beforeSend: (event) => {
+      if (event.event === PostHogMCPAnalyticsEvent.Exception) return null;
+
       const properties = event.properties;
       if (!properties) return event;
 
-      delete properties[PostHogMCPAnalyticsProperty.Parameters];
-      delete properties[PostHogMCPAnalyticsProperty.Response];
+      for (const key of Object.keys(properties)) {
+        if (!SENT_PROPERTIES.has(key)) delete properties[key];
+      }
 
       return event;
     },
@@ -70,7 +93,10 @@ export function instrumentMcpAnalytics(server: McpServer) {
 
 type InitializeRequestBody = {
   method?: string;
-  params?: { clientInfo?: { name?: string; version?: string } };
+  params?: {
+    clientInfo?: { name?: string; version?: string };
+    protocolVersion?: string;
+  };
 };
 
 /**
@@ -86,6 +112,11 @@ type InitializeRequestBody = {
 export async function mintMcpSessionId(req: Request): Promise<string | null> {
   if (!posthog || req.headers.get(MCP_SESSION_HEADER)) return null;
 
+  // Streamable HTTP only. The legacy SSE transport issues its own session id and its
+  // clients don't replay ours, which would put the handshake in one session and the
+  // calls that follow in another.
+  if (!new URL(req.url).pathname.endsWith("/mcp")) return null;
+
   const body = (await req
     .clone()
     .json()
@@ -96,6 +127,9 @@ export async function mintMcpSessionId(req: Request): Promise<string | null> {
     sessionId: newSessionId(),
     clientName: body.params?.clientInfo?.name,
     clientVersion: body.params?.clientInfo?.version,
+    // Negotiated once, at the handshake. Carried in the token so the events after it
+    // report it too.
+    protocolVersion: body.params?.protocolVersion,
   });
 }
 
