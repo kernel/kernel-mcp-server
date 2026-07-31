@@ -24,6 +24,50 @@ export const hostedAuthParams = {
   ...paginationParams,
 };
 
+export function hostedAuthLoginForMCP(response: {
+  id: string;
+  hosted_url: string;
+  flow_expires_at: string;
+  flow_type: string;
+  live_view_url?: string;
+}) {
+  return {
+    id: response.id,
+    hosted_url: response.hosted_url,
+    flow_expires_at: response.flow_expires_at,
+    flow_type: response.flow_type,
+    ...(response.live_view_url && { live_view_url: response.live_view_url }),
+  };
+}
+
+export function hostedAuthConnectionForMCP(connection: {
+  id: string;
+  domain: string;
+  profile_name: string;
+  status: string;
+  flow_status?: string | null;
+  flow_step?: string | null;
+  flow_expires_at?: string | null;
+  hosted_url?: string | null;
+  live_view_url?: string | null;
+  error_code?: string | null;
+  error_message?: string | null;
+}) {
+  return {
+    id: connection.id,
+    domain: connection.domain,
+    profile_name: connection.profile_name,
+    status: connection.status,
+    flow_status: connection.flow_status ?? null,
+    flow_step: connection.flow_step ?? null,
+    flow_expires_at: connection.flow_expires_at ?? null,
+    hosted_url: connection.hosted_url ?? null,
+    live_view_url: connection.live_view_url ?? null,
+    error_code: connection.error_code ?? null,
+    error_message: connection.error_message ?? null,
+  };
+}
+
 export function registerHostedAuthTool(server: McpServer) {
   server.tool(
     "manage_hosted_auth",
@@ -67,7 +111,7 @@ export function registerHostedAuthTool(server: McpServer) {
               }),
             });
             return connection
-              ? jsonResponse(connection)
+              ? jsonResponse(hostedAuthConnectionForMCP(connection))
               : errorResponse("Failed to create auth connection");
           }
           case "list": {
@@ -77,13 +121,17 @@ export function registerHostedAuthTool(server: McpServer) {
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
-            return paginatedJsonResponse(page);
+            return paginatedJsonResponse(page, {
+              mapItem: hostedAuthConnectionForMCP,
+            });
           }
           case "get": {
             if (!params.id)
               return errorResponse("Error: id is required for get.");
             return jsonResponse(
-              await client.auth.connections.retrieve(params.id),
+              hostedAuthConnectionForMCP(
+                await client.auth.connections.retrieve(params.id),
+              ),
             );
           }
           case "delete": {
@@ -98,9 +146,11 @@ export function registerHostedAuthTool(server: McpServer) {
               return errorResponse("Error: id is required for login.");
             }
             return jsonResponse(
-              await client.auth.connections.login(
-                params.id,
-                proxy ? { proxy } : undefined,
+              hostedAuthLoginForMCP(
+                await client.auth.connections.login(
+                  params.id,
+                  proxy ? { proxy } : undefined,
+                ),
               ),
             );
           }
