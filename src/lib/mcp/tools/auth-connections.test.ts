@@ -68,12 +68,19 @@ function fakeClient({
   createError?: unknown;
   loginError?: unknown;
 } = {}) {
-  const calls = { create: 0, retrieve: 0, login: 0 };
+  const calls = {
+    create: 0,
+    retrieve: 0,
+    login: 0,
+    createParams: null as unknown,
+    loginParams: null as unknown,
+  };
   const client = {
     auth: {
       connections: {
-        create: async () => {
+        create: async (params: unknown) => {
           calls.create++;
+          calls.createParams = params;
           if (createError) throw createError;
           return created ?? initial;
         },
@@ -81,8 +88,9 @@ function fakeClient({
           calls.retrieve++;
           return initial;
         },
-        login: async () => {
+        login: async (_id: string, params: unknown) => {
           calls.login++;
+          calls.loginParams = params;
           if (loginError) throw loginError;
           return (
             login ?? {
@@ -164,7 +172,95 @@ describe("manage_auth_connections programmatic surface", () => {
     expect(schema?.credential_name).toBeDefined();
     expect(schema?.credential_provider).toBeDefined();
     expect(schema?.credential_path).toBeDefined();
+    expect(schema?.record_session).toBeDefined();
+    expect(schema?.browser_telemetry.safeParse({ enabled: true }).success).toBe(
+      true,
+    );
+    expect(
+      schema?.browser_telemetry.safeParse({
+        enabled: false,
+        browser: { network: { enabled: true } },
+      }).success,
+    ).toBe(false);
     expect(schema?.sign_in_option_id).toBeUndefined();
+  });
+
+  test("forwards replay and browser telemetry settings on create and login", async () => {
+    const { handler } = captureHandler();
+    let createBody: unknown;
+    let loginBody: unknown;
+    kernelClientFactory = () => ({
+      auth: {
+        connections: {
+          create: async (body: unknown) => {
+            createBody = body;
+            return connection();
+          },
+          login: async (_id: string, body: unknown) => {
+            loginBody = body;
+            return {
+              id: "conn_1",
+              flow_type: "LOGIN",
+              flow_expires_at: "2099-01-01T00:00:00Z",
+              hosted_url: "https://managed-auth.example/login",
+            };
+          },
+        },
+      },
+    });
+    try {
+      const extra = { authInfo: { token: "test-token" } };
+      await handler(
+        {
+          action: "create",
+          domain: "example.com",
+          profile_name: "work",
+        },
+        extra,
+      );
+      expect(createBody).not.toHaveProperty("record_session");
+      expect(createBody).not.toHaveProperty("browser_telemetry");
+
+      await handler({ action: "login", id: "conn_1" }, extra);
+      expect(loginBody).toBeUndefined();
+
+      await handler(
+        {
+          action: "create",
+          domain: "example.com",
+          profile_name: "work",
+          record_session: true,
+          browser_telemetry: {
+            enabled: true,
+            browser: { network: { enabled: true } },
+          },
+        },
+        extra,
+      );
+      expect(createBody).toMatchObject({
+        record_session: true,
+        browser_telemetry: {
+          enabled: true,
+          browser: { network: { enabled: true } },
+        },
+      });
+
+      await handler(
+        {
+          action: "login",
+          id: "conn_1",
+          record_session: false,
+          browser_telemetry: { enabled: false },
+        },
+        extra,
+      );
+      expect(loginBody).toEqual({
+        record_session: false,
+        browser_telemetry: { enabled: false },
+      });
+    } finally {
+      kernelClientFactory = () => unusedKernelClient;
+    }
   });
 
   test("legacy actions keep their established raw response shapes", async () => {
@@ -975,6 +1071,44 @@ describe("managed-auth start/resume state machine", () => {
     expect(result.state).toBe("already_authenticated");
     expect(calls.retrieve).toBe(1);
     expect(calls.login).toBe(0);
+  });
+
+  test("secure App login defaults replay and operational telemetry on", async () => {
+    const initial = connection();
+    const { client, calls } = fakeClient({ initial });
+    await beginAuthLogin(client, {
+      mode: "new_login",
+      domain: "example.com",
+      profile_name: "work",
+    });
+    expect(calls.createParams).toMatchObject({
+      record_session: true,
+      browser_telemetry: { enabled: true },
+    });
+    expect(calls.loginParams).toEqual({
+      record_session: true,
+      browser_telemetry: { enabled: true },
+    });
+  });
+
+  test("secure App login preserves explicit recording opt-outs", async () => {
+    const initial = connection();
+    const { client, calls } = fakeClient({ initial });
+    await beginAuthLogin(client, {
+      mode: "new_login",
+      domain: "example.com",
+      profile_name: "work",
+      record_session: false,
+      browser_telemetry: { enabled: false },
+    });
+    expect(calls.createParams).toMatchObject({
+      record_session: false,
+      browser_telemetry: { enabled: false },
+    });
+    expect(calls.loginParams).toEqual({
+      record_session: false,
+      browser_telemetry: { enabled: false },
+    });
   });
 
   test("explicit reauth starts login even when authenticated", async () => {

@@ -3,6 +3,7 @@ import type {
   LoginResponse,
   ManagedAuth,
 } from "@onkernel/sdk/resources/auth/connections";
+import type { ManagedAuthBrowserTelemetry } from "@/lib/mcp/tools/managed-auth-telemetry";
 
 export interface SafeAuthConnection {
   id: string;
@@ -39,6 +40,8 @@ export interface AuthLoginInput {
   domain?: string;
   profile_name?: string;
   save_credentials?: boolean;
+  record_session?: boolean;
+  browser_telemetry?: ManagedAuthBrowserTelemetry;
   proxy_id?: string;
   proxy_name?: string;
 }
@@ -445,6 +448,9 @@ export async function beginAuthLogin(
   const validationError = validateAuthLoginInput(input);
   if (validationError) throw new Error(validationError);
 
+  const recordSession = input.record_session ?? true;
+  const browserTelemetry = input.browser_telemetry ?? { enabled: true };
+
   let connection: ManagedAuth;
   if (input.mode === "new_login") {
     try {
@@ -454,6 +460,8 @@ export async function beginAuthLogin(
         ...(input.save_credentials !== undefined && {
           save_credentials: input.save_credentials,
         }),
+        record_session: recordSession,
+        browser_telemetry: browserTelemetry,
         ...((input.proxy_id || input.proxy_name) && {
           proxy: {
             ...(input.proxy_id && { id: input.proxy_id }),
@@ -501,10 +509,11 @@ export async function beginAuthLogin(
       : undefined;
 
   try {
-    const login = await client.auth.connections.login(
-      connection.id,
-      proxy ? { proxy } : undefined,
-    );
+    const login = await client.auth.connections.login(connection.id, {
+      record_session: recordSession,
+      browser_telemetry: browserTelemetry,
+      ...(proxy && { proxy }),
+    });
     let current = withLoginState(connection, login);
     try {
       current = await client.auth.connections.retrieve(connection.id);

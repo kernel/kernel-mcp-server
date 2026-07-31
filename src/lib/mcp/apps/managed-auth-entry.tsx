@@ -255,6 +255,8 @@ function sanitizeBeginArguments(input: JsonObject): JsonObject {
     "domain",
     "profile_name",
     "save_credentials",
+    "record_session",
+    "browser_telemetry",
     "proxy_id",
     "proxy_name",
   ];

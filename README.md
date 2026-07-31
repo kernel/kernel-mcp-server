@@ -341,6 +341,8 @@ Returns: { success: true, result: "Example Domain" }
 
 Example: “Log me into my Hacker News account and update my profile to add a random emoji at the bottom.” The agent should discover `news.ycombinator.com`, open the App when needed, wait for authentication, then continue the profile edit without asking for credentials or a profile name in chat.
 
+The secure App defaults `record_session` and `browser_telemetry.enabled` to `true`, recording replay video plus the operational telemetry categories (`control`, `connection`, `system`, and `captcha`) for managed-auth browser sessions. Callers can explicitly disable either setting. The programmatic `manage_auth_connections` create/login actions preserve the API’s opt-in and inheritance behavior when these parameters are omitted.
+
 ### Set up browser profiles for authentication
 
 ```

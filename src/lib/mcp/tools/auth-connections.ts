@@ -5,6 +5,7 @@ import {
   AuthLoginStartError,
   waitForAuthConnection,
 } from "@/lib/mcp/tools/managed-auth-state";
+import { managedAuthBrowserTelemetrySchema } from "@/lib/mcp/tools/managed-auth-telemetry";
 import {
   errorResponse,
   jsonResponse,
@@ -100,6 +101,17 @@ export function registerAuthConnectionTools(server: McpServer) {
         .boolean()
         .describe(
           "(create) Save credentials after each successful login. Default true.",
+        )
+        .optional(),
+      record_session: z
+        .boolean()
+        .describe(
+          "(create) Set the connection default for recording replay video of future login, reauth, and health-check browser sessions. (login) Override that default for this login only. Omitted preserves the API default/inheritance behavior.",
+        )
+        .optional(),
+      browser_telemetry: managedAuthBrowserTelemetrySchema
+        .describe(
+          "(create) Set the connection default for browser telemetry. (login) Override it for this login only. Use { enabled: true } for the default operational categories (control, connection, system, captcha); add browser category flags to opt into console, network, page, interaction, or screenshot capture. Omitted preserves API default/inheritance behavior.",
         )
         .optional(),
       proxy_id: z
@@ -240,6 +252,12 @@ export function registerAuthConnectionTools(server: McpServer) {
               ...(params.save_credentials !== undefined && {
                 save_credentials: params.save_credentials,
               }),
+              ...(params.record_session !== undefined && {
+                record_session: params.record_session,
+              }),
+              ...(params.browser_telemetry !== undefined && {
+                browser_telemetry: params.browser_telemetry,
+              }),
               ...(proxy && { proxy }),
             });
             if (!connection)
@@ -273,9 +291,23 @@ export function registerAuthConnectionTools(server: McpServer) {
             if (!params.id)
               return errorResponse("Error: id is required for login.");
             const proxy = buildProxy();
+            const hasOverrides =
+              !!proxy ||
+              params.record_session !== undefined ||
+              params.browser_telemetry !== undefined;
             const response = await client.auth.connections.login(
               params.id,
-              proxy ? { proxy } : undefined,
+              hasOverrides
+                ? {
+                    ...(proxy && { proxy }),
+                    ...(params.record_session !== undefined && {
+                      record_session: params.record_session,
+                    }),
+                    ...(params.browser_telemetry !== undefined && {
+                      browser_telemetry: params.browser_telemetry,
+                    }),
+                  }
+                : undefined,
             );
             return jsonResponse(response);
           }

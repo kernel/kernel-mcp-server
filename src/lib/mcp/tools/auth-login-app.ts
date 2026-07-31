@@ -14,6 +14,7 @@ import {
   toSafeAuthConnection,
   validateAuthLoginInput,
 } from "@/lib/mcp/tools/managed-auth-state";
+import { managedAuthBrowserTelemetrySchema } from "@/lib/mcp/tools/managed-auth-telemetry";
 import { errorResponse } from "@/lib/mcp/responses";
 
 export { initializeDeclaresMcpApps };
@@ -22,7 +23,7 @@ const MCP_APPS_GATE_DENIED_MESSAGE =
   "This tool is only available to the secure Kernel login App on MCP Apps-capable hosts and cannot be called by the model. Clients without MCP Apps can use manage_auth_connections create/login/get/submit/wait.";
 
 export const MANAGED_AUTH_RESOURCE_URI =
-  "ui://kernel/managed-auth-login-v8.html";
+  "ui://kernel/managed-auth-login-v9.html";
 export const MANAGED_AUTH_MIME_TYPE = "text/html;profile=mcp-app";
 
 export function managedAuthAppOrigin(): string {
@@ -48,6 +49,17 @@ const authLoginInputSchema = {
   domain: z.string().optional(),
   profile_name: z.string().optional(),
   save_credentials: z.boolean().optional(),
+  record_session: z
+    .boolean()
+    .describe(
+      "Record replay video for this managed-auth flow and make it the connection default for new connections. Defaults to true in the secure App.",
+    )
+    .default(true),
+  browser_telemetry: managedAuthBrowserTelemetrySchema
+    .describe(
+      "Browser telemetry for this managed-auth flow and the connection default for new connections. Defaults to { enabled: true }, which captures the operational categories (control, connection, system, captcha).",
+    )
+    .default({ enabled: true }),
   proxy_id: z.string().min(1).optional(),
   proxy_name: z.string().min(1).optional(),
 };
@@ -81,6 +93,8 @@ function inputFromParams(params: AuthLoginInput): AuthLoginInput {
     ...(params.save_credentials !== undefined && {
       save_credentials: params.save_credentials,
     }),
+    record_session: params.record_session ?? true,
+    browser_telemetry: params.browser_telemetry ?? { enabled: true },
     ...(params.proxy_id && { proxy_id: params.proxy_id }),
     ...(params.proxy_name && { proxy_name: params.proxy_name }),
   };
@@ -116,7 +130,7 @@ export function registerAuthLoginApp(server: McpServer) {
     {
       title: "Open secure managed-auth login",
       description:
-        'Open Kernel\'s secure interactive login panel so the user can enter credentials and MFA without exposing them to the conversation. Use this when a user directly asks to log in/sign in, or after a protected browser task discovers authentication is needed and the user consents. A direct request to log in is already consent; do not ask again. First list manage_auth_connections for the exact domain across all pages. Reuse an authenticated connection, ask the user to choose only when multiple relevant accounts exist, or call this tool with mode="reauth" and connection_id for an existing connection that needs authentication. If none exists, call with mode="new_login", domain, and a concise stable profile_name derived from the service (for example "hacker-news") unless the user supplied one; do not ask solely for a profile name. This launcher never creates or starts a flow—the App does that only after the user clicks Continue. Immediately follow the returned next_action, repeat its read-only wait while pending, then resume the original task using the authenticated profile_name. Never ask for passwords, credentials, OTPs, or MFA values in chat.',
+        'Open Kernel\'s secure interactive login panel so the user can enter credentials and MFA without exposing them to the conversation. Use this when a user directly asks to log in/sign in, or after a protected browser task discovers authentication is needed and the user consents. A direct request to log in is already consent; do not ask again. First list manage_auth_connections for the exact domain across all pages. Reuse an authenticated connection, ask the user to choose only when multiple relevant accounts exist, or call this tool with mode="reauth" and connection_id for an existing connection that needs authentication. If none exists, call with mode="new_login", domain, and a concise stable profile_name derived from the service (for example "hacker-news") unless the user supplied one; do not ask solely for a profile name. Replay recording and default operational browser telemetry are enabled unless explicitly disabled with record_session=false or browser_telemetry={enabled:false}. This launcher never creates or starts a flow—the App does that only after the user clicks Continue. Immediately follow the returned next_action, repeat its read-only wait while pending, then resume the original task using the authenticated profile_name. Never ask for passwords, credentials, OTPs, or MFA values in chat.',
       inputSchema: authLoginInputSchema,
       annotations: {
         readOnlyHint: false,

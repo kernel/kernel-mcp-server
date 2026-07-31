@@ -11,7 +11,7 @@
         "@mcp-ui/server": "^5.10.0",
         "@modelcontextprotocol/sdk": "1.26.0",
         "@onkernel/managed-auth-react": "0.4.1",
-        "@onkernel/sdk": "^0.78.0",
+        "@onkernel/sdk": "^0.85.0",
         "@posthog/mcp": "0.10.1",
         "@types/jsonwebtoken": "^9.0.10",
         "@types/redis": "^4.0.11",
@@ -151,7 +151,7 @@
 
     "@onkernel/managed-auth-react": ["@onkernel/managed-auth-react@0.4.1", "", { "dependencies": { "clsx": "^2.1.1" }, "peerDependencies": { "react": ">=18", "react-dom": ">=18" } }, "sha512-8p+pMljBRQMKLiBFWbyJQ2ohYflsomWYGgQtlF2sbb4b2w/z+CBsnxUiBs1q23h/W1OtHsbw/jKGX51ZCjNYzA=="],
 
-    "@onkernel/sdk": ["@onkernel/sdk@0.78.0", "", {}, "sha512-VrGEDcuSwO6AKe6oYTNaQsAHnOAVeqehmStDTM0EFd3u8+WhITYxhU+jNFq+9yEt0N/nrn2COsk/ThQ+dxWBlw=="],
+    "@onkernel/sdk": ["@onkernel/sdk@0.85.0", "", {}, "sha512-u5EKb2itzuUV5Yq+AQ1mJ1xsnsXgvNrEUrg40KjVw9GWa+deE5jCsVtBrQaGF8Ysbx//QkG0k0jyAZxgcsfDNA=="],
 
     "@posthog/core": ["@posthog/core@1.45.2", "", { "dependencies": { "@posthog/types": "^1.398.0" } }, "sha512-OhEHkojFkqEFbtm/wUtLYgomN1gFNU9IyufvNsuZvpIOh8TZ9tnAvI81Sej/2zu+vyDExs9JroQB5SW3y5QyOw=="],
 
