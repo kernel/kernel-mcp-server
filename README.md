@@ -274,7 +274,7 @@ Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_
 - `manage_replays` - Start, stop, and list MP4 video replay recordings for a browser session. Session-scoped: start once, run your automation, then stop. Requires a paid Kernel plan.
 - `manage_extensions` - List and delete uploaded browser extensions.
 - `manage_apps` - List/search apps, invoke actions, get/list/delete deployments, and get invocation results.
-- `manage_auth_connections` - List and get sanitized managed-auth connections. Use domain-filtered `list` as the discovery entrypoint; connection mutations stay in the secure App boundary.
+- `manage_auth_connections` - Create, list, get, delete, login, submit, and wait for managed-auth connections. Use domain-filtered `list` for discovery and prefer `open_auth_login` in App-capable clients; the mutation/login actions preserve compatibility with clients that cannot render MCP Apps.
 - `manage_credentials` - Create, list, get, update, and delete stored credentials; fetch a current TOTP code for credentials with a configured totp_secret.
 - `manage_credential_providers` - Create, list, get, update, and delete external credential providers (e.g. 1Password); list available items and test the provider connection.
 
@@ -339,9 +339,10 @@ Returns: { success: true, result: "Example Domain" }
 5. The user enters credentials/MFA only in the secure MCP App. Never ask for them in chat.
 6. When the wait returns `authenticated`, continue the pending task and create the browser with the verified `profile_name`.
 
-If no App appears, ask the user to confirm that before retrying `open_auth_login` with
-`text_only: true`. That compatibility path returns a capability-bearing hosted login URL as
-user-audience text. Returning the URL does not mean login succeeded; always verify the
+If no App appears, either retry `open_auth_login` with `text_only: true` or use the
+backward-compatible `manage_auth_connections` flow: `create` (if needed), `login`, then `get` /
+`submit` and `wait`. These compatibility paths may return a capability-bearing hosted login URL
+as user-audience text. Returning the URL does not mean login succeeded; always verify the
 connection afterward.
 
 ### Set up browser profiles for authentication

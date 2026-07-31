@@ -122,8 +122,8 @@ function assertNoSecrets(value: unknown) {
   expect(json).not.toContain("untrusted website text");
 }
 
-describe("managed-auth safe responses", () => {
-  test("keeps discovery on manage_auth_connections and removes secret login inputs", () => {
+describe("managed-auth responses", () => {
+  test("keeps discovery, App waiting, and non-App compatibility actions together", () => {
     let schema: Record<string, any> | undefined;
     const server = {
       tool(
@@ -138,18 +138,100 @@ describe("managed-auth safe responses", () => {
     expect(schema?.action.safeParse("list").success).toBe(true);
     expect(schema?.action.safeParse("get").success).toBe(true);
     expect(schema?.action.safeParse("wait").success).toBe(true);
-    expect(schema?.action.safeParse("create").success).toBe(false);
-    expect(schema?.action.safeParse("delete").success).toBe(false);
-    expect(schema?.action.safeParse("login").success).toBe(false);
-    expect(schema?.action.safeParse("submit").success).toBe(false);
-    expect(schema?.fields).toBeUndefined();
-    expect(schema?.mfa_option_id).toBeUndefined();
-    expect(schema?.sso_button_selector).toBeUndefined();
-    expect(schema?.allowed_domains).toBeUndefined();
-    expect(schema?.login_url).toBeUndefined();
-    expect(schema?.credential_name).toBeUndefined();
-    expect(schema?.credential_provider).toBeUndefined();
-    expect(schema?.credential_path).toBeUndefined();
+    expect(schema?.action.safeParse("create").success).toBe(true);
+    expect(schema?.action.safeParse("delete").success).toBe(true);
+    expect(schema?.action.safeParse("login").success).toBe(true);
+    expect(schema?.action.safeParse("submit").success).toBe(true);
+    expect(schema?.fields).toBeDefined();
+    expect(schema?.mfa_option_id).toBeDefined();
+    expect(schema?.sso_button_selector).toBeDefined();
+    expect(schema?.allowed_domains).toBeDefined();
+    expect(schema?.login_url).toBeDefined();
+    expect(schema?.credential_name).toBeDefined();
+    expect(schema?.credential_provider).toBeDefined();
+    expect(schema?.credential_path).toBeDefined();
+  });
+
+  test("non-App compatibility actions create, login, submit, and delete", async () => {
+    let handler: ((params: any, extra: any) => Promise<any>) | undefined;
+    const server = {
+      tool(...args: any[]) {
+        handler = args[args.length - 1];
+      },
+    } as unknown as McpServer;
+    registerAuthConnectionTools(server);
+    const calls = { create: 0, login: 0, submit: 0, delete: 0 };
+    kernelClientFactory = () => ({
+      auth: {
+        connections: {
+          create: async () => {
+            calls.create++;
+            return connection();
+          },
+          login: async () => {
+            calls.login++;
+            return {
+              id: "conn_1",
+              flow_type: "LOGIN",
+              flow_expires_at: "2099-01-01T00:00:00Z",
+              hosted_url: "https://managed-auth.example/login",
+              live_view_url: "https://live.example/view",
+              handoff_code: "must-not-leak",
+            };
+          },
+          submit: async () => {
+            calls.submit++;
+            return { accepted: true };
+          },
+          delete: async () => {
+            calls.delete++;
+          },
+        },
+      },
+    });
+    try {
+      const extra = { authInfo: { token: "test-token" } };
+      const created = await handler!(
+        {
+          action: "create",
+          domain: "example.com",
+          profile_name: "work",
+          credential_name: "stored-login",
+        },
+        extra,
+      );
+      expect(created.structuredContent.connection.id).toBe("conn_1");
+      assertNoSecrets(created);
+
+      const login = await handler!({ action: "login", id: "conn_1" }, extra);
+      expect(login.structuredContent.hosted_url).toBe(
+        "https://managed-auth.example/login",
+      );
+      expect(login.structuredContent.live_view_url).toBe(
+        "https://live.example/view",
+      );
+      expect(JSON.stringify(login)).not.toContain("must-not-leak");
+
+      const submitted = await handler!(
+        {
+          action: "submit",
+          id: "conn_1",
+          fields: { mfa_code: "123456" },
+        },
+        extra,
+      );
+      expect(submitted.structuredContent).toEqual({ accepted: true });
+      expect(JSON.stringify(submitted)).not.toContain("123456");
+
+      const deleted = await handler!({ action: "delete", id: "conn_1" }, extra);
+      expect(deleted.structuredContent).toEqual({
+        deleted: true,
+        id: "conn_1",
+      });
+      expect(calls).toEqual({ create: 1, login: 1, submit: 1, delete: 1 });
+    } finally {
+      kernelClientFactory = () => unusedKernelClient;
+    }
   });
 
   test("get waits out a live in-progress flow on an authenticated connection", async () => {
@@ -180,7 +262,14 @@ describe("managed-auth safe responses", () => {
       );
       expect(result.structuredContent.instruction).toContain("in progress");
       expect(result.structuredContent.instruction).not.toContain("verified");
-      assertNoSecrets(result);
+      expect(
+        result.structuredContent.interaction.discovered_fields,
+      ).toHaveLength(1);
+      const json = JSON.stringify(result);
+      expect(json).not.toContain("handoff_code");
+      expect(json).not.toContain("managed-auth.onkernel.com");
+      expect(json).not.toContain("browser_secret");
+      expect(json).not.toContain("secret-credential-ref");
     } finally {
       kernelClientFactory = () => unusedKernelClient;
     }
