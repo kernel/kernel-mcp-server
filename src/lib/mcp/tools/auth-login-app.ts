@@ -22,7 +22,7 @@ const MCP_APPS_GATE_DENIED_MESSAGE =
   "This tool is only available to the secure Kernel login App on MCP Apps-capable hosts and cannot be called by the model. Clients without MCP Apps can use manage_auth_connections create/login/get/submit/wait.";
 
 export const MANAGED_AUTH_RESOURCE_URI =
-  "ui://kernel/managed-auth-login-v7.html";
+  "ui://kernel/managed-auth-login-v8.html";
 export const MANAGED_AUTH_MIME_TYPE = "text/html;profile=mcp-app";
 
 export function managedAuthAppOrigin(): string {
