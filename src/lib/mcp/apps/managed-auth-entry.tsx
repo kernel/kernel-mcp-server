@@ -155,10 +155,13 @@ function applyHostContext(context: JsonObject | undefined) {
 }
 
 function reportSize() {
+  const launcherReady =
+    completeToolInput !== null && launcherToolResult !== null;
   sendNotification("ui/notifications/size-changed", {
-    height: collapsed
-      ? 1
-      : Math.max(document.documentElement.scrollHeight, 360),
+    height:
+      collapsed || !launcherReady
+        ? 1
+        : Math.max(document.documentElement.scrollHeight, 360),
   });
 }
 
@@ -571,7 +574,7 @@ function ManagedAuthApp() {
       return;
     }
     setStarting(true);
-    setStatusText("Preparing secure login…");
+    setStatusText("Starting secure login…");
     try {
       beginCalledAt.current = new Date().toISOString();
       const result = await callTool("begin_auth_login", {
@@ -619,9 +622,7 @@ function ManagedAuthApp() {
     return <div aria-hidden="true" style={{ height: 0, overflow: "hidden" }} />;
   }
 
-  if (!launcher.input || !launcher.result) {
-    return <div className="kernel-app-loading">Preparing secure login…</div>;
-  }
+  if (!launcher.input || !launcher.result) return null;
 
   if (!beginResult) {
     return (

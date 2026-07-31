@@ -52,14 +52,15 @@ try {
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Kernel Managed Authentication</title>
 <style>${escapeStyle(css)}
-html,body,#root{margin:0;min-height:100%;background:var(--color-background-primary,transparent)}
-.kernel-app-loading,.kernel-app-status,.kernel-app-fallback{font-family:ui-sans-serif,system-ui,sans-serif;padding:16px;text-align:center}
+html,body,#root{margin:0;min-height:100%}
+html,body{background:transparent}
+.kernel-app-status,.kernel-app-fallback{font-family:ui-sans-serif,system-ui,sans-serif;padding:16px;text-align:center}
 .kernel-app-actions{display:flex;flex-direction:column;align-items:center;gap:8px;padding:0 16px 16px}
 .kernel-app-button{appearance:none;border:0;border-radius:8px;background:#81b300;color:#fff;cursor:pointer;font:600 14px ui-sans-serif,system-ui,sans-serif;padding:10px 16px}
 .kernel-app-button:hover{background:#709c00}
 </style>
 </head>
-<body><div id="root"><div class="kernel-app-loading">Preparing secure login…</div></div>
+<body><div id="root"></div>
 <script type="module">${escapeScript(javascript)}</script>
 </body>
 </html>`;

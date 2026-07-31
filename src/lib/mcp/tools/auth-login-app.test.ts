@@ -444,6 +444,8 @@ describe("managed-auth MCP App registration", () => {
     expect(MANAGED_AUTH_APP_HTML).not.toContain(
       "managed-auth.onkernel.com/login",
     );
+    expect(MANAGED_AUTH_APP_HTML).not.toContain("Preparing secure login");
+    expect(MANAGED_AUTH_APP_HTML).not.toContain("kernel-app-loading");
   });
 
   test("terminal model context excludes internal identifiers and never writes the prompt", () => {
