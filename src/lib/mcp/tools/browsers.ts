@@ -37,6 +37,13 @@ type TelemetryParams = {
   telemetry_interaction?: boolean;
 };
 
+export function browserForMCP<T extends { cdp_ws_url?: unknown }>(
+  browser: T,
+): Omit<T, "cdp_ws_url"> {
+  const { cdp_ws_url: _cdpWsURL, ...safeBrowser } = browser;
+  return safeBrowser;
+}
+
 const telemetryCategories = [
   ["telemetry_console", "console"],
   ["telemetry_network", "network"],
@@ -590,7 +597,7 @@ export function registerBrowserCapabilities(server: McpServer) {
               browser.session_id,
             );
             return jsonResponse({
-              browser,
+              browser: browserForMCP(browser),
               next_actions: browserSessionNextActions(browser.session_id),
               ...(sshPortForwarding && {
                 ssh_port_forwarding: sshPortForwarding,
@@ -638,7 +645,7 @@ export function registerBrowserCapabilities(server: McpServer) {
             if (!browser)
               return errorResponse("Failed to update browser session");
             return jsonResponse({
-              browser,
+              browser: browserForMCP(browser),
               next_actions: browserSessionNextActions(browser.session_id),
             });
           }
@@ -649,7 +656,7 @@ export function registerBrowserCapabilities(server: McpServer) {
               ...(params.offset !== undefined && { offset: params.offset }),
             });
             return paginatedJsonResponse(page, {
-              mapItem: ({ cdp_ws_url: _cdpWsUrl, ...browser }) => browser,
+              mapItem: browserForMCP,
               note: 'Use action "get" with session_id for full browser details.',
             });
           }
@@ -663,7 +670,7 @@ export function registerBrowserCapabilities(server: McpServer) {
               return errorResponse(
                 `Browser session "${params.session_id}" not found`,
               );
-            return jsonResponse(browser);
+            return jsonResponse(browserForMCP(browser));
           }
           case "get_telemetry": {
             if (!params.session_id)
