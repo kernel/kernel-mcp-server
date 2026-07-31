@@ -6,7 +6,7 @@ import {
   jsonResponse,
   paginatedJsonResponse,
   textResponse,
-  toolErrorResponse,
+  throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 
@@ -169,7 +169,7 @@ export function registerProxyTools(server: McpServer) {
           }
         }
       } catch (error) {
-        return toolErrorResponse("manage_proxies", params.action, error);
+        throwToolError("manage_proxies", params.action, error);
       }
     },
   );

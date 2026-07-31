@@ -5,7 +5,7 @@ import {
   errorResponse,
   paginatedJsonResponse,
   textResponse,
-  toolErrorResponse,
+  throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 
@@ -53,7 +53,7 @@ export function registerExtensionTools(server: McpServer) {
           }
         }
       } catch (error) {
-        return toolErrorResponse("manage_extensions", params.action, error);
+        throwToolError("manage_extensions", params.action, error);
       }
     },
   );
