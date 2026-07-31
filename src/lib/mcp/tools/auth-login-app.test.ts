@@ -446,6 +446,11 @@ describe("managed-auth MCP App registration", () => {
     );
     expect(MANAGED_AUTH_APP_HTML).not.toContain("Preparing secure login");
     expect(MANAGED_AUTH_APP_HTML).not.toContain("kernel-app-loading");
+    expect(MANAGED_AUTH_APP_HTML).toContain("MutationObserver");
+    expect(MANAGED_AUTH_APP_HTML).toContain("preventScroll");
+    expect(MANAGED_AUTH_APP_HTML).toContain(
+      'input:not([type="hidden"]):not([type="submit"])',
+    );
   });
 
   test("terminal model context excludes internal identifiers and never writes the prompt", () => {
