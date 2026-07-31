@@ -56,6 +56,9 @@ export function registerPlaywrightTool(server: McpServer) {
           ],
         };
       } catch (error) {
+        // The code never ran -- the session was gone, unleased, or the request failed.
+        // Distinct from code that ran and threw, which comes back as a 200 with
+        // success: false so the agent can read the failure and adjust.
         return {
           content: [
             {
@@ -70,6 +73,7 @@ export function registerPlaywrightTool(server: McpServer) {
               ),
             },
           ],
+          isError: true,
         };
       }
     },
