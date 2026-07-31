@@ -11,6 +11,7 @@ import { registerCredentialProviderTools } from "@/lib/mcp/tools/credential-prov
 import { registerCredentialTools } from "@/lib/mcp/tools/credentials";
 import { registerDocsTools } from "@/lib/mcp/tools/docs";
 import { registerExtensionTools } from "@/lib/mcp/tools/extensions";
+import { registerHostedAuthTool } from "@/lib/mcp/tools/hosted-auth";
 import { registerPlaywrightTool } from "@/lib/mcp/tools/playwright";
 import { registerProfileCapabilities } from "@/lib/mcp/tools/profiles";
 import { registerProjectCapabilities } from "@/lib/mcp/tools/projects";
@@ -36,6 +37,7 @@ const mcpToolRegistrations = [
   ["playwright", registerPlaywrightTool],
   ["replays", registerReplayTools],
   ["auth_connections", registerAuthConnectionTools],
+  ["hosted_auth", registerHostedAuthTool],
   ["credentials", registerCredentialTools],
   ["credential_providers", registerCredentialProviderTools],
 ] as const satisfies readonly (readonly [string, RegisterMcpToolset])[];
