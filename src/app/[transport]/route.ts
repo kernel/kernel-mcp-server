@@ -1,10 +1,16 @@
+import { MCP_SESSION_HEADER } from "@posthog/mcp";
 import {
   createMcpHandler,
   experimental_withMcpAuth as withMcpAuth,
 } from "mcp-handler";
 import { verifyToken } from "@clerk/nextjs/server";
-import { NextRequest } from "next/server";
+import { after, NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
+import {
+  flushMcpAnalytics,
+  instrumentMcpAnalytics,
+  mintMcpSessionId,
+} from "@/lib/mcp/analytics";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
 import { initializeDeclaresMcpApps } from "@/lib/mcp/tools/auth-login-app";
 import {
@@ -79,7 +85,8 @@ export async function OPTIONS(_req: NextRequest): Promise<Response> {
     headers: {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Allow-Headers": `Content-Type, Authorization, ${MCP_SESSION_HEADER}`,
+      "Access-Control-Expose-Headers": MCP_SESSION_HEADER,
     },
   });
 }
@@ -110,6 +117,7 @@ function createAuthErrorResponse(
 // The base tool set is unchanged. Capability negotiation only adds the
 // Managed Auth launcher, its resource, and its app-only implementation tools.
 const handler = createMcpHandler((server) => {
+  instrumentMcpAnalytics(server);
   registerMcpCapabilities(server);
 });
 const mcpAppsHandler = createMcpHandler((server) => {
@@ -192,9 +200,37 @@ async function handleAuthenticatedRequest(req: NextRequest): Promise<Response> {
 }
 
 export async function GET(req: NextRequest): Promise<Response> {
+  after(flushMcpAnalytics);
   return await handleAuthenticatedRequest(req);
 }
 
 export async function POST(req: NextRequest): Promise<Response> {
-  return await handleAuthenticatedRequest(req);
+  after(flushMcpAnalytics);
+
+  const sessionId = await mintMcpSessionId(req);
+  if (!sessionId) return await handleAuthenticatedRequest(req);
+
+  // Pass the token in on the handshake too, so the initialize event lands in the same
+  // session as the calls that follow it.
+  const requestHeaders = new Headers(req.headers);
+  requestHeaders.set(MCP_SESSION_HEADER, sessionId);
+  const response = await handleAuthenticatedRequest(
+    new NextRequest(req.url, {
+      method: req.method,
+      headers: requestHeaders,
+      body: await req.text(),
+      signal: req.signal,
+    }),
+  );
+
+  const headers = new Headers(response.headers);
+  headers.set(MCP_SESSION_HEADER, sessionId);
+  // Preflight allows the header; a browser only gets to read it if the response that
+  // carries it says so too.
+  headers.set("Access-Control-Expose-Headers", MCP_SESSION_HEADER);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
