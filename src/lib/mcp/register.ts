@@ -23,7 +23,6 @@ type RegisterMcpToolset = (server: McpServer) => void;
 
 function registerManagedAuthCapabilities(server: McpServer) {
   registerAuthConnectionTools(server);
-  registerAuthLoginApp(server);
 }
 
 const mcpToolRegistrations = [
@@ -124,7 +123,10 @@ function toolsetEnabled(
   return !disabledToolsets.has(toolset);
 }
 
-export function registerMcpCapabilities(server: McpServer) {
+export function registerMcpCapabilities(
+  server: McpServer,
+  { mcpApps = false }: { mcpApps?: boolean } = {},
+) {
   const disabledToolsets = disabledMcpToolsetsFromEnv();
 
   registerKernelPrompts(server);
@@ -133,5 +135,12 @@ export function registerMcpCapabilities(server: McpServer) {
     if (toolsetEnabled(disabledToolsets, toolset)) {
       registerToolset(server);
     }
+  }
+
+  // Managed Auth remains fully programmatic for every client. MCP Apps support
+  // adds one interactive launcher (plus its app-only implementation tools and
+  // resource) without replacing or narrowing manage_auth_connections.
+  if (mcpApps && toolsetEnabled(disabledToolsets, "auth_connections")) {
+    registerAuthLoginApp(server);
   }
 }

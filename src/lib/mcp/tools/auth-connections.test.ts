@@ -123,7 +123,7 @@ function assertNoSecrets(value: unknown) {
 }
 
 describe("managed-auth responses", () => {
-  test("keeps discovery, App waiting, and non-App compatibility actions together", () => {
+  test("keeps discovery, App waiting, and programmatic actions together", () => {
     let schema: Record<string, any> | undefined;
     const server = {
       tool(
@@ -152,7 +152,7 @@ describe("managed-auth responses", () => {
     expect(schema?.credential_path).toBeDefined();
   });
 
-  test("non-App compatibility actions create, login, submit, and delete", async () => {
+  test("programmatic actions create, login, submit, and delete", async () => {
     let handler: ((params: any, extra: any) => Promise<any>) | undefined;
     const server = {
       tool(...args: any[]) {

@@ -7,27 +7,69 @@ import { NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
 import { initializeDeclaresMcpApps } from "@/lib/mcp/tools/auth-login-app";
-import { markMcpAppsClient } from "@/lib/redis";
+import {
+  clearMcpAppsClient,
+  hasMcpAppsClient,
+  markMcpAppsClient,
+} from "@/lib/redis";
 
-// The streamable-HTTP transport is stateless (one McpServer per request), so
-// the client's declared MCP Apps capability is invisible to later tool calls.
-// Observe initialize here — where the bearer token is available — and record
-// the capability per token so app-only tools can fail closed on hosts that
-// never declared MCP Apps support.
-async function recordMcpAppsCapability(
+// The streamable-HTTP transport creates one McpServer per request, so the
+// initialize capability is unavailable when tools/list or an App call arrives.
+// Persist the negotiation marker, then select the additive App registration
+// only for requests that need to discover or invoke it.
+async function requestUsesMcpApps(
   req: NextRequest,
   token: string,
   ttlSeconds: number,
-): Promise<void> {
-  if (req.method !== "POST") return;
+): Promise<boolean> {
+  if (req.method !== "POST") return false;
+  let body: unknown;
   try {
-    const body = await req.clone().json();
-    if (!initializeDeclaresMcpApps(body)) return;
-    await markMcpAppsClient({ token, ttlSeconds });
+    body = await req.clone().json();
+  } catch {
+    return false;
+  }
+
+  const request =
+    body && typeof body === "object" && !Array.isArray(body)
+      ? (body as {
+          method?: unknown;
+          params?: { name?: unknown; uri?: unknown };
+        })
+      : null;
+  if (request?.method === "initialize") {
+    const declaresApps = initializeDeclaresMcpApps(body);
+    try {
+      if (declaresApps) {
+        await markMcpAppsClient({ token, ttlSeconds });
+      } else {
+        await clearMcpAppsClient(token);
+      }
+    } catch (error) {
+      // Never block initialize; without a marker, later App discovery and
+      // invocation fail closed to the base tool set.
+      console.error("Failed to record MCP Apps capability:", error);
+    }
+    return false;
+  }
+
+  const needsAppRegistration =
+    request?.method === "tools/list" ||
+    request?.method === "resources/list" ||
+    (request?.method === "resources/read" &&
+      typeof request.params?.uri === "string" &&
+      request.params.uri.startsWith("ui://kernel/managed-auth-login")) ||
+    (request?.method === "tools/call" &&
+      (request.params?.name === "open_auth_login" ||
+        request.params?.name === "begin_auth_login" ||
+        request.params?.name === "get_auth_login_status"));
+  if (!needsAppRegistration) return false;
+
+  try {
+    return await hasMcpAppsClient({ token, ttlSeconds });
   } catch (error) {
-    // Never block the initialize handshake on the marker; gated tools fail
-    // closed if the record is missing.
-    console.error("Failed to record MCP Apps capability:", error);
+    console.error("MCP Apps capability check failed; using base tools:", error);
+    return false;
   }
 }
 
@@ -65,9 +107,13 @@ function createAuthErrorResponse(
   );
 }
 
-// Create MCP handler with tools
+// The base tool set is unchanged. Capability negotiation only adds the
+// Managed Auth launcher, its resource, and its app-only implementation tools.
 const handler = createMcpHandler((server) => {
   registerMcpCapabilities(server);
+});
+const mcpAppsHandler = createMcpHandler((server) => {
+  registerMcpCapabilities(server, { mcpApps: true });
 });
 
 async function handleAuthenticatedRequest(req: NextRequest): Promise<Response> {
@@ -82,12 +128,13 @@ async function handleAuthenticatedRequest(req: NextRequest): Promise<Response> {
     );
   }
 
+  const selectedHandler = (await requestUsesMcpApps(req, token, 24 * 60 * 60))
+    ? mcpAppsHandler
+    : handler;
+
   if (!isValidJwtFormat(token)) {
-    // Static API keys have no expiry; use a long sliding TTL (refreshed on
-    // every gated app-only call and on re-initialize).
-    await recordMcpAppsCapability(req, token, 24 * 60 * 60);
     const authHandler = withMcpAuth(
-      handler,
+      selectedHandler,
       async () => ({
         token,
         scopes: ["apikey"],
@@ -114,14 +161,9 @@ async function handleAuthenticatedRequest(req: NextRequest): Promise<Response> {
       );
     }
 
-    // The marker is keyed by the session (sid), which survives access-token
-    // refresh, so bind it to the long sliding TTL (refreshed on every gated
-    // app-only call) rather than this one token's lifetime.
-    await recordMcpAppsCapability(req, token, 24 * 60 * 60);
-
     // Create authenticated handler with auth info
     const authHandler = withMcpAuth(
-      handler,
+      selectedHandler,
       async (_req, _providedToken) => {
         // Return auth info with validated user data
         return {

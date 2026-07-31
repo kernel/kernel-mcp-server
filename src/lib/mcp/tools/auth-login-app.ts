@@ -19,7 +19,7 @@ import { errorResponse } from "@/lib/mcp/responses";
 export { initializeDeclaresMcpApps };
 
 const MCP_APPS_GATE_DENIED_MESSAGE =
-  "This tool is only available to the secure Kernel login App on MCP Apps-capable hosts and cannot be called by the model. To authenticate without the App, call open_auth_login with text_only=true after the user confirms that no panel appeared.";
+  "This tool is only available to the secure Kernel login App on MCP Apps-capable hosts and cannot be called by the model. Clients without MCP Apps can use manage_auth_connections create/login/get/submit/wait.";
 
 export const MANAGED_AUTH_RESOURCE_URI =
   "ui://kernel/managed-auth-login-v7.html";

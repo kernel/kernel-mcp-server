@@ -171,6 +171,12 @@ export async function markMcpAppsClient({
   );
 }
 
+export async function clearMcpAppsClient(token: string): Promise<void> {
+  await ensureConnected();
+  const key = `${MCP_APPS_KEY_PREFIX}${mcpAppsMarkerSubject(token)}`;
+  await withReconnect(() => client.del(key));
+}
+
 /**
  * Whether the bearer token's client declared MCP Apps support at initialize.
  * Sliding expiration: active App sessions keep the marker alive.

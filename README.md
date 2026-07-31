@@ -274,7 +274,7 @@ Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_
 - `manage_replays` - Start, stop, and list MP4 video replay recordings for a browser session. Session-scoped: start once, run your automation, then stop. Requires a paid Kernel plan.
 - `manage_extensions` - List and delete uploaded browser extensions.
 - `manage_apps` - List/search apps, invoke actions, get/list/delete deployments, and get invocation results.
-- `manage_auth_connections` - Create, list, get, delete, login, submit, and wait for managed-auth connections. Use domain-filtered `list` for discovery and prefer `open_auth_login` in App-capable clients; the mutation/login actions preserve compatibility with clients that cannot render MCP Apps.
+- `manage_auth_connections` - Create, list, get, delete, login, submit, and wait for managed-auth connections in every client. Use domain-filtered `list` for discovery. App-capable clients additionally receive `open_auth_login`; the programmatic actions remain available there too.
 - `manage_credentials` - Create, list, get, update, and delete stored credentials; fetch a current TOTP code for credentials with a configured totp_secret.
 - `manage_credential_providers` - Create, list, get, update, and delete external credential providers (e.g. 1Password); list available items and test the provider connection.
 
@@ -285,7 +285,7 @@ Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_
 - `execute_playwright_code` - Execute Playwright/TypeScript code against an existing browser session. Does not create or delete browsers - use `manage_browsers` for session lifecycle.
 - `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
 - `search_docs` - Search Kernel platform documentation and guides.
-- `open_auth_login` - Open a secure interactive Managed Auth MCP App after user consent. Credentials and MFA never enter MCP/model traffic.
+- `open_auth_login` - Open a secure interactive Managed Auth MCP App after user consent. Registered only for clients that declare MCP Apps support; credentials and MFA never enter MCP/model traffic.
 
 ## Resources
 

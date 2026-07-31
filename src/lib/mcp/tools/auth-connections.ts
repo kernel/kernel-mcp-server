@@ -26,7 +26,7 @@ function safeJsonResponse(value: unknown) {
 export function registerAuthConnectionTools(server: McpServer) {
   server.tool(
     "manage_auth_connections",
-    'Manage Kernel managed-auth connections while preferring the secure MCP App when available. Start protected-site tasks with action="list" and domain_filter. After user consent, use open_auth_login for new login/re-auth in App-capable clients, then follow its action="wait" instructions. Compatibility actions remain available for clients without MCP Apps: "create" creates a connection, "login" returns a hosted URL, "get" polls flow state and input metadata, "submit" provides fields or selects MFA/SSO, and "delete" removes a connection. Never echo submitted passwords or OTPs in responses. Actions: create, list, get, delete, login, submit, wait.',
+    'Manage Kernel managed-auth connections programmatically in every client. Start protected-site tasks with action="list" and domain_filter. Actions: "create" creates a connection, "login" returns a hosted URL, "get" polls flow state and input metadata, "submit" provides fields or selects MFA/SSO, "delete" removes a connection, and "wait" verifies completion. App-capable clients additionally offer open_auth_login after user consent, but these programmatic actions remain available there too. Never echo submitted passwords or OTPs in responses.',
     {
       action: z
         .enum(["create", "list", "get", "delete", "login", "submit", "wait"])
