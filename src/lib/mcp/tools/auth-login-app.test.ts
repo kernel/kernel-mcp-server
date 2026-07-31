@@ -133,6 +133,9 @@ describe("managed-auth MCP App registration", () => {
       "begin_auth_login",
       "open_auth_login",
     ]);
+    expect(
+      tools.get("open_auth_login")!.config.inputSchema.text_only,
+    ).toBeUndefined();
   });
 
   test("app-only tool schema rejects an empty connection identifier", () => {
@@ -169,7 +172,6 @@ describe("managed-auth MCP App registration", () => {
         mode: "new_login",
         domain: "example.com",
         profile_name: "work",
-        text_only: false,
       },
       { authInfo: { token: "unused-api-key" } },
     );
@@ -178,7 +180,6 @@ describe("managed-auth MCP App registration", () => {
       version: 1,
       mode: "new_login",
       connection: { domain: "example.com", profile_name: "work" },
-      text_only: false,
       next_action: {
         tool: "manage_auth_connections",
         arguments: {
@@ -339,7 +340,7 @@ describe("managed-auth MCP App registration", () => {
       const result = await tools
         .get("open_auth_login")!
         .handler(
-          { mode: "reauth", connection_id: "conn_1", text_only: false },
+          { mode: "reauth", connection_id: "conn_1" },
           { authInfo: { token: "unused-api-key" } },
         );
       expect(result.structuredContent.next_action.arguments).toEqual({
@@ -387,7 +388,7 @@ describe("managed-auth MCP App registration", () => {
       const result = await tools
         .get("open_auth_login")!
         .handler(
-          { mode: "reauth", connection_id: "conn_1", text_only: false },
+          { mode: "reauth", connection_id: "conn_1" },
           { authInfo: { token: "unused-api-key" } },
         );
       expect(result.structuredContent.next_action.arguments).toEqual({
@@ -424,7 +425,7 @@ describe("managed-auth MCP App registration", () => {
       const result = await tools
         .get("open_auth_login")!
         .handler(
-          { mode: "reauth", connection_id: "conn_1", text_only: false },
+          { mode: "reauth", connection_id: "conn_1" },
           { authInfo: { token: "unused-api-key" } },
         );
       expect(result.structuredContent.next_action.arguments).toEqual({
@@ -432,62 +433,6 @@ describe("managed-auth MCP App registration", () => {
         id: "conn_1",
         wait_seconds: 25,
       });
-    } finally {
-      resetKernelClientFactory();
-    }
-  });
-
-  test("text_only fallback emits baseline-guarded wait arguments and keeps handoff material out of model content", async () => {
-    const initial = {
-      id: "conn_1",
-      domain: "example.com",
-      profile_name: "work",
-      status: "NEEDS_AUTH",
-      flow_status: "FAILED",
-      flow_type: "LOGIN",
-      flow_expires_at: "2020-01-01T00:00:00Z",
-    };
-    kernelClientFactory = () => ({
-      auth: {
-        connections: {
-          retrieve: async () => initial,
-          login: async () => ({
-            id: "conn_1",
-            flow_type: "LOGIN",
-            flow_expires_at: "2099-01-01T00:00:00Z",
-            hosted_url:
-              "https://managed-auth.onkernel.com/login/conn_1?code=handoff-secret",
-            handoff_code: "handoff-secret",
-          }),
-        },
-      },
-    });
-    try {
-      const { tools } = captureRegistration({ appsSupport: false });
-      const result = await tools
-        .get("open_auth_login")!
-        .handler(
-          { mode: "reauth", connection_id: "conn_1", text_only: true },
-          { authInfo: { token: "unused-api-key" } },
-        );
-      expect(result.content[0].text).toContain(
-        JSON.stringify({
-          action: "wait",
-          id: "conn_1",
-          wait_seconds: 25,
-          previous_flow_expires_at: "2020-01-01T00:00:00Z",
-        }),
-      );
-      // The hosted URL is delivered only as user-audience text; nothing
-      // capability-bearing appears in structuredContent.
-      expect(result.content[1].text).toContain("handoff-secret");
-      expect(result.content[1].annotations).toEqual({ audience: ["user"] });
-      expect(JSON.stringify(result.structuredContent)).not.toContain(
-        "handoff-secret",
-      );
-      expect(JSON.stringify(result.structuredContent)).not.toContain(
-        "hosted_url",
-      );
     } finally {
       resetKernelClientFactory();
     }

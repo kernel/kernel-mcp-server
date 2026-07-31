@@ -116,11 +116,8 @@ export function registerAuthLoginApp(server: McpServer) {
     {
       title: "Open secure managed-auth login",
       description:
-        'Display a secure Kernel login panel after the user consents. Before calling: use manage_auth_connections(action="list", domain_filter=...) across all pages, reason about the result, and ask the user which profile to use if needed. Never ask for passwords, credentials, OTPs, or MFA values in conversation. The user enters them only in the panel. Immediately follow this tool result\'s next_action and repeat its read-only wait while pending; continue only when it returns authenticated. This call does not create or start a flow until the user clicks Continue. Use text_only=true only after the user confirms no App appeared; that compatibility fallback exposes a capability-bearing hosted URL as user-audience text.',
-      inputSchema: {
-        ...authLoginInputSchema,
-        text_only: z.boolean().default(false),
-      },
+        'Open Kernel\'s secure interactive login panel so the user can enter credentials and MFA without exposing them to the conversation. Use this when a user directly asks to log in/sign in, or after a protected browser task discovers authentication is needed and the user consents. A direct request to log in is already consent; do not ask again. First list manage_auth_connections for the exact domain across all pages. Reuse an authenticated connection, ask the user to choose only when multiple relevant accounts exist, or call this tool with mode="reauth" and connection_id for an existing connection that needs authentication. If none exists, call with mode="new_login", domain, and a concise stable profile_name derived from the service (for example "hacker-news") unless the user supplied one; do not ask solely for a profile name. This launcher never creates or starts a flow—the App does that only after the user clicks Continue. Immediately follow the returned next_action, repeat its read-only wait while pending, then resume the original task using the authenticated profile_name. Never ask for passwords, credentials, OTPs, or MFA values in chat.',
+      inputSchema: authLoginInputSchema,
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -143,59 +140,6 @@ export function registerAuthLoginApp(server: McpServer) {
       const client = createKernelClient(extra.authInfo.token);
 
       try {
-        if (params.text_only) {
-          const flowWaitBaseline = input.connection_id
-            ? await authFlowWaitBaseline(client, input.connection_id)
-            : undefined;
-          const result = await beginAuthLogin(client, input);
-          // Guard the wait with the pre-flow baseline captured by begin so a
-          // completed flow from before this call is never accepted as the new
-          // one. When begin only observes an already-live flow, the wait
-          // tracks that flow directly (a live in-progress flow reads as
-          // pending even on an AUTHENTICATED connection).
-          const waitArguments: Record<string, unknown> = {
-            action: "wait",
-            id: result.connection.id,
-            wait_seconds: 25,
-            ...(result.started_new_flow && {
-              previous_flow_expires_at: result.previous_flow_expires_at,
-              ...(flowWaitBaseline && {
-                ...(flowWaitBaseline.eventId && {
-                  previous_flow_event_id: flowWaitBaseline.eventId,
-                }),
-                flow_wait_started_at: flowWaitBaseline.startedAt,
-              }),
-            }),
-          };
-          const content: Array<{
-            type: "text";
-            text: string;
-            annotations?: { audience: ["user"] };
-          }> = [
-            {
-              type: "text",
-              text: `Secure managed authentication is ${result.state === "already_authenticated" ? "already complete" : "ready"} for connection ${result.connection.id}. Expiry: ${result.connection.flow_expires_at ?? "not applicable"}. Do not claim success from this response. Immediately call manage_auth_connections with ${JSON.stringify(waitArguments)}; repeat with the same arguments while it returns state=pending and continue only when it returns state=authenticated.`,
-            },
-          ];
-          if (result.hosted_url) {
-            content.push({
-              type: "text",
-              text: result.hosted_url,
-              annotations: { audience: ["user"] },
-            });
-          }
-          return {
-            content,
-            structuredContent: {
-              kind: "kernel.managed_auth.text_fallback",
-              version: 1,
-              connection_id: result.connection.id,
-              flow_expires_at: result.connection.flow_expires_at,
-              state: result.state,
-            },
-          };
-        }
-
         const reauthConnection =
           input.mode === "reauth"
             ? toSafeAuthConnection(
@@ -247,7 +191,6 @@ export function registerAuthLoginApp(server: McpServer) {
             version: 1,
             mode: input.mode,
             connection,
-            text_only: false,
             next_action: {
               tool: "manage_auth_connections",
               arguments: waitArguments,

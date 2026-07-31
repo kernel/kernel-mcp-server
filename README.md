@@ -332,18 +332,14 @@ Returns: { success: true, result: "Example Domain" }
 
 ### Use managed authentication for a protected site
 
-1. Call `manage_auth_connections` with `action: "list"` and `domain_filter`.
-2. Fetch all pages. If multiple profiles match, ask the user which profile to use.
-3. If the selected connection needs auth, explain why and wait for consent before calling `open_auth_login`.
-4. Immediately follow the launcher's `next_action`: long-poll `manage_auth_connections` with `action: "wait"`, repeating while it reports `pending`.
-5. The user enters credentials/MFA only in the secure MCP App. Never ask for them in chat.
-6. When the wait returns `authenticated`, continue the pending task and create the browser with the verified `profile_name`.
+1. Call `manage_auth_connections` with `action: "list"` and the exact `domain_filter`.
+2. Fetch all pages. Reuse an authenticated connection; ask only when multiple relevant accounts match.
+3. A direct request to log in is consent. If authentication is discovered incidentally, ask before opening the App.
+4. For a new connection, choose a concise service-derived profile name unless the user supplied one; do not ask solely for a profile name.
+5. Call `open_auth_login`, then immediately follow its `next_action` and repeat the read-only wait while it reports `pending`.
+6. The user enters credentials/MFA only in the secure App. Once the wait reports `authenticated`, resume the original task with the verified `profile_name`.
 
-If no App appears, either retry `open_auth_login` with `text_only: true` or use the
-backward-compatible `manage_auth_connections` flow: `create` (if needed), `login`, then `get` /
-`submit` and `wait`. These compatibility paths may return a capability-bearing hosted login URL
-as user-audience text. Returning the URL does not mean login succeeded; always verify the
-connection afterward.
+Example: “Log me into my Hacker News account and update my profile to add a random emoji at the bottom.” The agent should discover `news.ycombinator.com`, open the App when needed, wait for authentication, then continue the profile edit without asking for credentials or a profile name in chat.
 
 ### Set up browser profiles for authentication
 
