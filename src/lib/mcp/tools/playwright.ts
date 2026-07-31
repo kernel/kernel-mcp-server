@@ -11,7 +11,7 @@ export function registerPlaywrightTool(server: McpServer) {
       code: z
         .string()
         .describe(
-          'Playwright/TypeScript code with `page`, `context`, and `browser` objects in scope; the value you `return` is sent back. Example: `await page.goto(\'https://example.com\'); return await page.title();` Return only what you need — prefer a targeted selector (e.g. `await page.locator(\'h1\').innerText()`) or a region-scoped snapshot (e.g. `await page.locator(\'main\').ariaSnapshot()`) rather than dumping the whole page.',
+          "Playwright/TypeScript code with `page`, `context`, and `browser` objects in scope; the value you `return` is sent back. Example: `await page.goto('https://example.com'); return await page.title();` Return only what you need — prefer a targeted selector (e.g. `await page.locator('h1').innerText()`) or a region-scoped snapshot (e.g. `await page.locator('main').ariaSnapshot()`) rather than dumping the whole page.",
         ),
       session_id: z
         .string()
@@ -56,9 +56,9 @@ export function registerPlaywrightTool(server: McpServer) {
           ],
         };
       } catch (error) {
-        // The code never ran -- the session was gone, unleased, or the request failed.
-        // Distinct from code that ran and threw, which comes back as a 200 with
-        // success: false so the agent can read the failure and adjust.
+        // No normal API response came back -- the session was gone, unleased, the request
+        // was rejected, or it timed out. Distinct from code that ran and threw, which comes
+        // back as a 200 with success: false so the agent can read the failure and adjust.
         return {
           content: [
             {
