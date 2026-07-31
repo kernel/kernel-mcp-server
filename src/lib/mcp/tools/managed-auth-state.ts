@@ -43,32 +43,11 @@ export interface AuthLoginInput {
   proxy_name?: string;
 }
 
-export interface AuthNextAction {
-  tool:
-    | "open_auth_login"
-    | "manage_auth_connections"
-    | "manage_browsers"
-    | "ask_user";
-  arguments: Record<string, unknown>;
-  reason: string;
-  required_user_input?: string[];
-}
-
-export interface AuthSelection {
-  domain_filter: string | null;
-  outcome: "none" | "single" | "multiple" | "page_incomplete";
-}
-
 export class AuthLoginStartError extends Error {
   constructor(public readonly safeMessage: string) {
     super(safeMessage);
     this.name = "AuthLoginStartError";
   }
-}
-
-export interface AuthSteering {
-  selection: AuthSelection;
-  next_action?: AuthNextAction;
 }
 
 export interface BeginAuthLoginResult {
@@ -353,139 +332,6 @@ export async function waitForAuthConnection(
     );
   }
   return { state: "pending", ...(latest && { connection: latest }) };
-}
-
-export function deriveAuthNextAction({
-  items,
-  hasMore,
-  nextOffset,
-  offset,
-  domainFilter,
-  profileFilter,
-}: {
-  items: SafeAuthConnection[];
-  hasMore: boolean;
-  nextOffset: number | null;
-  offset?: number;
-  domainFilter?: string;
-  profileFilter?: string;
-}): AuthSteering {
-  const domain_filter = domainFilter ?? null;
-
-  if (hasMore || (offset ?? 0) > 0) {
-    return {
-      selection: { domain_filter, outcome: "page_incomplete" },
-      next_action: hasMore
-        ? {
-            tool: "manage_auth_connections",
-            arguments: {
-              action: "list",
-              ...(domainFilter && { domain_filter: domainFilter }),
-              ...(profileFilter && { profile_name: profileFilter }),
-              ...(nextOffset !== null && { offset: nextOffset }),
-            },
-            reason:
-              "More matching connections exist. Fetch every page and retain the earlier matches; do not infer a unique profile from this page.",
-          }
-        : {
-            tool: "ask_user",
-            arguments: {
-              current_page: items.map(
-                ({ id, profile_name, domain, status }) => ({
-                  connection_id: id,
-                  profile_name,
-                  domain,
-                  status,
-                }),
-              ),
-              include_matches_from_prior_pages: true,
-            },
-            required_user_input: ["connection_id"],
-            reason:
-              "This is a continuation page. Combine it with every retained earlier page before deciding; if the combined result has multiple matches, ask the user to choose.",
-          },
-    };
-  }
-
-  if (items.length === 0) {
-    return {
-      selection: { domain_filter, outcome: "none" },
-      ...(domainFilter && {
-        next_action: {
-          tool: "open_auth_login" as const,
-          arguments: { mode: "new_login", domain: domainFilter },
-          required_user_input: ["profile_name"],
-          reason:
-            "No connection matches this domain. Ask which profile name to use and get consent before opening secure login.",
-        },
-      }),
-    };
-  }
-
-  if (items.length > 1) {
-    return {
-      selection: { domain_filter, outcome: "multiple" },
-      next_action: {
-        tool: "ask_user",
-        arguments: {
-          choices: items.map(({ id, profile_name, domain, status }) => ({
-            connection_id: id,
-            profile_name,
-            domain,
-            status,
-          })),
-        },
-        required_user_input: ["connection_id"],
-        reason:
-          "Multiple profiles match. Ask the user to choose a profile; do not select one automatically.",
-      },
-    };
-  }
-
-  const connection = items[0];
-  if (connection.status === "AUTHENTICATED") {
-    if (hasLiveAuthFlow(connection)) {
-      return {
-        selection: { domain_filter, outcome: "single" },
-        next_action: {
-          tool: "manage_auth_connections",
-          arguments: {
-            action: "wait",
-            id: connection.id,
-          },
-          reason:
-            "This connection is authenticated but an authentication flow is still in progress. Wait for it to complete before creating a browser.",
-        },
-      };
-    }
-    return {
-      selection: { domain_filter, outcome: "single" },
-      next_action: {
-        tool: "manage_browsers",
-        arguments: {
-          action: "create",
-          profile_name: connection.profile_name,
-        },
-        reason:
-          "This connection is authenticated. Create the browser with its existing profile; do not start another login.",
-      },
-    };
-  }
-
-  return {
-    selection: { domain_filter, outcome: "single" },
-    next_action: {
-      tool: "open_auth_login",
-      arguments: {
-        mode: "reauth",
-        connection_id: connection.id,
-      },
-      reason:
-        connection.flow_status === "IN_PROGRESS"
-          ? "Authentication is already in progress. Ask for consent, then reopen the secure panel to resume or observe it."
-          : "This profile needs authentication. Ask for consent before opening the secure login panel.",
-    },
-  };
 }
 
 export function validateAuthLoginInput(input: AuthLoginInput): string | null {

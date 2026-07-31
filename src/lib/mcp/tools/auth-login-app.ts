@@ -315,6 +315,10 @@ export function registerAuthLoginApp(server: McpServer) {
             connection: result.connection,
             started_new_flow: result.started_new_flow,
             resume_id: result.resume_id,
+            // Baseline the App adds to its wait polling once a new flow has
+            // started, so a terminal state from before this begin is never
+            // mistaken for the new flow's outcome.
+            previous_flow_expires_at: result.previous_flow_expires_at,
             // Execution is gated on the client's MCP Apps capability, so
             // this result only reaches hosts that deliver visibility:["app"]
             // tool results to the View rather than the model. The
@@ -331,57 +335,6 @@ export function registerAuthLoginApp(server: McpServer) {
           error instanceof AuthLoginStartError
             ? error.safeMessage
             : "Managed authentication could not start. Close the panel and retry.",
-        );
-      }
-    },
-  );
-
-  server.registerTool(
-    "get_auth_login_status",
-    {
-      title: "Get managed-auth login status (app-only)",
-      description:
-        "Read sanitized managed-auth status for the secure login App.",
-      inputSchema: {
-        connection_id: z.string().min(1),
-      },
-      annotations: {
-        readOnlyHint: true,
-        destructiveHint: false,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
-      _meta: { ui: { visibility: ["app"] } },
-    },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
-      const gateError = await mcpAppsGateError(
-        server,
-        extra.authInfo.token,
-        MCP_APPS_GATE_DENIED_MESSAGE,
-      );
-      if (gateError) return errorResponse(gateError);
-      const client = createKernelClient(extra.authInfo.token);
-      try {
-        const connection = toSafeAuthConnection(
-          await client.auth.connections.retrieve(params.connection_id),
-        );
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Managed authentication status refreshed.",
-            },
-          ],
-          structuredContent: {
-            kind: "kernel.managed_auth.status",
-            version: 1,
-            connection,
-          },
-        };
-      } catch {
-        return errorResponse(
-          "Managed authentication status could not be refreshed. Retry shortly.",
         );
       }
     },

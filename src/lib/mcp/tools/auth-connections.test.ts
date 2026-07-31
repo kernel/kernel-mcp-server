@@ -4,7 +4,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerAuthConnectionTools } from "@/lib/mcp/tools/auth-connections";
 import {
   beginAuthLogin,
-  deriveAuthNextAction,
   toSafeAuthConnection,
   waitForAuthConnection,
 } from "@/lib/mcp/tools/managed-auth-state";
@@ -122,26 +121,41 @@ function assertNoSecrets(value: unknown) {
   expect(json).not.toContain("untrusted website text");
 }
 
-describe("managed-auth responses", () => {
-  test("keeps discovery, App waiting, and programmatic actions together", () => {
-    let schema: Record<string, any> | undefined;
-    const server = {
-      tool(
-        _name: string,
-        _description: string,
-        inputSchema: Record<string, any>,
-      ) {
-        schema = inputSchema;
-      },
-    } as unknown as McpServer;
-    registerAuthConnectionTools(server);
+function captureHandler() {
+  let handler: ((params: any, extra: any) => Promise<any>) | undefined;
+  let schema: Record<string, any> | undefined;
+  const server = {
+    tool(
+      _name: string,
+      _description: string,
+      inputSchema: Record<string, any>,
+      ...rest: any[]
+    ) {
+      schema = inputSchema;
+      handler = rest[rest.length - 1];
+    },
+  } as unknown as McpServer;
+  registerAuthConnectionTools(server);
+  return {
+    get handler() {
+      return handler!;
+    },
+    get schema() {
+      return schema;
+    },
+  };
+}
+
+describe("manage_auth_connections programmatic surface", () => {
+  test("keeps every legacy action and adds wait", () => {
+    const { schema } = captureHandler();
     expect(schema?.action.safeParse("list").success).toBe(true);
     expect(schema?.action.safeParse("get").success).toBe(true);
-    expect(schema?.action.safeParse("wait").success).toBe(true);
     expect(schema?.action.safeParse("create").success).toBe(true);
     expect(schema?.action.safeParse("delete").success).toBe(true);
     expect(schema?.action.safeParse("login").success).toBe(true);
     expect(schema?.action.safeParse("submit").success).toBe(true);
+    expect(schema?.action.safeParse("wait").success).toBe(true);
     expect(schema?.fields).toBeDefined();
     expect(schema?.mfa_option_id).toBeDefined();
     expect(schema?.sso_button_selector).toBeDefined();
@@ -150,23 +164,22 @@ describe("managed-auth responses", () => {
     expect(schema?.credential_name).toBeDefined();
     expect(schema?.credential_provider).toBeDefined();
     expect(schema?.credential_path).toBeDefined();
+    expect(schema?.sign_in_option_id).toBeUndefined();
   });
 
-  test("programmatic actions create, login, submit, and delete", async () => {
-    let handler: ((params: any, extra: any) => Promise<any>) | undefined;
-    const server = {
-      tool(...args: any[]) {
-        handler = args[args.length - 1];
-      },
-    } as unknown as McpServer;
-    registerAuthConnectionTools(server);
-    const calls = { create: 0, login: 0, submit: 0, delete: 0 };
+  test("legacy actions keep their established raw response shapes", async () => {
+    const { handler } = captureHandler();
+    const calls = { create: 0, login: 0, submit: 0, delete: 0, retrieve: 0 };
     kernelClientFactory = () => ({
       auth: {
         connections: {
           create: async () => {
             calls.create++;
             return connection();
+          },
+          retrieve: async () => {
+            calls.retrieve++;
+            return connection({ status: "AUTHENTICATED" });
           },
           login: async () => {
             calls.login++;
@@ -176,7 +189,6 @@ describe("managed-auth responses", () => {
               flow_expires_at: "2099-01-01T00:00:00Z",
               hosted_url: "https://managed-auth.example/login",
               live_view_url: "https://live.example/view",
-              handoff_code: "must-not-leak",
             };
           },
           submit: async () => {
@@ -191,7 +203,9 @@ describe("managed-auth responses", () => {
     });
     try {
       const extra = { authInfo: { token: "test-token" } };
-      const created = await handler!(
+
+      // create returns the raw connection JSON (established main behavior).
+      const created = await handler(
         {
           action: "create",
           domain: "example.com",
@@ -200,76 +214,249 @@ describe("managed-auth responses", () => {
         },
         extra,
       );
-      expect(created.structuredContent.connection.id).toBe("conn_1");
-      assertNoSecrets(created);
+      expect(created.structuredContent).toBeUndefined();
+      expect(JSON.parse(created.content[0].text).id).toBe("conn_1");
 
-      const login = await handler!({ action: "login", id: "conn_1" }, extra);
-      expect(login.structuredContent.hosted_url).toBe(
-        "https://managed-auth.example/login",
-      );
-      expect(login.structuredContent.live_view_url).toBe(
-        "https://live.example/view",
-      );
-      expect(JSON.stringify(login)).not.toContain("must-not-leak");
+      // get returns the full raw connection, including programmatic
+      // interaction metadata (discovered_fields, mfa_options, ...).
+      const got = await handler({ action: "get", id: "conn_1" }, extra);
+      const gotJson = JSON.parse(got.content[0].text);
+      expect(gotJson.status).toBe("AUTHENTICATED");
+      expect(gotJson.discovered_fields).toHaveLength(1);
+      expect(gotJson.interaction).toBeUndefined();
 
-      const submitted = await handler!(
-        {
-          action: "submit",
-          id: "conn_1",
-          fields: { mfa_code: "123456" },
-        },
+      // login returns the raw hosted flow response.
+      const login = await handler({ action: "login", id: "conn_1" }, extra);
+      const loginJson = JSON.parse(login.content[0].text);
+      expect(loginJson.hosted_url).toBe("https://managed-auth.example/login");
+      expect(loginJson.live_view_url).toBe("https://live.example/view");
+
+      // submit returns the raw acceptance response.
+      const submitted = await handler(
+        { action: "submit", id: "conn_1", fields: { mfa_code: "123456" } },
         extra,
       );
-      expect(submitted.structuredContent).toEqual({ accepted: true });
-      expect(JSON.stringify(submitted)).not.toContain("123456");
-
-      const deleted = await handler!({ action: "delete", id: "conn_1" }, extra);
-      expect(deleted.structuredContent).toEqual({
-        deleted: true,
-        id: "conn_1",
+      expect(JSON.parse(submitted.content[0].text)).toEqual({
+        accepted: true,
       });
-      expect(calls).toEqual({ create: 1, login: 1, submit: 1, delete: 1 });
+
+      // delete returns the established plain-text confirmation.
+      const deleted = await handler({ action: "delete", id: "conn_1" }, extra);
+      expect(deleted.content[0].text).toBe(
+        "Auth connection deleted successfully",
+      );
+
+      expect(calls).toEqual({
+        create: 1,
+        login: 1,
+        submit: 1,
+        delete: 1,
+        retrieve: 1,
+      });
     } finally {
       kernelClientFactory = () => unusedKernelClient;
     }
   });
 
-  test("get waits out a live in-progress flow on an authenticated connection", async () => {
-    let handler: ((params: any, extra: any) => Promise<any>) | undefined;
-    const server = {
-      tool(...args: any[]) {
-        handler = args[args.length - 1];
+  test("list returns the established paginated shape", async () => {
+    const { handler } = captureHandler();
+    kernelClientFactory = () => ({
+      auth: {
+        connections: {
+          list: async (params: Record<string, unknown>) => {
+            expect(params.domain).toBe("example.com");
+            return {
+              getPaginatedItems: () => [connection()],
+              has_more: false,
+              next_offset: null,
+            };
+          },
+        },
       },
-    } as unknown as McpServer;
-    registerAuthConnectionTools(server);
+    });
+    try {
+      const result = await handler(
+        { action: "list", domain_filter: "example.com" },
+        { authInfo: { token: "test-token" } },
+      );
+      const json = JSON.parse(result.content[0].text);
+      expect(json.items).toHaveLength(1);
+      expect(json.items[0].id).toBe("conn_1");
+      expect(json.has_more).toBe(false);
+      expect(json.next_offset).toBeNull();
+      // No discovery steering is injected into the programmatic list shape.
+      expect(json.selection).toBeUndefined();
+      expect(json.next_action).toBeUndefined();
+    } finally {
+      kernelClientFactory = () => unusedKernelClient;
+    }
+  });
+
+  test("legacy validation errors are preserved", async () => {
+    const { handler } = captureHandler();
+    const extra = { authInfo: { token: "test-token" } };
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [{ action: "create", domain: "example.com" }, "domain and profile_name"],
+      [
+        {
+          action: "create",
+          domain: "example.com",
+          profile_name: "work",
+          credential_name: "x",
+          credential_auto: true,
+        },
+        "credential_name cannot be combined",
+      ],
+      [
+        {
+          action: "create",
+          domain: "example.com",
+          profile_name: "work",
+          credential_path: "Vault/Item",
+        },
+        "require credential_provider",
+      ],
+      [{ action: "get" }, "id is required for get"],
+      [{ action: "delete" }, "id is required for delete"],
+      [{ action: "login" }, "id is required for login"],
+      [{ action: "submit", id: "conn_1" }, "submit requires at least one of"],
+    ];
+    for (const [params, message] of cases) {
+      const result = await handler(params, extra);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(message);
+    }
+  });
+
+  test("legacy action errors surface through toolErrorResponse", async () => {
+    const { handler } = captureHandler();
+    kernelClientFactory = () => ({
+      auth: {
+        connections: {
+          retrieve: async () => {
+            throw new Error("upstream boom");
+          },
+        },
+      },
+    });
+    try {
+      const result = await handler(
+        { action: "get", id: "conn_1" },
+        { authInfo: { token: "test-token" } },
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toBe(
+        "Error in manage_auth_connections (get): upstream boom",
+      );
+    } finally {
+      kernelClientFactory = () => unusedKernelClient;
+    }
+  });
+
+  test("wait requires an id or an exact domain and profile", async () => {
+    const { handler } = captureHandler();
+    const result = await handler(
+      { action: "wait", domain_filter: "example.com" },
+      { authInfo: { token: "test-token" } },
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain(
+      "wait requires id, or both domain_filter and profile_name",
+    );
+  });
+
+  test("wait long-polls and returns a sanitized state plus connection", async () => {
+    const { handler } = captureHandler();
+    const states = [
+      connection({ flow_status: "IN_PROGRESS" }),
+      connection({ status: "AUTHENTICATED", flow_status: "SUCCESS" }),
+    ];
+    let calls = 0;
+    kernelClientFactory = () => ({
+      auth: {
+        connections: {
+          retrieve: async () => states[Math.min(calls++, states.length - 1)],
+        },
+      },
+    });
+    try {
+      const result = await handler(
+        { action: "wait", id: "conn_1", wait_seconds: 2 },
+        { authInfo: { token: "test-token" } },
+      );
+      expect(result.structuredContent.state).toBe("authenticated");
+      expect(result.structuredContent.connection.id).toBe("conn_1");
+      expect(result.structuredContent.instruction).toContain("verified");
+      expect(calls).toBe(2);
+      assertNoSecrets(result.structuredContent);
+    } finally {
+      kernelClientFactory = () => unusedKernelClient;
+    }
+  });
+
+  test("baseline-guarded wait stays pending on the stale pre-flow success", async () => {
+    const { handler } = captureHandler();
     kernelClientFactory = () => ({
       auth: {
         connections: {
           retrieve: async () =>
             connection({
               status: "AUTHENTICATED",
-              flow_status: "IN_PROGRESS",
+              flow_status: "SUCCESS",
               flow_type: "REAUTH",
-              flow_expires_at: "2099-01-01T00:00:00Z",
+              flow_expires_at: "2026-01-01T00:00:00Z",
             }),
         },
       },
     });
     try {
-      const result = await handler!(
-        { action: "get", id: "conn_1" },
+      const result = await handler(
+        {
+          action: "wait",
+          id: "conn_1",
+          wait_seconds: 1,
+          required_flow_type: "REAUTH",
+          previous_flow_expires_at: "2026-01-01T00:00:00Z",
+        },
         { authInfo: { token: "test-token" } },
       );
-      expect(result.structuredContent.instruction).toContain("in progress");
-      expect(result.structuredContent.instruction).not.toContain("verified");
-      expect(
-        result.structuredContent.interaction.discovered_fields,
-      ).toHaveLength(1);
-      const json = JSON.stringify(result);
-      expect(json).not.toContain("handoff_code");
-      expect(json).not.toContain("managed-auth.onkernel.com");
-      expect(json).not.toContain("browser_secret");
-      expect(json).not.toContain("secret-credential-ref");
+      expect(result.structuredContent.state).toBe("pending");
+      expect(result.structuredContent.instruction).toContain("pending");
+    } finally {
+      kernelClientFactory = () => unusedKernelClient;
+    }
+  });
+
+  test("ambiguous wait selectors fail with a safe message", async () => {
+    const { handler } = captureHandler();
+    kernelClientFactory = () => ({
+      auth: {
+        connections: {
+          list: async () => ({
+            getPaginatedItems: () => [
+              connection(),
+              connection({ id: "conn_2" }),
+            ],
+            hasNextPage: () => false,
+          }),
+        },
+      },
+    });
+    try {
+      const result = await handler(
+        {
+          action: "wait",
+          domain_filter: "example.com",
+          profile_name: "work",
+          wait_seconds: 1,
+        },
+        { authInfo: { token: "test-token" } },
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(
+        "Multiple managed-auth connections matched",
+      );
+      expect(result.content[0].text).not.toContain("secret");
     } finally {
       kernelClientFactory = () => unusedKernelClient;
     }
@@ -288,97 +475,6 @@ describe("managed-auth responses", () => {
       "Managed authentication failed. Retry the secure login flow.",
     );
     assertNoSecrets(safe);
-  });
-
-  test("steers none, one authenticated, one needs-auth, multiple, and incomplete pages", () => {
-    const none = deriveAuthNextAction({
-      items: [],
-      hasMore: false,
-      nextOffset: null,
-      domainFilter: "example.com",
-    });
-    expect(none.selection.outcome).toBe("none");
-    expect(none.next_action?.arguments).toEqual({
-      mode: "new_login",
-      domain: "example.com",
-    });
-    expect(none.next_action?.required_user_input).toEqual(["profile_name"]);
-
-    const safe = toSafeAuthConnection(connection());
-    const needsAuth = deriveAuthNextAction({
-      items: [safe],
-      hasMore: false,
-      nextOffset: null,
-      domainFilter: "example.com",
-    });
-    expect(needsAuth.next_action?.arguments).toEqual({
-      mode: "reauth",
-      connection_id: "conn_1",
-    });
-
-    const authenticated = deriveAuthNextAction({
-      items: [{ ...safe, status: "AUTHENTICATED", flow_status: "FAILED" }],
-      hasMore: false,
-      nextOffset: null,
-      domainFilter: "example.com",
-    });
-    expect(authenticated.next_action?.tool).toBe("manage_browsers");
-    expect(authenticated.next_action?.arguments.profile_name).toBe("work");
-
-    const liveReauth = deriveAuthNextAction({
-      items: [
-        {
-          ...safe,
-          status: "AUTHENTICATED",
-          flow_status: "IN_PROGRESS",
-          flow_type: "REAUTH",
-          flow_expires_at: "2099-01-01T00:00:00Z",
-        },
-      ],
-      hasMore: false,
-      nextOffset: null,
-      domainFilter: "example.com",
-    });
-    expect(liveReauth.next_action?.tool).toBe("manage_auth_connections");
-    expect(liveReauth.next_action?.arguments).toEqual({
-      action: "wait",
-      id: "conn_1",
-    });
-
-    const multiple = deriveAuthNextAction({
-      items: [safe, { ...safe, id: "conn_2", profile_name: "personal" }],
-      hasMore: false,
-      nextOffset: null,
-      domainFilter: "example.com",
-    });
-    expect(multiple.selection.outcome).toBe("multiple");
-    expect(multiple.next_action?.required_user_input).toEqual([
-      "connection_id",
-    ]);
-
-    const incomplete = deriveAuthNextAction({
-      items: [safe],
-      hasMore: true,
-      nextOffset: 10,
-      domainFilter: "example.com",
-      profileFilter: "work",
-    });
-    expect(incomplete.selection.outcome).toBe("page_incomplete");
-    expect(incomplete.next_action?.arguments.offset).toBe(10);
-    expect(incomplete.next_action?.arguments.profile_name).toBe("work");
-
-    const finalContinuation = deriveAuthNextAction({
-      items: [safe],
-      hasMore: false,
-      nextOffset: null,
-      offset: 1,
-      domainFilter: "example.com",
-    });
-    expect(finalContinuation.selection.outcome).toBe("page_incomplete");
-    expect(finalContinuation.next_action?.tool).toBe("ask_user");
-    expect(
-      finalContinuation.next_action?.arguments.include_matches_from_prior_pages,
-    ).toBe(true);
   });
 });
 
@@ -801,6 +897,7 @@ describe("managed-auth wait", () => {
       { timeoutMs: 50, pollIntervalMs: 1 },
     );
     expect(failed.state).toBe("failed");
+    expect(failed.connection?.flow_status).toBe("FAILED");
     assertNoSecrets(failed);
 
     // A terminal failure the wait never saw live predates it (e.g. an old

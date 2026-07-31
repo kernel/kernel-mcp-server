@@ -125,18 +125,24 @@ describe("managed-auth MCP App registration", () => {
     expect(tools.get("begin_auth_login")?.config._meta.ui.visibility).toEqual([
       "app",
     ]);
-    expect(
-      tools.get("get_auth_login_status")?.config._meta.ui.visibility,
-    ).toEqual(["app"]);
+    // The App polls the baseline-guarded manage_auth_connections wait action;
+    // there is no duplicate app-only status tool.
+    expect(tools.has("get_auth_login_status")).toBe(false);
     expect(tools.has("delete_auth_login_connection")).toBe(false);
+    expect([...tools.keys()].sort()).toEqual([
+      "begin_auth_login",
+      "open_auth_login",
+    ]);
   });
 
   test("app-only tool schema rejects an empty connection identifier", () => {
     const { tools } = captureRegistration();
-    const statusSchema = z.object(
-      tools.get("get_auth_login_status")!.config.inputSchema,
+    const beginSchema = z.object(
+      tools.get("begin_auth_login")!.config.inputSchema,
     );
-    expect(statusSchema.safeParse({ connection_id: "" }).success).toBe(false);
+    expect(
+      beginSchema.safeParse({ mode: "reauth", connection_id: "" }).success,
+    ).toBe(false);
   });
 
   test("login schemas reject empty proxy identifiers", () => {
@@ -191,19 +197,16 @@ describe("managed-auth MCP App registration", () => {
 
   test("app-only tools fail closed on hosts without MCP Apps support", async () => {
     const { tools } = captureRegistration({ appsSupport: false });
-    const calls: Array<[string, any]> = [
-      ["begin_auth_login", { mode: "reauth", connection_id: "conn_1" }],
-      ["get_auth_login_status", { connection_id: "conn_1" }],
-    ];
-    for (const [name, params] of calls) {
-      const result = await tools.get(name)!.handler(params, {
-        authInfo: { token: "unused-api-key" },
-      });
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain("MCP Apps-capable hosts");
-      expect(JSON.stringify(result)).not.toContain("handoff_code");
-      expect(JSON.stringify(result)).not.toContain("hosted_url");
-    }
+    const result = await tools
+      .get("begin_auth_login")!
+      .handler(
+        { mode: "reauth", connection_id: "conn_1" },
+        { authInfo: { token: "unused-api-key" } },
+      );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("MCP Apps-capable hosts");
+    expect(JSON.stringify(result)).not.toContain("handoff_code");
+    expect(JSON.stringify(result)).not.toContain("hosted_url");
   });
 
   test("stateless transports pass the gate via the recorded initialize marker", async () => {
@@ -218,6 +221,15 @@ describe("managed-auth MCP App registration", () => {
             domain: "example.com",
             profile_name: "work",
             status: "AUTHENTICATED",
+            flow_expires_at: "2026-01-01T00:00:00Z",
+          }),
+          login: async () => ({
+            id: "conn_1",
+            flow_type: "REAUTH",
+            flow_expires_at: "2099-01-01T00:00:00Z",
+            hosted_url:
+              "https://managed-auth.onkernel.com/login/conn_1?code=handoff-secret",
+            handoff_code: "handoff-secret",
           }),
         },
       },
@@ -225,13 +237,20 @@ describe("managed-auth MCP App registration", () => {
     try {
       const { tools } = captureRegistration({ appsSupport: false });
       const result = await tools
-        .get("get_auth_login_status")!
+        .get("begin_auth_login")!
         .handler(
-          { connection_id: "conn_1" },
+          { mode: "reauth", connection_id: "conn_1" },
           { authInfo: { token: "unused-api-key" } },
         );
       expect(result.isError).toBeUndefined();
-      expect(result.structuredContent.kind).toBe("kernel.managed_auth.status");
+      expect(result.structuredContent.kind).toBe("kernel.managed_auth.begin");
+      // The begin result carries the pre-flow baseline so the App can keep
+      // its wait polling guarded after a new flow starts.
+      expect(result.structuredContent.previous_flow_expires_at).toBe(
+        "2026-01-01T00:00:00Z",
+      );
+      // Capability-bearing material stays in App-private channels only.
+      expect(JSON.stringify(result.content)).not.toContain("handoff-secret");
     } finally {
       redisMarkerPresent = false;
       resetKernelClientFactory();
@@ -490,6 +509,9 @@ describe("managed-auth MCP App registration", () => {
       "Connection status saved for Claude",
     );
     expect(MANAGED_AUTH_APP_HTML).toContain("Close panel");
+    // The App polls the shared wait action; the deleted duplicate status tool
+    // is gone from the bundle.
+    expect(MANAGED_AUTH_APP_HTML).not.toContain("get_auth_login_status");
     expect(MANAGED_AUTH_APP_HTML).not.toContain('sendRequest("ui/message"');
     expect(MANAGED_AUTH_APP_HTML).not.toContain("Agent notified");
     expect(MANAGED_AUTH_APP_HTML).not.toContain("Continue agent");

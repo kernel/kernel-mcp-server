@@ -13,10 +13,15 @@ import {
   LocalizationProvider,
   Shell,
   StepError,
+  StepExpired,
   StepPrime,
   StepSuccess,
 } from "@onkernel/managed-auth-react";
 import "@onkernel/managed-auth-react/styles.css";
+import {
+  failureTerminalView,
+  isTerminalFailure,
+} from "./managed-auth-terminal";
 
 const FAILURE_CONTEXT =
   "Managed authentication stopped. Verify its terminal state and report the recovery option; do not continue the protected action.";
@@ -40,11 +45,14 @@ type SafeConnection = {
     | null;
   flow_type: "LOGIN" | "REAUTH" | null;
   flow_expires_at: string | null;
+  error_code: string | null;
 };
 type BeginResult = {
   structuredContent?: {
     state?: string;
     connection?: SafeConnection;
+    started_new_flow?: boolean;
+    previous_flow_expires_at?: string | null;
     resume_id?: string;
     app_private?: {
       handoff_code?: string;
@@ -64,7 +72,9 @@ type BeginResult = {
 type WaitToolResult = {
   structuredContent?: {
     state?: "authenticated" | "failed" | "pending";
+    connection?: SafeConnection | null;
   };
+  isError?: boolean;
 };
 
 let nextRequestId = 1;
@@ -252,6 +262,10 @@ function sanitizeBeginArguments(input: JsonObject): JsonObject {
   );
 }
 
+// Short long-poll so the panel reflects flow progress promptly; the model's
+// own wait keeps its longer duration.
+const APP_WAIT_SECONDS = 5;
+
 function waitArgumentsFromLauncher(
   content: JsonObject | undefined,
 ): JsonObject | null {
@@ -280,7 +294,32 @@ function waitArgumentsFromLauncher(
         .filter((key) => nextAction.arguments?.[key] !== undefined)
         .map((key) => [key, nextAction.arguments?.[key]]),
     ),
-    wait_seconds: 1,
+    wait_seconds: APP_WAIT_SECONDS,
+  };
+}
+
+/**
+ * Poll arguments for the App: the launcher-supplied, baseline-guarded wait
+ * arguments, upgraded once begin has started a new flow — the selector
+ * tightens to the concrete connection id and carries the pre-flow baseline
+ * (plus a client-side timestamp so timeline identity can prove a new flow
+ * even when the API clears flow_expires_at before polling observes it).
+ */
+function pollWaitArguments(
+  launcherContent: JsonObject | undefined,
+  begin: BeginResult | null,
+  beginCalledAt: string | null,
+): JsonObject | null {
+  const base = waitArgumentsFromLauncher(launcherContent);
+  if (!base) return null;
+  const content = begin?.structuredContent;
+  if (!content?.started_new_flow || !content.connection?.id) return base;
+  return {
+    action: "wait",
+    id: content.connection.id,
+    previous_flow_expires_at: content.previous_flow_expires_at ?? null,
+    ...(beginCalledAt && { flow_wait_started_at: beginCalledAt }),
+    wait_seconds: APP_WAIT_SECONDS,
   };
 }
 
@@ -289,12 +328,16 @@ function ManagedAuthApp() {
   const [beginResult, setBeginResult] = useState<BeginResult | null>(null);
   const [starting, setStarting] = useState(false);
   const [terminal, setTerminal] = useState<"success" | "failure" | null>(null);
+  const [terminalConnection, setTerminalConnection] =
+    useState<SafeConnection | null>(null);
   const [dismissed, setDismissed] = useState(false);
   const [statusText, setStatusText] = useState("");
   const [embeddedInitFailed, setEmbeddedInitFailed] = useState(false);
   const [embeddedRetryRequired, setEmbeddedRetryRequired] = useState(false);
   const pollTimer = useRef<number | null>(null);
   const pollingStarted = useRef(false);
+  const sawLiveFlow = useRef(false);
+  const beginCalledAt = useRef<string | null>(null);
   const mountedFlow = useRef(false);
   const hostedFallbackAvailable = useRef(true);
   const exchangedJwt = useRef<string | null>(null);
@@ -315,9 +358,6 @@ function ManagedAuthApp() {
   const privateAuth =
     beginResult?._meta?.auth_login ??
     beginResult?.structuredContent?.app_private;
-  const waitArguments = waitArgumentsFromLauncher(
-    launcher.result?.structuredContent as JsonObject | undefined,
-  );
 
   const appearance = useMemo(
     () => ({ theme: launcher.theme, layout: { skipPrimeStep: true } }),
@@ -449,65 +489,72 @@ function ManagedAuthApp() {
     }
   }
 
-  function finish(outcome: "success" | "failure") {
+  function finish(outcome: "success" | "failure", failed?: SafeConnection) {
     if (terminal || destroyed) return;
     if (pollTimer.current !== null) window.clearTimeout(pollTimer.current);
+    if (failed) setTerminalConnection(failed);
     setTerminal(outcome);
     setStatusText("");
     void publishTerminal(outcome);
   }
 
+  // The App polls the launcher-supplied, baseline-guarded wait arguments and
+  // trusts the wait verdict; the returned SafeAuthConnection retains
+  // flow_status/error_code so the terminal step matches the hosted UI.
   async function checkStatus() {
-    if (!connection?.id || destroyed || terminal) return;
-    const knownExpiry = connection.flow_expires_at
+    if (destroyed || terminal) return;
+    const args = pollWaitArguments(
+      launcher.result?.structuredContent as JsonObject | undefined,
+      beginResult,
+      beginCalledAt.current,
+    );
+    const knownExpiry = connection?.flow_expires_at
       ? Date.parse(connection.flow_expires_at)
       : Number.NaN;
-    try {
-      const result = await callTool("get_auth_login_status", {
-        connection_id: connection.id,
-      });
-      const current = result.structuredContent?.connection;
-      if (!current) throw new Error("No connection status returned");
-      const expiresAt = current.flow_expires_at
-        ? Date.parse(current.flow_expires_at)
-        : Number.NaN;
-      const statusClaimsFailure =
-        current.flow_status === "FAILED" ||
-        current.flow_status === "EXPIRED" ||
-        current.flow_status === "CANCELED" ||
-        (current.flow_status !== "SUCCESS" &&
-          Number.isFinite(expiresAt) &&
-          expiresAt <= Date.now());
-      const statusClaimsSuccess =
-        current.flow_status === "SUCCESS" && current.status === "AUTHENTICATED";
-      if ((statusClaimsFailure || statusClaimsSuccess) && waitArguments) {
-        const wait = await callTool<WaitToolResult>(
-          "manage_auth_connections",
-          waitArguments,
-        );
-        const waitState = wait.structuredContent?.state;
-        if (waitState === "authenticated") {
-          finish("success");
-          return;
-        }
-        if (waitState === "failed") {
-          finish("failure");
-          return;
-        }
-        setStatusText("Secure login is still in progress…");
-        pollTimer.current = window.setTimeout(checkStatus, 2000);
-        return;
-      }
-      if (statusClaimsFailure) {
+    if (!args) {
+      if (Number.isFinite(knownExpiry) && knownExpiry <= Date.now()) {
         finish("failure");
         return;
       }
-      if (statusClaimsSuccess) {
+      setStatusText("Checking secure login status…");
+      pollTimer.current = window.setTimeout(checkStatus, 3000);
+      return;
+    }
+    try {
+      const wait = await callTool<WaitToolResult>(
+        "manage_auth_connections",
+        args,
+      );
+      const waitState = wait.structuredContent?.state;
+      const current = wait.structuredContent?.connection ?? null;
+      if (current?.flow_status === "IN_PROGRESS") sawLiveFlow.current = true;
+      if (waitState === "authenticated") {
         finish("success");
         return;
       }
+      if (waitState === "failed") {
+        finish("failure", current ?? undefined);
+        return;
+      }
+      // A pending wait can still carry a terminal flow it treated as stale
+      // (e.g. an unguarded selector whose flow failed before any poll saw it
+      // live). This App drove begin itself, so a terminal state it saw live —
+      // or one whose expiry moved past the pre-flow baseline — is the new
+      // flow's outcome.
+      if (current && isTerminalFailure(current.flow_status)) {
+        const baseline = beginResult?.structuredContent?.started_new_flow
+          ? beginResult.structuredContent.previous_flow_expires_at
+          : undefined;
+        const isNewFlowOutcome =
+          sawLiveFlow.current ||
+          (baseline !== undefined && current.flow_expires_at !== baseline);
+        if (isNewFlowOutcome) {
+          finish("failure", current);
+          return;
+        }
+      }
       setStatusText("Secure login is still in progress…");
-      pollTimer.current = window.setTimeout(checkStatus, 2000);
+      pollTimer.current = window.setTimeout(checkStatus, 1000);
     } catch {
       if (Number.isFinite(knownExpiry) && knownExpiry <= Date.now()) {
         finish("failure");
@@ -526,6 +573,7 @@ function ManagedAuthApp() {
     setStarting(true);
     setStatusText("Preparing secure login…");
     try {
+      beginCalledAt.current = new Date().toISOString();
       const result = await callTool("begin_auth_login", {
         ...sanitizeBeginArguments(launcher.input),
       });
@@ -593,16 +641,28 @@ function ManagedAuthApp() {
   }
 
   if (terminal) {
+    // Mirror the hosted UI: FAILED/CANCELED render StepError with the actual
+    // safe error code so ERROR_DISPLAY copy survives; EXPIRED renders
+    // StepExpired.
+    const failure =
+      terminal === "failure"
+        ? failureTerminalView(
+            terminalConnection?.flow_status,
+            terminalConnection?.error_code,
+          )
+        : null;
     return (
       <AppearanceProvider appearance={appearance}>
         <LocalizationProvider>
           <Shell appearance={appearance}>
             {terminal === "success" ? (
               <StepSuccess targetDomain={targetDomain} />
+            ) : failure?.step === "expired" ? (
+              <StepExpired />
             ) : (
               <StepError
                 targetDomain={targetDomain}
-                errorMessage="Managed authentication stopped."
+                errorCode={failure?.errorCode}
               />
             )}
             <div className="kernel-app-actions">

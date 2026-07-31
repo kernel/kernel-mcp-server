@@ -67,8 +67,7 @@ async function requestUsesMcpApps(
       request.params.uri.startsWith("ui://kernel/managed-auth-login")) ||
     (request?.method === "tools/call" &&
       (request.params?.name === "open_auth_login" ||
-        request.params?.name === "begin_auth_login" ||
-        request.params?.name === "get_auth_login_status"));
+        request.params?.name === "begin_auth_login"));
   if (!needsAppRegistration) return false;
 
   try {
@@ -121,6 +120,7 @@ const handler = createMcpHandler((server) => {
   registerMcpCapabilities(server);
 });
 const mcpAppsHandler = createMcpHandler((server) => {
+  instrumentMcpAnalytics(server);
   registerMcpCapabilities(server, { mcpApps: true });
 });
 

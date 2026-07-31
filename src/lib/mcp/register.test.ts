@@ -58,7 +58,6 @@ describe("MCP Apps additive registration", () => {
       expect(withApps.appTools).toEqual([
         "open_auth_login",
         "begin_auth_login",
-        "get_auth_login_status",
       ]);
       expect(withApps.resources).toEqual(["kernel-managed-auth-login"]);
     } finally {
