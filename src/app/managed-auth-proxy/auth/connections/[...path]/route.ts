@@ -18,9 +18,20 @@ function responseError(status: number, message: string) {
   return new Response(message, { status, headers: corsHeaders() });
 }
 
+function validConnectionId(value: string | undefined): value is string {
+  // URL resolves literal and percent-encoded dot segments before fetching.
+  // Reject them explicitly so the connection ID can never escape the fixed
+  // /auth/connections/ upstream prefix.
+  return !!value && value !== "." && value !== "..";
+}
+
 function validOperation(path: string[], method: string): boolean {
-  if (path.length === 1 && method === "GET") return path[0].length > 0;
-  if (path.length !== 2 || !path[0] || !path[1]) return false;
+  if (path.length === 1 && method === "GET") {
+    return validConnectionId(path[0]);
+  }
+  if (path.length !== 2 || !validConnectionId(path[0]) || !path[1]) {
+    return false;
+  }
   if (method === "POST") {
     return path[1] === "exchange" || path[1] === "submit";
   }
@@ -29,9 +40,9 @@ function validOperation(path: string[], method: string): boolean {
 
 function pathExists(path: string[]): boolean {
   return (
-    (path.length === 1 && !!path[0]) ||
+    (path.length === 1 && validConnectionId(path[0])) ||
     (path.length === 2 &&
-      !!path[0] &&
+      validConnectionId(path[0]) &&
       ["exchange", "submit", "events"].includes(path[1]))
   );
 }

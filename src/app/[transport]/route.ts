@@ -136,11 +136,12 @@ async function handleAuthenticatedRequest(req: NextRequest): Promise<Response> {
     );
   }
 
-  const selectedHandler = (await requestUsesMcpApps(req, token, 24 * 60 * 60))
-    ? mcpAppsHandler
-    : handler;
-
   if (!isValidJwtFormat(token)) {
+    // Opaque API keys are authenticated by the Kernel API rather than Clerk.
+    // Select the additive App handler from their token-bound marker here.
+    const selectedHandler = (await requestUsesMcpApps(req, token, 24 * 60 * 60))
+      ? mcpAppsHandler
+      : handler;
     const authHandler = withMcpAuth(
       selectedHandler,
       async () => ({
@@ -168,6 +169,12 @@ async function handleAuthenticatedRequest(req: NextRequest): Promise<Response> {
         "Invalid token: No user ID found in token payload",
       );
     }
+
+    // JWT markers are keyed by the decoded sid, so only read or mutate them
+    // after Clerk has verified the token and its expiry.
+    const selectedHandler = (await requestUsesMcpApps(req, token, 24 * 60 * 60))
+      ? mcpAppsHandler
+      : handler;
 
     // Create authenticated handler with auth info
     const authHandler = withMcpAuth(

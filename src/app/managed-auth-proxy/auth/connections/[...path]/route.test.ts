@@ -47,6 +47,21 @@ describe("managed-auth relay", () => {
     expect(invalidPath.status).toBe(404);
     expectCors(invalidPath);
 
+    let traversalForwarded = false;
+    const traversal = await proxyManagedAuthRequest(
+      request("/managed-auth-proxy/auth/connections/%2e%2e/exchange", {
+        method: "POST",
+        body: "{}",
+      }),
+      ["..", "exchange"],
+      (async () => {
+        traversalForwarded = true;
+        return new Response(null);
+      }) as unknown as typeof fetch,
+    );
+    expect(traversal.status).toBe(404);
+    expect(traversalForwarded).toBe(false);
+
     const invalidMethod = await proxyManagedAuthRequest(
       request("/managed-auth-proxy/auth/connections/c_1/events", {
         method: "POST",
