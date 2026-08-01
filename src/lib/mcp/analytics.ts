@@ -29,8 +29,8 @@ const posthog = projectToken
 // Every property this integration sends. An allow-list rather than a deny-list so a
 // property the pinned SDK doesn't emit today — a renamed payload field, a new one —
 // can't start flowing on an upgrade. Deliberately absent: $mcp_parameters and
-// $mcp_response (call payloads), $mcp_error_message (the text a failed tool returned),
-// and $mcp_intent / $mcp_intent_source (agent-written, and intent capture is off).
+// $mcp_response (call payloads), and $mcp_error_message (the text a failed tool
+// returned).
 const SENT_PROPERTIES = new Set<string>([
   "$groups",
   "$process_person_profile",
@@ -38,6 +38,8 @@ const SENT_PROPERTIES = new Set<string>([
   PostHogMCPAnalyticsProperty.ClientVersion,
   PostHogMCPAnalyticsProperty.DurationMs,
   PostHogMCPAnalyticsProperty.ErrorType,
+  PostHogMCPAnalyticsProperty.Intent,
+  PostHogMCPAnalyticsProperty.IntentSource,
   PostHogMCPAnalyticsProperty.IsError,
   PostHogMCPAnalyticsProperty.ListedToolNames,
   PostHogMCPAnalyticsProperty.ProtocolVersion,
@@ -51,6 +53,18 @@ const SENT_PROPERTIES = new Set<string>([
   PostHogMCPAnalyticsProperty.ToolName,
 ]);
 
+const INTENT_ARGUMENT_DESCRIPTION =
+  "Why this tool is being called and how it fits the user's overall goal, in 15-25 words, " +
+  "third person. Used for product analytics. Never restate argument values, and never " +
+  "include credentials, tokens, URLs, file contents, or personal data. Example: " +
+  '"Inspecting a running browser session to diagnose a checkout automation that stopped ' +
+  'responding partway through the flow."';
+
+// Intent is the only free-form text this captures, and an agent writes it. Long enough for
+// the 15-25 words asked for, short enough that a client ignoring the instruction can't
+// stream a payload or a prompt into an event property.
+const INTENT_MAX_LENGTH = 300;
+
 /**
  * Captures every tool call, tools/list, and initialize handled by the server as a
  * `$mcp_*` PostHog event. No-op when POSTHOG_PROJECT_TOKEN is unset.
@@ -59,9 +73,11 @@ export function instrumentMcpAnalytics(server: McpServer) {
   if (!posthog) return;
 
   instrument(server, posthog, {
-    // Intent capture injects a required `context` argument into every tool schema.
-    // Left off so the public tool surface is unchanged.
-    context: false,
+    // Adds a required `context` argument to every advertised tool, which the agent fills
+    // with why it is making the call. Recorded as $mcp_intent. The description replaces
+    // the SDK default: it repeats per tool in every tools/list response, so it stays
+    // short, and it names the arguments agents must not copy into it.
+    context: { description: INTENT_ARGUMENT_DESCRIPTION },
     // A failed tool call otherwise fans out into a second `$exception` event whose
     // `$exception_list` is built from the text the tool returned.
     enableExceptionAutocapture: false,
@@ -84,6 +100,14 @@ export function instrumentMcpAnalytics(server: McpServer) {
 
       for (const key of Object.keys(properties)) {
         if (!SENT_PROPERTIES.has(key)) delete properties[key];
+      }
+
+      const intent = properties[PostHogMCPAnalyticsProperty.Intent];
+      if (typeof intent === "string" && intent.length > INTENT_MAX_LENGTH) {
+        properties[PostHogMCPAnalyticsProperty.Intent] = intent.slice(
+          0,
+          INTENT_MAX_LENGTH,
+        );
       }
 
       return event;
