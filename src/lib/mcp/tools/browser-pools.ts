@@ -451,7 +451,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
             return jsonResponse({
               browser: summarizeAcquiredBrowser(browser),
               next_actions: [
-                `Use computer_action with session_id "${browser.session_id}" to control this browser.`,
+                `Use execute_playwright_code with session_id "${browser.session_id}" to drive this browser, and screenshot to see what it currently shows.`,
                 `When finished, use manage_browser_pools with action "release", id_or_name "${poolId}", and session_id "${browser.session_id}".`,
                 `Use manage_browsers with action "get" and session_id "${browser.session_id}" for full browser details.`,
               ],

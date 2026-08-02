@@ -278,9 +278,10 @@ Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_
 
 ### Standalone tools
 
-- `computer_action` - Mouse, keyboard, clipboard, and screenshot controls for browser sessions (click, type, press_key, scroll, move, get_position, read_clipboard, write_clipboard, screenshot).
+- `execute_playwright_code` - Execute Playwright/TypeScript code against an existing browser session. The primary way to drive a browser. Does not create or delete browsers - use `manage_browsers` for session lifecycle.
+- `screenshot` - Capture a PNG of what a browser session currently displays, optionally cropped to a region. Read-only.
+- `computer_action` - Mouse, keyboard, and clipboard input at screen coordinates (click, type, press_key, scroll, move, drag, get_position, read_clipboard, write_clipboard). Fallback for surfaces Playwright selectors can't reach, such as canvas apps and embedded PDFs; it depends on the model being able to locate targets in a screenshot, so prefer `execute_playwright_code`.
 - `browser_curl` - Send HTTP requests through an existing browser session's Chrome network stack.
-- `execute_playwright_code` - Execute Playwright/TypeScript code against an existing browser session. Does not create or delete browsers - use `manage_browsers` for session lifecycle.
 - `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
 - `search_docs` - Search Kernel platform documentation and guides.
 

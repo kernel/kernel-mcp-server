@@ -26,7 +26,6 @@ const computerActionSchema = z.object({
       "sleep",
       "write_clipboard",
       "read_clipboard",
-      "screenshot",
       "get_mouse_position",
     ])
     .describe("Action type."),
@@ -107,26 +106,11 @@ const computerActionSchema = z.object({
     })
     .describe("Params for write_clipboard action.")
     .optional(),
-  screenshot: z
-    .object({
-      region: z
-        .object({
-          x: z.number(),
-          y: z.number(),
-          width: z.number().int().min(1),
-          height: z.number().int().min(1),
-        })
-        .optional(),
-    })
-    .describe(
-      "Params for screenshot action. Omit or pass {} for full-page screenshot.",
-    )
-    .optional(),
 });
 
 type ComputerActionParams = z.infer<typeof computerActionSchema>;
 type TerminalAction = ComputerActionParams & {
-  type: "screenshot" | "get_mouse_position" | "read_clipboard";
+  type: "get_mouse_position" | "read_clipboard";
 };
 type WriteClipboardAction = ComputerActionParams & { type: "write_clipboard" };
 type PrefixExecutionResult =
@@ -137,9 +121,7 @@ function isTerminalAction(
   action: ComputerActionParams | undefined,
 ): action is TerminalAction {
   return (
-    action?.type === "screenshot" ||
-    action?.type === "get_mouse_position" ||
-    action?.type === "read_clipboard"
+    action?.type === "get_mouse_position" || action?.type === "read_clipboard"
   );
 }
 
@@ -250,7 +232,7 @@ export function registerComputerActionTool(server: McpServer) {
   // computer_action -- Execute one or more computer actions on a browser session
   server.tool(
     "computer_action",
-    "Execute computer actions on a browser session. Pass a single action for simple operations (e.g. one click or one screenshot), or pass multiple actions to batch them into a single request for lower latency (e.g. click, type, press_key in one call). Use sleep actions between steps when the page needs time to react (e.g. after a click that triggers navigation or animation). IMPORTANT: Always include a screenshot as the last action so you can see the result of your actions. Action types: click_mouse, move_mouse, type_text, press_key, scroll, drag_mouse, set_cursor, sleep, write_clipboard, read_clipboard, screenshot, get_mouse_position. screenshot, read_clipboard, and get_mouse_position return data, so they must be the last action if included.",
+    "Drive a browser session with raw mouse and keyboard input at screen coordinates. Prefer execute_playwright_code for anything a selector can reach -- it is faster, deterministic, and does not depend on the model's ability to locate targets in an image. Reach for this tool only when there is no selector to target: canvas apps, embedded PDFs, native dialogs, drag interactions. Coordinates come from a screenshot tool call, and screen coordinates are only as accurate as the model's pixel grounding, so verify with screenshot after acting. Pass a single action, or several to batch them into one request for lower latency (e.g. click, type, press_key). Use sleep actions between steps when the page needs time to react. Action types: click_mouse, move_mouse, type_text, press_key, scroll, drag_mouse, set_cursor, sleep, write_clipboard, read_clipboard, get_mouse_position. read_clipboard and get_mouse_position return data, so they must be the last action if included.",
     {
       session_id: z.string().describe("Browser session ID."),
       actions: z
@@ -261,7 +243,7 @@ export function registerComputerActionTool(server: McpServer) {
         ),
     },
     {
-      title: "Control browser (mouse, keyboard, screenshot)",
+      title: "Control browser (mouse, keyboard)",
       readOnlyHint: false,
       destructiveHint: true,
       idempotentHint: false,
@@ -287,45 +269,6 @@ export function registerComputerActionTool(server: McpServer) {
         if (!prefixResult.ok) return errorResponse(prefixResult.error);
 
         const { executedActionCount } = prefixResult;
-
-        if (terminalAction?.type === "screenshot") {
-          const screenshotParams = terminalAction.screenshot;
-          const screenshotOpts = screenshotParams?.region
-            ? { region: screenshotParams.region }
-            : undefined;
-          const [screenshotResponse, browserInfo] = await Promise.all([
-            client.browsers.computer.captureScreenshot(
-              session_id,
-              screenshotOpts,
-            ),
-            client.browsers.retrieve(session_id),
-          ]);
-          const blob = await screenshotResponse.blob();
-          const buffer = Buffer.from(await blob.arrayBuffer());
-          const viewport = browserInfo.viewport;
-          const content: Array<
-            | { type: "text"; text: string }
-            | { type: "image"; data: string; mimeType: string }
-          > = [];
-          if (executedActionCount > 0) {
-            content.push({
-              type: "text",
-              text: `Executed ${executedActionCount} action(s), then captured screenshot.`,
-            });
-          }
-          content.push({
-            type: "text",
-            text: viewport
-              ? `Viewport: ${viewport.width}x${viewport.height}. Use these dimensions as the coordinate space for click, scroll, and move actions.`
-              : "Could not determine viewport dimensions. Use manage_browsers with action 'get' to check the browser's viewport.",
-          });
-          content.push({
-            type: "image",
-            data: buffer.toString("base64"),
-            mimeType: "image/png",
-          });
-          return { content };
-        }
 
         if (terminalAction?.type === "get_mouse_position") {
           const position =

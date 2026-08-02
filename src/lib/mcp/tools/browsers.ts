@@ -266,7 +266,7 @@ async function readBrowserTelemetry(
 
 function browserSessionNextActions(sessionId: string) {
   return [
-    `Use computer_action with session_id "${sessionId}" to inspect or control the browser.`,
+    `Use execute_playwright_code with session_id "${sessionId}" to drive the browser, and screenshot to see what it currently shows.`,
     `Use manage_browsers with action "get" and session_id "${sessionId}" for full browser details.`,
     `Use manage_browsers with action "delete" and session_id "${sessionId}" when the session is no longer needed.`,
   ];

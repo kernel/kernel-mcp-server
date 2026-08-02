@@ -6,7 +6,7 @@ export function registerPlaywrightTool(server: McpServer) {
   // execute_playwright_code -- Run Playwright/TypeScript code against a browser
   server.tool(
     "execute_playwright_code",
-    "Execute Playwright/TypeScript automation code against an existing Kernel browser session. Does not create or delete browsers -- use manage_browsers to manage session lifecycle.",
+    "Execute Playwright/TypeScript automation code against an existing Kernel browser session. This is the primary way to drive a browser: navigation, clicks, form fills, and extraction should all go through here rather than raw coordinate input, and `await page.locator('main').ariaSnapshot()` gives you the accessibility tree to locate elements without needing a screenshot. Does not create or delete browsers -- use manage_browsers to manage session lifecycle.",
     {
       code: z
         .string()

@@ -129,7 +129,7 @@ kernel browsers process --help
 kernel browsers playwright --help
 \`\`\`
 
-**MCP Exceptions:** The \`computer_action\` MCP tool with action "screenshot" is useful since it returns images directly to the agent, and \`manage_browsers\` with action "get_telemetry" reads structured telemetry events (see below).
+**MCP Exceptions:** The \`screenshot\` MCP tool is useful since it returns images directly to the agent, and \`manage_browsers\` with action "get_telemetry" reads structured telemetry events (see below).
 
 ---
 
@@ -152,7 +152,7 @@ ${TELEMETRY_EVENT_CATALOG}
 kernel browsers get ${session_id}
 \`\`\`
 
-### Take a screenshot (or use MCP computer_action with action "screenshot")
+### Take a screenshot (or use the MCP screenshot tool)
 \`\`\`bash
 kernel browsers screenshot ${session_id}
 \`\`\`
