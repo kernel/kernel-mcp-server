@@ -38,7 +38,10 @@ export function registerScreenshotTool(server: McpServer) {
     "screenshot",
     "Capture a PNG screenshot of what a browser session currently displays. Read-only: it observes the session without changing it. Use it to see page state, confirm what an automation did, or diagnose a stuck flow. To act on the page, prefer execute_playwright_code.",
     {
-      session_id: z.string().describe("Browser session ID."),
+      session_id: z
+        .string()
+        .min(1, "session_id is required")
+        .describe("Browser session ID."),
       region: regionSchema
         .describe(
           "Crop to this screen region. Omit to capture the full screen.",
