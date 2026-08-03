@@ -67,6 +67,25 @@ const INTENT_ARGUMENT_DESCRIPTION =
 // stream a payload or a prompt into an event property.
 const INTENT_MAX_LENGTH = 300;
 
+// The intent descriptions ask agents to leave specifics out, and the agent writing the string
+// is the only thing holding them to it. These cover the shapes that are unambiguous when one
+// does slip through. They are not a substitute for the instruction: no pattern can tell that a
+// plain noun is a customer's name, so an intent still has to be treated as agent-written prose.
+const INTENT_REDACTIONS: readonly [RegExp, string][] = [
+  [/[^\s@]+@[^\s@]+\.[^\s@]+/g, "[email]"],
+  [/[a-z][a-z0-9+.-]*:\/\/\S+/gi, "[url]"],
+  [/\b[A-Za-z0-9_-]{32,}\b/g, "[token]"],
+];
+
+function sanitizeIntent(intent: string) {
+  const redacted = INTENT_REDACTIONS.reduce(
+    (text, [pattern, replacement]) => text.replace(pattern, replacement),
+    intent.trim(),
+  );
+
+  return redacted.slice(0, INTENT_MAX_LENGTH);
+}
+
 // Must stay the SDK's default name: reportMissing advertises a tool under this name and
 // dispatches calls to it as capability reports, and the name is what ties the two together.
 const MISSING_CAPABILITY_TOOL_NAME = "get_more_tools";
@@ -150,12 +169,25 @@ export function instrumentMcpAnalytics(server: McpServer) {
         if (!SENT_PROPERTIES.has(key)) delete properties[key];
       }
 
+      // Only a string is an intent. Anything else is a client sending an object or an array
+      // through the argument, which would land in PostHog as a serialized payload.
       const intent = properties[PostHogMCPAnalyticsProperty.Intent];
-      if (typeof intent === "string" && intent.length > INTENT_MAX_LENGTH) {
-        properties[PostHogMCPAnalyticsProperty.Intent] = intent.slice(
-          0,
-          INTENT_MAX_LENGTH,
-        );
+      const sanitized =
+        typeof intent === "string" ? sanitizeIntent(intent) : "";
+      if (sanitized) {
+        properties[PostHogMCPAnalyticsProperty.Intent] = sanitized;
+      } else {
+        delete properties[PostHogMCPAnalyticsProperty.Intent];
+      }
+
+      // The SDK answers a get_more_tools call before the registered schema validates it, so a
+      // report can arrive with no usable context: missing, blank, or not a string. The reported
+      // gap is the entire event, so drop the ones that don't carry one rather than count them.
+      if (
+        event.event === PostHogMCPAnalyticsEvent.MissingCapability &&
+        !sanitized
+      ) {
+        return null;
       }
 
       return event;
