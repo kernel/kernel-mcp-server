@@ -71,10 +71,22 @@ const INTENT_MAX_LENGTH = 300;
 // is the only thing holding them to it. These cover the shapes that are unambiguous when one
 // does slip through. They are not a substitute for the instruction: no pattern can tell that a
 // plain noun is a customer's name, so an intent still has to be treated as agent-written prose.
+//
+// A capability gap is often named as a long snake_case or kebab-case identifier, and that name
+// is the whole point of the report, so length alone can't stand in for a credential. What marks
+// one is either a vendor prefix (Kernel API keys are sk_*) or an unbroken high-entropy run:
+// mixed case with a digit, or hex. Separator-joined lowercase names match none of those.
 const INTENT_REDACTIONS: readonly [RegExp, string][] = [
   [/[^\s@]+@[^\s@]+\.[^\s@]+/g, "[email]"],
   [/[a-z][a-z0-9+.-]*:\/\/\S+/gi, "[url]"],
-  [/\b[A-Za-z0-9_-]{32,}\b/g, "[token]"],
+  [
+    /\b(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[a-z])(?=[A-Za-z0-9]*[A-Z])[A-Za-z0-9]{20,}\b/g,
+    "[token]",
+  ],
+  [
+    /\b(?:[0-9a-f]{32,}|(?:sk|pk|rk|whsec|ghp|glpat|github_pat|xox[abprs])[_-][A-Za-z0-9_-]{8,})\b/gi,
+    "[token]",
+  ],
 ];
 
 function sanitizeIntent(intent: string) {
