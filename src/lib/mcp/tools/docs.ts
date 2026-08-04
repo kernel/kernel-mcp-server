@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { errorResponse } from "@/lib/mcp/responses";
 
 interface MintlifySearchResult {
   content: string;
@@ -31,14 +32,9 @@ export function registerDocsTools(server: McpServer) {
         !process.env.MINTLIFY_ASSISTANT_API_TOKEN ||
         !process.env.MINTLIFY_DOMAIN
       ) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "Error: Documentation search is not configured (missing MINTLIFY_ASSISTANT_API_TOKEN or MINTLIFY_DOMAIN).",
-            },
-          ],
-        };
+        return errorResponse(
+          "Error: Documentation search is not configured (missing MINTLIFY_ASSISTANT_API_TOKEN or MINTLIFY_DOMAIN).",
+        );
       }
 
       try {
@@ -74,14 +70,9 @@ export function registerDocsTools(server: McpServer) {
 
         return { content: [{ type: "text", text: formatted }] };
       } catch (error) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Error searching documentation: ${error instanceof Error ? error.message : "Unknown error"}`,
-            },
-          ],
-        };
+        return errorResponse(
+          `Error searching documentation: ${error instanceof Error ? error.message : "Unknown error"}`,
+        );
       }
     },
   );
