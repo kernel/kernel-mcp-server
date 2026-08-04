@@ -1,3 +1,10 @@
+import {
+  APIConnectionError,
+  APIConnectionTimeoutError,
+  APIError,
+  APIUserAbortError,
+} from "@onkernel/sdk";
+
 type PaginatedPage<T> = {
   getPaginatedItems(): T[];
   has_more?: boolean | null;
@@ -64,12 +71,46 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function toolErrorResponse(
+// Named after what the API said, so a stale session id (404) is distinguishable from an
+// org hitting its limits (429) or a fault on our side (5xx). Status codes only; the
+// message stays out.
+class ToolCallError extends Error {
+  constructor(name: string, message: string) {
+    super(message);
+    this.name = name;
+  }
+}
+
+function errorName(error: unknown) {
+  if (error instanceof APIError) {
+    if (typeof error.status === "number") {
+      return `KernelApiError${error.status}`;
+    }
+    // No status means the request never got a response. Classified by instance
+    // rather than class name, which the production bundle minifies.
+    if (error instanceof APIConnectionTimeoutError) return "KernelApiTimeout";
+    if (error instanceof APIConnectionError) return "KernelApiConnectionError";
+    if (error instanceof APIUserAbortError) return "KernelApiAborted";
+    return "KernelApiError";
+  }
+  return error instanceof Error ? error.name : "Error";
+}
+
+/**
+ * Fails a tool call that a Kernel API request rejected.
+ *
+ * Throws rather than returning an isError result: analytics reads the error category
+ * from a thrown error's name, while a returned result only ever coerces to a generic
+ * "Error". The MCP SDK turns the throw back into the same isError text result the client
+ * saw before, so agents see no difference.
+ */
+export function throwToolError(
   toolName: string,
   action: string,
   error: unknown,
-) {
-  return errorResponse(
+): never {
+  throw new ToolCallError(
+    errorName(error),
     `Error in ${toolName} (${action}): ${errorMessage(error)}`,
   );
 }

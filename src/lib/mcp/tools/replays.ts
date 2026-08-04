@@ -6,7 +6,7 @@ import {
   itemsJsonResponse,
   jsonResponse,
   textResponse,
-  toolErrorResponse,
+  throwToolError,
 } from "@/lib/mcp/responses";
 
 export function registerReplayTools(server: McpServer) {
@@ -90,7 +90,7 @@ export function registerReplayTools(server: McpServer) {
           }
         }
       } catch (error) {
-        return toolErrorResponse("manage_replays", params.action, error);
+        throwToolError("manage_replays", params.action, error);
       }
     },
   );

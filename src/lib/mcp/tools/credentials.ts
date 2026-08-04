@@ -6,7 +6,7 @@ import {
   jsonResponse,
   paginatedJsonResponse,
   textResponse,
-  toolErrorResponse,
+  throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 
@@ -152,7 +152,7 @@ export function registerCredentialTools(server: McpServer) {
           }
         }
       } catch (error) {
-        return toolErrorResponse("manage_credentials", params.action, error);
+        throwToolError("manage_credentials", params.action, error);
       }
     },
   );

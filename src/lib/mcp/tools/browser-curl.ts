@@ -4,7 +4,7 @@ import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
 import {
   errorResponse,
   jsonResponse,
-  toolErrorResponse,
+  throwToolError,
 } from "@/lib/mcp/responses";
 
 type BrowserCurlParams = Parameters<KernelClient["browsers"]["curl"]>[1];
@@ -74,7 +74,7 @@ export function registerBrowserCurlTool(server: McpServer) {
         const response = await client.browsers.curl(session_id, curlParams);
         return jsonResponse(response);
       } catch (error) {
-        return toolErrorResponse("browser_curl", "request", error);
+        throwToolError("browser_curl", "request", error);
       }
     },
   );

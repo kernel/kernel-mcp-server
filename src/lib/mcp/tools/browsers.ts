@@ -13,7 +13,7 @@ import {
   jsonResponse,
   paginatedJsonResponse,
   textResponse,
-  toolErrorResponse,
+  throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 import {
@@ -695,7 +695,7 @@ export function registerBrowserCapabilities(server: McpServer) {
           }
         }
       } catch (error) {
-        return toolErrorResponse("manage_browsers", params.action, error);
+        throwToolError("manage_browsers", params.action, error);
       }
     },
   );

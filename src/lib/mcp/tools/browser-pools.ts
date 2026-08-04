@@ -12,7 +12,7 @@ import {
   errorResponse,
   paginatedJsonResponse,
   textResponse,
-  toolErrorResponse,
+  throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 
@@ -474,7 +474,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           }
         }
       } catch (error) {
-        return toolErrorResponse("manage_browser_pools", params.action, error);
+        throwToolError("manage_browser_pools", params.action, error);
       }
     },
   );
