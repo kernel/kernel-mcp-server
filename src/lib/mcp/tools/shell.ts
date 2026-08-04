@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
+import { throwToolError } from "@/lib/mcp/responses";
 
 export function registerShellTool(server: McpServer) {
   // exec_command -- Execute shell commands inside a browser VM
@@ -70,11 +71,7 @@ export function registerShellTool(server: McpServer) {
           ],
         };
       } catch (error) {
-        return {
-          content: [
-            { type: "text", text: `Error executing command: ${error}` },
-          ],
-        };
+        throwToolError("exec_command", "exec", error);
       }
     },
   );
