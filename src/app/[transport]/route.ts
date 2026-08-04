@@ -12,6 +12,7 @@ import {
   mintMcpSessionId,
 } from "@/lib/mcp/analytics";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
+import { name, version } from "../../../server.json";
 
 export async function OPTIONS(_req: NextRequest): Promise<Response> {
   return new Response(null, {
@@ -49,10 +50,15 @@ function createAuthErrorResponse(
 }
 
 // Create MCP handler with tools
-const handler = createMcpHandler((server) => {
-  instrumentMcpAnalytics(server);
-  registerMcpCapabilities(server);
-});
+const handler = createMcpHandler(
+  (server) => {
+    instrumentMcpAnalytics(server);
+    registerMcpCapabilities(server);
+  },
+  // Identity returned on initialize. Taken from server.json so the handshake and the
+  // registry entry can't disagree; without it mcp-handler advertises its own default.
+  { serverInfo: { name, version } },
+);
 
 async function handleAuthenticatedRequest(req: NextRequest): Promise<Response> {
   const authHeader = req.headers.get("Authorization");
