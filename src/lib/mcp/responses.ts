@@ -1,4 +1,9 @@
-import { APIError } from "@onkernel/sdk";
+import {
+  APIConnectionError,
+  APIConnectionTimeoutError,
+  APIError,
+  APIUserAbortError,
+} from "@onkernel/sdk";
 
 type PaginatedPage<T> = {
   getPaginatedItems(): T[];
@@ -77,10 +82,18 @@ class ToolCallError extends Error {
 }
 
 function errorName(error: unknown) {
-  if (error instanceof APIError && typeof error.status === "number") {
-    return `KernelApiError${error.status}`;
+  if (error instanceof APIError) {
+    if (typeof error.status === "number") {
+      return `KernelApiError${error.status}`;
+    }
+    // No status means the request never got a response. Classified by instance
+    // rather than class name, which the production bundle minifies.
+    if (error instanceof APIConnectionTimeoutError) return "KernelApiTimeout";
+    if (error instanceof APIConnectionError) return "KernelApiConnectionError";
+    if (error instanceof APIUserAbortError) return "KernelApiAborted";
+    return "KernelApiError";
   }
-  return error instanceof Error ? error.constructor.name : "Error";
+  return error instanceof Error ? error.name : "Error";
 }
 
 /**
