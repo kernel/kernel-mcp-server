@@ -1,31 +1,26 @@
 import { z } from "zod";
 
-const telemetryCategorySchema = z
-  .object({
-    enabled: z.boolean().optional(),
-  })
-  .strict();
+const telemetryCategorySchema = z.object({
+  enabled: z.boolean().optional(),
+});
 
-const telemetryCategoriesSchema = z
-  .object({
-    captcha: telemetryCategorySchema.optional(),
-    connection: telemetryCategorySchema.optional(),
-    console: telemetryCategorySchema.optional(),
-    control: telemetryCategorySchema.optional(),
-    interaction: telemetryCategorySchema.optional(),
-    network: telemetryCategorySchema.optional(),
-    page: telemetryCategorySchema.optional(),
-    screenshot: telemetryCategorySchema.optional(),
-    system: telemetryCategorySchema.optional(),
-  })
-  .strict();
+const telemetryCategoriesSchema = z.object({
+  captcha: telemetryCategorySchema.optional(),
+  connection: telemetryCategorySchema.optional(),
+  console: telemetryCategorySchema.optional(),
+  control: telemetryCategorySchema.optional(),
+  interaction: telemetryCategorySchema.optional(),
+  network: telemetryCategorySchema.optional(),
+  page: telemetryCategorySchema.optional(),
+  screenshot: telemetryCategorySchema.optional(),
+  system: telemetryCategorySchema.optional(),
+});
 
 export const managedAuthBrowserTelemetrySchema = z
   .object({
     enabled: z.boolean().optional(),
     browser: telemetryCategoriesSchema.optional(),
   })
-  .strict()
   .superRefine((telemetry, context) => {
     if (
       telemetry.enabled === false &&

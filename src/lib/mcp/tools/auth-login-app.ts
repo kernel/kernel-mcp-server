@@ -1,16 +1,19 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MANAGED_AUTH_APP_HTML } from "@/lib/mcp/apps/generated/managed-auth-app";
-import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
+import { mcpAppsAuthSubject } from "@/lib/mcp-apps-marker";
+import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
   initializeDeclaresMcpApps,
   mcpAppsGateError,
+  mcpTransportSessionId,
 } from "@/lib/mcp/tools/mcp-apps-gate";
 import {
   AuthLoginStartError,
   beginAuthLogin,
   type AuthLoginInput,
   hasLiveAuthFlow,
+  issueAuthWaitCheckpoint,
   toSafeAuthConnection,
   validateAuthLoginInput,
 } from "@/lib/mcp/tools/managed-auth-state";
@@ -23,7 +26,7 @@ const MCP_APPS_GATE_DENIED_MESSAGE =
   "This tool is only available to the secure Kernel login App on MCP Apps-capable hosts and cannot be called by the model. Clients without MCP Apps can use manage_auth_connections create/login/get/submit/wait.";
 
 export const MANAGED_AUTH_RESOURCE_URI =
-  "ui://kernel/managed-auth-login-v9.html";
+  "ui://kernel/managed-auth-login-v10.html";
 export const MANAGED_AUTH_MIME_TYPE = "text/html;profile=mcp-app";
 
 export function managedAuthAppOrigin(): string {
@@ -64,24 +67,20 @@ const authLoginInputSchema = {
   proxy_name: z.string().min(1).optional(),
 };
 
-async function authFlowWaitBaseline(
-  client: KernelClient,
+function waitAction(
   connectionId: string,
-): Promise<{ eventId?: string; startedAt: string } | undefined> {
-  try {
-    const page = await client.auth.connections.timeline(connectionId, {
-      limit: 10,
-    });
-    const eventId = page
-      .getPaginatedItems()
-      .find((event) => event.type === "login" || event.type === "reauth")?.id;
-    return {
-      ...(eventId && { eventId }),
-      startedAt: new Date().toISOString(),
-    };
-  } catch {
-    return undefined;
-  }
+  flowCheckpoint: string,
+  waitSeconds: number,
+) {
+  return {
+    tool: "manage_auth_connections" as const,
+    arguments: {
+      action: "wait" as const,
+      id: connectionId,
+      flow_checkpoint: flowCheckpoint,
+      wait_seconds: waitSeconds,
+    },
+  };
 }
 
 function inputFromParams(params: AuthLoginInput): AuthLoginInput {
@@ -164,35 +163,26 @@ export function registerAuthLoginApp(server: McpServer) {
           domain: input.domain!,
           profile_name: input.profile_name!,
         };
-        const flowWaitBaseline =
-          reauthConnection && !hasLiveAuthFlow(reauthConnection)
-            ? await authFlowWaitBaseline(client, reauthConnection.id)
-            : undefined;
-        const waitArguments = reauthConnection
-          ? {
-              action: "wait",
-              id: input.connection_id!,
-              wait_seconds: 25,
-              // The server chooses LOGIN vs REAUTH when the flow starts, so
-              // never guess a required flow type here. Guard on the pre-flow
-              // baseline instead. When a flow is already live the wait simply
-              // observes that flow, so no baseline is needed.
-              ...(!hasLiveAuthFlow(reauthConnection) && {
-                previous_flow_expires_at: reauthConnection.flow_expires_at,
-                ...(flowWaitBaseline && {
-                  ...(flowWaitBaseline.eventId && {
-                    previous_flow_event_id: flowWaitBaseline.eventId,
-                  }),
-                  flow_wait_started_at: flowWaitBaseline.startedAt,
-                }),
-              }),
-            }
+        const nextAction = reauthConnection
+          ? waitAction(
+              reauthConnection.id,
+              await issueAuthWaitCheckpoint(
+                client,
+                reauthConnection.id,
+                hasLiveAuthFlow(reauthConnection) ? "event" : "after",
+              ),
+              25,
+            )
           : {
-              action: "wait",
-              domain_filter: input.domain!,
-              profile_name: input.profile_name!,
-              wait_seconds: 25,
+              tool: "manage_auth_connections" as const,
+              arguments: {
+                action: "wait" as const,
+                domain_filter: input.domain!,
+                profile_name: input.profile_name!,
+                wait_seconds: 25,
+              },
             };
+        const waitArguments = nextAction.arguments;
         return {
           content: [
             {
@@ -205,10 +195,7 @@ export function registerAuthLoginApp(server: McpServer) {
             version: 1,
             mode: input.mode,
             connection,
-            next_action: {
-              tool: "manage_auth_connections",
-              arguments: waitArguments,
-            },
+            next_action: nextAction,
           },
         };
       } catch (error) {
@@ -238,9 +225,19 @@ export function registerAuthLoginApp(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
+      const authExtra = extra.authInfo.extra as
+        | { userId?: unknown }
+        | undefined;
+      const authSubject = mcpAppsAuthSubject({
+        token: extra.authInfo.token,
+        userId: typeof authExtra?.userId === "string" ? authExtra.userId : null,
+      });
+      const requestHeaders = (extra as { requestInfo?: { headers?: unknown } })
+        .requestInfo?.headers;
       const gateError = await mcpAppsGateError(
         server,
-        extra.authInfo.token,
+        authSubject,
+        mcpTransportSessionId(requestHeaders),
         MCP_APPS_GATE_DENIED_MESSAGE,
       );
       if (gateError) return errorResponse(gateError);
@@ -272,10 +269,15 @@ export function registerAuthLoginApp(server: McpServer) {
             connection: result.connection,
             started_new_flow: result.started_new_flow,
             resume_id: result.resume_id,
-            // Baseline the App adds to its wait polling once a new flow has
-            // started, so a terminal state from before this begin is never
-            // mistaken for the new flow's outcome.
-            previous_flow_expires_at: result.previous_flow_expires_at,
+            // The App forwards this exact server-issued wait action. It does
+            // not infer flow identity or terminal state in the browser.
+            ...(result.flow_checkpoint && {
+              next_action: waitAction(
+                result.connection.id,
+                result.flow_checkpoint,
+                5,
+              ),
+            }),
             // Execution is gated on the client's MCP Apps capability, so
             // this result only reaches hosts that deliver visibility:["app"]
             // tool results to the View rather than the model. The

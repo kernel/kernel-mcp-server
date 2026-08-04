@@ -259,7 +259,7 @@ Configure these values wherever the tool expects MCP server settings.
 
 Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Standalone tools handle high-frequency and interactive workflows.
 
-One additional Managed Auth helper (`begin_auth_login`) is marked app-only (`_meta.ui.visibility: ["app"]`); it refuses to execute on hosts that do not declare MCP Apps support. The App itself polls the shared, baseline-guarded `manage_auth_connections` `wait` action for status.
+One additional Managed Auth helper (`begin_auth_login`) is marked app-only (`_meta.ui.visibility: ["app"]`); it refuses to execute on hosts that do not declare MCP Apps support. The App forwards the server-issued signed flow checkpoint to the shared `manage_auth_connections` `wait` action, so flow identity and terminal-state decisions stay on the server.
 
 Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_DISABLED_TOOLSETS` to a comma-separated list. For example, `KERNEL_MCP_DISABLED_TOOLSETS=api_keys` prevents `manage_api_keys` from being registered.
 

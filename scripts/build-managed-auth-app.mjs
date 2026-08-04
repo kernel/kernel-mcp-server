@@ -1,8 +1,9 @@
 // Builds the managed-auth MCP App into a single self-contained HTML bundle.
 // The --check mode is byte-exact, and Bun's minifier output can change between
-// releases, so the bundle is only reproducible with the Bun version pinned in
-// .github/workflows/ci.yml (currently 1.3.3). Regenerate the bundle with that
-// exact version: bun run build:managed-auth-app
+// releases, so the bundle is only reproducible with the Bun version pinned by
+// package.json and .github/workflows/ci.yml (currently 1.3.3). Production build
+// checks the committed artifact; regeneration remains an explicit command:
+// bun run build:managed-auth-app
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";

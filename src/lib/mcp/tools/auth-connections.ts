@@ -116,10 +116,12 @@ export function registerAuthConnectionTools(server: McpServer) {
         .optional(),
       proxy_id: z
         .string()
+        .min(1)
         .describe("(create, login) Proxy ID to route the auth flow through.")
         .optional(),
       proxy_name: z
         .string()
+        .min(1)
         .describe("(create, login) Proxy name to route the auth flow through.")
         .optional(),
       domain_filter: z.string().describe("(list) Filter by domain.").optional(),
@@ -153,25 +155,11 @@ export function registerAuthConnectionTools(server: McpServer) {
         .enum(["LOGIN", "REAUTH"])
         .describe("(wait) Require this newly completed flow type.")
         .optional(),
-      previous_flow_expires_at: z
-        .string()
-        .nullable()
-        .describe(
-          "(wait) Baseline flow expiry supplied by open_auth_login; do not modify.",
-        )
-        .optional(),
-      previous_flow_event_id: z
+      flow_checkpoint: z
         .string()
         .min(1)
         .describe(
-          "(wait) Baseline timeline event supplied by open_auth_login; do not modify.",
-        )
-        .optional(),
-      flow_wait_started_at: z
-        .string()
-        .min(1)
-        .describe(
-          "(wait) Baseline timestamp supplied by open_auth_login; do not modify.",
+          "(wait) Signed flow checkpoint supplied by open_auth_login or begin_auth_login; forward it unchanged.",
         )
         .optional(),
     },
@@ -341,6 +329,11 @@ export function registerAuthConnectionTools(server: McpServer) {
                 "Error: wait requires id, or both domain_filter and profile_name.",
               );
             }
+            if (params.flow_checkpoint && !params.id) {
+              return errorResponse(
+                "Error: a flow_checkpoint wait requires its connection id.",
+              );
+            }
             const result = await waitForAuthConnection(
               client,
               {
@@ -352,14 +345,8 @@ export function registerAuthConnectionTools(server: McpServer) {
                 ...(params.required_flow_type && {
                   requiredFlowType: params.required_flow_type,
                 }),
-                ...(params.previous_flow_expires_at !== undefined && {
-                  previousFlowExpiresAt: params.previous_flow_expires_at,
-                }),
-                ...(params.previous_flow_event_id !== undefined && {
-                  previousFlowEventId: params.previous_flow_event_id,
-                }),
-                ...(params.flow_wait_started_at !== undefined && {
-                  flowWaitStartedAt: params.flow_wait_started_at,
+                ...(params.flow_checkpoint && {
+                  flowCheckpoint: params.flow_checkpoint,
                 }),
               },
               {

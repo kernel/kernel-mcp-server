@@ -2,7 +2,12 @@ import type { KernelClient } from "@/lib/mcp/kernel-client";
 import type {
   LoginResponse,
   ManagedAuth,
+  ManagedAuthTimelineEvent,
 } from "@onkernel/sdk/resources/auth/connections";
+import {
+  issueAuthFlowCheckpoint,
+  verifyAuthFlowCheckpoint,
+} from "@/lib/mcp/tools/managed-auth-checkpoint";
 import type { ManagedAuthBrowserTelemetry } from "@/lib/mcp/tools/managed-auth-telemetry";
 
 export interface SafeAuthConnection {
@@ -62,12 +67,8 @@ export interface BeginAuthLoginResult {
   connection: SafeAuthConnection;
   started_new_flow: boolean;
   resume_id: string;
-  /**
-   * The connection's flow_expires_at captured before any new flow was started.
-   * Waiters use it as a baseline so a completed flow from before this begin
-   * call is never mistaken for the newly requested one.
-   */
-  previous_flow_expires_at: string | null;
+  /** Signed server checkpoint identifying this exact flow or its predecessor. */
+  flow_checkpoint?: string;
   handoff_code?: string;
   hosted_url?: string;
 }
@@ -77,9 +78,7 @@ export interface AuthWaitSelector {
   domain?: string;
   profileName?: string;
   requiredFlowType?: "LOGIN" | "REAUTH";
-  previousFlowExpiresAt?: string | null;
-  previousFlowEventId?: string;
-  flowWaitStartedAt?: string;
+  flowCheckpoint?: string;
 }
 
 export interface AuthWaitResult {
@@ -164,16 +163,76 @@ async function findAuthConnection(
   return matches[0] ?? null;
 }
 
-async function latestAuthFlowEvent(client: KernelClient, connectionId: string) {
+async function authFlowEvents(
+  client: KernelClient,
+  connectionId: string,
+): Promise<ManagedAuthTimelineEvent[]> {
   const page = await client.auth.connections.timeline(connectionId, {
-    limit: 10,
+    limit: 20,
   });
-  return (
-    page
-      .getPaginatedItems()
-      .find((event) => event.type === "login" || event.type === "reauth") ??
-    null
-  );
+  return page
+    .getPaginatedItems()
+    .filter((event) => event.type === "login" || event.type === "reauth");
+}
+
+export async function issueAuthWaitCheckpoint(
+  client: KernelClient,
+  connectionId: string,
+  kind: "after" | "event",
+): Promise<string> {
+  const latest = (await authFlowEvents(client, connectionId))[0] ?? null;
+  if (kind === "event" && !latest) {
+    throw new AuthLoginStartError(
+      "The active managed-auth flow could not be identified. Retry shortly.",
+    );
+  }
+  return kind === "event"
+    ? issueAuthFlowCheckpoint({
+        version: 1,
+        connectionId,
+        kind,
+        eventId: latest!.id,
+      })
+    : issueAuthFlowCheckpoint({
+        version: 1,
+        connectionId,
+        kind,
+        eventId: latest?.id ?? null,
+      });
+}
+
+function terminalFlowStatus(
+  status: ManagedAuthTimelineEvent["status"],
+): boolean {
+  return status === "FAILED" || status === "EXPIRED" || status === "CANCELED";
+}
+
+async function waitFromCheckpoint(
+  client: KernelClient,
+  latest: SafeAuthConnection,
+  token: string,
+): Promise<AuthWaitResult> {
+  const checkpoint = verifyAuthFlowCheckpoint(token);
+  if (!checkpoint || checkpoint.connectionId !== latest.id) {
+    throw new AuthLoginStartError(
+      "The managed-auth wait checkpoint is invalid. Restart the secure login flow.",
+    );
+  }
+  const events = await authFlowEvents(client, latest.id);
+  const event =
+    checkpoint.kind === "event"
+      ? events.find((candidate) => candidate.id === checkpoint.eventId)
+      : events.find((candidate) => candidate.id !== checkpoint.eventId);
+  if (!event || event.status === "IN_PROGRESS") {
+    return { state: "pending", connection: latest };
+  }
+  if (terminalFlowStatus(event.status)) {
+    return { state: "failed", connection: latest };
+  }
+  if (event.status === "SUCCESS" && latest.status === "AUTHENTICATED") {
+    return { state: "authenticated", connection: latest };
+  }
+  return { state: "pending", connection: latest };
 }
 
 function authWaitDelay(milliseconds: number, signal?: AbortSignal) {
@@ -208,9 +267,6 @@ export async function waitForAuthConnection(
   const deadline = Date.now() + timeoutMs;
   let observedQuery = false;
   let observedLiveFlow = false;
-  let observedNewFlow = false;
-  let observedNewFlowSucceeded = false;
-  let observedNewFlowFailed = false;
   let latest: SafeAuthConnection | undefined;
 
   do {
@@ -222,100 +278,31 @@ export async function waitForAuthConnection(
       observedQuery = true;
       if (connection) {
         latest = toSafeAuthConnection(connection);
-        if (hasLiveAuthFlow(latest)) observedLiveFlow = true;
-        if (
-          (selector.previousFlowEventId !== undefined ||
-            selector.flowWaitStartedAt !== undefined) &&
-          selector.connectionId
-        ) {
-          try {
-            const event = await latestAuthFlowEvent(
-              client,
-              selector.connectionId,
-            );
-            const eventTimestamp = event
-              ? Date.parse(event.timestamp)
-              : Number.NaN;
-            const waitStartedAt = selector.flowWaitStartedAt
-              ? Date.parse(selector.flowWaitStartedAt)
-              : Number.NaN;
-            const isNewEvent = event
-              ? selector.previousFlowEventId !== undefined
-                ? event.id !== selector.previousFlowEventId
-                : Number.isFinite(eventTimestamp) &&
-                  Number.isFinite(waitStartedAt) &&
-                  eventTimestamp >= waitStartedAt
-              : false;
-            if (event && isNewEvent) {
-              observedNewFlow = true;
-              observedNewFlowSucceeded = event.status === "SUCCESS";
-              observedNewFlowFailed =
-                event.status === "FAILED" ||
-                event.status === "EXPIRED" ||
-                event.status === "CANCELED";
-            }
-          } catch {
-            // Keep polling with the connection-level guards when timeline
-            // lookup is transiently unavailable.
+        if (selector.flowCheckpoint) {
+          const checkpointResult = await waitFromCheckpoint(
+            client,
+            latest,
+            selector.flowCheckpoint,
+          );
+          if (checkpointResult.state !== "pending") return checkpointResult;
+        } else if (hasLiveAuthFlow(latest)) {
+          observedLiveFlow = true;
+        } else {
+          const flowFailed =
+            latest.flow_status === "FAILED" ||
+            latest.flow_status === "EXPIRED" ||
+            latest.flow_status === "CANCELED";
+          if (flowFailed && observedLiveFlow) {
+            return { state: "failed", connection: latest };
           }
-        }
-        // A wait is flow-guarded when the caller supplied a baseline (and/or a
-        // required flow type): only a flow that completed after that baseline
-        // counts. The flow type is never assumed ahead of time — the server
-        // chooses LOGIN vs REAUTH — so any successful new flow satisfies the
-        // guard. Timeline identity closes the case where the API clears
-        // flow_expires_at before polling observes the in-progress state.
-        const flowGuarded =
-          selector.requiredFlowType !== undefined ||
-          selector.previousFlowExpiresAt !== undefined ||
-          selector.previousFlowEventId !== undefined ||
-          selector.flowWaitStartedAt !== undefined;
-        const flowFailed =
-          observedNewFlowFailed ||
-          latest.flow_status === "FAILED" ||
-          latest.flow_status === "EXPIRED" ||
-          latest.flow_status === "CANCELED";
-        // A terminal failure observed only after this wait saw the flow live
-        // is authoritative even when the connection still reads AUTHENTICATED
-        // (e.g. a failed re-auth keeps its previous session): the App shows
-        // the failure, so the wait must not report success. A terminal
-        // failure with no live flow observed predates this wait and leaves
-        // the authenticated state usable.
-        const observedFlowFailed =
-          (observedLiveFlow || observedNewFlow) && flowFailed;
-        const requiredFlowCompleted =
-          !flowGuarded ||
-          observedNewFlowSucceeded ||
-          (latest.flow_status === "SUCCESS" &&
-            (selector.requiredFlowType === undefined ||
-              latest.flow_type === selector.requiredFlowType) &&
-            (selector.previousFlowExpiresAt === undefined ||
-              latest.flow_expires_at !== selector.previousFlowExpiresAt ||
-              observedLiveFlow) &&
-            ((selector.previousFlowEventId === undefined &&
-              selector.flowWaitStartedAt === undefined) ||
-              observedNewFlow));
-        // AUTHENTICATED with a live in-progress flow means a (re-)auth is
-        // still running: report pending instead of the stale pre-flow state.
-        if (
-          latest.status === "AUTHENTICATED" &&
-          !hasLiveAuthFlow(latest) &&
-          !observedFlowFailed &&
-          requiredFlowCompleted
-        ) {
-          return { state: "authenticated", connection: latest };
-        }
-        if (flowFailed) {
-          // A terminal flow this wait never saw live predates it: an old failed
-          // attempt (the common case when the user is about to click Continue
-          // for a retry), or one matching the caller's baseline. Keep polling
-          // for the new flow instead of reporting a stale failure.
-          const terminalIsStale =
-            !observedLiveFlow &&
-            (selector.previousFlowExpiresAt !== undefined
-              ? latest.flow_expires_at === selector.previousFlowExpiresAt
-              : !flowGuarded);
-          if (!terminalIsStale) {
+          if (
+            latest.status === "AUTHENTICATED" &&
+            (!selector.requiredFlowType ||
+              latest.flow_type === selector.requiredFlowType)
+          ) {
+            return { state: "authenticated", connection: latest };
+          }
+          if (flowFailed && selector.connectionId) {
             return { state: "failed", connection: latest };
           }
         }
@@ -416,7 +403,7 @@ function readyResult(
   connection: ManagedAuth,
   options: {
     startedNewFlow: boolean;
-    previousFlowExpiresAt: string | null;
+    flowCheckpoint: string;
     handoffCode?: string;
     hostedUrl?: string;
   },
@@ -430,7 +417,7 @@ function readyResult(
     connection: toSafeAuthConnection(connection),
     started_new_flow: options.startedNewFlow,
     resume_id: randomResumeId(),
-    previous_flow_expires_at: options.previousFlowExpiresAt,
+    flow_checkpoint: options.flowCheckpoint,
     ...(options.handoffCode && { handoff_code: options.handoffCode }),
     ...(options.hostedUrl && { hosted_url: options.hostedUrl }),
   };
@@ -478,15 +465,18 @@ export async function beginAuthLogin(
     connection = await client.auth.connections.retrieve(input.connection_id!);
   }
 
-  const previousFlowExpiresAt = connection.flow_expires_at ?? null;
-
   if (hasLiveAuthFlow(connection, now)) {
     // Handoff codes embedded in hosted_url are single-use. An existing flow may
     // already have redeemed its code in another panel, so reopening is strictly
-    // observation-only until the API can mint a fresh resume capability.
+    // observation-only. Its exact timeline event is checkpointed so a failure
+    // before the first wait poll cannot be mistaken for stale authenticated state.
     return readyResult(connection, {
       startedNewFlow: false,
-      previousFlowExpiresAt,
+      flowCheckpoint: await issueAuthWaitCheckpoint(
+        client,
+        connection.id,
+        "event",
+      ),
     });
   }
 
@@ -496,7 +486,6 @@ export async function beginAuthLogin(
       connection: toSafeAuthConnection(connection),
       started_new_flow: false,
       resume_id: randomResumeId(),
-      previous_flow_expires_at: previousFlowExpiresAt,
     };
   }
 
@@ -507,6 +496,15 @@ export async function beginAuthLogin(
           ...(input.proxy_name && { name: input.proxy_name }),
         }
       : undefined;
+
+  // Capture the latest server timeline identity before starting. A signed
+  // "after" checkpoint then identifies the new event even if it reaches a
+  // terminal state before either the App or model polls once.
+  const flowCheckpoint = await issueAuthWaitCheckpoint(
+    client,
+    connection.id,
+    "after",
+  );
 
   try {
     const login = await client.auth.connections.login(connection.id, {
@@ -523,7 +521,7 @@ export async function beginAuthLogin(
     }
     return readyResult(current, {
       startedNewFlow: true,
-      previousFlowExpiresAt,
+      flowCheckpoint,
       handoffCode: login.handoff_code,
       hostedUrl: login.hosted_url,
     });

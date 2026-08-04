@@ -1,3 +1,4 @@
+import { decodeSessionId, MCP_SESSION_HEADER } from "@posthog/mcp";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { hasMcpAppsClient } from "@/lib/redis";
 
@@ -32,19 +33,33 @@ export function initializeDeclaresMcpApps(body: unknown): boolean {
  * only execute them when the connected client actually declared the MCP Apps
  * extension. Persistent transports (SSE) expose client capabilities directly;
  * on the stateless streamable-HTTP transport the route layer records the
- * declared capability per bearer token at initialize time.
+ * capability per authenticated subject and signed transport session.
  */
+export function mcpTransportSessionId(headers: unknown): string | null {
+  if (!headers || typeof headers !== "object") return null;
+  const record = headers as Record<string, unknown>;
+  const key = Object.keys(record).find(
+    (candidate) => candidate.toLowerCase() === MCP_SESSION_HEADER,
+  );
+  const value = key ? record[key] : undefined;
+  const first = Array.isArray(value) ? value[0] : value;
+  return decodeSessionId(first)?.sessionId ?? null;
+}
+
 export async function clientSupportsMcpApps(
   server: McpServer,
-  authToken: string,
+  authSubject: string,
+  transportSessionId: string | null,
 ): Promise<boolean> {
   const capabilities = server.server.getClientCapabilities() as
     | { extensions?: Record<string, unknown> }
     | undefined;
   if (capabilities?.extensions?.[MCP_APPS_EXTENSION]) return true;
+  if (!transportSessionId) return false;
   try {
     return await hasMcpAppsClient({
-      token: authToken,
+      authSubject,
+      transportSessionId,
       ttlSeconds: MCP_APPS_MARKER_TTL_SECONDS,
     });
   } catch (error) {
@@ -59,9 +74,12 @@ export async function clientSupportsMcpApps(
  */
 export async function mcpAppsGateError(
   server: McpServer,
-  authToken: string,
+  authSubject: string,
+  transportSessionId: string | null,
   deniedMessage: string,
 ): Promise<string | null> {
-  if (await clientSupportsMcpApps(server, authToken)) return null;
+  if (await clientSupportsMcpApps(server, authSubject, transportSessionId)) {
+    return null;
+  }
   return deniedMessage;
 }

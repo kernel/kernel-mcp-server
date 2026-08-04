@@ -1,7 +1,9 @@
 import { describe, expect, mock, test } from "bun:test";
+import { encodeSessionId } from "@posthog/mcp";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MANAGED_AUTH_APP_HTML } from "@/lib/mcp/apps/generated/managed-auth-app";
+import { verifyAuthFlowCheckpoint } from "@/lib/mcp/tools/managed-auth-checkpoint";
 import {
   initializeDeclaresMcpApps,
   MANAGED_AUTH_MIME_TYPE,
@@ -9,6 +11,8 @@ import {
   managedAuthResourceMeta,
   registerAuthLoginApp,
 } from "@/lib/mcp/tools/auth-login-app";
+
+process.env.CLERK_SECRET_KEY ??= "test-clerk-secret";
 
 // Tests that exercise API-backed handlers substitute a fake Kernel client.
 // The default stub errors if any API method is actually invoked.
@@ -125,8 +129,8 @@ describe("managed-auth MCP App registration", () => {
     expect(tools.get("begin_auth_login")?.config._meta.ui.visibility).toEqual([
       "app",
     ]);
-    // The App polls the baseline-guarded manage_auth_connections wait action;
-    // there is no duplicate app-only status tool.
+    // The App forwards the signed server-checkpointed wait action; there is no
+    // duplicate app-only status tool.
     expect(tools.has("get_auth_login_status")).toBe(false);
     expect(tools.has("delete_auth_login_connection")).toBe(false);
     expect([...tools.keys()].sort()).toEqual([
@@ -174,6 +178,19 @@ describe("managed-auth MCP App registration", () => {
           },
         }).success,
       ).toBe(false);
+      expect(
+        schema.parse({
+          ...base,
+          browser_telemetry: {
+            enabled: true,
+            future_option: true,
+            browser: { page: { enabled: true, future_option: true } },
+          },
+        }).browser_telemetry,
+      ).toEqual({
+        enabled: true,
+        browser: { page: { enabled: true } },
+      });
     }
   });
 
@@ -244,24 +261,36 @@ describe("managed-auth MCP App registration", () => {
               "https://managed-auth.onkernel.com/login/conn_1?code=handoff-secret",
             handoff_code: "handoff-secret",
           }),
+          timeline: async () => ({ getPaginatedItems: () => [] }),
         },
       },
     });
     try {
       const { tools } = captureRegistration({ appsSupport: false });
-      const result = await tools
-        .get("begin_auth_login")!
-        .handler(
-          { mode: "reauth", connection_id: "conn_1" },
-          { authInfo: { token: "unused-api-key" } },
-        );
+      const result = await tools.get("begin_auth_login")!.handler(
+        { mode: "reauth", connection_id: "conn_1" },
+        {
+          authInfo: { token: "unused-api-key" },
+          requestInfo: {
+            headers: {
+              "mcp-session-id": encodeSessionId({
+                sessionId: "mcp_session_apps",
+              }),
+            },
+          },
+        },
+      );
       expect(result.isError).toBeUndefined();
       expect(result.structuredContent.kind).toBe("kernel.managed_auth.begin");
-      // The begin result carries the pre-flow baseline so the App can keep
-      // its wait polling guarded after a new flow starts.
-      expect(result.structuredContent.previous_flow_expires_at).toBe(
-        "2026-01-01T00:00:00Z",
-      );
+      expect(result.structuredContent.next_action).toMatchObject({
+        tool: "manage_auth_connections",
+        arguments: {
+          action: "wait",
+          id: "conn_1",
+          flow_checkpoint: expect.any(String),
+          wait_seconds: 5,
+        },
+      });
       // Capability-bearing material stays in App-private channels only.
       expect(JSON.stringify(result.content)).not.toContain("handoff-secret");
     } finally {
@@ -331,7 +360,7 @@ describe("managed-auth MCP App registration", () => {
     expect(initializeDeclaresMcpApps("not json")).toBe(false);
   });
 
-  test("reauth launcher guards the wait with the pre-flow baseline, never a guessed flow type", async () => {
+  test("reauth launcher issues a signed server checkpoint, never a guessed flow type", async () => {
     kernelClientFactory = () => ({
       auth: {
         connections: {
@@ -343,44 +372,6 @@ describe("managed-auth MCP App registration", () => {
             flow_status: "SUCCESS",
             flow_type: "LOGIN",
             flow_expires_at: "2026-01-01T00:00:00Z",
-          }),
-        },
-      },
-    });
-    try {
-      const { tools } = captureRegistration();
-      const result = await tools
-        .get("open_auth_login")!
-        .handler(
-          { mode: "reauth", connection_id: "conn_1" },
-          { authInfo: { token: "unused-api-key" } },
-        );
-      expect(result.structuredContent.next_action.arguments).toEqual({
-        action: "wait",
-        id: "conn_1",
-        wait_seconds: 25,
-        previous_flow_expires_at: "2026-01-01T00:00:00Z",
-      });
-      expect(JSON.stringify(result.structuredContent)).not.toContain(
-        "required_flow_type",
-      );
-    } finally {
-      resetKernelClientFactory();
-    }
-  });
-
-  test("reauth launcher includes a timeline baseline when flow expiry is null", async () => {
-    kernelClientFactory = () => ({
-      auth: {
-        connections: {
-          retrieve: async () => ({
-            id: "conn_1",
-            domain: "example.com",
-            profile_name: "work",
-            status: "AUTHENTICATED",
-            flow_status: "SUCCESS",
-            flow_type: "LOGIN",
-            flow_expires_at: null,
           }),
           timeline: async () => ({
             getPaginatedItems: () => [
@@ -403,20 +394,66 @@ describe("managed-auth MCP App registration", () => {
           { mode: "reauth", connection_id: "conn_1" },
           { authInfo: { token: "unused-api-key" } },
         );
-      expect(result.structuredContent.next_action.arguments).toEqual({
+      const args = result.structuredContent.next_action.arguments;
+      expect(args).toMatchObject({
         action: "wait",
         id: "conn_1",
         wait_seconds: 25,
-        previous_flow_expires_at: null,
-        previous_flow_event_id: "flow_old",
-        flow_wait_started_at: expect.any(String),
+      });
+      expect(args.flow_checkpoint).toEqual(expect.any(String));
+      expect(verifyAuthFlowCheckpoint(args.flow_checkpoint)).toEqual({
+        version: 1,
+        connectionId: "conn_1",
+        kind: "after",
+        eventId: "flow_old",
+      });
+      expect(JSON.stringify(result.structuredContent)).not.toContain(
+        "required_flow_type",
+      );
+    } finally {
+      resetKernelClientFactory();
+    }
+  });
+
+  test("reauth launcher preserves an explicitly empty timeline baseline", async () => {
+    kernelClientFactory = () => ({
+      auth: {
+        connections: {
+          retrieve: async () => ({
+            id: "conn_1",
+            domain: "example.com",
+            profile_name: "work",
+            status: "AUTHENTICATED",
+            flow_status: "SUCCESS",
+            flow_type: "LOGIN",
+            flow_expires_at: null,
+          }),
+          timeline: async () => ({ getPaginatedItems: () => [] }),
+        },
+      },
+    });
+    try {
+      const { tools } = captureRegistration();
+      const result = await tools
+        .get("open_auth_login")!
+        .handler(
+          { mode: "reauth", connection_id: "conn_1" },
+          { authInfo: { token: "unused-api-key" } },
+        );
+      const token =
+        result.structuredContent.next_action.arguments.flow_checkpoint;
+      expect(verifyAuthFlowCheckpoint(token)).toEqual({
+        version: 1,
+        connectionId: "conn_1",
+        kind: "after",
+        eventId: null,
       });
     } finally {
       resetKernelClientFactory();
     }
   });
 
-  test("reauth launcher observing a live flow emits no baseline guard", async () => {
+  test("reauth launcher identifies an already-live flow", async () => {
     kernelClientFactory = () => ({
       auth: {
         connections: {
@@ -429,6 +466,16 @@ describe("managed-auth MCP App registration", () => {
             flow_type: "REAUTH",
             flow_expires_at: "2099-01-01T00:00:00Z",
           }),
+          timeline: async () => ({
+            getPaginatedItems: () => [
+              {
+                id: "flow_live",
+                type: "reauth",
+                status: "IN_PROGRESS",
+                timestamp: "2026-01-01T00:00:00Z",
+              },
+            ],
+          }),
         },
       },
     });
@@ -440,10 +487,13 @@ describe("managed-auth MCP App registration", () => {
           { mode: "reauth", connection_id: "conn_1" },
           { authInfo: { token: "unused-api-key" } },
         );
-      expect(result.structuredContent.next_action.arguments).toEqual({
-        action: "wait",
-        id: "conn_1",
-        wait_seconds: 25,
+      const token =
+        result.structuredContent.next_action.arguments.flow_checkpoint;
+      expect(verifyAuthFlowCheckpoint(token)).toEqual({
+        version: 1,
+        connectionId: "conn_1",
+        kind: "event",
+        eventId: "flow_live",
       });
     } finally {
       resetKernelClientFactory();
@@ -470,7 +520,7 @@ describe("managed-auth MCP App registration", () => {
     expect(MANAGED_AUTH_APP_HTML).toContain("record_session");
     expect(MANAGED_AUTH_APP_HTML).toContain("browser_telemetry");
     expect(MANAGED_AUTH_APP_HTML).toContain("manage_auth_connections");
-    expect(MANAGED_AUTH_APP_HTML).toContain("flow_wait_started_at");
+    expect(MANAGED_AUTH_APP_HTML).not.toContain("flow_wait_started_at");
     expect(MANAGED_AUTH_APP_HTML).toContain(
       "Connection status saved for Claude",
     );

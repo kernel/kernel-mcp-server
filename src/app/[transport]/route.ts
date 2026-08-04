@@ -6,78 +6,15 @@ import {
 import { verifyToken } from "@clerk/nextjs/server";
 import { after, NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
+import { flushMcpAnalytics, instrumentMcpAnalytics } from "@/lib/mcp/analytics";
+import { mcpAppsAuthSubject } from "@/lib/mcp-apps-marker";
+import { requestUsesMcpApps } from "@/lib/mcp-apps-request";
 import {
-  flushMcpAnalytics,
-  instrumentMcpAnalytics,
-  mintMcpSessionId,
-} from "@/lib/mcp/analytics";
+  createMcpTransportSession,
+  verifyMcpTransportSession,
+} from "@/lib/mcp-transport-session";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
-import { initializeDeclaresMcpApps } from "@/lib/mcp/tools/auth-login-app";
-import {
-  clearMcpAppsClient,
-  hasMcpAppsClient,
-  markMcpAppsClient,
-} from "@/lib/redis";
 import { name, version } from "../../../server.json";
-
-// The streamable-HTTP transport creates one McpServer per request, so the
-// initialize capability is unavailable when tools/list or an App call arrives.
-// Persist the negotiation marker, then select the additive App registration
-// only for requests that need to discover or invoke it.
-async function requestUsesMcpApps(
-  req: NextRequest,
-  token: string,
-  ttlSeconds: number,
-): Promise<boolean> {
-  if (req.method !== "POST") return false;
-  let body: unknown;
-  try {
-    body = await req.clone().json();
-  } catch {
-    return false;
-  }
-
-  const request =
-    body && typeof body === "object" && !Array.isArray(body)
-      ? (body as {
-          method?: unknown;
-          params?: { name?: unknown; uri?: unknown };
-        })
-      : null;
-  if (request?.method === "initialize") {
-    const declaresApps = initializeDeclaresMcpApps(body);
-    try {
-      if (declaresApps) {
-        await markMcpAppsClient({ token, ttlSeconds });
-      } else {
-        await clearMcpAppsClient(token);
-      }
-    } catch (error) {
-      // Never block initialize; without a marker, later App discovery and
-      // invocation fail closed to the base tool set.
-      console.error("Failed to record MCP Apps capability:", error);
-    }
-    return false;
-  }
-
-  const needsAppRegistration =
-    request?.method === "tools/list" ||
-    request?.method === "resources/list" ||
-    (request?.method === "resources/read" &&
-      typeof request.params?.uri === "string" &&
-      request.params.uri.startsWith("ui://kernel/managed-auth-login")) ||
-    (request?.method === "tools/call" &&
-      (request.params?.name === "open_auth_login" ||
-        request.params?.name === "begin_auth_login"));
-  if (!needsAppRegistration) return false;
-
-  try {
-    return await hasMcpAppsClient({ token, ttlSeconds });
-  } catch (error) {
-    console.error("MCP Apps capability check failed; using base tools:", error);
-    return false;
-  }
-}
 
 export async function OPTIONS(_req: NextRequest): Promise<Response> {
   return new Response(null, {
@@ -126,7 +63,10 @@ const mcpAppsHandler = createMcpHandler((server) => {
   registerMcpCapabilities(server, { mcpApps: true });
 }, serverInfo);
 
-async function handleAuthenticatedRequest(req: NextRequest): Promise<Response> {
+async function handleAuthenticatedRequest(
+  req: NextRequest,
+  transportSessionId: string | null = null,
+): Promise<Response> {
   const authHeader = req.headers.get("Authorization");
   const token = authHeader?.startsWith("Bearer ")
     ? authHeader.substring(7).trim()
@@ -140,8 +80,12 @@ async function handleAuthenticatedRequest(req: NextRequest): Promise<Response> {
 
   if (!isValidJwtFormat(token)) {
     // Opaque API keys are authenticated by the Kernel API rather than Clerk.
-    // Select the additive App handler from their token-bound marker here.
-    const selectedHandler = (await requestUsesMcpApps(req, token, 24 * 60 * 60))
+    const authSubject = mcpAppsAuthSubject({ token });
+    const selectedHandler = (await requestUsesMcpApps(req, {
+      authSubject,
+      transportSessionId,
+      ttlSeconds: 24 * 60 * 60,
+    }))
       ? mcpAppsHandler
       : handler;
     const authHandler = withMcpAuth(
@@ -172,9 +116,14 @@ async function handleAuthenticatedRequest(req: NextRequest): Promise<Response> {
       );
     }
 
-    // JWT markers are keyed by the decoded sid, so only read or mutate them
-    // after Clerk has verified the token and its expiry.
-    const selectedHandler = (await requestUsesMcpApps(req, token, 24 * 60 * 60))
+    // Capability state is keyed only after Clerk verifies the JWT, and uses
+    // the verified user plus this signed MCP transport session.
+    const authSubject = mcpAppsAuthSubject({ token, userId: payload.sub });
+    const selectedHandler = (await requestUsesMcpApps(req, {
+      authSubject,
+      transportSessionId,
+      ttlSeconds: 24 * 60 * 60,
+    }))
       ? mcpAppsHandler
       : handler;
 
@@ -216,26 +165,56 @@ export async function GET(req: NextRequest): Promise<Response> {
 export async function POST(req: NextRequest): Promise<Response> {
   after(flushMcpAnalytics);
 
-  const sessionId = await mintMcpSessionId(req);
-  if (!sessionId) return await handleAuthenticatedRequest(req);
+  const body = await req.text();
+  type InitializeRequest = {
+    method?: unknown;
+    params?: {
+      clientInfo?: { name?: string; version?: string };
+      protocolVersion?: string;
+    };
+  };
+  let parsed: InitializeRequest | null = null;
+  try {
+    const value = JSON.parse(body) as unknown;
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      parsed = value as InitializeRequest;
+    }
+  } catch {
+    // Let the MCP transport return its normal parse error.
+  }
+  const initializeParams =
+    parsed?.method === "initialize" ? parsed.params : undefined;
+  const isStreamableInitialize =
+    new URL(req.url).pathname.endsWith("/mcp") &&
+    parsed?.method === "initialize";
+  const session = isStreamableInitialize
+    ? createMcpTransportSession({
+        clientName: initializeParams?.clientInfo?.name,
+        clientVersion: initializeParams?.clientInfo?.version,
+        protocolVersion: initializeParams?.protocolVersion,
+      })
+    : verifyMcpTransportSession(req.headers.get(MCP_SESSION_HEADER));
 
-  // Pass the token in on the handshake too, so the initialize event lands in the same
-  // session as the calls that follow it.
+  // Only the verified inner token reaches PostHog's instrumentation. Clients
+  // receive and replay the signed outer token, which capability storage trusts.
   const requestHeaders = new Headers(req.headers);
-  requestHeaders.set(MCP_SESSION_HEADER, sessionId);
+  if (session) requestHeaders.set(MCP_SESSION_HEADER, session.analyticsToken);
+  else requestHeaders.delete(MCP_SESSION_HEADER);
   const response = await handleAuthenticatedRequest(
     new NextRequest(req.url, {
       method: req.method,
       headers: requestHeaders,
-      body: await req.text(),
+      body,
       signal: req.signal,
     }),
+    session?.id ?? null,
   );
 
+  if (!session) return response;
   const headers = new Headers(response.headers);
-  headers.set(MCP_SESSION_HEADER, sessionId);
-  // Preflight allows the header; a browser only gets to read it if the response that
-  // carries it says so too.
+  if (isStreamableInitialize || headers.has(MCP_SESSION_HEADER)) {
+    headers.set(MCP_SESSION_HEADER, session.token);
+  }
   headers.set("Access-Control-Expose-Headers", MCP_SESSION_HEADER);
   return new Response(response.body, {
     status: response.status,
