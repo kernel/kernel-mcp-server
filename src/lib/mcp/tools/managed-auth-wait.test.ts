@@ -157,7 +157,14 @@ describe("managed-auth wait", () => {
     });
     const staleClient = waitClient({
       states: [authenticated],
-      events: [oldEvent],
+      events: [
+        oldEvent,
+        timelineEvent({
+          id: "flow_older",
+          type: "reauth",
+          status: "SUCCESS",
+        }),
+      ],
     }).client;
     const selector = {
       connectionId: authenticated.id,
@@ -186,6 +193,33 @@ describe("managed-auth wait", () => {
         })
       ).state,
     ).toBe("authenticated");
+  });
+
+  test("after-checkpoint fails closed when its baseline is absent", async () => {
+    const authenticated = connection({
+      status: "AUTHENTICATED",
+      flow_status: "SUCCESS",
+      flow_type: "REAUTH",
+    });
+    const { client } = waitClient({
+      states: [authenticated],
+      events: [
+        timelineEvent({
+          id: "flow_historical",
+          type: "reauth",
+          status: "SUCCESS",
+        }),
+      ],
+    });
+    const result = await waitForAuthConnection(
+      client,
+      {
+        connectionId: authenticated.id,
+        flowCheckpoint: checkpoint("after", "flow_missing"),
+      },
+      { timeoutMs: 0 },
+    );
+    expect(result.state).toBe("pending");
   });
 
   test("explicitly empty baseline catches the first flow's terminal failure", async () => {

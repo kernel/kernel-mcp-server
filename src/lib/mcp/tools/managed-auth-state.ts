@@ -219,10 +219,19 @@ async function waitFromCheckpoint(
     );
   }
   const events = await authFlowEvents(client, latest.id);
-  const event =
-    checkpoint.kind === "event"
-      ? events.find((candidate) => candidate.id === checkpoint.eventId)
-      : events.find((candidate) => candidate.id !== checkpoint.eventId);
+  let event: ManagedAuthTimelineEvent | undefined;
+  if (checkpoint.kind === "event") {
+    event = events.find((candidate) => candidate.id === checkpoint.eventId);
+  } else if (checkpoint.eventId === null) {
+    event = events[0];
+  } else {
+    // Timelines are newest-first. Only entries before the baseline were created
+    // after the checkpoint; an absent baseline must fail closed.
+    const baselineIndex = events.findIndex(
+      (candidate) => candidate.id === checkpoint.eventId,
+    );
+    event = baselineIndex > 0 ? events.slice(0, baselineIndex)[0] : undefined;
+  }
   if (!event || event.status === "IN_PROGRESS") {
     return { state: "pending", connection: latest };
   }
