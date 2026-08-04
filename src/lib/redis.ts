@@ -1,5 +1,6 @@
 import { createClient } from "redis";
 import { createHmac } from "crypto";
+import { mcpAppsMarkerKey } from "@/lib/mcp-apps-marker";
 
 const redisUrl = process.env.REDIS_URL;
 const redisTlsServerName = process.env.REDIS_TLS_SERVER_NAME;
@@ -147,6 +148,62 @@ export async function setOrgIdForJwt({
 }
 
 export { client as redisClient };
+
+// MCP Apps capability markers. Streamable HTTP creates one McpServer per
+// request, so initialize capability must survive in Redis. The key combines
+// the authenticated subject with the server-signed MCP transport session;
+// shared credentials never share capability state.
+export async function markMcpAppsClient({
+  authSubject,
+  transportSessionId,
+  ttlSeconds,
+}: {
+  authSubject: string;
+  transportSessionId: string;
+  ttlSeconds: number;
+}): Promise<void> {
+  await ensureConnected();
+  const key = mcpAppsMarkerKey(authSubject, transportSessionId);
+  await withReconnect(() =>
+    client.setEx(key, Math.max(60, Math.floor(ttlSeconds)), "1"),
+  );
+}
+
+export async function clearMcpAppsClient({
+  authSubject,
+  transportSessionId,
+}: {
+  authSubject: string;
+  transportSessionId: string;
+}): Promise<void> {
+  await ensureConnected();
+  await withReconnect(() =>
+    client.del(mcpAppsMarkerKey(authSubject, transportSessionId)),
+  );
+}
+
+/**
+ * Atomically reads and extends one client's capability marker. GETEX avoids a
+ * race where a marker could expire between separate GET and EXPIRE commands.
+ */
+export async function hasMcpAppsClient({
+  authSubject,
+  transportSessionId,
+  ttlSeconds,
+}: {
+  authSubject: string;
+  transportSessionId: string;
+  ttlSeconds: number;
+}): Promise<boolean> {
+  await ensureConnected();
+  const value = await withReconnect(() =>
+    client.getEx(mcpAppsMarkerKey(authSubject, transportSessionId), {
+      type: "EX",
+      value: Math.max(60, Math.floor(ttlSeconds)),
+    }),
+  );
+  return value !== null;
+}
 
 export async function setOrgIdForRefreshToken({
   refreshToken,

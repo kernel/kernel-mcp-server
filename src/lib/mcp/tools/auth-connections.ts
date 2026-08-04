@@ -2,6 +2,11 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
+  AuthLoginStartError,
+  waitForAuthConnection,
+} from "@/lib/mcp/tools/managed-auth-state";
+import { managedAuthBrowserTelemetrySchema } from "@/lib/mcp/tools/managed-auth-telemetry";
+import {
   errorResponse,
   jsonResponse,
   paginatedJsonResponse,
@@ -10,14 +15,28 @@ import {
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 
+// The additive wait action returns a sanitized snapshot (safeJsonResponse);
+// every pre-existing action keeps its established raw response shape.
+function safeJsonResponse(value: unknown) {
+  return {
+    content: [
+      {
+        type: "text" as const,
+        text: JSON.stringify(value, null, 2),
+      },
+    ],
+    structuredContent: value as Record<string, unknown>,
+  };
+}
+
 export function registerAuthConnectionTools(server: McpServer) {
   // manage_auth_connections -- Manage Kernel managed auth connections
   server.tool(
     "manage_auth_connections",
-    'Manage Kernel managed auth connections for keeping a profile logged into a third-party site. Use "create" to start managing auth for a profile + domain (optionally referencing a stored credential), "login" to begin a login flow (returns a hosted_url to share with the user, plus live_view_url to watch), "submit" to provide field values or pick an MFA option when a flow is awaiting input, "get" to poll flow state, "list" to see connections, or "delete" to remove one.',
+    'Manage reusable authenticated profiles for third-party websites. Before a browser task that needs a user account, call "list" with the exact domain_filter and inspect every page. If one relevant connection is AUTHENTICATED, create the browser with its profile_name. If multiple relevant accounts exist, ask the user which one to use. If authentication is needed and open_auth_login is available, prefer that secure App so credentials and MFA never enter chat: a direct user request to log in is already consent; if login is only discovered incidentally, ask first. For a new App login, choose a concise stable profile name derived from the service unless the user specified one. The programmatic actions remain available for every client: "create" a connection, "login" to start a hosted flow, "submit" fields/MFA/SSO, "get" status, "delete", or "wait" for completion. After authentication, resume the original task with manage_browsers using the verified profile_name.',
     {
       action: z
-        .enum(["create", "list", "get", "delete", "login", "submit"])
+        .enum(["create", "list", "get", "delete", "login", "submit", "wait"])
         .describe("Operation to perform."),
       id: z
         .string()
@@ -84,12 +103,25 @@ export function registerAuthConnectionTools(server: McpServer) {
           "(create) Save credentials after each successful login. Default true.",
         )
         .optional(),
+      record_session: z
+        .boolean()
+        .describe(
+          "(create) Set the connection default for recording replay video of future login, reauth, and health-check browser sessions. (login) Override that default for this login only. Omitted preserves the API default/inheritance behavior.",
+        )
+        .optional(),
+      browser_telemetry: managedAuthBrowserTelemetrySchema
+        .describe(
+          "(create) Set the connection default for browser telemetry. (login) Override it for this login only. Use { enabled: true } for the default operational categories (control, connection, system, captcha); add browser category flags to opt into console, network, page, interaction, or screenshot capture. Omitted preserves API default/inheritance behavior.",
+        )
+        .optional(),
       proxy_id: z
         .string()
+        .min(1)
         .describe("(create, login) Proxy ID to route the auth flow through.")
         .optional(),
       proxy_name: z
         .string()
+        .min(1)
         .describe("(create, login) Proxy name to route the auth flow through.")
         .optional(),
       domain_filter: z.string().describe("(list) Filter by domain.").optional(),
@@ -110,6 +142,24 @@ export function registerAuthConnectionTools(server: McpServer) {
         .string()
         .describe(
           "(submit) XPath of an SSO button to click instead of submitting fields.",
+        )
+        .optional(),
+      wait_seconds: z
+        .number()
+        .int()
+        .min(1)
+        .max(30)
+        .describe("(wait) Long-poll duration. Defaults to 25 seconds.")
+        .optional(),
+      required_flow_type: z
+        .enum(["LOGIN", "REAUTH"])
+        .describe("(wait) Require this newly completed flow type.")
+        .optional(),
+      flow_checkpoint: z
+        .string()
+        .min(1)
+        .describe(
+          "(wait) Signed flow checkpoint supplied by open_auth_login or begin_auth_login; forward it unchanged.",
         )
         .optional(),
     },
@@ -190,6 +240,12 @@ export function registerAuthConnectionTools(server: McpServer) {
               ...(params.save_credentials !== undefined && {
                 save_credentials: params.save_credentials,
               }),
+              ...(params.record_session !== undefined && {
+                record_session: params.record_session,
+              }),
+              ...(params.browser_telemetry !== undefined && {
+                browser_telemetry: params.browser_telemetry,
+              }),
               ...(proxy && { proxy }),
             });
             if (!connection)
@@ -223,9 +279,23 @@ export function registerAuthConnectionTools(server: McpServer) {
             if (!params.id)
               return errorResponse("Error: id is required for login.");
             const proxy = buildProxy();
+            const hasOverrides =
+              !!proxy ||
+              params.record_session !== undefined ||
+              params.browser_telemetry !== undefined;
             const response = await client.auth.connections.login(
               params.id,
-              proxy ? { proxy } : undefined,
+              hasOverrides
+                ? {
+                    ...(proxy && { proxy }),
+                    ...(params.record_session !== undefined && {
+                      record_session: params.record_session,
+                    }),
+                    ...(params.browser_telemetry !== undefined && {
+                      browser_telemetry: params.browser_telemetry,
+                    }),
+                  }
+                : undefined,
             );
             return jsonResponse(response);
           }
@@ -253,8 +323,52 @@ export function registerAuthConnectionTools(server: McpServer) {
             });
             return jsonResponse(response);
           }
+          case "wait": {
+            if (!params.id && (!params.domain_filter || !params.profile_name)) {
+              return errorResponse(
+                "Error: wait requires id, or both domain_filter and profile_name.",
+              );
+            }
+            if (params.flow_checkpoint && !params.id) {
+              return errorResponse(
+                "Error: a flow_checkpoint wait requires its connection id.",
+              );
+            }
+            const result = await waitForAuthConnection(
+              client,
+              {
+                ...(params.id && { connectionId: params.id }),
+                ...(params.domain_filter && { domain: params.domain_filter }),
+                ...(params.profile_name && {
+                  profileName: params.profile_name,
+                }),
+                ...(params.required_flow_type && {
+                  requiredFlowType: params.required_flow_type,
+                }),
+                ...(params.flow_checkpoint && {
+                  flowCheckpoint: params.flow_checkpoint,
+                }),
+              },
+              {
+                timeoutMs: (params.wait_seconds ?? 25) * 1_000,
+                signal: extra.signal,
+              },
+            );
+            return safeJsonResponse({
+              ...result,
+              instruction:
+                result.state === "authenticated"
+                  ? "Authentication is verified. Continue the pending task now, using this profile_name when creating the browser."
+                  : result.state === "failed"
+                    ? "Authentication did not complete. Explain the safe error and ask whether to retry the login flow."
+                    : "Authentication is still pending. Immediately call manage_auth_connections with action=wait and the same selector again. Do not ask the user to report completion.",
+            });
+          }
         }
       } catch (error) {
+        if (error instanceof AuthLoginStartError) {
+          return errorResponse(error.safeMessage);
+        }
         throwToolError("manage_auth_connections", params.action, error);
       }
     },

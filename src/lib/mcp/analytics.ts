@@ -1,9 +1,6 @@
 import {
-  encodeSessionId,
   getMoreToolsResult,
   instrument,
-  MCP_SESSION_HEADER,
-  newSessionId,
   PostHogMCPAnalyticsEvent,
   PostHogMCPAnalyticsProperty,
 } from "@posthog/mcp";
@@ -207,48 +204,6 @@ export function instrumentMcpAnalytics(server: McpServer) {
   });
 
   registerMissingCapabilityTool(server);
-}
-
-type InitializeRequestBody = {
-  method?: string;
-  params?: {
-    clientInfo?: { name?: string; version?: string };
-    protocolVersion?: string;
-  };
-};
-
-/**
- * mcp-handler answers over SSE with a stateless transport, so it never issues an
- * `Mcp-Session-Id`. Left alone every request becomes its own PostHog session and the
- * client name is lost after the handshake. Mint the SDK's session token on the
- * initialize request instead: it goes back to the client on the response, the client
- * replays it, and any instance decodes the same session id and client info out of it.
- *
- * Returns the token, or null when there's nothing to mint. Safe on the stateless
- * transport, which ignores an incoming session id.
- */
-export async function mintMcpSessionId(req: Request): Promise<string | null> {
-  if (!posthog || req.headers.get(MCP_SESSION_HEADER)) return null;
-
-  // Streamable HTTP only. The legacy SSE transport issues its own session id and its
-  // clients don't replay ours, which would put the handshake in one session and the
-  // calls that follow in another.
-  if (!new URL(req.url).pathname.endsWith("/mcp")) return null;
-
-  const body = (await req
-    .clone()
-    .json()
-    .catch(() => null)) as InitializeRequestBody | null;
-  if (body?.method !== "initialize") return null;
-
-  return encodeSessionId({
-    sessionId: newSessionId(),
-    clientName: body.params?.clientInfo?.name,
-    clientVersion: body.params?.clientInfo?.version,
-    // Negotiated once, at the handshake. Carried in the token so the events after it
-    // report it too.
-    protocolVersion: body.params?.protocolVersion,
-  });
 }
 
 /**

@@ -255,9 +255,11 @@ Many other MCP-capable tools accept:
 
 Configure these values wherever the tool expects MCP server settings.
 
-## Tools (16 total)
+## Tools (17 model-facing, plus 1 app-only helper)
 
-Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Five standalone tools handle high-frequency workflows.
+Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Standalone tools handle high-frequency and interactive workflows.
+
+One additional Managed Auth helper (`begin_auth_login`) is marked app-only (`_meta.ui.visibility: ["app"]`); it refuses to execute on hosts that do not declare MCP Apps support. The App forwards the server-issued signed flow checkpoint to the shared `manage_auth_connections` `wait` action, so flow identity and terminal-state decisions stay on the server.
 
 Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_DISABLED_TOOLSETS` to a comma-separated list. For example, `KERNEL_MCP_DISABLED_TOOLSETS=api_keys` prevents `manage_api_keys` from being registered.
 
@@ -272,7 +274,7 @@ Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_
 - `manage_replays` - Start, stop, and list MP4 video replay recordings for a browser session. Session-scoped: start once, run your automation, then stop. Requires a paid Kernel plan.
 - `manage_extensions` - List and delete uploaded browser extensions.
 - `manage_apps` - List/search apps, invoke actions, get/list/delete deployments, and get invocation results.
-- `manage_auth_connections` - Create, list, get, delete managed auth connections; start login flows (returns a hosted URL and live view); submit MFA codes or SSO selections.
+- `manage_auth_connections` - Create, list, get, delete, login, submit, and wait for managed-auth connections in every client. Use domain-filtered `list` for discovery. App-capable clients additionally receive `open_auth_login`; the programmatic actions remain available there too.
 - `manage_credentials` - Create, list, get, update, and delete stored credentials; fetch a current TOTP code for credentials with a configured totp_secret.
 - `manage_credential_providers` - Create, list, get, update, and delete external credential providers (e.g. 1Password); list available items and test the provider connection.
 
@@ -283,6 +285,7 @@ Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_
 - `execute_playwright_code` - Execute Playwright/TypeScript code against an existing browser session. Does not create or delete browsers - use `manage_browsers` for session lifecycle.
 - `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
 - `search_docs` - Search Kernel platform documentation and guides.
+- `open_auth_login` - Open a secure interactive Managed Auth MCP App after user consent. Registered only for clients that declare MCP Apps support; credentials and MFA never enter MCP/model traffic.
 
 ## Resources
 
@@ -326,6 +329,19 @@ Assistant: I'll create a browser session, then execute Playwright code against i
 [Uses execute_playwright_code tool with session_id and code: "await page.goto('https://example.com'); return await page.title();"]
 Returns: { success: true, result: "Example Domain" }
 ```
+
+### Use managed authentication for a protected site
+
+1. Call `manage_auth_connections` with `action: "list"` and the exact `domain_filter`.
+2. Fetch all pages. Reuse an authenticated connection; ask only when multiple relevant accounts match.
+3. A direct request to log in is consent. If authentication is discovered incidentally, ask before opening the App.
+4. For a new connection, choose a concise service-derived profile name unless the user supplied one; do not ask solely for a profile name.
+5. Call `open_auth_login`, then immediately follow its `next_action` and repeat the read-only wait while it reports `pending`.
+6. The user enters credentials/MFA only in the secure App. Once the wait reports `authenticated`, resume the original task with the verified `profile_name`.
+
+Example: “Log me into my Hacker News account and update my profile to add a random emoji at the bottom.” The agent should discover `news.ycombinator.com`, open the App when needed, wait for authentication, then continue the profile edit without asking for credentials or a profile name in chat.
+
+The secure App defaults `record_session` and `browser_telemetry.enabled` to `true`, recording replay video plus the operational telemetry categories (`control`, `connection`, `system`, and `captcha`) for managed-auth browser sessions. Callers can explicitly disable either setting. The programmatic `manage_auth_connections` create/login actions preserve the API’s opt-in and inheritance behavior when these parameters are omitted.
 
 ### Set up browser profiles for authentication
 

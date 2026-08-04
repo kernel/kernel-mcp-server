@@ -22,7 +22,9 @@
   },
   "scripts": {
     "dev": "next dev -p 3002",
-    "build": "next build",
+    "build:managed-auth-app": "bun scripts/build-managed-auth-app.mjs",
+    "check:managed-auth-app": "bun scripts/build-managed-auth-app.mjs --check",
+    "build": "bun run check:managed-auth-app && next build",
     "start": "next start -p 3002",
     "lint": "next lint",
     "test": "bun test",
@@ -35,7 +37,8 @@
     "@clerk/themes": "^2.4.19",
     "@mcp-ui/server": "^5.10.0",
     "@modelcontextprotocol/sdk": "1.26.0",
-    "@onkernel/sdk": "^0.78.0",
+    "@onkernel/managed-auth-react": "0.4.1",
+    "@onkernel/sdk": "^0.85.0",
     "@posthog/mcp": "0.10.1",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/redis": "^4.0.11",
@@ -62,6 +65,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "bun": "1.3.3",
     "bun-types": "^1.3.14",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.11"
