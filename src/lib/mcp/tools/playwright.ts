@@ -56,6 +56,9 @@ export function registerPlaywrightTool(server: McpServer) {
           ],
         };
       } catch (error) {
+        // No normal API response came back -- the session was gone, unleased, the request
+        // was rejected, or it timed out. Distinct from code that ran and threw, which comes
+        // back as a 200 with success: false so the agent can read the failure and adjust.
         return {
           content: [
             {
@@ -70,6 +73,7 @@ export function registerPlaywrightTool(server: McpServer) {
               ),
             },
           ],
+          isError: true,
         };
       }
     },

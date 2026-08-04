@@ -11,7 +11,7 @@ import {
   jsonResponse,
   paginatedJsonResponse,
   textResponse,
-  toolErrorResponse,
+  throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 
@@ -382,11 +382,7 @@ export function registerAuthConnectionTools(server: McpServer) {
         if (error instanceof AuthLoginStartError) {
           return errorResponse(error.safeMessage);
         }
-        return toolErrorResponse(
-          "manage_auth_connections",
-          params.action,
-          error,
-        );
+        throwToolError("manage_auth_connections", params.action, error);
       }
     },
   );

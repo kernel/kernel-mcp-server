@@ -5,7 +5,7 @@ import {
   errorResponse,
   jsonResponse,
   textResponse,
-  toolErrorResponse,
+  throwToolError,
 } from "@/lib/mcp/responses";
 
 type ComputerClient = KernelClient["browsers"]["computer"];
@@ -353,7 +353,7 @@ export function registerComputerActionTool(server: McpServer) {
           `Executed ${executedActionCount} action(s) successfully`,
         );
       } catch (error) {
-        return toolErrorResponse("computer_action", "actions", error);
+        throwToolError("computer_action", "actions", error);
       }
     },
   );

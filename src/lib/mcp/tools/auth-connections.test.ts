@@ -424,7 +424,7 @@ describe("manage_auth_connections programmatic surface", () => {
     }
   });
 
-  test("legacy action errors surface through toolErrorResponse", async () => {
+  test("legacy action errors throw classified tool errors", async () => {
     const { handler } = captureHandler();
     kernelClientFactory = () => ({
       auth: {
@@ -436,12 +436,12 @@ describe("manage_auth_connections programmatic surface", () => {
       },
     });
     try {
-      const result = await handler(
-        { action: "get", id: "conn_1" },
-        { authInfo: { token: "test-token" } },
-      );
-      expect(result.isError).toBe(true);
-      expect(result.content[0].text).toBe(
+      await expect(
+        handler(
+          { action: "get", id: "conn_1" },
+          { authInfo: { token: "test-token" } },
+        ),
+      ).rejects.toThrow(
         "Error in manage_auth_connections (get): upstream boom",
       );
     } finally {

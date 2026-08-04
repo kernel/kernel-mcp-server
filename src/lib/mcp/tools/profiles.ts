@@ -8,7 +8,7 @@ import {
   jsonResponse,
   paginatedJsonResponse,
   textResponse,
-  toolErrorResponse,
+  throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 
@@ -214,7 +214,7 @@ export function registerProfileCapabilities(server: McpServer) {
           }
         }
       } catch (error) {
-        return toolErrorResponse("manage_profiles", params.action, error);
+        throwToolError("manage_profiles", params.action, error);
       }
     },
   );

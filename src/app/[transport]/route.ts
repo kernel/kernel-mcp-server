@@ -18,6 +18,7 @@ import {
   hasMcpAppsClient,
   markMcpAppsClient,
 } from "@/lib/redis";
+import { name, version } from "../../../server.json";
 
 // The streamable-HTTP transport creates one McpServer per request, so the
 // initialize capability is unavailable when tools/list or an App call arrives.
@@ -115,14 +116,15 @@ function createAuthErrorResponse(
 
 // The base tool set is unchanged. Capability negotiation only adds the
 // Managed Auth launcher, its resource, and its app-only implementation tools.
+const serverInfo = { serverInfo: { name, version } };
 const handler = createMcpHandler((server) => {
   instrumentMcpAnalytics(server);
   registerMcpCapabilities(server);
-});
+}, serverInfo);
 const mcpAppsHandler = createMcpHandler((server) => {
   instrumentMcpAnalytics(server);
   registerMcpCapabilities(server, { mcpApps: true });
-});
+}, serverInfo);
 
 async function handleAuthenticatedRequest(req: NextRequest): Promise<Response> {
   const authHeader = req.headers.get("Authorization");
