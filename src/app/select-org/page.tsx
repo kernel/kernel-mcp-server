@@ -294,14 +294,14 @@ function SelectOrgContent(): React.ReactElement {
           </p>
         </Col>
 
-        <div className="relative">
-          <div
-            ref={scrollContainerRef}
-            onScroll={updateScrollState}
-            className="flex flex-col gap-0 max-h-72 overflow-y-auto overscroll-y-none bg-[#faf9f2] border-[0.5px] border-[#e1dccf]"
-          >
-            {stage === "organization" ? (
-              [...memberships]
+        {stage === "organization" ? (
+          <div className="relative">
+            <div
+              ref={scrollContainerRef}
+              onScroll={updateScrollState}
+              className="flex flex-col gap-0 max-h-72 overflow-y-auto overscroll-y-none bg-[#faf9f2] border-[0.5px] border-[#e1dccf]"
+            >
+              {[...memberships]
                 .sort((a, b) => {
                   if (a.organization.id === orgId) return -1;
                   if (b.organization.id === orgId) return 1;
@@ -347,80 +347,111 @@ function SelectOrgContent(): React.ReactElement {
                       </Row>
                     </button>
                   );
-                })
-            ) : (
-              <>
-                <ScopeButton
-                  label="entire organization"
-                  detail="access every project and select projects per request"
-                  selected={selectedScope === "organization"}
-                  onClick={() => setSelectedScope("organization")}
-                />
-                {supportsProjectScope && (
-                  <div className="p-3 border-b-[0.5px] border-b-[#e1dccf] bg-[#faf9f2]">
-                    <input
-                      type="search"
-                      value={projectQuery}
-                      onChange={(event) => setProjectQuery(event.target.value)}
-                      placeholder="search projects"
-                      aria-label="search projects"
-                      className="w-full bg-transparent border-[0.5px] border-[#e1dccf] px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground"
-                    />
-                  </div>
-                )}
-                {projects.map((project) => (
-                  <ScopeButton
-                    key={project.id}
-                    label={project.name}
-                    detail="access only this project"
-                    selected={selectedScope === `project:${project.id}`}
-                    onClick={() => setSelectedScope(`project:${project.id}`)}
-                  />
-                ))}
-                {supportsProjectScope &&
-                  isLoadingProjects &&
-                  projects.length === 0 && (
-                    <p className="p-4 text-xs text-muted-foreground">
-                      loading projects...
-                    </p>
-                  )}
-                {supportsProjectScope &&
-                  !isLoadingProjects &&
-                  projects.length === 0 &&
-                  !hasMoreProjects &&
-                  !projectsError && (
-                    <p className="p-4 text-xs text-muted-foreground">
-                      no projects found.
-                    </p>
-                  )}
-                {supportsProjectScope && hasMoreProjects && (
-                  <button
-                    onClick={() => {
-                      if (selectedOrgId && nextProjectOffset !== undefined) {
-                        void loadProjectsPage({
-                          organizationId: selectedOrgId,
-                          query: projectQuery,
-                          offset: nextProjectOffset,
-                          append: true,
-                        });
-                      }
-                    }}
-                    disabled={isLoadingProjects}
-                    className="w-full p-4 text-left text-sm text-foreground hover:bg-primary/5 disabled:opacity-50 cursor-pointer"
-                  >
-                    {isLoadingProjects ? "loading..." : "show more projects"}
-                  </button>
-                )}
-              </>
+                })}
+            </div>
+            {canScrollUp && (
+              <div className="absolute top-0 left-0 right-0 h-6 bg-gradient-to-b from-[#faf9f2] to-transparent pointer-events-none" />
+            )}
+            {canScrollDown && (
+              <div className="absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-[#faf9f2] to-transparent pointer-events-none" />
             )}
           </div>
-          {canScrollUp && (
-            <div className="absolute top-0 left-0 right-0 h-6 bg-gradient-to-b from-[#faf9f2] to-transparent pointer-events-none" />
-          )}
-          {canScrollDown && (
-            <div className="absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-[#faf9f2] to-transparent pointer-events-none" />
-          )}
-        </div>
+        ) : (
+          <Col className="gap-3">
+            <div className="bg-[#faf9f2] border-[0.5px] border-[#e1dccf]">
+              <ScopeButton
+                label="entire organization"
+                detail="access every project and select projects per request"
+                selected={selectedScope === "organization"}
+                onClick={() => setSelectedScope("organization")}
+              />
+            </div>
+            {supportsProjectScope && (
+              <>
+                <Row className="gap-3">
+                  <div className="h-px flex-1 bg-[#e1dccf]" />
+                  <span className="text-xs text-muted-foreground">
+                    or restrict access
+                  </span>
+                  <div className="h-px flex-1 bg-[#e1dccf]" />
+                </Row>
+                <div className="relative">
+                  <div
+                    ref={scrollContainerRef}
+                    onScroll={updateScrollState}
+                    className="flex flex-col gap-0 max-h-72 overflow-y-auto overscroll-y-none bg-[#faf9f2] border-[0.5px] border-[#e1dccf]"
+                  >
+                    <div className="p-3 border-b-[0.5px] border-b-[#e1dccf] bg-[#faf9f2]">
+                      <input
+                        type="search"
+                        value={projectQuery}
+                        onChange={(event) =>
+                          setProjectQuery(event.target.value)
+                        }
+                        placeholder="search projects"
+                        aria-label="search projects"
+                        className="w-full bg-transparent border-[0.5px] border-[#e1dccf] px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground"
+                      />
+                    </div>
+                    {projects.map((project) => (
+                      <ScopeButton
+                        key={project.id}
+                        label={project.name}
+                        detail="access only this project"
+                        selected={selectedScope === `project:${project.id}`}
+                        onClick={() =>
+                          setSelectedScope(`project:${project.id}`)
+                        }
+                      />
+                    ))}
+                    {isLoadingProjects && projects.length === 0 && (
+                      <p className="p-4 text-xs text-muted-foreground">
+                        loading projects...
+                      </p>
+                    )}
+                    {!isLoadingProjects &&
+                      projects.length === 0 &&
+                      !hasMoreProjects &&
+                      !projectsError && (
+                        <p className="p-4 text-xs text-muted-foreground">
+                          no projects found.
+                        </p>
+                      )}
+                    {hasMoreProjects && (
+                      <button
+                        onClick={() => {
+                          if (
+                            selectedOrgId &&
+                            nextProjectOffset !== undefined
+                          ) {
+                            void loadProjectsPage({
+                              organizationId: selectedOrgId,
+                              query: projectQuery,
+                              offset: nextProjectOffset,
+                              append: true,
+                            });
+                          }
+                        }}
+                        disabled={isLoadingProjects}
+                        className="w-full p-4 text-left text-sm text-foreground hover:bg-primary/5 disabled:opacity-50 cursor-pointer"
+                      >
+                        {isLoadingProjects
+                          ? "loading..."
+                          : "show more projects"}
+                      </button>
+                    )}
+                  </div>
+                  {canScrollUp && (
+                    <div className="absolute top-0 left-0 right-0 h-6 bg-gradient-to-b from-[#faf9f2] to-transparent pointer-events-none" />
+                  )}
+                  {canScrollDown && (
+                    <div className="absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-[#faf9f2] to-transparent pointer-events-none" />
+                  )}
+                </div>
+              </>
+            )}
+          </Col>
+        )}
 
         {selectionError && (
           <p className="text-xs text-muted-foreground">{selectionError}</p>
