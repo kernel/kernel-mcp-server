@@ -110,7 +110,11 @@ export async function requireActiveOAuthProject({
   if (!response.ok) {
     throw new OAuthProjectsError(
       "Project not found or inactive",
-      response.status === 404 ? 404 : 502,
+      response.status === 401 ||
+      response.status === 403 ||
+      response.status === 404
+        ? response.status
+        : 502,
     );
   }
 

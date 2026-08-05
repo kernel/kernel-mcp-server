@@ -74,7 +74,16 @@ describe("OAuth project lookup", () => {
         projectId: "proj_1",
         fetcher: missing,
       }),
-    ).rejects.toBeInstanceOf(OAuthProjectsError);
+    ).rejects.toMatchObject({ status: 404 });
+
+    const forbidden = mock(async () => new Response(null, { status: 403 }));
+    await expect(
+      requireActiveOAuthProject({
+        clerkSessionToken: "session-token",
+        projectId: "proj_1",
+        fetcher: forbidden,
+      }),
+    ).rejects.toMatchObject({ status: 403 });
 
     for (const project of [
       { id: "proj_1", name: "one", status: "archived" },

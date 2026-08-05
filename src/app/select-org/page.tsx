@@ -46,7 +46,7 @@ function SelectOrgContent(): React.ReactElement {
   const [canScrollDown, setCanScrollDown] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const projectRequestRef = useRef(0);
-  const lastLoadedProjectQueryRef = useRef("");
+  const lastLoadedProjectQueryRef = useRef<string | null>(null);
   const supportsProjectScope =
     searchParams.get("code_challenge_method") === "S256" &&
     Boolean(searchParams.get("code_challenge"));
@@ -120,7 +120,12 @@ function SelectOrgContent(): React.ReactElement {
       } catch (error) {
         if (requestId !== projectRequestRef.current) return;
         console.error("Failed to load projects:", error);
-        if (!append) setProjects([]);
+        if (!append) {
+          setProjects([]);
+          setHasMoreProjects(false);
+          setNextProjectOffset(undefined);
+          lastLoadedProjectQueryRef.current = null;
+        }
         setProjectsError(true);
       } finally {
         if (requestId === projectRequestRef.current) {
@@ -175,7 +180,7 @@ function SelectOrgContent(): React.ReactElement {
     }
 
     setProjectQuery("");
-    lastLoadedProjectQueryRef.current = "";
+    lastLoadedProjectQueryRef.current = null;
     if (supportsProjectScope) {
       await loadProjectsPage({
         organizationId: selectedOrgId,
@@ -382,6 +387,7 @@ function SelectOrgContent(): React.ReactElement {
                 {supportsProjectScope &&
                   !isLoadingProjects &&
                   projects.length === 0 &&
+                  !hasMoreProjects &&
                   !projectsError && (
                     <p className="p-4 text-xs text-muted-foreground">
                       no projects found.
