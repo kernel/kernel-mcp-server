@@ -144,6 +144,20 @@ export async function authorizeRequest(
     );
   }
 
+  const hasPKCEParameters = Boolean(codeChallenge || codeChallengeMethod);
+  if (hasPKCEParameters && (!codeChallenge || codeChallengeMethod !== "S256")) {
+    return errorResponse(
+      "invalid_request",
+      "PKCE requires code_challenge and code_challenge_method=S256",
+    );
+  }
+  if (SHARED_CLIENT_IDS.includes(clientId) && !codeChallenge) {
+    return errorResponse(
+      "invalid_request",
+      "Shared OAuth clients require PKCE with S256",
+    );
+  }
+
   let authorizationContext;
   try {
     authorizationContext = authorizationContextFromSelection({
@@ -160,7 +174,7 @@ export async function authorizeRequest(
   }
 
   if (authorizationContext.access_scope === PROJECT_ACCESS_SCOPE) {
-    if (!codeChallenge || codeChallengeMethod !== "S256") {
+    if (!codeChallenge) {
       return errorResponse(
         "invalid_request",
         "Project-scoped authorization requires PKCE with S256",
@@ -193,7 +207,7 @@ export async function authorizeRequest(
   }
 
   try {
-    if (codeChallenge && codeChallengeMethod === "S256") {
+    if (codeChallenge) {
       await dependencies.setRequestContext({
         clientId,
         codeChallenge,

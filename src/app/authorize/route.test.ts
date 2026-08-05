@@ -129,6 +129,33 @@ describe("GET /authorize", () => {
     expect(deps.requestContexts).toHaveLength(0);
   });
 
+  test("rejects incomplete or unsupported PKCE parameters", async () => {
+    const deps = dependencies();
+    const response = await authorizeRequest(
+      request(
+        "client_id=client_1&org_id=org_1&access_scope=organization&code_challenge=challenge&code_challenge_method=plain",
+      ),
+      deps.value,
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "invalid_request" });
+    expect(deps.clientContexts).toHaveLength(0);
+    expect(deps.requestContexts).toHaveLength(0);
+  });
+
+  test("requires PKCE for shared clients", async () => {
+    const deps = dependencies();
+    const response = await authorizeRequest(
+      request("client_id=cli_prod&org_id=org_1&access_scope=organization"),
+      deps.value,
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "invalid_request" });
+    expect(deps.clientContexts).toHaveLength(0);
+  });
+
   test("rejects an organization that is not active for the user", async () => {
     const deps = dependencies({ orgId: "org_2" });
     const response = await authorizeRequest(
