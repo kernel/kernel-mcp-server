@@ -1,126 +1,170 @@
-'use client';
+"use client";
 
-import { useAuth, useOrganizationList, useUser, CreateOrganization, UserButton } from '@clerk/nextjs';
-import { useSearchParams, useRouter } from 'next/navigation';
-import { useState, Suspense, useEffect, useRef } from 'react';
-import { Col } from '@/components/col'
-import { Row } from '@/components/row'
-import { LoadingState } from '@/components/spinner/loading-state';
-import { KernelWordmark } from '@/components/icons';
+import {
+  CreateOrganization,
+  UserButton,
+  useAuth,
+  useOrganizationList,
+  useUser,
+} from "@clerk/nextjs";
+import { useSearchParams, useRouter } from "next/navigation";
+import { useState, Suspense, useEffect, useRef } from "react";
+import { Col } from "@/components/col";
+import { Row } from "@/components/row";
+import { LoadingState } from "@/components/spinner/loading-state";
+import { KernelWordmark } from "@/components/icons";
+
+interface OAuthProject {
+  id: string;
+  name: string;
+}
+
+type SelectionStage = "organization" | "scope";
 
 function SelectOrgContent(): React.ReactElement {
   const { isLoaded, setActive, userMemberships } = useOrganizationList({
-    userMemberships: {
-      infinite: true,
-      pageSize: 100,
-    },
+    userMemberships: { infinite: true, pageSize: 100 },
   });
+  const { orgId } = useAuth();
+  const { user } = useUser();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const [stage, setStage] = useState<SelectionStage>("organization");
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(
+    orgId || null,
+  );
+  const [projects, setProjects] = useState<OAuthProject[]>([]);
+  const [selectedScope, setSelectedScope] = useState("organization");
+  const [projectsError, setProjectsError] = useState(false);
+  const [selectionError, setSelectionError] = useState<string | null>(null);
+  const [canScrollUp, setCanScrollUp] = useState(false);
+  const [canScrollDown, setCanScrollDown] = useState(false);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const supportsProjectScope =
+    searchParams.get("code_challenge_method") === "S256" &&
+    Boolean(searchParams.get("code_challenge"));
 
   useEffect(() => {
     if (userMemberships?.hasNextPage && !userMemberships.isFetching) {
       userMemberships.fetchNext?.();
     }
   }, [userMemberships?.hasNextPage, userMemberships?.isFetching]);
-  const { orgId } = useAuth();
-  const { user } = useUser();
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const [isSelecting, setIsSelecting] = useState(false);
-  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(orgId || null);
-  const [canScrollUp, setCanScrollUp] = useState(false);
-  const [canScrollDown, setCanScrollDown] = useState(false);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // Check if we just returned from org creation and reload to get fresh data
   useEffect(() => {
-    if (searchParams.get('org_created') === 'true') {
-      // Remove the flag from URL and reload to get fresh organization data
+    if (searchParams.get("org_created") === "true") {
       const newUrl = new URL(window.location.href);
-      newUrl.searchParams.delete('org_created');
+      newUrl.searchParams.delete("org_created");
       window.location.href = newUrl.toString();
     }
   }, [searchParams]);
 
-  // Check scroll state
   const updateScrollState = (): void => {
     const container = scrollContainerRef.current;
     if (!container) return;
-
     const { scrollTop, scrollHeight, clientHeight } = container;
     setCanScrollUp(scrollTop > 0);
     setCanScrollDown(scrollTop < scrollHeight - clientHeight);
   };
 
-  // Update scroll state when content changes
   useEffect(() => {
     updateScrollState();
-  }, [userMemberships?.data]);
+  }, [userMemberships?.data, projects, stage]);
 
-  // Get the original OAuth parameters from the URL
-  const originalParams = {
-    client_id: searchParams.get('client_id'),
-    redirect_uri: searchParams.get('redirect_uri'),
-    response_type: searchParams.get('response_type'),
-    scope: searchParams.get('scope'),
-    state: searchParams.get('state'),
-    code_challenge: searchParams.get('code_challenge'),
-    code_challenge_method: searchParams.get('code_challenge_method'),
-  };
-
-  const handleOrgSelect = (organizationId: string): void => {
-    setSelectedOrgId(organizationId);
-  };
-
-  const handleConfirm = async (): Promise<void> => {
+  const handleOrgConfirm = async (): Promise<void> => {
     if (!setActive || isSelecting || !selectedOrgId) return;
-
     setIsSelecting(true);
+    setProjectsError(false);
+    setSelectionError(null);
 
     try {
       await setActive({ organization: selectedOrgId });
-
-      // After setting active org, redirect back to authorize
-      const authorizeUrl = new URL('/authorize', window.location.origin);
-
-      // Add all original OAuth parameters
-      Object.entries(originalParams).forEach(([key, value]) => {
-        if (value) authorizeUrl.searchParams.set(key, value);
-      });
-
-      // Add the selected orgId as a parameter
-      authorizeUrl.searchParams.set('org_id', selectedOrgId);
-
-      router.push(authorizeUrl.toString());
     } catch (error) {
-      console.error('Failed to set active organization:', error);
+      console.error("Failed to select organization:", error);
+      setSelectionError("organization selection failed. please try again.");
       setIsSelecting(false);
+      return;
     }
+
+    try {
+      if (supportsProjectScope) {
+        const response = await fetch(
+          `/oauth/projects?org_id=${encodeURIComponent(selectedOrgId)}`,
+          { cache: "no-store" },
+        );
+        if (!response.ok) throw new Error("failed to load projects");
+        const body = (await response.json()) as { projects: OAuthProject[] };
+        setProjects(body.projects);
+      } else {
+        setProjects([]);
+      }
+    } catch (error) {
+      console.error("Failed to load projects:", error);
+      setProjects([]);
+      setProjectsError(true);
+    }
+
+    setSelectedScope("organization");
+    setStage("scope");
+    setIsSelecting(false);
+  };
+
+  const handleAuthorize = (): void => {
+    if (!selectedOrgId || isSelecting) return;
+    setIsSelecting(true);
+
+    const authorizeUrl = new URL("/authorize", window.location.origin);
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("org_created");
+    params.delete("org_id");
+    params.delete("access_scope");
+    params.delete("project_id");
+    params.forEach((value, key) => authorizeUrl.searchParams.set(key, value));
+    authorizeUrl.searchParams.set("org_id", selectedOrgId);
+
+    if (selectedScope.startsWith("project:")) {
+      authorizeUrl.searchParams.set("access_scope", "project");
+      authorizeUrl.searchParams.set(
+        "project_id",
+        selectedScope.slice("project:".length),
+      );
+    } else {
+      authorizeUrl.searchParams.set("access_scope", "organization");
+    }
+
+    router.push(authorizeUrl.toString());
   };
 
   if (!isLoaded || userMemberships?.isLoading) {
     return (
       <Col className="min-h-screen items-center justify-center">
         <LoadingState>
-          <p className="text-muted-foreground text-sm">loading your organizations...</p>
+          <p className="text-muted-foreground text-sm">
+            loading your organizations...
+          </p>
         </LoadingState>
       </Col>
     );
   }
 
-  // Check if user has any organizations (only after loaded)
-  if (isLoaded && !userMemberships?.isLoading && (!userMemberships?.data || userMemberships.data.length === 0)) {
+  const memberships =
+    userMemberships?.data || user?.organizationMemberships || [];
+
+  if (!memberships.length) {
     return (
       <Col className="min-h-screen items-center justify-center">
-        {/* User button in top-right corner */}
         <div className="absolute top-6 right-6">
           <UserButton
             afterSignOutUrl={`/select-org?${searchParams.toString()}`}
           />
         </div>
-
         <Col className="text-center max-w-md mx-auto p-8 gap-8">
           <Col className="items-center gap-4">
-            <KernelWordmark className="text-foreground" width={100} height={22} />
+            <KernelWordmark
+              className="text-foreground"
+              width={100}
+              height={22}
+            />
             <p className="text-muted-foreground text-sm">
               you need to be a member of at least one organization to continue.
             </p>
@@ -128,7 +172,7 @@ function SelectOrgContent(): React.ReactElement {
           <CreateOrganization
             afterCreateOrganizationUrl={(() => {
               const params = new URLSearchParams(searchParams.toString());
-              params.set('org_created', 'true');
+              params.set("org_created", "true");
               return `/select-org?${params.toString()}`;
             })()}
             skipInvitationScreen={true}
@@ -138,9 +182,12 @@ function SelectOrgContent(): React.ReactElement {
     );
   }
 
+  const selectedOrg = memberships.find(
+    (membership) => membership.organization.id === selectedOrgId,
+  )?.organization;
+
   return (
     <Col className="min-h-screen items-center justify-center">
-      {/* User button in top-right corner */}
       <div className="absolute top-6 right-6">
         <UserButton
           afterSignOutUrl={`/select-org?${searchParams.toString()}`}
@@ -151,7 +198,9 @@ function SelectOrgContent(): React.ReactElement {
         <Col className="items-center gap-3">
           <KernelWordmark className="text-foreground" width={100} height={22} />
           <p className="text-muted-foreground text-sm">
-            select an organization to authorize access.
+            {stage === "organization"
+              ? "select an organization to authorize access."
+              : `choose access for ${selectedOrg?.name || "this organization"}.`}
           </p>
         </Col>
 
@@ -159,58 +208,76 @@ function SelectOrgContent(): React.ReactElement {
           <div
             ref={scrollContainerRef}
             onScroll={updateScrollState}
-            className="flex flex-col gap-0 max-h-64 overflow-y-auto overscroll-y-none bg-[#faf9f2] border-[0.5px] border-[#e1dccf]"
+            className="flex flex-col gap-0 max-h-72 overflow-y-auto overscroll-y-none bg-[#faf9f2] border-[0.5px] border-[#e1dccf]"
           >
-            {(userMemberships?.data || user?.organizationMemberships)
-              ?.sort((a, b) => {
-                // Put the currently active org first
-                if (a.organization.id === orgId) return -1;
-                if (b.organization.id === orgId) return 1;
-                return 0;
-              })
-              ?.map((membership, index, arr) => {
-              const isSelected = membership.organization.id === selectedOrgId;
-              const isCurrentlyActive = membership.organization.id === orgId;
-              const isLast = index === arr.length - 1;
-              return (
-                <button
-                  key={membership.organization.id}
-                  onClick={() => handleOrgSelect(membership.organization.id)}
-                  disabled={isSelecting}
-                  className={`w-full p-4 text-left transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-                    !isLast ? 'border-b-[0.5px] border-b-[#e1dccf]' : ''
-                  } ${
-                    isSelected
-                      ? 'bg-primary/10'
-                      : 'bg-[#faf9f2] hover:bg-primary/5'
-                  }`}
-                >
-                  <Row className="gap-3">
-                    {membership.organization.imageUrl && (
-                      <img
-                        src={membership.organization.imageUrl}
-                        alt={membership.organization.name}
-                        className="w-10 h-10"
-                      />
-                    )}
-                    <Col className="flex-1 gap-1">
-                      <Row className="justify-between items-center">
-                        <span className="font-light text-sm text-foreground">{membership.organization.name}</span>
-                        {isCurrentlyActive && (
-                          <span className="text-[10px] font-[350] uppercase tracking-normal border-[0.5px] border-foreground px-2 py-0.5">
-                            active
-                          </span>
+            {stage === "organization" ? (
+              [...memberships]
+                .sort((a, b) => {
+                  if (a.organization.id === orgId) return -1;
+                  if (b.organization.id === orgId) return 1;
+                  return 0;
+                })
+                .map((membership, index, arr) => {
+                  const organization = membership.organization;
+                  const isSelected = organization.id === selectedOrgId;
+                  return (
+                    <button
+                      key={organization.id}
+                      onClick={() => setSelectedOrgId(organization.id)}
+                      disabled={isSelecting}
+                      className={`w-full p-4 text-left transition-colors cursor-pointer disabled:opacity-50 ${
+                        index < arr.length - 1
+                          ? "border-b-[0.5px] border-b-[#e1dccf]"
+                          : ""
+                      } ${isSelected ? "bg-primary/10" : "bg-[#faf9f2] hover:bg-primary/5"}`}
+                    >
+                      <Row className="gap-3">
+                        {organization.imageUrl && (
+                          <img
+                            src={organization.imageUrl}
+                            alt={organization.name}
+                            className="w-10 h-10"
+                          />
                         )}
+                        <Col className="flex-1 gap-1">
+                          <Row className="justify-between items-center">
+                            <span className="font-light text-sm text-foreground">
+                              {organization.name}
+                            </span>
+                            {organization.id === orgId && (
+                              <span className="text-[10px] font-[350] uppercase border-[0.5px] border-foreground px-2 py-0.5">
+                                active
+                              </span>
+                            )}
+                          </Row>
+                          <span className="text-xs text-muted-foreground">
+                            {organization.slug}
+                          </span>
+                        </Col>
                       </Row>
-                      <span className="text-xs text-muted-foreground">{membership.organization.slug}</span>
-                    </Col>
-                  </Row>
-                </button>
-              );
-            })}
+                    </button>
+                  );
+                })
+            ) : (
+              <>
+                <ScopeButton
+                  label="entire organization"
+                  detail="access every project and select projects per request"
+                  selected={selectedScope === "organization"}
+                  onClick={() => setSelectedScope("organization")}
+                />
+                {projects.map((project) => (
+                  <ScopeButton
+                    key={project.id}
+                    label={project.name}
+                    detail="access only this project"
+                    selected={selectedScope === `project:${project.id}`}
+                    onClick={() => setSelectedScope(`project:${project.id}`)}
+                  />
+                ))}
+              </>
+            )}
           </div>
-
-          {/* Fade overlays to indicate scrollability */}
           {canScrollUp && (
             <div className="absolute top-0 left-0 right-0 h-6 bg-gradient-to-b from-[#faf9f2] to-transparent pointer-events-none" />
           )}
@@ -219,20 +286,74 @@ function SelectOrgContent(): React.ReactElement {
           )}
         </div>
 
-        <button
-          onClick={handleConfirm}
-          disabled={isSelecting || !selectedOrgId}
-          className="w-full bg-foreground text-background py-3 px-4 font-[250] text-sm hover:underline hover:decoration-[0.5px] hover:underline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-opacity"
-        >
-          {isSelecting ? (
-            <Row className="items-center justify-center gap-2">
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-background"></div>
-              authorizing...
-            </Row>
-          ) : 'continue'}
-        </button>
+        {selectionError && (
+          <p className="text-xs text-muted-foreground">{selectionError}</p>
+        )}
+        {stage === "scope" && projectsError && (
+          <p className="text-xs text-muted-foreground">
+            projects could not be loaded. organization-wide access is still
+            available.
+          </p>
+        )}
+        {stage === "scope" && !supportsProjectScope && (
+          <p className="text-xs text-muted-foreground">
+            this client does not support PKCE, so project-scoped access is
+            unavailable.
+          </p>
+        )}
+
+        <Row className="gap-3">
+          {stage === "scope" && (
+            <button
+              onClick={() => setStage("organization")}
+              disabled={isSelecting}
+              className="border-[0.5px] border-foreground py-3 px-4 text-sm disabled:opacity-50 cursor-pointer"
+            >
+              back
+            </button>
+          )}
+          <button
+            onClick={
+              stage === "organization" ? handleOrgConfirm : handleAuthorize
+            }
+            disabled={isSelecting || !selectedOrgId}
+            className="flex-1 bg-foreground text-background py-3 px-4 font-[250] text-sm hover:underline disabled:opacity-50 cursor-pointer"
+          >
+            {isSelecting
+              ? "loading..."
+              : stage === "organization"
+                ? "continue"
+                : "authorize"}
+          </button>
+        </Row>
       </Col>
     </Col>
+  );
+}
+
+function ScopeButton({
+  label,
+  detail,
+  selected,
+  onClick,
+}: {
+  label: string;
+  detail: string;
+  selected: boolean;
+  onClick: () => void;
+}): React.ReactElement {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full p-4 text-left border-b-[0.5px] last:border-b-0 border-b-[#e1dccf] cursor-pointer ${
+        selected ? "bg-primary/10" : "bg-[#faf9f2] hover:bg-primary/5"
+      }`}
+    >
+      <Col className="gap-1">
+        <span className="font-light text-sm text-foreground">{label}</span>
+        <span className="text-xs text-muted-foreground">{detail}</span>
+      </Col>
+    </button>
   );
 }
 

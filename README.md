@@ -24,7 +24,7 @@ The Kernel MCP Server bridges AI assistants (like Claude, Cursor, or other MCP-c
 
 **Open-source & fully-managed** — the complete codebase is available here, and we run the production instance so you don't need to deploy anything.
 
-The server uses OAuth 2.0 authentication via [Clerk](https://clerk.com) to ensure secure access to your Kernel resources.
+The server uses OAuth 2.0 authentication via [Clerk](https://clerk.com) to ensure secure access to your Kernel resources. During authorization, users can grant organization-wide access or restrict the resulting access and refresh tokens to one Kernel project. Project-scoped tokens cannot switch projects; organization-wide authorization remains available for existing workflows.
 
 For a deeper dive into why and how we built this server, see our blog post: [Introducing Kernel MCP Server](https://blog.onkernel.com/p/introducing-kernel-mcp-server).
 

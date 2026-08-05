@@ -15,7 +15,32 @@ export async function OPTIONS(): Promise<NextResponse> {
   });
 }
 
-export async function POST(request: NextRequest): Promise<NextResponse> {
+interface OAuthApplicationInput {
+  name: string;
+  redirectUris: string[];
+  scopes: string;
+  public: boolean;
+}
+
+export interface RegisterDependencies {
+  createOAuthApplication: (input: OAuthApplicationInput) => Promise<{
+    id: string;
+    clientId: string;
+    clientSecret?: string | null;
+  }>;
+}
+
+const registerDependencies: RegisterDependencies = {
+  createOAuthApplication: async (input) => {
+    const clerk = await clerkClient();
+    return clerk.oauthApplications.create(input);
+  },
+};
+
+export async function registerRequest(
+  request: NextRequest,
+  dependencies: RegisterDependencies = registerDependencies,
+): Promise<NextResponse> {
   const contentType = request.headers.get("content-type");
   if (!contentType?.includes("application/json")) {
     return NextResponse.json(
@@ -112,8 +137,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const expandedRedirectUris = expandLocalhostUris(redirect_uris);
 
     // Register the OAuth application with Clerk
-    const clerk = await clerkClient();
-    const oauthApp = await clerk.oauthApplications.create({
+    const oauthApp = await dependencies.createOAuthApplication({
       name: client_name || "MCP Client",
       redirectUris: expandedRedirectUris,
       scopes: scope ? scope : "openid",
@@ -160,4 +184,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       { status: 500 },
     );
   }
+}
+
+export async function POST(request: NextRequest): Promise<NextResponse> {
+  return registerRequest(request);
 }
