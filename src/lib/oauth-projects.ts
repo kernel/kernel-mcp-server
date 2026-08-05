@@ -1,3 +1,8 @@
+export type OAuthProjectsFetcher = (
+  input: URL | RequestInfo,
+  init?: RequestInit,
+) => Promise<Response>;
+
 export interface OAuthProject {
   id: string;
   name: string;
@@ -15,6 +20,7 @@ export class OAuthProjectsError extends Error {
 
 export async function listOAuthProjects(
   clerkSessionToken: string,
+  fetcher: OAuthProjectsFetcher = fetch,
 ): Promise<OAuthProject[]> {
   const apiBaseUrl = process.env.API_BASE_URL;
   if (!apiBaseUrl) {
@@ -30,7 +36,7 @@ export async function listOAuthProjects(
     url.searchParams.set("limit", String(limit));
     url.searchParams.set("offset", String(offset));
 
-    const response = await fetch(url, {
+    const response = await fetcher(url, {
       headers: {
         Authorization: `Bearer ${clerkSessionToken}`,
         "X-Source": "oauth-server",
@@ -63,11 +69,13 @@ export async function listOAuthProjects(
 export async function requireActiveOAuthProject({
   clerkSessionToken,
   projectId,
+  fetcher,
 }: {
   clerkSessionToken: string;
   projectId: string;
+  fetcher?: OAuthProjectsFetcher;
 }): Promise<OAuthProject> {
-  const projects = await listOAuthProjects(clerkSessionToken);
+  const projects = await listOAuthProjects(clerkSessionToken, fetcher);
   const project = projects.find((candidate) => candidate.id === projectId);
   if (!project) {
     throw new OAuthProjectsError("Project not found or inactive", 404);

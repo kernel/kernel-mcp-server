@@ -96,8 +96,13 @@ async function hasOrganizationMembership(
   }
 }
 
+type Fetcher = (
+  input: URL | RequestInfo,
+  init?: RequestInit,
+) => Promise<Response>;
+
 export interface TokenDependencies {
-  exchange: typeof fetch;
+  exchange: Fetcher;
   resolveContext: typeof resolveAuthorizationContext;
   verify: (
     token: string,

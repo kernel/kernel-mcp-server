@@ -53,7 +53,9 @@ describe("resolveAuthorizationContext", () => {
       codeChallenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
     });
     expect(result.authorizationContext).toEqual(requestContext);
-    expect(result.requestCodeChallenge).toBe(requestLookup.codeChallenge);
+    expect(result.requestCodeChallenge).toBe(
+      "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+    );
   });
 
   test("refresh uses only the refresh-token mapping", async () => {
