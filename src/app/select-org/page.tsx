@@ -487,7 +487,9 @@ function SelectOrgContent(): React.ReactElement {
             className="flex-1 bg-foreground text-background py-3 px-4 font-[250] text-sm hover:underline disabled:opacity-50 cursor-pointer"
           >
             {isSelecting
-              ? "loading..."
+              ? stage === "organization"
+                ? "loading projects..."
+                : "authorizing..."
               : stage === "organization"
                 ? "continue"
                 : "authorize"}
