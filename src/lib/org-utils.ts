@@ -28,28 +28,43 @@ function createErrorResponse(
   );
 }
 
+export interface AuthorizationContextDependencies {
+  getRequestContext: typeof getAuthorizationContextForRequest;
+  getClientContext: typeof getAuthorizationContextForClientId;
+  getRefreshContext: typeof getAuthorizationContextForRefreshTokenSliding;
+}
+
+const authorizationContextDependencies: AuthorizationContextDependencies = {
+  getRequestContext: getAuthorizationContextForRequest,
+  getClientContext: getAuthorizationContextForClientId,
+  getRefreshContext: getAuthorizationContextForRefreshTokenSliding,
+};
+
 export interface ResolvedAuthorizationContext {
   authorizationContext: OAuthAuthorizationContext | null;
   requestCodeChallenge?: string;
   error?: NextResponse;
 }
 
-export async function resolveAuthorizationContext({
-  grantType,
-  clientId,
-  codeVerifier,
-  refreshToken,
-}: {
-  grantType: string;
-  clientId: string;
-  codeVerifier?: string;
-  refreshToken?: string;
-}): Promise<ResolvedAuthorizationContext> {
+export async function resolveAuthorizationContext(
+  {
+    grantType,
+    clientId,
+    codeVerifier,
+    refreshToken,
+  }: {
+    grantType: string;
+    clientId: string;
+    codeVerifier?: string;
+    refreshToken?: string;
+  },
+  dependencies: AuthorizationContextDependencies = authorizationContextDependencies,
+): Promise<ResolvedAuthorizationContext> {
   if (grantType === "authorization_code") {
     if (codeVerifier) {
       const codeChallenge = deriveS256CodeChallenge(codeVerifier);
       try {
-        const authorizationContext = await getAuthorizationContextForRequest({
+        const authorizationContext = await dependencies.getRequestContext({
           clientId,
           codeChallenge,
         });
@@ -82,7 +97,7 @@ export async function resolveAuthorizationContext({
     }
 
     try {
-      const authorizationContext = await getAuthorizationContextForClientId({
+      const authorizationContext = await dependencies.getClientContext({
         clientId,
       });
       if (authorizationContext) return { authorizationContext };
@@ -120,11 +135,10 @@ export async function resolveAuthorizationContext({
       };
     }
     try {
-      const authorizationContext =
-        await getAuthorizationContextForRefreshTokenSliding({
-          refreshToken,
-          ttlSeconds: REFRESH_TOKEN_ORG_TTL_SECONDS,
-        });
+      const authorizationContext = await dependencies.getRefreshContext({
+        refreshToken,
+        ttlSeconds: REFRESH_TOKEN_ORG_TTL_SECONDS,
+      });
       if (authorizationContext) return { authorizationContext };
     } catch (error) {
       console.error(

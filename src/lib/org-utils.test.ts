@@ -1,31 +1,35 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import {
   type OAuthAuthorizationContext,
   projectAuthorizationContext,
 } from "./oauth-context";
+import type { AuthorizationContextDependencies } from "./org-utils";
 
 process.env.KERNEL_CLI_PROD_CLIENT_ID ??= "cli_prod";
 process.env.KERNEL_CLI_STAGING_CLIENT_ID ??= "cli_staging";
 process.env.KERNEL_CLI_DEV_CLIENT_ID ??= "cli_dev";
+
+const { resolveAuthorizationContext } = await import("./org-utils");
 
 let requestContext: OAuthAuthorizationContext | null = null;
 let clientContext: OAuthAuthorizationContext | null = null;
 let refreshContext: OAuthAuthorizationContext | null = null;
 let requestLookup: { clientId: string; codeChallenge: string } | null = null;
 
-mock.module("./redis", () => ({
-  getAuthorizationContextForRequest: async (value: {
-    clientId: string;
-    codeChallenge: string;
-  }) => {
+const dependencies: AuthorizationContextDependencies = {
+  getRequestContext: async (value) => {
     requestLookup = value;
     return requestContext;
   },
-  getAuthorizationContextForClientId: async () => clientContext,
-  getAuthorizationContextForRefreshTokenSliding: async () => refreshContext,
-}));
+  getClientContext: async () => clientContext,
+  getRefreshContext: async () => refreshContext,
+};
 
-const { resolveAuthorizationContext } = await import("./org-utils");
+function resolveContext(
+  input: Parameters<typeof resolveAuthorizationContext>[0],
+) {
+  return resolveAuthorizationContext(input, dependencies);
+}
 
 beforeEach(() => {
   requestContext = null;
@@ -42,7 +46,7 @@ describe("resolveAuthorizationContext", () => {
       projectId: "proj_1",
     });
 
-    const result = await resolveAuthorizationContext({
+    const result = await resolveContext({
       grantType: "authorization_code",
       clientId: "client_1",
       codeVerifier: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
@@ -65,7 +69,7 @@ describe("resolveAuthorizationContext", () => {
       projectId: "proj_1",
     });
 
-    const result = await resolveAuthorizationContext({
+    const result = await resolveContext({
       grantType: "refresh_token",
       clientId: "cli_prod",
       refreshToken: "refresh-token",
@@ -75,7 +79,7 @@ describe("resolveAuthorizationContext", () => {
   });
 
   test("shared clients cannot supply authorization context directly", async () => {
-    const result = await resolveAuthorizationContext({
+    const result = await resolveContext({
       grantType: "authorization_code",
       clientId: "cli_prod",
     });
@@ -91,7 +95,7 @@ describe("resolveAuthorizationContext", () => {
       projectId: "proj_wrong",
     });
 
-    const result = await resolveAuthorizationContext({
+    const result = await resolveContext({
       grantType: "authorization_code",
       clientId: "client_1",
       codeVerifier: "verifier",
@@ -102,14 +106,14 @@ describe("resolveAuthorizationContext", () => {
   });
 
   test("fails when request and refresh context have expired", async () => {
-    const authCode = await resolveAuthorizationContext({
+    const authCode = await resolveContext({
       grantType: "authorization_code",
       clientId: "client_1",
       codeVerifier: "verifier",
     });
     expect(authCode.error?.status).toBe(400);
 
-    const refresh = await resolveAuthorizationContext({
+    const refresh = await resolveContext({
       grantType: "refresh_token",
       clientId: "client_1",
       refreshToken: "refresh-token",
