@@ -8,7 +8,7 @@ import {
   useUser,
 } from "@clerk/nextjs";
 import { useSearchParams, useRouter } from "next/navigation";
-import { useState, Suspense, useEffect, useRef } from "react";
+import { useState, Suspense, useCallback, useEffect, useRef } from "react";
 import { Col } from "@/components/col";
 import { Row } from "@/components/row";
 import { LoadingState } from "@/components/spinner/loading-state";
@@ -35,12 +35,18 @@ function SelectOrgContent(): React.ReactElement {
     orgId || null,
   );
   const [projects, setProjects] = useState<OAuthProject[]>([]);
+  const [projectQuery, setProjectQuery] = useState("");
+  const [hasMoreProjects, setHasMoreProjects] = useState(false);
+  const [nextProjectOffset, setNextProjectOffset] = useState<number>();
+  const [isLoadingProjects, setIsLoadingProjects] = useState(false);
   const [selectedScope, setSelectedScope] = useState("organization");
   const [projectsError, setProjectsError] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [canScrollUp, setCanScrollUp] = useState(false);
   const [canScrollDown, setCanScrollDown] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const projectRequestRef = useRef(0);
+  const lastLoadedProjectQueryRef = useRef("");
   const supportsProjectScope =
     searchParams.get("code_challenge_method") === "S256" &&
     Boolean(searchParams.get("code_challenge"));
@@ -71,6 +77,88 @@ function SelectOrgContent(): React.ReactElement {
     updateScrollState();
   }, [userMemberships?.data, projects, stage]);
 
+  const loadProjectsPage = useCallback(
+    async ({
+      organizationId,
+      query,
+      offset,
+      append,
+    }: {
+      organizationId: string;
+      query: string;
+      offset: number;
+      append: boolean;
+    }): Promise<void> => {
+      const requestId = ++projectRequestRef.current;
+      setIsLoadingProjects(true);
+      setProjectsError(false);
+
+      try {
+        const params = new URLSearchParams({
+          org_id: organizationId,
+          limit: "20",
+          offset: String(offset),
+        });
+        if (query) params.set("query", query);
+        const response = await fetch(`/oauth/projects?${params.toString()}`, {
+          cache: "no-store",
+        });
+        if (!response.ok) throw new Error("failed to load projects");
+        const body = (await response.json()) as {
+          projects: OAuthProject[];
+          has_more: boolean;
+          next_offset?: number;
+        };
+        if (requestId !== projectRequestRef.current) return;
+
+        setProjects((current) =>
+          append ? [...current, ...body.projects] : body.projects,
+        );
+        setHasMoreProjects(body.has_more);
+        setNextProjectOffset(body.next_offset);
+        lastLoadedProjectQueryRef.current = query;
+      } catch (error) {
+        if (requestId !== projectRequestRef.current) return;
+        console.error("Failed to load projects:", error);
+        if (!append) setProjects([]);
+        setProjectsError(true);
+      } finally {
+        if (requestId === projectRequestRef.current) {
+          setIsLoadingProjects(false);
+        }
+      }
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (
+      stage !== "scope" ||
+      !supportsProjectScope ||
+      !selectedOrgId ||
+      projectQuery === lastLoadedProjectQueryRef.current
+    ) {
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      setSelectedScope("organization");
+      void loadProjectsPage({
+        organizationId: selectedOrgId,
+        query: projectQuery,
+        offset: 0,
+        append: false,
+      });
+    }, 250);
+    return () => clearTimeout(timeout);
+  }, [
+    loadProjectsPage,
+    projectQuery,
+    selectedOrgId,
+    stage,
+    supportsProjectScope,
+  ]);
+
   const handleOrgConfirm = async (): Promise<void> => {
     if (!setActive || isSelecting || !selectedOrgId) return;
     setIsSelecting(true);
@@ -86,22 +174,19 @@ function SelectOrgContent(): React.ReactElement {
       return;
     }
 
-    try {
-      if (supportsProjectScope) {
-        const response = await fetch(
-          `/oauth/projects?org_id=${encodeURIComponent(selectedOrgId)}`,
-          { cache: "no-store" },
-        );
-        if (!response.ok) throw new Error("failed to load projects");
-        const body = (await response.json()) as { projects: OAuthProject[] };
-        setProjects(body.projects);
-      } else {
-        setProjects([]);
-      }
-    } catch (error) {
-      console.error("Failed to load projects:", error);
+    setProjectQuery("");
+    lastLoadedProjectQueryRef.current = "";
+    if (supportsProjectScope) {
+      await loadProjectsPage({
+        organizationId: selectedOrgId,
+        query: "",
+        offset: 0,
+        append: false,
+      });
+    } else {
       setProjects([]);
-      setProjectsError(true);
+      setHasMoreProjects(false);
+      setNextProjectOffset(undefined);
     }
 
     setSelectedScope("organization");
@@ -266,6 +351,18 @@ function SelectOrgContent(): React.ReactElement {
                   selected={selectedScope === "organization"}
                   onClick={() => setSelectedScope("organization")}
                 />
+                {supportsProjectScope && (
+                  <div className="p-3 border-b-[0.5px] border-b-[#e1dccf] bg-[#faf9f2]">
+                    <input
+                      type="search"
+                      value={projectQuery}
+                      onChange={(event) => setProjectQuery(event.target.value)}
+                      placeholder="search projects"
+                      aria-label="search projects"
+                      className="w-full bg-transparent border-[0.5px] border-[#e1dccf] px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground"
+                    />
+                  </div>
+                )}
                 {projects.map((project) => (
                   <ScopeButton
                     key={project.id}
@@ -275,6 +372,39 @@ function SelectOrgContent(): React.ReactElement {
                     onClick={() => setSelectedScope(`project:${project.id}`)}
                   />
                 ))}
+                {supportsProjectScope &&
+                  isLoadingProjects &&
+                  projects.length === 0 && (
+                    <p className="p-4 text-xs text-muted-foreground">
+                      loading projects...
+                    </p>
+                  )}
+                {supportsProjectScope &&
+                  !isLoadingProjects &&
+                  projects.length === 0 &&
+                  !projectsError && (
+                    <p className="p-4 text-xs text-muted-foreground">
+                      no projects found.
+                    </p>
+                  )}
+                {supportsProjectScope && hasMoreProjects && (
+                  <button
+                    onClick={() => {
+                      if (selectedOrgId && nextProjectOffset !== undefined) {
+                        void loadProjectsPage({
+                          organizationId: selectedOrgId,
+                          query: projectQuery,
+                          offset: nextProjectOffset,
+                          append: true,
+                        });
+                      }
+                    }}
+                    disabled={isLoadingProjects}
+                    className="w-full p-4 text-left text-sm text-foreground hover:bg-primary/5 disabled:opacity-50 cursor-pointer"
+                  >
+                    {isLoadingProjects ? "loading..." : "show more projects"}
+                  </button>
+                )}
               </>
             )}
           </div>

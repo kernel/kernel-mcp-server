@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import {
-  listOAuthProjects,
+  listOAuthProjectsPage,
   OAuthProjectsError,
   requireActiveOAuthProject,
 } from "./oauth-projects";
@@ -17,38 +17,44 @@ afterEach(() => {
 });
 
 describe("OAuth project lookup", () => {
-  test("paginates and returns only active projects", async () => {
-    const calls: string[] = [];
+  test("forwards search and pagination to the API", async () => {
+    let requestedUrl: URL | undefined;
     const fetcher = mock(async (input: RequestInfo | URL) => {
-      const url = input.toString();
-      calls.push(url);
-      if (url.includes("offset=0")) {
-        return Response.json(
-          [
-            { id: "proj_1", name: "one", status: "active" },
-            { id: "proj_old", name: "old", status: "archived" },
-          ],
-          { headers: { "X-Has-More": "true", "X-Next-Offset": "2" } },
-        );
-      }
-      return Response.json([{ id: "proj_2", name: "two", status: "active" }], {
-        headers: { "X-Has-More": "false" },
-      });
+      requestedUrl = new URL(input.toString());
+      return Response.json(
+        [
+          { id: "proj_1", name: "one", status: "active" },
+          { id: "proj_old", name: "old", status: "archived" },
+        ],
+        { headers: { "X-Has-More": "true", "X-Next-Offset": "40" } },
+      );
     });
 
-    expect(await listOAuthProjects("session-token", fetcher)).toEqual([
-      { id: "proj_1", name: "one", status: "active" },
-      { id: "proj_2", name: "two", status: "active" },
-    ]);
-    expect(calls).toHaveLength(2);
+    const page = await listOAuthProjectsPage({
+      clerkSessionToken: "session-token",
+      query: "prod",
+      limit: 20,
+      offset: 20,
+      fetcher,
+    });
+
+    expect(requestedUrl?.pathname).toBe("/org/projects");
+    expect(requestedUrl?.searchParams.get("query")).toBe("prod");
+    expect(requestedUrl?.searchParams.get("limit")).toBe("20");
+    expect(requestedUrl?.searchParams.get("offset")).toBe("20");
+    expect(page).toEqual({
+      projects: [{ id: "proj_1", name: "one", status: "active" }],
+      hasMore: true,
+      nextOffset: 40,
+    });
   });
 
-  test("requires the selected project to be active and visible", async () => {
-    const fetcher = mock(async () =>
-      Response.json([{ id: "proj_1", name: "one", status: "active" }], {
-        headers: { "X-Has-More": "false" },
-      }),
-    );
+  test("validates the selected project directly by ID", async () => {
+    let requestedUrl: URL | undefined;
+    const fetcher = mock(async (input: RequestInfo | URL) => {
+      requestedUrl = new URL(input.toString());
+      return Response.json({ id: "proj_1", name: "one", status: "active" });
+    });
 
     expect(
       await requireActiveOAuthProject({
@@ -57,23 +63,42 @@ describe("OAuth project lookup", () => {
         fetcher,
       }),
     ).toEqual({ id: "proj_1", name: "one", status: "active" });
+    expect(requestedUrl?.pathname).toBe("/org/projects/proj_1");
+  });
 
+  test("rejects missing, inactive, and mismatched projects", async () => {
+    const missing = mock(async () => new Response(null, { status: 404 }));
     await expect(
       requireActiveOAuthProject({
         clerkSessionToken: "session-token",
-        projectId: "proj_2",
-        fetcher,
+        projectId: "proj_1",
+        fetcher: missing,
       }),
     ).rejects.toBeInstanceOf(OAuthProjectsError);
+
+    for (const project of [
+      { id: "proj_1", name: "one", status: "archived" },
+      { id: "proj_2", name: "two", status: "active" },
+    ]) {
+      const fetcher = mock(async () => Response.json(project));
+      await expect(
+        requireActiveOAuthProject({
+          clerkSessionToken: "session-token",
+          projectId: "proj_1",
+          fetcher,
+        }),
+      ).rejects.toBeInstanceOf(OAuthProjectsError);
+    }
   });
 
   test("fails on API and pagination errors", async () => {
     const unavailable = mock(async () => new Response(null, { status: 503 }));
     await expect(
-      listOAuthProjects("session-token", unavailable),
-    ).rejects.toMatchObject({
-      status: 502,
-    });
+      listOAuthProjectsPage({
+        clerkSessionToken: "session-token",
+        fetcher: unavailable,
+      }),
+    ).rejects.toMatchObject({ status: 502 });
 
     const invalidPagination = mock(async () =>
       Response.json([], {
@@ -81,7 +106,10 @@ describe("OAuth project lookup", () => {
       }),
     );
     await expect(
-      listOAuthProjects("session-token", invalidPagination),
+      listOAuthProjectsPage({
+        clerkSessionToken: "session-token",
+        fetcher: invalidPagination,
+      }),
     ).rejects.toThrow("Invalid project pagination response");
   });
 });
