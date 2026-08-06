@@ -88,6 +88,7 @@ function buildBrowserStartUrl(
   startUrl: string | undefined,
 ): BrowserConfigResult<string | undefined> {
   if (startUrl === undefined) return configValue(undefined);
+  if (startUrl === "") return configValue("");
 
   try {
     new URL(startUrl);
