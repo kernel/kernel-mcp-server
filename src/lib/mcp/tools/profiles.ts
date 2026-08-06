@@ -69,19 +69,24 @@ export function registerProfileCapabilities(server: McpServer) {
 
   server.tool(
     "manage_profiles",
-    'Manage browser profiles when an agent needs persistent cookies, login state, or reusable browser state. Use "setup" for a guided login session, "list" to find a profile, "get" to retrieve one, and "delete" only when a profile should be removed.',
+    'Manage browser profiles when an agent needs persistent cookies, login state, or reusable browser state. Use "setup" for a guided login session, "list" to find a profile, "get" to retrieve one, "rename" to change its name, and "delete" only when a profile should be removed. Do not rename a profile while a browser is using it because that session may no longer save changes back to the profile.',
     {
       action: z
-        .enum(["setup", "list", "get", "delete"])
+        .enum(["setup", "list", "get", "rename", "delete"])
         .describe("Operation to perform."),
       profile_name: z
         .string()
-        .describe("(setup, get, delete) Profile name. For setup: 1-255 chars.")
+        .describe(
+          "(setup, get, rename, delete) Profile name. For setup: 1-255 chars.",
+        )
         .optional(),
       profile_id: z
         .string()
-        .describe("(get, delete) Profile ID. Alternative to profile_name.")
+        .describe(
+          "(get, rename, delete) Profile ID. Alternative to profile_name.",
+        )
         .optional(),
+      new_name: z.string().describe("(rename) New profile name.").optional(),
       update_existing: z
         .boolean()
         .describe("(setup) If true, update existing profile. Default false.")
@@ -110,13 +115,20 @@ export function registerProfileCapabilities(server: McpServer) {
               return errorResponse(
                 "Error: profile_name is required for setup.",
               );
-            // Scan all profiles for an exact name match: the list `query` is a
-            // search and may not reliably return an exact-named profile, which
-            // would let setup create a duplicate.
-            const existingProfiles = await listProfiles(client);
-            const existingProfile = existingProfiles?.find(
-              (p) => p.name === params.profile_name,
-            );
+            const existingProfiles = await listProfiles(client, {
+              name: params.profile_name,
+            });
+            if (existingProfiles.length > 1) {
+              return errorResponse(
+                `Error: multiple profiles match the exact name "${params.profile_name}". Rename or delete duplicate profiles by ID, then retry setup.`,
+              );
+            }
+            const existingProfile = existingProfiles[0];
+            if (!existingProfile && params.update_existing) {
+              return errorResponse(
+                `Error: profile "${params.profile_name}" does not exist. Omit update_existing to create it.`,
+              );
+            }
             let profile;
             let isNewProfile = false;
 
@@ -138,7 +150,7 @@ export function registerProfileCapabilities(server: McpServer) {
             const browser = await client.browsers.create({
               stealth: true,
               timeout_seconds: 300,
-              profile: { name: params.profile_name, save_changes: true },
+              profile: { id: profile.id, save_changes: true },
             });
             if (!browser)
               return errorResponse(
@@ -194,6 +206,26 @@ export function registerProfileCapabilities(server: McpServer) {
               );
             }
             const profile = await client.profiles.retrieve(identifier);
+            return jsonResponse(profile);
+          }
+          case "rename": {
+            if (params.profile_name && params.profile_id) {
+              return errorResponse(
+                "Error: Cannot specify both profile_name and profile_id.",
+              );
+            }
+            const identifier = params.profile_name || params.profile_id;
+            if (!identifier) {
+              return errorResponse(
+                "Error: profile_name or profile_id is required for rename.",
+              );
+            }
+            if (!params.new_name) {
+              return errorResponse("Error: new_name is required for rename.");
+            }
+            const profile = await client.profiles.update(identifier, {
+              name: params.new_name,
+            });
             return jsonResponse(profile);
           }
           case "delete": {

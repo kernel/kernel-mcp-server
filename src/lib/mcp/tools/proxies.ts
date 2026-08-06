@@ -26,17 +26,17 @@ const httpUrlSchema = z
   );
 
 export function registerProxyTools(server: McpServer) {
-  // manage_proxies -- Create, list, get, check, and delete proxy configurations
+  // manage_proxies -- Create, list, get, rename, check, and delete proxy configurations
   server.tool(
     "manage_proxies",
-    'Manage proxy configurations for routing browser traffic. Use "create" to add a proxy, "list" to see all proxies, "get" to retrieve one, "check" to test connectivity (optionally against a target URL), or "delete" to remove one. Proxy quality for bot detection avoidance, best to worst: mobile > residential > ISP > datacenter.',
+    'Manage proxy configurations for routing browser traffic. Use "create" to add a proxy, "list" to see all proxies, "get" to retrieve one, "rename" to change its name, "check" to test connectivity (optionally against a target URL), or "delete" to remove one. Proxy quality for bot detection avoidance, best to worst: mobile > residential > ISP > datacenter.',
     {
       action: z
-        .enum(["create", "list", "get", "check", "delete"])
+        .enum(["create", "list", "get", "rename", "check", "delete"])
         .describe("Operation to perform."),
       proxy_id: z
         .string()
-        .describe("(get, check, delete) Proxy ID.")
+        .describe("(get, rename, check, delete) Proxy ID.")
         .optional(),
       check_url: httpUrlSchema
         .describe(
@@ -49,7 +49,7 @@ export function registerProxyTools(server: McpServer) {
         .optional(),
       name: z
         .string()
-        .describe("(create) Readable name for the proxy.")
+        .describe("(create, rename) Readable name for the proxy.")
         .optional(),
       country: z
         .string()
@@ -149,6 +149,18 @@ export function registerProxyTools(server: McpServer) {
               return errorResponse("Error: proxy_id is required for get.");
             }
             const proxy = await client.proxies.retrieve(params.proxy_id);
+            return jsonResponse(proxy);
+          }
+          case "rename": {
+            if (!params.proxy_id) {
+              return errorResponse("Error: proxy_id is required for rename.");
+            }
+            if (!params.name) {
+              return errorResponse("Error: name is required for rename.");
+            }
+            const proxy = await client.proxies.update(params.proxy_id, {
+              name: params.name,
+            });
             return jsonResponse(proxy);
           }
           case "check": {
