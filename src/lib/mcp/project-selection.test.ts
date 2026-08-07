@@ -3,8 +3,10 @@ import type { KernelClient } from "@/lib/mcp/kernel-client";
 import {
   clearProjectSelectionScopeCacheForTests,
   connectionAllowsProjectSelection,
+  expireProjectSelectionScopeCacheForTests,
   projectIDFromParams,
   projectSelectionInputSchema,
+  requestIncludesProjectSelection,
 } from "@/lib/mcp/project-selection";
 
 const originalKernelProject = process.env.KERNEL_PROJECT;
@@ -119,6 +121,30 @@ describe("connectionAllowsProjectSelection", () => {
     expect(query).not.toContain("secret");
   });
 
+  test("keeps a previously resolved scope during a transient refresh failure", async () => {
+    delete process.env.KERNEL_PROJECT;
+    const token = "jwt.org-wide.stale";
+    expect(
+      await connectionAllowsProjectSelection(
+        token,
+        true,
+        dependencies({ jwtContext: "org_123" }),
+      ),
+    ).toBe(true);
+
+    expireProjectSelectionScopeCacheForTests();
+    expect(
+      await connectionAllowsProjectSelection(token, true, {
+        getJwtContext: async () => {
+          throw new Error("temporary outage");
+        },
+        createClient: () => {
+          throw new Error("unexpected API client");
+        },
+      }),
+    ).toBe(true);
+  });
+
   test("does not expose project selection when the server is pinned", async () => {
     process.env.KERNEL_PROJECT = "proj_server";
     expect(
@@ -141,5 +167,21 @@ describe("project selection helpers", () => {
     expect(projectIDFromParams({ project_id: "proj_123" })).toBe("proj_123");
     expect(projectIDFromParams({ project_id: "" })).toBeUndefined();
     expect(projectIDFromParams(null)).toBeUndefined();
+  });
+
+  test("keeps project selection enabled for calls that already include it", async () => {
+    const request = new Request("https://mcp.example/mcp", {
+      method: "POST",
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "manage_browsers",
+          arguments: { action: "create", project_id: "proj_123" },
+        },
+      }),
+    });
+    expect(await requestIncludesProjectSelection(request)).toBe(true);
   });
 });

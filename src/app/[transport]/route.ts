@@ -13,7 +13,10 @@ import {
   createMcpTransportSession,
   verifyMcpTransportSession,
 } from "@/lib/mcp-transport-session";
-import { connectionAllowsProjectSelection } from "@/lib/mcp/project-selection";
+import {
+  connectionAllowsProjectSelection,
+  requestIncludesProjectSelection,
+} from "@/lib/mcp/project-selection";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
 import { name, version } from "../../../server.json";
 
@@ -107,15 +110,20 @@ async function handleAuthenticatedRequest(
   if (!isValidJwtFormat(token)) {
     // Opaque API keys are authenticated by the Kernel API rather than Clerk.
     const authSubject = mcpAppsAuthSubject({ token });
-    const [mcpApps, projectSelection] = await Promise.all([
-      requestUsesMcpApps(req, {
-        authSubject,
-        transportSessionId,
-        ttlSeconds: 24 * 60 * 60,
-      }),
-      connectionAllowsProjectSelection(token, false),
-    ]);
-    const selectedHandler = selectHandler({ mcpApps, projectSelection });
+    const [mcpApps, connectionProjectSelection, requestProjectSelection] =
+      await Promise.all([
+        requestUsesMcpApps(req, {
+          authSubject,
+          transportSessionId,
+          ttlSeconds: 24 * 60 * 60,
+        }),
+        connectionAllowsProjectSelection(token, false),
+        requestIncludesProjectSelection(req),
+      ]);
+    const selectedHandler = selectHandler({
+      mcpApps,
+      projectSelection: connectionProjectSelection || requestProjectSelection,
+    });
     const authHandler = withMcpAuth(
       selectedHandler,
       async () => ({
@@ -147,15 +155,20 @@ async function handleAuthenticatedRequest(
     // Capability state is keyed only after Clerk verifies the JWT, and uses
     // the verified user plus this signed MCP transport session.
     const authSubject = mcpAppsAuthSubject({ token, userId: payload.sub });
-    const [mcpApps, projectSelection] = await Promise.all([
-      requestUsesMcpApps(req, {
-        authSubject,
-        transportSessionId,
-        ttlSeconds: 24 * 60 * 60,
-      }),
-      connectionAllowsProjectSelection(token, true),
-    ]);
-    const selectedHandler = selectHandler({ mcpApps, projectSelection });
+    const [mcpApps, connectionProjectSelection, requestProjectSelection] =
+      await Promise.all([
+        requestUsesMcpApps(req, {
+          authSubject,
+          transportSessionId,
+          ttlSeconds: 24 * 60 * 60,
+        }),
+        connectionAllowsProjectSelection(token, true),
+        requestIncludesProjectSelection(req),
+      ]);
+    const selectedHandler = selectHandler({
+      mcpApps,
+      projectSelection: connectionProjectSelection || requestProjectSelection,
+    });
 
     // Create authenticated handler with auth info
     const authHandler = withMcpAuth(

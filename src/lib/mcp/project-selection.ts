@@ -46,12 +46,9 @@ function scopeCacheKey(token: string) {
   return createHash("sha256").update(token).digest("hex");
 }
 
-function readScopeCache(token: string) {
-  const key = scopeCacheKey(token);
-  const cached = scopeCache.get(key);
-  if (!cached) return undefined;
-  if (cached.expiresAt <= Date.now()) {
-    scopeCache.delete(key);
+function readScopeCache(token: string, allowExpired = false) {
+  const cached = scopeCache.get(scopeCacheKey(token));
+  if (!cached || (!allowExpired && cached.expiresAt <= Date.now())) {
     return undefined;
   }
   return cached.allowsProjectSelection;
@@ -116,6 +113,7 @@ export async function connectionAllowsProjectSelection(
 
   const cached = readScopeCache(token);
   if (cached !== undefined) return cached;
+  const stale = readScopeCache(token, true);
 
   let allowsProjectSelection = false;
   let resolved = true;
@@ -140,9 +138,40 @@ export async function connectionAllowsProjectSelection(
   }
 
   if (resolved) writeScopeCache(token, allowsProjectSelection);
-  return allowsProjectSelection;
+  return resolved ? allowsProjectSelection : (stale ?? false);
+}
+
+export async function requestIncludesProjectSelection(req: Request) {
+  if (req.method !== "POST") return false;
+
+  let body: unknown;
+  try {
+    body = await req.clone().json();
+  } catch {
+    return false;
+  }
+
+  const requests = Array.isArray(body) ? body : [body];
+  return requests.some((request) => {
+    if (!request || typeof request !== "object") return false;
+    const candidate = request as {
+      method?: unknown;
+      params?: { arguments?: unknown };
+    };
+    const args = candidate.params?.arguments;
+    return (
+      candidate.method === "tools/call" &&
+      args !== null &&
+      typeof args === "object" &&
+      projectIDFromParams(args) !== undefined
+    );
+  });
 }
 
 export function clearProjectSelectionScopeCacheForTests() {
   scopeCache.clear();
+}
+
+export function expireProjectSelectionScopeCacheForTests() {
+  for (const entry of scopeCache.values()) entry.expiresAt = 0;
 }
