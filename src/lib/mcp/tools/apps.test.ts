@@ -92,6 +92,10 @@ describe("manage_apps invoke", () => {
         action: "get_invocation",
         invocation_id: "inv_123",
       },
+      polling: {
+        interval_seconds: 5,
+        max_attempts: 60,
+      },
     });
   });
 });

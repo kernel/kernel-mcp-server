@@ -11,6 +11,11 @@ import {
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 
+const invocationPolling = {
+  interval_seconds: 5,
+  max_attempts: 60,
+} as const;
+
 export function registerAppCapabilities(server: McpServer) {
   server.resource("apps", "apps://", async (uri, extra) => {
     if (!extra.authInfo) {
@@ -46,7 +51,7 @@ export function registerAppCapabilities(server: McpServer) {
   // manage_apps -- List apps, invoke actions, manage deployments, check invocations
   server.tool(
     "manage_apps",
-    'Manage Kernel apps when an agent needs to discover deployed app actions, invoke an app, or inspect deployment/invocation state. Use "list_apps" before invoking an unknown app. "invoke" starts an action asynchronously and returns an invocation_id immediately; poll "get_invocation" with that ID until the invocation reaches a terminal state. Use get/list actions to inspect results and "delete_deployment" to remove a deployment.',
+    'Manage Kernel apps when an agent needs to discover deployed app actions, invoke an app, or inspect deployment/invocation state. Use "list_apps" before invoking an unknown app. "invoke" starts an action asynchronously and returns an invocation_id immediately. Follow the returned polling interval and attempt limit; if the invocation is still running, report its ID instead of continuing indefinitely. Use get/list actions to inspect results and "delete_deployment" to remove a deployment.',
     {
       action: z
         .enum([
@@ -135,6 +140,7 @@ export function registerAppCapabilities(server: McpServer) {
                 action: "get_invocation",
                 invocation_id: invocation.id,
               },
+              polling: invocationPolling,
             });
           }
           case "get_deployment": {
