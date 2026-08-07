@@ -176,6 +176,27 @@ describe("manage_browser_files", () => {
     });
   });
 
+  test("uses an absolute resource path when downloading the root directory", async () => {
+    const fs = {
+      downloadDirZip: async () => new Response(new Uint8Array([80, 75])),
+    } as any;
+
+    const result = await runBrowserFileAction(fs, {
+      action: "download_dir_zip",
+      session_id: "session-1",
+      path: "/",
+    });
+
+    expect(result.content[0]).toEqual({
+      type: "resource",
+      resource: {
+        uri: "kernel-browser-file://session-1/browser-files.zip",
+        blob: "UEs=",
+        mimeType: "application/zip",
+      },
+    });
+  });
+
   test("routes filesystem mutations to the SDK", async () => {
     const calls: Array<[string, unknown]> = [];
     const fs = {

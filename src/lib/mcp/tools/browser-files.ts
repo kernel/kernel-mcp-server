@@ -109,10 +109,16 @@ function decodeContent(content: string, encoding: "utf8" | "base64" = "utf8") {
 }
 
 function encodedPath(path: string) {
-  return path
+  const absolutePath = path.startsWith("/") ? path : `/${path}`;
+  return absolutePath
     .split("/")
     .map((part) => encodeURIComponent(part))
     .join("/");
+}
+
+function zipResourcePath(path: string) {
+  const directoryPath = path.replace(/\/+$/, "");
+  return `${directoryPath || "/browser-files"}.zip`;
 }
 
 function embeddedFileResponse(
@@ -228,7 +234,7 @@ export async function runBrowserFileAction(
       const response = await fs.downloadDirZip(params.session_id, { path });
       return embeddedFileResponse(
         params.session_id,
-        `${path.replace(/\/$/, "")}.zip`,
+        zipResourcePath(path),
         await responseBuffer(response),
         "application/zip",
       );
