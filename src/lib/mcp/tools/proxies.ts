@@ -12,6 +12,11 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
+import {
+  projectIDFromParams,
+  projectSelectionInputSchema,
+  type ProjectSelectionOptions,
+} from "@/lib/mcp/project-selection";
 
 const httpUrlSchema = z
   .string()
@@ -30,13 +35,16 @@ const httpUrlSchema = z
 
 export function registerProxyTools(
   server: McpServer,
-  dependencies: McpDependencies = defaultMcpDependencies,
+  options: ProjectSelectionOptions & McpDependencies = {
+    ...defaultMcpDependencies,
+  },
 ) {
   // manage_proxies -- Create, list, get, rename, check, and delete proxy configurations
   server.tool(
     "manage_proxies",
     'Manage proxy configurations for routing browser traffic. Use "create" to add a proxy, "list" to see all proxies, "get" to retrieve one, "rename" to change its name, "check" to test connectivity (optionally against a target URL), or "delete" to remove one. Proxy quality for bot detection avoidance, best to worst: mobile > residential > ISP > datacenter.',
     {
+      ...projectSelectionInputSchema(options.projectSelection),
       action: z
         .enum(["create", "list", "get", "rename", "check", "delete"])
         .describe("Operation to perform."),
@@ -95,7 +103,10 @@ export function registerProxyTools(
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = dependencies.createKernelClient(extra.authInfo.token);
+      const client = options.createKernelClient(
+        extra.authInfo.token,
+        projectIDFromParams(params),
+      );
 
       try {
         switch (params.action) {

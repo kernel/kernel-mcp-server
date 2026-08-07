@@ -1,13 +1,21 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
+import {
+  projectSelectionInputSchema,
+  type ProjectSelectionOptions,
+} from "@/lib/mcp/project-selection";
 
-export function registerPlaywrightTool(server: McpServer) {
+export function registerPlaywrightTool(
+  server: McpServer,
+  options: ProjectSelectionOptions = {},
+) {
   // execute_playwright_code -- Run Playwright/TypeScript code against a browser
   server.tool(
     "execute_playwright_code",
     "Execute Playwright/TypeScript automation code against an existing Kernel browser session. Does not create or delete browsers -- use manage_browsers to manage session lifecycle.",
     {
+      ...projectSelectionInputSchema(options.projectSelection),
       code: z
         .string()
         .describe(
@@ -25,9 +33,9 @@ export function registerPlaywrightTool(server: McpServer) {
       idempotentHint: false,
       openWorldHint: true,
     },
-    async ({ code, session_id }, extra) => {
+    async ({ code, session_id, project_id }, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
+      const client = createKernelClient(extra.authInfo.token, project_id);
 
       try {
         if (!code || typeof code !== "string")

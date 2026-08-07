@@ -17,6 +17,11 @@ import {
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 import {
+  projectIDFromParams,
+  projectSelectionInputSchema,
+  type ProjectSelectionOptions,
+} from "@/lib/mcp/project-selection";
+import {
   TELEMETRY_EVENT_CATALOG,
   telemetryEventCategories,
 } from "@/lib/mcp/telemetry";
@@ -311,7 +316,10 @@ function buildSshPortForwardingInfo(
   };
 }
 
-export function registerBrowserCapabilities(server: McpServer) {
+export function registerBrowserCapabilities(
+  server: McpServer,
+  options: ProjectSelectionOptions = {},
+) {
   server.resource("browsers", "browsers://", async (uri, extra) => {
     if (!extra.authInfo) {
       throw new Error("Authentication required");
@@ -347,6 +355,7 @@ export function registerBrowserCapabilities(server: McpServer) {
     "manage_browsers",
     'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished.',
     {
+      ...projectSelectionInputSchema(options.projectSelection),
       action: z
         .enum(["create", "update", "list", "get", "get_telemetry", "delete"])
         .describe("Operation to perform."),
@@ -551,7 +560,10 @@ export function registerBrowserCapabilities(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
+      const client = createKernelClient(
+        extra.authInfo.token,
+        projectIDFromParams(params),
+      );
 
       try {
         switch (params.action) {

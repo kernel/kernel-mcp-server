@@ -10,8 +10,16 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
+import {
+  projectIDFromParams,
+  projectSelectionInputSchema,
+  type ProjectSelectionOptions,
+} from "@/lib/mcp/project-selection";
 
-export function registerAppCapabilities(server: McpServer) {
+export function registerAppCapabilities(
+  server: McpServer,
+  options: ProjectSelectionOptions = {},
+) {
   server.resource("apps", "apps://", async (uri, extra) => {
     if (!extra.authInfo) {
       throw new Error("Authentication required");
@@ -48,6 +56,7 @@ export function registerAppCapabilities(server: McpServer) {
     "manage_apps",
     'Manage Kernel apps when an agent needs to discover deployed app actions, invoke an app, or inspect deployment/invocation state. Use "list_apps" before invoking an unknown app, "invoke" to run an action, get/list actions to inspect results, and "delete_deployment" to remove a deployment.',
     {
+      ...projectSelectionInputSchema(options.projectSelection),
       action: z
         .enum([
           "list_apps",
@@ -98,7 +107,10 @@ export function registerAppCapabilities(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
+      const client = createKernelClient(
+        extra.authInfo.token,
+        projectIDFromParams(params),
+      );
 
       try {
         switch (params.action) {

@@ -21,17 +21,24 @@ const NON_AUTH_TOOLSETS = [
   "credential_providers",
 ].join(",");
 
-function captureRegistration(mcpApps: boolean) {
+function captureRegistration(mcpApps: boolean, projectSelection = false) {
   const legacyTools: string[] = [];
   const appTools: string[] = [];
   const resources: string[] = [];
+  const schemas = new Map<string, Record<string, unknown>>();
   const server = {
     prompt() {},
-    tool(name: string) {
+    resource() {},
+    tool(name: string, _description: string, inputSchema: object) {
       legacyTools.push(name);
+      schemas.set(name, inputSchema as Record<string, unknown>);
     },
-    registerTool(name: string) {
+    registerTool(
+      name: string,
+      config: { inputSchema?: Record<string, unknown> },
+    ) {
       appTools.push(name);
+      schemas.set(name, config.inputSchema ?? {});
       return { enable() {}, disable() {} };
     },
     registerResource(name: string) {
@@ -39,8 +46,8 @@ function captureRegistration(mcpApps: boolean) {
       return { enable() {}, disable() {} };
     },
   } as unknown as McpServer;
-  registerMcpCapabilities(server, { mcpApps });
-  return { legacyTools, appTools, resources };
+  registerMcpCapabilities(server, { mcpApps, projectSelection });
+  return { legacyTools, appTools, resources, schemas };
 }
 
 describe("MCP Apps additive registration", () => {
@@ -66,6 +73,50 @@ describe("MCP Apps additive registration", () => {
       } else {
         process.env.KERNEL_MCP_DISABLED_TOOLSETS = previous;
       }
+    }
+  });
+});
+
+describe("project selection registration", () => {
+  const projectScopedTools = [
+    "manage_profiles",
+    "manage_browsers",
+    "manage_browser_pools",
+    "browser_curl",
+    "manage_proxies",
+    "manage_extensions",
+    "manage_apps",
+    "computer_action",
+    "exec_command",
+    "execute_playwright_code",
+    "manage_replays",
+    "manage_auth_connections",
+    "manage_credentials",
+    "open_auth_login",
+    "begin_auth_login",
+  ];
+
+  test("advertises project_id only for project-scoped resource tools", () => {
+    const orgWide = captureRegistration(true, true);
+    const projectScoped = captureRegistration(true, false);
+
+    for (const name of projectScopedTools) {
+      expect(orgWide.schemas.get(name)).toHaveProperty("project_id");
+      expect(projectScoped.schemas.get(name)).not.toHaveProperty("project_id");
+    }
+
+    for (const name of ["search_docs", "manage_credential_providers"]) {
+      expect(orgWide.schemas.get(name)).not.toHaveProperty("project_id");
+    }
+
+    for (const name of ["manage_projects", "manage_api_keys"]) {
+      const orgWideProjectID = orgWide.schemas.get(name)?.project_id as {
+        description?: string;
+      };
+      const scopedProjectID = projectScoped.schemas.get(name)?.project_id as {
+        description?: string;
+      };
+      expect(orgWideProjectID.description).toBe(scopedProjectID.description);
     }
   });
 });

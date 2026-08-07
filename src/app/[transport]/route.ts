@@ -13,6 +13,7 @@ import {
   createMcpTransportSession,
   verifyMcpTransportSession,
 } from "@/lib/mcp-transport-session";
+import { connectionAllowsProjectSelection } from "@/lib/mcp/project-selection";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
 import { name, version } from "../../../server.json";
 
@@ -51,17 +52,42 @@ function createAuthErrorResponse(
   );
 }
 
-// The base tool set is unchanged. Capability negotiation only adds the
-// Managed Auth launcher, its resource, and its app-only implementation tools.
+// Handler variants keep per-connection capabilities out of tools/list unless
+// the authenticated connection can use them.
 const serverInfo = { serverInfo: { name, version } };
-const handler = createMcpHandler((server) => {
-  instrumentMcpAnalytics(server);
-  registerMcpCapabilities(server);
-}, serverInfo);
-const mcpAppsHandler = createMcpHandler((server) => {
-  instrumentMcpAnalytics(server);
-  registerMcpCapabilities(server, { mcpApps: true });
-}, serverInfo);
+function createHandler({
+  mcpApps = false,
+  projectSelection = false,
+}: {
+  mcpApps?: boolean;
+  projectSelection?: boolean;
+} = {}) {
+  return createMcpHandler((server) => {
+    instrumentMcpAnalytics(server);
+    registerMcpCapabilities(server, { mcpApps, projectSelection });
+  }, serverInfo);
+}
+
+const handler = createHandler();
+const projectSelectionHandler = createHandler({ projectSelection: true });
+const mcpAppsHandler = createHandler({ mcpApps: true });
+const mcpAppsProjectSelectionHandler = createHandler({
+  mcpApps: true,
+  projectSelection: true,
+});
+
+function selectHandler({
+  mcpApps,
+  projectSelection,
+}: {
+  mcpApps: boolean;
+  projectSelection: boolean;
+}) {
+  if (mcpApps) {
+    return projectSelection ? mcpAppsProjectSelectionHandler : mcpAppsHandler;
+  }
+  return projectSelection ? projectSelectionHandler : handler;
+}
 
 async function handleAuthenticatedRequest(
   req: NextRequest,
@@ -81,13 +107,15 @@ async function handleAuthenticatedRequest(
   if (!isValidJwtFormat(token)) {
     // Opaque API keys are authenticated by the Kernel API rather than Clerk.
     const authSubject = mcpAppsAuthSubject({ token });
-    const selectedHandler = (await requestUsesMcpApps(req, {
-      authSubject,
-      transportSessionId,
-      ttlSeconds: 24 * 60 * 60,
-    }))
-      ? mcpAppsHandler
-      : handler;
+    const [mcpApps, projectSelection] = await Promise.all([
+      requestUsesMcpApps(req, {
+        authSubject,
+        transportSessionId,
+        ttlSeconds: 24 * 60 * 60,
+      }),
+      connectionAllowsProjectSelection(token, false),
+    ]);
+    const selectedHandler = selectHandler({ mcpApps, projectSelection });
     const authHandler = withMcpAuth(
       selectedHandler,
       async () => ({
@@ -119,13 +147,15 @@ async function handleAuthenticatedRequest(
     // Capability state is keyed only after Clerk verifies the JWT, and uses
     // the verified user plus this signed MCP transport session.
     const authSubject = mcpAppsAuthSubject({ token, userId: payload.sub });
-    const selectedHandler = (await requestUsesMcpApps(req, {
-      authSubject,
-      transportSessionId,
-      ttlSeconds: 24 * 60 * 60,
-    }))
-      ? mcpAppsHandler
-      : handler;
+    const [mcpApps, projectSelection] = await Promise.all([
+      requestUsesMcpApps(req, {
+        authSubject,
+        transportSessionId,
+        ttlSeconds: 24 * 60 * 60,
+      }),
+      connectionAllowsProjectSelection(token, true),
+    ]);
+    const selectedHandler = selectHandler({ mcpApps, projectSelection });
 
     // Create authenticated handler with auth info
     const authHandler = withMcpAuth(

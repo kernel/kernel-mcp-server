@@ -8,13 +8,22 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
+import {
+  projectIDFromParams,
+  projectSelectionInputSchema,
+  type ProjectSelectionOptions,
+} from "@/lib/mcp/project-selection";
 
-export function registerExtensionTools(server: McpServer) {
+export function registerExtensionTools(
+  server: McpServer,
+  options: ProjectSelectionOptions = {},
+) {
   // manage_extensions -- List and delete browser extensions
   server.tool(
     "manage_extensions",
     'Manage browser extensions uploaded to Kernel. Use "list" to see all extensions available to the current project or "delete" to remove one by ID or name.',
     {
+      ...projectSelectionInputSchema(options.projectSelection),
       action: z.enum(["list", "delete"]).describe("Operation to perform."),
       id_or_name: z
         .string()
@@ -31,7 +40,10 @@ export function registerExtensionTools(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
+      const client = createKernelClient(
+        extra.authInfo.token,
+        projectIDFromParams(params),
+      );
 
       try {
         switch (params.action) {

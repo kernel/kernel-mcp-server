@@ -42,6 +42,35 @@ describe("manage_auth_connections programmatic surface", () => {
     expect(schema?.sign_in_option_id).toBeUndefined();
   });
 
+  test("constructs a project-scoped client from the optional selector", async () => {
+    const { handler, schema } = captureHandler(true);
+    let selectedProject: string | undefined;
+    kernelClientMock.factory = (_token, projectID) => {
+      selectedProject = projectID;
+      return {
+        auth: {
+          connections: {
+            list: async () => ({
+              getPaginatedItems: () => [],
+              has_more: false,
+              next_offset: null,
+            }),
+          },
+        },
+      };
+    };
+    try {
+      expect(schema?.project_id).toBeDefined();
+      await handler(
+        { action: "list", project_id: "proj_123" },
+        { authInfo: { token: "test-token" } },
+      );
+      expect(selectedProject).toBe("proj_123");
+    } finally {
+      kernelClientMock.factory = () => unusedKernelClient;
+    }
+  });
+
   test("forwards replay and browser telemetry settings on create and login", async () => {
     const { handler } = captureHandler();
     let createBody: unknown;

@@ -263,6 +263,8 @@ One additional Managed Auth helper (`begin_auth_login`) is marked app-only (`_me
 
 Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_DISABLED_TOOLSETS` to a comma-separated list. For example, `KERNEL_MCP_DISABLED_TOOLSETS=api_keys` prevents `manage_api_keys` from being registered.
 
+Organization-wide connections receive an optional `project_id` parameter on tools that operate on project-scoped resources. Use the same `project_id` for follow-up operations on a browser, profile, pool, proxy, app, managed-auth connection, or credential. Project-scoped connections do not advertise this parameter because their project is fixed by authentication.
+
 ### manage\_\* tools
 
 - `manage_browsers` - Create, update, list, get, and delete browser sessions, and read archived telemetry for active or deleted sessions. Supports headless/stealth modes, profiles, proxies, viewports, extensions, and SSH tunneling.

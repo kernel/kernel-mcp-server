@@ -22,14 +22,23 @@ import { registerProjectCapabilities } from "@/lib/mcp/tools/projects";
 import { registerProxyTools } from "@/lib/mcp/tools/proxies";
 import { registerReplayTools } from "@/lib/mcp/tools/replays";
 import { registerShellTool } from "@/lib/mcp/tools/shell";
+import type { ProjectSelectionOptions } from "@/lib/mcp/project-selection";
 
+type McpToolOptions = ProjectSelectionOptions & McpDependencies;
+type McpRegistrationOptions = ProjectSelectionOptions & {
+  mcpApps?: boolean;
+  dependencies?: McpDependencies;
+};
 type RegisterMcpToolset = (
   server: McpServer,
-  dependencies?: McpDependencies,
+  options: McpToolOptions,
 ) => void;
 
-function registerManagedAuthCapabilities(server: McpServer) {
-  registerAuthConnectionTools(server);
+function registerManagedAuthCapabilities(
+  server: McpServer,
+  options: McpRegistrationOptions,
+) {
+  registerAuthConnectionTools(server, options);
 }
 
 const mcpToolRegistrations = [
@@ -134,16 +143,18 @@ export function registerMcpCapabilities(
   server: McpServer,
   {
     mcpApps = false,
+    projectSelection = false,
     dependencies = defaultMcpDependencies,
-  }: { mcpApps?: boolean; dependencies?: McpDependencies } = {},
+  }: McpRegistrationOptions = {},
 ) {
   const disabledToolsets = disabledMcpToolsetsFromEnv();
+  const options = { ...dependencies, projectSelection };
 
   registerKernelPrompts(server);
 
   for (const [toolset, registerToolset] of mcpToolRegistrations) {
     if (toolsetEnabled(disabledToolsets, toolset)) {
-      registerToolset(server, dependencies);
+      registerToolset(server, options);
     }
   }
 
@@ -151,6 +162,6 @@ export function registerMcpCapabilities(
   // adds one interactive launcher (plus its app-only implementation tools and
   // resource) without replacing or narrowing manage_auth_connections.
   if (mcpApps && toolsetEnabled(disabledToolsets, "auth_connections")) {
-    registerAuthLoginApp(server);
+    registerAuthLoginApp(server, options);
   }
 }

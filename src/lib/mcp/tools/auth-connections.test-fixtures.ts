@@ -142,7 +142,7 @@ export function assertNoSecrets(value: unknown) {
   expect(json).not.toContain("untrusted website text");
 }
 
-export function captureHandler() {
+export function captureHandler(projectSelection = false) {
   let handler: ((params: any, extra: any) => Promise<any>) | undefined;
   let schema: Record<string, any> | undefined;
   const server = {
@@ -156,7 +156,7 @@ export function captureHandler() {
       handler = rest[rest.length - 1];
     },
   } as unknown as McpServer;
-  registerAuthConnectionTools(server);
+  registerAuthConnectionTools(server, { projectSelection });
   return {
     get handler() {
       return handler!;

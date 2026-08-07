@@ -16,6 +16,11 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
+import {
+  projectIDFromParams,
+  projectSelectionInputSchema,
+  type ProjectSelectionOptions,
+} from "@/lib/mcp/project-selection";
 
 type BrowserPoolCreateParams = Parameters<
   KernelClient["browserPools"]["create"]
@@ -209,7 +214,10 @@ function summarizeAcquiredBrowser(browser: BrowserPoolAcquireResponse) {
   };
 }
 
-export function registerBrowserPoolCapabilities(server: McpServer) {
+export function registerBrowserPoolCapabilities(
+  server: McpServer,
+  options: ProjectSelectionOptions = {},
+) {
   server.resource("browser_pools", "browser-pools://", async (uri, extra) => {
     if (!extra.authInfo) {
       throw new Error("Authentication required");
@@ -247,6 +255,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
     "manage_browser_pools",
     'Manage pre-warmed browser pools when an agent needs fast browser acquisition or reusable session capacity. Use "list" for a compact pool inventory, "get" for full details, "acquire" before controlling a pooled browser, and "release" when the browser should return to the pool.',
     {
+      ...projectSelectionInputSchema(options.projectSelection),
       action: z
         .enum([
           "create",
@@ -406,7 +415,10 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
+      const client = createKernelClient(
+        extra.authInfo.token,
+        projectIDFromParams(params),
+      );
 
       try {
         switch (params.action) {

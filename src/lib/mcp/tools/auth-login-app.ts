@@ -19,6 +19,10 @@ import {
 } from "@/lib/mcp/tools/managed-auth-state";
 import { managedAuthBrowserTelemetrySchema } from "@/lib/mcp/tools/managed-auth-telemetry";
 import { errorResponse } from "@/lib/mcp/responses";
+import {
+  projectSelectionInputSchema,
+  type ProjectSelectionOptions,
+} from "@/lib/mcp/project-selection";
 
 export { initializeDeclaresMcpApps };
 
@@ -46,7 +50,8 @@ export function managedAuthResourceMeta() {
   };
 }
 
-const authLoginInputSchema = {
+const authLoginInputSchema = (projectSelection = false) => ({
+  ...projectSelectionInputSchema(projectSelection),
   mode: z.enum(["new_login", "reauth"]),
   connection_id: z.string().min(1).optional(),
   domain: z.string().optional(),
@@ -65,12 +70,13 @@ const authLoginInputSchema = {
     .default({ enabled: true }),
   proxy_id: z.string().min(1).optional(),
   proxy_name: z.string().min(1).optional(),
-};
+});
 
 function waitAction(
   connectionId: string,
   flowCheckpoint: string,
   waitSeconds: number,
+  projectID?: string,
 ) {
   return {
     tool: "manage_auth_connections" as const,
@@ -79,6 +85,7 @@ function waitAction(
       id: connectionId,
       flow_checkpoint: flowCheckpoint,
       wait_seconds: waitSeconds,
+      ...(projectID && { project_id: projectID }),
     },
   };
 }
@@ -89,6 +96,7 @@ function inputFromParams(params: AuthLoginInput): AuthLoginInput {
     ...(params.connection_id && { connection_id: params.connection_id }),
     ...(params.domain && { domain: params.domain }),
     ...(params.profile_name && { profile_name: params.profile_name }),
+    ...(params.project_id && { project_id: params.project_id }),
     ...(params.save_credentials !== undefined && {
       save_credentials: params.save_credentials,
     }),
@@ -99,7 +107,10 @@ function inputFromParams(params: AuthLoginInput): AuthLoginInput {
   };
 }
 
-export function registerAuthLoginApp(server: McpServer) {
+export function registerAuthLoginApp(
+  server: McpServer,
+  options: ProjectSelectionOptions = {},
+) {
   const resourceMeta = managedAuthResourceMeta();
 
   server.registerResource(
@@ -130,7 +141,7 @@ export function registerAuthLoginApp(server: McpServer) {
       title: "Open secure managed-auth login",
       description:
         'Open Kernel\'s secure interactive login panel so the user can enter credentials and MFA without exposing them to the conversation. Use this when a user directly asks to log in/sign in, or after a protected browser task discovers authentication is needed and the user consents. A direct request to log in is already consent; do not ask again. First list manage_auth_connections for the exact domain across all pages. Reuse an authenticated connection, ask the user to choose only when multiple relevant accounts exist, or call this tool with mode="reauth" and connection_id for an existing connection that needs authentication. If none exists, call with mode="new_login", domain, and a concise stable profile_name derived from the service (for example "hacker-news") unless the user supplied one; do not ask solely for a profile name. Replay recording and default operational browser telemetry are enabled unless explicitly disabled with record_session=false or browser_telemetry={enabled:false}. This launcher never creates or starts a flow—the App does that only after the user clicks Continue. Immediately follow the returned next_action, repeat its read-only wait while pending, then resume the original task using the authenticated profile_name. Never ask for passwords, credentials, OTPs, or MFA values in chat.',
-      inputSchema: authLoginInputSchema,
+      inputSchema: authLoginInputSchema(options.projectSelection),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -150,7 +161,7 @@ export function registerAuthLoginApp(server: McpServer) {
       const input = inputFromParams(params);
       const validationError = validateAuthLoginInput(input);
       if (validationError) return errorResponse(`Error: ${validationError}`);
-      const client = createKernelClient(extra.authInfo.token);
+      const client = createKernelClient(extra.authInfo.token, input.project_id);
 
       try {
         const reauthConnection =
@@ -172,6 +183,7 @@ export function registerAuthLoginApp(server: McpServer) {
                 hasLiveAuthFlow(reauthConnection) ? "event" : "after",
               ),
               25,
+              input.project_id,
             )
           : {
               tool: "manage_auth_connections" as const,
@@ -180,6 +192,7 @@ export function registerAuthLoginApp(server: McpServer) {
                 domain_filter: input.domain!,
                 profile_name: input.profile_name!,
                 wait_seconds: 25,
+                ...(input.project_id && { project_id: input.project_id }),
               },
             };
         const waitArguments = nextAction.arguments;
@@ -214,7 +227,7 @@ export function registerAuthLoginApp(server: McpServer) {
       title: "Begin secure managed authentication (app-only)",
       description:
         "Start or resume the secure managed-auth flow after the App user clicks Continue.",
-      inputSchema: authLoginInputSchema,
+      inputSchema: authLoginInputSchema(options.projectSelection),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -244,7 +257,7 @@ export function registerAuthLoginApp(server: McpServer) {
       const input = inputFromParams(params);
       const validationError = validateAuthLoginInput(input);
       if (validationError) return errorResponse(`Error: ${validationError}`);
-      const client = createKernelClient(extra.authInfo.token);
+      const client = createKernelClient(extra.authInfo.token, input.project_id);
 
       try {
         const result = await beginAuthLogin(client, input);
@@ -276,6 +289,7 @@ export function registerAuthLoginApp(server: McpServer) {
                 result.connection.id,
                 result.flow_checkpoint,
                 5,
+                input.project_id,
               ),
             }),
             // Execution is gated on the client's MCP Apps capability, so

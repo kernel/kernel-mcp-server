@@ -15,6 +15,11 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
+import {
+  projectIDFromParams,
+  projectSelectionInputSchema,
+  type ProjectSelectionOptions,
+} from "@/lib/mcp/project-selection";
 
 type ProfileListParams = NonNullable<
   Parameters<KernelClient["profiles"]["list"]>[0]
@@ -65,14 +70,16 @@ function requireProfileIdentifier(
 
 export function registerProfileCapabilities(
   server: McpServer,
-  dependencies: McpDependencies = defaultMcpDependencies,
+  options: ProjectSelectionOptions & McpDependencies = {
+    ...defaultMcpDependencies,
+  },
 ) {
   server.resource("profiles", "profiles://", async (uri, extra) => {
     if (!extra.authInfo) {
       throw new Error("Authentication required");
     }
 
-    const client = dependencies.createKernelClient(extra.authInfo.token);
+    const client = options.createKernelClient(extra.authInfo.token);
     const profiles = await listProfiles(client);
     return {
       contents: [
@@ -97,13 +104,14 @@ export function registerProfileCapabilities(
       resourceLabel: "Profile",
       read: (client, profileName) => client.profiles.retrieve(profileName),
     },
-    dependencies,
+    options,
   );
 
   server.tool(
     "manage_profiles",
     'Manage browser profiles when an agent needs persistent cookies, login state, or reusable browser state. Use "setup" for a guided login session, "list" to find a profile, "get" to retrieve one, "rename" to change its name, and "delete" only when a profile should be removed. Do not rename a profile while a browser is using it because that session may no longer save changes back to the profile.',
     {
+      ...projectSelectionInputSchema(options.projectSelection),
       action: z
         .enum(["setup", "list", "get", "rename", "delete"])
         .describe("Operation to perform."),
@@ -139,7 +147,10 @@ export function registerProfileCapabilities(
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = dependencies.createKernelClient(extra.authInfo.token);
+      const client = options.createKernelClient(
+        extra.authInfo.token,
+        projectIDFromParams(params),
+      );
 
       try {
         switch (params.action) {
