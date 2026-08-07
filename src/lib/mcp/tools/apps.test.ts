@@ -1,7 +1,20 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type {
+  InvocationCreateParams,
+  InvocationCreateResponse,
+} from "@onkernel/sdk/resources/invocations";
 
-let kernelClient: any;
+type InvocationClient = {
+  invocations: {
+    create: (
+      input: InvocationCreateParams,
+    ) => Promise<InvocationCreateResponse>;
+    follow: (invocationId: string) => never;
+  };
+};
+
+let kernelClient: InvocationClient;
 
 mock.module("@/lib/mcp/kernel-client", () => ({
   createKernelClient: () => kernelClient,
@@ -9,15 +22,19 @@ mock.module("@/lib/mcp/kernel-client", () => ({
 
 const { registerAppCapabilities } = await import("@/lib/mcp/tools/apps");
 
-type ToolHandler = (params: any, extra: any) => Promise<any>;
+type ToolResult = { content: Array<{ type: string; text: string }> };
+type ToolHandler = (
+  params: Record<string, unknown>,
+  extra: { authInfo?: { token: string } },
+) => Promise<ToolResult>;
 
 function captureManageAppsHandler() {
   let handler: ToolHandler | undefined;
   const server = {
     resource() {},
-    tool(name: string, ...args: any[]) {
+    tool(name: string, ...args: unknown[]) {
       if (name === "manage_apps") {
-        handler = args.at(-1);
+        handler = args.at(-1) as ToolHandler;
       }
     },
   } as unknown as McpServer;
@@ -33,9 +50,13 @@ describe("manage_apps invoke", () => {
     let followCalls = 0;
     kernelClient = {
       invocations: {
-        create: async (input: unknown) => {
+        create: async (input) => {
           createInput = input;
-          return { id: "inv_123", status: "pending" };
+          return {
+            id: "inv_123",
+            action_name: "cua-task",
+            status: "queued",
+          };
         },
         follow: () => {
           followCalls += 1;
@@ -64,7 +85,8 @@ describe("manage_apps invoke", () => {
     expect(followCalls).toBe(0);
     expect(JSON.parse(result.content[0].text)).toEqual({
       id: "inv_123",
-      status: "pending",
+      action_name: "cua-task",
+      status: "queued",
       invocation_id: "inv_123",
       next_action: {
         action: "get_invocation",
