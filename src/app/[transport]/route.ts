@@ -6,7 +6,12 @@ import {
 import { verifyToken } from "@clerk/nextjs/server";
 import { after, NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
-import { flushMcpAnalytics, instrumentMcpAnalytics } from "@/lib/mcp/analytics";
+import {
+  flushMcpAnalytics,
+  instrumentMcpAnalytics,
+  isMcpAnalyticsEnabled,
+} from "@/lib/mcp/analytics";
+import { resolveMcpConnectionAnalyticsContext } from "@/lib/mcp/auth-context";
 import { mcpAppsAuthSubject } from "@/lib/mcp-apps-marker";
 import { requestUsesMcpApps } from "@/lib/mcp-apps-request";
 import {
@@ -92,6 +97,7 @@ function selectHandler({
 async function handleAuthenticatedRequest(
   req: NextRequest,
   transportSessionId: string | null = null,
+  observeConnection = false,
 ): Promise<Response> {
   const authHeader = req.headers.get("Authorization");
   const token = authHeader?.startsWith("Bearer ")
@@ -103,6 +109,14 @@ async function handleAuthenticatedRequest(
       "Missing or invalid access token",
     );
   }
+
+  const connectionAnalytics = observeConnection
+    ? await resolveMcpConnectionAnalyticsContext({
+        token,
+        enabled: isMcpAnalyticsEnabled(),
+        signal: req.signal,
+      })
+    : null;
 
   if (!isValidJwtFormat(token)) {
     // Opaque API keys are authenticated by the Kernel API rather than Clerk.
@@ -129,7 +143,11 @@ async function handleAuthenticatedRequest(
         token,
         scopes: ["apikey"],
         clientId: "mcp-server",
-        extra: { userId: null, clerkToken: null },
+        extra: {
+          userId: null,
+          clerkToken: null,
+          connectionAnalytics,
+        },
       }),
       {
         required: true,
@@ -183,6 +201,7 @@ async function handleAuthenticatedRequest(
           extra: {
             userId: payload.sub,
             clerkToken: token,
+            connectionAnalytics,
           },
         };
       },
@@ -252,6 +271,7 @@ export async function POST(req: NextRequest): Promise<Response> {
       signal: req.signal,
     }),
     session?.id ?? null,
+    isStreamableInitialize,
   );
 
   if (!session) return response;
