@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
   buildBrowserCreateConfig,
+  buildBrowserSharedConfig,
   type BrowserConfigResult,
   type BrowserCreateConfigParams,
 } from "@/lib/mcp/browser-config";
@@ -49,37 +50,6 @@ type PoolConfigParams = Omit<
 const browserPoolTimeoutSchema = z.number().int().min(10).max(259200);
 const browserPoolFillRateSchema = z.number().int().min(0);
 
-function buildPoolConfigParams(
-  params: PoolConfigParams,
-): BrowserConfigResult<BrowserPoolUpdateParams> {
-  const browserConfig = buildBrowserCreateConfig(params);
-  if (!browserConfig.ok) return browserConfig;
-  const chromePolicy =
-    params.chrome_policy && Object.keys(params.chrome_policy).length > 0
-      ? params.chrome_policy
-      : undefined;
-
-  return {
-    ok: true,
-    value: {
-      ...(params.size !== undefined && { size: params.size }),
-      ...(params.name && { name: params.name }),
-      ...(params.headless !== undefined && { headless: params.headless }),
-      ...(params.stealth !== undefined && { stealth: params.stealth }),
-      ...(params.timeout_seconds !== undefined && {
-        timeout_seconds: params.timeout_seconds,
-      }),
-      ...(params.proxy_id && { proxy_id: params.proxy_id }),
-      ...(params.fill_rate_per_minute !== undefined && {
-        fill_rate_per_minute: params.fill_rate_per_minute,
-      }),
-      ...(chromePolicy && { chrome_policy: chromePolicy }),
-      ...(params.kiosk_mode !== undefined && { kiosk_mode: params.kiosk_mode }),
-      ...browserConfig.value,
-    },
-  };
-}
-
 function buildPoolCreateParams(
   params: PoolConfigParams,
 ): BrowserConfigResult<BrowserPoolCreateParams> {
@@ -99,18 +69,37 @@ function buildPoolCreateParams(
     };
   }
 
-  const config = buildPoolConfigParams(params);
-  if (!config.ok) return config;
+  const browserConfig = buildBrowserCreateConfig(params);
+  if (!browserConfig.ok) return browserConfig;
+  const chromePolicy =
+    params.chrome_policy && Object.keys(params.chrome_policy).length > 0
+      ? params.chrome_policy
+      : undefined;
 
-  return { ok: true, value: { ...config.value, size: params.size } };
+  return {
+    ok: true,
+    value: {
+      size: params.size,
+      ...(params.name && { name: params.name }),
+      ...(params.headless !== undefined && { headless: params.headless }),
+      ...(params.stealth !== undefined && { stealth: params.stealth }),
+      ...(params.timeout_seconds !== undefined && {
+        timeout_seconds: params.timeout_seconds,
+      }),
+      ...(params.proxy_id && { proxy_id: params.proxy_id }),
+      ...(params.fill_rate_per_minute !== undefined && {
+        fill_rate_per_minute: params.fill_rate_per_minute,
+      }),
+      ...(chromePolicy && { chrome_policy: chromePolicy }),
+      ...(params.kiosk_mode !== undefined && { kiosk_mode: params.kiosk_mode }),
+      ...browserConfig.value,
+    },
+  };
 }
 
 function buildPoolUpdateParams(
   params: PoolConfigParams & { discard_all_idle?: boolean },
 ): BrowserConfigResult<BrowserPoolUpdateParams> {
-  const config = buildPoolConfigParams(params);
-  if (!config.ok) return config;
-
   if (params.clear_profile && (params.profile_id || params.profile_name)) {
     return {
       ok: false,
@@ -129,14 +118,36 @@ function buildPoolUpdateParams(
     };
   }
 
+  const browserConfig = buildBrowserSharedConfig(params);
+  if (!browserConfig.ok) return browserConfig;
+  if (params.start_url) {
+    try {
+      new URL(params.start_url);
+    } catch {
+      return { ok: false, error: "Error: start_url must be a valid URL." };
+    }
+  }
+
   return {
     ok: true,
     value: {
-      ...config.value,
+      ...(params.size !== undefined && { size: params.size }),
+      ...(params.name && { name: params.name }),
+      ...(params.headless !== undefined && { headless: params.headless }),
+      ...(params.stealth !== undefined && { stealth: params.stealth }),
+      ...(params.timeout_seconds !== undefined && {
+        timeout_seconds: params.timeout_seconds,
+      }),
       ...(params.proxy_id !== undefined && { proxy_id: params.proxy_id }),
+      ...(params.fill_rate_per_minute !== undefined && {
+        fill_rate_per_minute: params.fill_rate_per_minute,
+      }),
       ...(params.chrome_policy !== undefined && {
         chrome_policy: params.chrome_policy,
       }),
+      ...(params.kiosk_mode !== undefined && { kiosk_mode: params.kiosk_mode }),
+      ...(params.start_url !== undefined && { start_url: params.start_url }),
+      ...browserConfig.value,
       ...(params.clear_profile && { profile: { id: "" } }),
       ...(params.clear_extensions && { extensions: [] }),
       ...(params.discard_all_idle !== undefined && {

@@ -1,7 +1,7 @@
 /// <reference types="bun-types" />
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { z } from "zod";
 import {
   kernelClientMock,
@@ -60,6 +60,10 @@ function pool() {
 
 describe("browser-pool contract parity", () => {
   beforeEach(() => {
+    resetKernelClientFactory();
+  });
+
+  afterEach(() => {
     resetKernelClientFactory();
   });
 

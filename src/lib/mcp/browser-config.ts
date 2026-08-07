@@ -38,6 +38,10 @@ export type BrowserCreateConfigParams = BrowserProfileParams &
     start_url?: string;
   };
 
+export type BrowserSharedConfigParams = BrowserProfileParams &
+  BrowserExtensionParams &
+  BrowserViewportParams;
+
 export type BrowserUpdateConfigParams = BrowserProfileParams &
   BrowserViewportUpdateParams;
 
@@ -67,6 +71,11 @@ export type BrowserCreateConfig = Pick<
   "profile" | "extensions" | "viewport" | "start_url"
 >;
 
+export type BrowserSharedConfig = Pick<
+  BrowserCreateParams,
+  "profile" | "extensions" | "viewport"
+>;
+
 export type BrowserUpdateConfig = Pick<
   BrowserUpdateParams,
   "profile" | "viewport"
@@ -88,8 +97,6 @@ function buildBrowserStartUrl(
   startUrl: string | undefined,
 ): BrowserConfigResult<string | undefined> {
   if (startUrl === undefined) return configValue(undefined);
-  // Pool updates use an empty string to clear; create callers must reject it.
-  if (startUrl === "") return configValue("");
 
   try {
     new URL(startUrl);
@@ -190,9 +197,9 @@ function buildBrowserViewportUpdate(
   });
 }
 
-export function buildBrowserCreateConfig(
-  params: BrowserCreateConfigParams,
-): BrowserConfigResult<BrowserCreateConfig> {
+export function buildBrowserSharedConfig(
+  params: BrowserSharedConfigParams,
+): BrowserConfigResult<BrowserSharedConfig> {
   const profile = buildBrowserProfile(params);
   if (!profile.ok) return profile;
 
@@ -202,13 +209,24 @@ export function buildBrowserCreateConfig(
   const viewport = buildBrowserViewport(params);
   if (!viewport.ok) return viewport;
 
-  const startUrl = buildBrowserStartUrl(params.start_url);
-  if (!startUrl.ok) return startUrl;
-
   return configValue({
     ...(profile.value && { profile: profile.value }),
     ...(extensions.value && { extensions: extensions.value }),
     ...(viewport.value && { viewport: viewport.value }),
+  });
+}
+
+export function buildBrowserCreateConfig(
+  params: BrowserCreateConfigParams,
+): BrowserConfigResult<BrowserCreateConfig> {
+  const sharedConfig = buildBrowserSharedConfig(params);
+  if (!sharedConfig.ok) return sharedConfig;
+
+  const startUrl = buildBrowserStartUrl(params.start_url);
+  if (!startUrl.ok) return startUrl;
+
+  return configValue({
+    ...sharedConfig.value,
     ...(startUrl.value !== undefined && { start_url: startUrl.value }),
   });
 }
