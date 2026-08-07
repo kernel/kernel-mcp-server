@@ -1,14 +1,8 @@
 /// <reference types="bun-types" />
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { describe, expect, mock, test } from "bun:test";
-import type { KernelClient } from "@/lib/mcp/kernel-client";
-
-let kernelClient: unknown;
-
-mock.module("@/lib/mcp/kernel-client", () => ({
-  createKernelClient: () => kernelClient as KernelClient,
-}));
+import { describe, expect, test } from "bun:test";
+import { kernelClientMock } from "@/lib/mcp/kernel-client.test-fixtures";
 
 const { registerProfileCapabilities } = await import(
   "@/lib/mcp/tools/profiles"
@@ -56,7 +50,7 @@ describe("durable profile contracts", () => {
     const listCalls: unknown[] = [];
     const createCalls: unknown[] = [];
     const browserCalls: unknown[] = [];
-    kernelClient = {
+    kernelClientMock.factory = () => ({
       profiles: {
         list: (params: unknown) => {
           listCalls.push(params);
@@ -76,7 +70,7 @@ describe("durable profile contracts", () => {
           };
         },
       },
-    };
+    });
     const handler = captureTool(registerProfileCapabilities, "manage_profiles");
 
     const result = await handler(
@@ -98,7 +92,7 @@ describe("durable profile contracts", () => {
 
   test("rejects ambiguous exact profile matches", async () => {
     let browserCreated = false;
-    kernelClient = {
+    kernelClientMock.factory = () => ({
       profiles: {
         list: () =>
           profilePage([
@@ -111,7 +105,7 @@ describe("durable profile contracts", () => {
           browserCreated = true;
         },
       },
-    };
+    });
     const handler = captureTool(registerProfileCapabilities, "manage_profiles");
 
     const result = await handler(
@@ -133,7 +127,7 @@ describe("durable profile contracts", () => {
 
   test("rejects a missing existing profile", async () => {
     let profileCreated = false;
-    kernelClient = {
+    kernelClientMock.factory = () => ({
       profiles: {
         list: () => profilePage([]),
         create: async () => {
@@ -145,7 +139,7 @@ describe("durable profile contracts", () => {
           throw new Error("browser setup should not start");
         },
       },
-    };
+    });
     const handler = captureTool(registerProfileCapabilities, "manage_profiles");
 
     const result = await handler(
@@ -172,7 +166,7 @@ describe("durable profile contracts", () => {
   test("loads the exact existing profile", async () => {
     let profileCreated = false;
     const browserCalls: unknown[] = [];
-    kernelClient = {
+    kernelClientMock.factory = () => ({
       profiles: {
         list: () => profilePage([{ id: "profile-1", name: "Acme" }]),
         create: async () => {
@@ -188,7 +182,7 @@ describe("durable profile contracts", () => {
           };
         },
       },
-    };
+    });
     const handler = captureTool(registerProfileCapabilities, "manage_profiles");
 
     const result = await handler(
@@ -212,14 +206,14 @@ describe("durable profile contracts", () => {
 
   test("renames a profile through the SDK", async () => {
     const updateCalls: unknown[] = [];
-    kernelClient = {
+    kernelClientMock.factory = () => ({
       profiles: {
         update: async (...args: unknown[]) => {
           updateCalls.push(args);
           return { id: "profile-1", name: "Renamed" };
         },
       },
-    };
+    });
     const handler = captureTool(registerProfileCapabilities, "manage_profiles");
 
     for (const selector of [
@@ -260,13 +254,13 @@ describe("durable profile contracts", () => {
     ],
   ])("rejects rename with %s", async (_name, params, wantError) => {
     let updated = false;
-    kernelClient = {
+    kernelClientMock.factory = () => ({
       profiles: {
         update: async () => {
           updated = true;
         },
       },
-    };
+    });
     const handler = captureTool(registerProfileCapabilities, "manage_profiles");
 
     const result = await handler({ action: "rename", ...params }, auth);
@@ -282,14 +276,14 @@ describe("durable profile contracts", () => {
 describe("durable proxy contracts", () => {
   test("renames a proxy through the SDK", async () => {
     const updateCalls: unknown[] = [];
-    kernelClient = {
+    kernelClientMock.factory = () => ({
       proxies: {
         update: async (...args: unknown[]) => {
           updateCalls.push(args);
           return { id: "proxy-1", name: "Renamed" };
         },
       },
-    };
+    });
     const handler = captureTool(registerProxyTools, "manage_proxies");
 
     const result = await handler(
@@ -313,13 +307,13 @@ describe("durable proxy contracts", () => {
     ["no name", { proxy_id: "proxy-1" }, "Error: name is required for rename."],
   ])("rejects rename with %s", async (_name, params, wantError) => {
     let updated = false;
-    kernelClient = {
+    kernelClientMock.factory = () => ({
       proxies: {
         update: async () => {
           updated = true;
         },
       },
-    };
+    });
     const handler = captureTool(registerProxyTools, "manage_proxies");
 
     const result = await handler({ action: "rename", ...params }, auth);
