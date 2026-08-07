@@ -1,8 +1,11 @@
 /// <reference types="bun-types" />
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { describe, expect, test } from "bun:test";
-import { kernelClientMock } from "@/lib/mcp/kernel-client.test-fixtures";
+import { afterEach, describe, expect, test } from "bun:test";
+import {
+  kernelClientMock,
+  resetKernelClientFactory,
+} from "@/lib/mcp/kernel-client.test-fixtures";
 
 const { registerProfileCapabilities } = await import(
   "@/lib/mcp/tools/profiles"
@@ -44,6 +47,8 @@ function profilePage(profiles: Array<{ id: string; name: string }>) {
 }
 
 const auth = { authInfo: { token: "test-token" } };
+
+afterEach(resetKernelClientFactory);
 
 describe("durable profile contracts", () => {
   test("creates a profile when no exact match exists", async () => {
