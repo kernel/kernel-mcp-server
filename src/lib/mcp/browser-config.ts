@@ -88,6 +88,7 @@ function buildBrowserStartUrl(
   startUrl: string | undefined,
 ): BrowserConfigResult<string | undefined> {
   if (startUrl === undefined) return configValue(undefined);
+  // Pool updates use an empty string to clear; create callers must reject it.
   if (startUrl === "") return configValue("");
 
   try {

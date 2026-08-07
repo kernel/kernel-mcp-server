@@ -100,6 +100,13 @@ describe("browser-pool contract parity", () => {
 
     expect(createCalls).toEqual([{ size: 1 }]);
     expect(result.isError).toBeUndefined();
+    const response = JSON.parse(result.content[0].text);
+    expect(response.browser_pool.config).toMatchObject({
+      profile_id: "profile_resolved",
+      extension_ids: ["extension_resolved"],
+    });
+    expect(response.browser_pool.config).not.toHaveProperty("profile");
+    expect(response.browser_pool.config).not.toHaveProperty("extensions");
   });
 
   test("rejects an update with no fields", async () => {
@@ -173,7 +180,11 @@ describe("browser-pool contract parity", () => {
       browserPools: {
         update: async (...args: unknown[]) => {
           updateCalls.push(args);
-          return pool();
+          return {
+            ...pool(),
+            profile_id: undefined,
+            extension_ids: [],
+          };
         },
       },
     };
@@ -206,10 +217,8 @@ describe("browser-pool contract parity", () => {
     ]);
     expect(result.isError).toBeUndefined();
     const response = JSON.parse(result.content[0].text);
-    expect(response.browser_pool.config).toMatchObject({
-      profile_id: "profile_resolved",
-      extension_ids: ["extension_resolved"],
-    });
+    expect(response.browser_pool.config.extension_ids).toEqual([]);
+    expect(response.browser_pool.config).not.toHaveProperty("profile_id");
     expect(response.browser_pool.config).not.toHaveProperty("profile");
     expect(response.browser_pool.config).not.toHaveProperty("extensions");
   });
