@@ -1,14 +1,12 @@
 /// <reference types="bun-types" />
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { beforeEach, describe, expect, mock, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import type { z } from "zod";
-
-let kernelClient: unknown;
-
-mock.module("@/lib/mcp/kernel-client", () => ({
-  createKernelClient: () => kernelClient,
-}));
+import {
+  kernelClientMock,
+  resetKernelClientFactory,
+} from "@/lib/mcp/kernel-client.test-fixtures";
 
 const { registerBrowserPoolCapabilities } = await import(
   "@/lib/mcp/tools/browser-pools"
@@ -62,7 +60,7 @@ function pool() {
 
 describe("browser-pool contract parity", () => {
   beforeEach(() => {
-    kernelClient = undefined;
+    resetKernelClientFactory();
   });
 
   test("validates API boundaries", () => {
@@ -86,14 +84,14 @@ describe("browser-pool contract parity", () => {
 
   test("keeps ordinary create valid", async () => {
     const createCalls: unknown[] = [];
-    kernelClient = {
+    kernelClientMock.factory = () => ({
       browserPools: {
         create: async (params: unknown) => {
           createCalls.push(params);
           return pool();
         },
       },
-    };
+    });
     const { handler } = captureBrowserPoolTool();
 
     const result = await handler({ action: "create", size: 1 }, auth);
@@ -111,13 +109,13 @@ describe("browser-pool contract parity", () => {
 
   test("rejects an update with no fields", async () => {
     let updated = false;
-    kernelClient = {
+    kernelClientMock.factory = () => ({
       browserPools: {
         update: async () => {
           updated = true;
         },
       },
-    };
+    });
     const { handler } = captureBrowserPoolTool();
 
     const result = await handler(
@@ -137,7 +135,7 @@ describe("browser-pool contract parity", () => {
   test.each(["clear_profile", "clear_extensions"])(
     "rejects update-only %s during create",
     async (clearField) => {
-      kernelClient = { browserPools: {} };
+      kernelClientMock.factory = () => ({ browserPools: {} });
       const { handler } = captureBrowserPoolTool();
 
       const result = await handler(
@@ -158,7 +156,7 @@ describe("browser-pool contract parity", () => {
   );
 
   test("rejects an empty start URL during create", async () => {
-    kernelClient = { browserPools: {} };
+    kernelClientMock.factory = () => ({ browserPools: {} });
     const { handler } = captureBrowserPoolTool();
 
     const result = await handler(
@@ -176,7 +174,7 @@ describe("browser-pool contract parity", () => {
 
   test("sends explicit durable clears on update", async () => {
     const updateCalls: unknown[] = [];
-    kernelClient = {
+    kernelClientMock.factory = () => ({
       browserPools: {
         update: async (...args: unknown[]) => {
           updateCalls.push(args);
@@ -187,7 +185,7 @@ describe("browser-pool contract parity", () => {
           };
         },
       },
-    };
+    });
     const { handler } = captureBrowserPoolTool();
 
     const result = await handler(
@@ -233,7 +231,7 @@ describe("browser-pool contract parity", () => {
       "Error: clear_extensions cannot be combined with extension_id or extension_name.",
     ],
   ])("rejects conflicting clear and set values", async (params, wantError) => {
-    kernelClient = { browserPools: {} };
+    kernelClientMock.factory = () => ({ browserPools: {} });
     const { handler } = captureBrowserPoolTool();
 
     const result = await handler(
