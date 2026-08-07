@@ -38,6 +38,10 @@ export type BrowserCreateConfigParams = BrowserProfileParams &
     start_url?: string;
   };
 
+export type BrowserSharedConfigParams = BrowserProfileParams &
+  BrowserExtensionParams &
+  BrowserViewportParams;
+
 export type BrowserUpdateConfigParams = BrowserProfileParams &
   BrowserViewportUpdateParams;
 
@@ -65,6 +69,11 @@ type BrowserViewportUpdateConfig = NonNullable<BrowserUpdateParams["viewport"]>;
 export type BrowserCreateConfig = Pick<
   BrowserCreateParams,
   "profile" | "extensions" | "viewport" | "start_url"
+>;
+
+export type BrowserSharedConfig = Pick<
+  BrowserCreateParams,
+  "profile" | "extensions" | "viewport"
 >;
 
 export type BrowserUpdateConfig = Pick<
@@ -188,9 +197,9 @@ function buildBrowserViewportUpdate(
   });
 }
 
-export function buildBrowserCreateConfig(
-  params: BrowserCreateConfigParams,
-): BrowserConfigResult<BrowserCreateConfig> {
+export function buildBrowserSharedConfig(
+  params: BrowserSharedConfigParams,
+): BrowserConfigResult<BrowserSharedConfig> {
   const profile = buildBrowserProfile(params);
   if (!profile.ok) return profile;
 
@@ -200,13 +209,24 @@ export function buildBrowserCreateConfig(
   const viewport = buildBrowserViewport(params);
   if (!viewport.ok) return viewport;
 
-  const startUrl = buildBrowserStartUrl(params.start_url);
-  if (!startUrl.ok) return startUrl;
-
   return configValue({
     ...(profile.value && { profile: profile.value }),
     ...(extensions.value && { extensions: extensions.value }),
     ...(viewport.value && { viewport: viewport.value }),
+  });
+}
+
+export function buildBrowserCreateConfig(
+  params: BrowserCreateConfigParams,
+): BrowserConfigResult<BrowserCreateConfig> {
+  const sharedConfig = buildBrowserSharedConfig(params);
+  if (!sharedConfig.ok) return sharedConfig;
+
+  const startUrl = buildBrowserStartUrl(params.start_url);
+  if (!startUrl.ok) return startUrl;
+
+  return configValue({
+    ...sharedConfig.value,
     ...(startUrl.value !== undefined && { start_url: startUrl.value }),
   });
 }

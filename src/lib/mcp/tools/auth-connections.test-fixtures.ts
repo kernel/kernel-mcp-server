@@ -1,34 +1,16 @@
-import { expect, mock } from "bun:test";
+import { expect } from "bun:test";
 import type { KernelClient } from "@/lib/mcp/kernel-client";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type {
   ManagedAuth,
   ManagedAuthTimelineEvent,
 } from "@onkernel/sdk/resources/auth/connections";
+export {
+  kernelClientMock,
+  resetKernelClientFactory,
+  unusedKernelClient,
+} from "@/lib/mcp/kernel-client.test-fixtures";
 import { registerAuthConnectionTools } from "./auth-connections";
-
-export const unusedKernelClient = new Proxy(
-  {},
-  {
-    get: () => {
-      throw new Error("unexpected Kernel client use");
-    },
-  },
-);
-
-export const kernelClientMock: {
-  factory: (token: string) => any;
-} = {
-  factory: () => unusedKernelClient,
-};
-
-mock.module("@/lib/mcp/kernel-client", () => ({
-  createKernelClient: (token: string) => kernelClientMock.factory(token),
-}));
-
-export function resetKernelClientFactory() {
-  kernelClientMock.factory = () => unusedKernelClient;
-}
 
 export function connection(overrides: Partial<ManagedAuth> = {}): ManagedAuth {
   return {

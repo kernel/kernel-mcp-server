@@ -3,6 +3,10 @@ import { encodeSessionId } from "@posthog/mcp";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MANAGED_AUTH_APP_HTML } from "@/lib/mcp/apps/generated/managed-auth-app";
+import {
+  kernelClientMock,
+  resetKernelClientFactory,
+} from "@/lib/mcp/kernel-client.test-fixtures";
 import { verifyAuthFlowCheckpoint } from "@/lib/mcp/tools/managed-auth-checkpoint";
 import {
   initializeDeclaresMcpApps,
@@ -14,21 +18,6 @@ import {
 
 process.env.CLERK_SECRET_KEY ??= "test-clerk-secret";
 
-// Tests that exercise API-backed handlers substitute a fake Kernel client.
-// The default stub errors if any API method is actually invoked.
-const unusedKernelClient = new Proxy(
-  {},
-  {
-    get: () => {
-      throw new Error("unexpected Kernel client use");
-    },
-  },
-);
-let kernelClientFactory: (token: string) => any = () => unusedKernelClient;
-function resetKernelClientFactory() {
-  kernelClientFactory = () => unusedKernelClient;
-}
-
 // The capability gate falls back to a Redis marker (recorded by the route
 // layer at initialize) on stateless transports. Tests control it directly.
 let redisMarkerPresent = false;
@@ -36,10 +25,6 @@ mock.module("@/lib/redis", () => ({
   hasMcpAppsClient: async () => redisMarkerPresent,
   markMcpAppsClient: async () => {},
 }));
-mock.module("@/lib/mcp/kernel-client", () => ({
-  createKernelClient: (token: string) => kernelClientFactory(token),
-}));
-
 type ToolRegistration = {
   config: Record<string, any>;
   handler: (params: any, extra: any) => Promise<any>;
@@ -243,7 +228,7 @@ describe("managed-auth MCP App registration", () => {
     // Simulates the streamable-HTTP path: no client capabilities on the
     // per-request server, but the route layer recorded the capability.
     redisMarkerPresent = true;
-    kernelClientFactory = () => ({
+    kernelClientMock.factory = () => ({
       auth: {
         connections: {
           retrieve: async () => ({
@@ -361,7 +346,7 @@ describe("managed-auth MCP App registration", () => {
   });
 
   test("reauth launcher issues a signed server checkpoint, never a guessed flow type", async () => {
-    kernelClientFactory = () => ({
+    kernelClientMock.factory = () => ({
       auth: {
         connections: {
           retrieve: async () => ({
@@ -416,7 +401,7 @@ describe("managed-auth MCP App registration", () => {
   });
 
   test("reauth launcher preserves an explicitly empty timeline baseline", async () => {
-    kernelClientFactory = () => ({
+    kernelClientMock.factory = () => ({
       auth: {
         connections: {
           retrieve: async () => ({
@@ -454,7 +439,7 @@ describe("managed-auth MCP App registration", () => {
   });
 
   test("reauth launcher identifies an already-live flow", async () => {
-    kernelClientFactory = () => ({
+    kernelClientMock.factory = () => ({
       auth: {
         connections: {
           retrieve: async () => ({

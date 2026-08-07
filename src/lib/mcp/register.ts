@@ -1,4 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
 import { registerKernelPrompts } from "@/lib/mcp/prompts";
 import { registerAPIKeyCapabilities } from "@/lib/mcp/tools/api-keys";
 import { registerAppCapabilities } from "@/lib/mcp/tools/apps";
@@ -19,7 +23,10 @@ import { registerProxyTools } from "@/lib/mcp/tools/proxies";
 import { registerReplayTools } from "@/lib/mcp/tools/replays";
 import { registerShellTool } from "@/lib/mcp/tools/shell";
 
-type RegisterMcpToolset = (server: McpServer) => void;
+type RegisterMcpToolset = (
+  server: McpServer,
+  dependencies?: McpDependencies,
+) => void;
 
 function registerManagedAuthCapabilities(server: McpServer) {
   registerAuthConnectionTools(server);
@@ -125,7 +132,10 @@ function toolsetEnabled(
 
 export function registerMcpCapabilities(
   server: McpServer,
-  { mcpApps = false }: { mcpApps?: boolean } = {},
+  {
+    mcpApps = false,
+    dependencies = defaultMcpDependencies,
+  }: { mcpApps?: boolean; dependencies?: McpDependencies } = {},
 ) {
   const disabledToolsets = disabledMcpToolsetsFromEnv();
 
@@ -133,7 +143,7 @@ export function registerMcpCapabilities(
 
   for (const [toolset, registerToolset] of mcpToolRegistrations) {
     if (toolsetEnabled(disabledToolsets, toolset)) {
-      registerToolset(server);
+      registerToolset(server, dependencies);
     }
   }
 
