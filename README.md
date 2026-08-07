@@ -255,7 +255,7 @@ Many other MCP-capable tools accept:
 
 Configure these values wherever the tool expects MCP server settings.
 
-## Tools (17 model-facing, plus 1 app-only helper)
+## Tools (18 model-facing, plus 1 app-only helper)
 
 Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Standalone tools handle high-frequency and interactive workflows.
 
@@ -270,6 +270,7 @@ Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_
 - `manage_projects` - Create, list, get, update, and delete organization projects. Inspect and update per-project resource limits.
 - `manage_api_keys` - Create, list, get, update, and delete org-wide or project-scoped API keys. Create returns the plaintext key once.
 - `manage_browser_pools` - Create, list, get, delete, and flush pools of pre-warmed browsers. Acquire and release browsers from pools.
+- `manage_browser_files` - Read, write, upload, download, and manage files in running browser VMs. Supports text and base64 input and returns binary downloads as embedded MCP resources.
 - `manage_proxies` - Create, list, get, check, and delete proxy configurations (datacenter, ISP, residential, mobile, custom).
 - `manage_replays` - Start, stop, and list MP4 video replay recordings for a browser session. Session-scoped: start once, run your automation, then stop. Requires a paid Kernel plan.
 - `manage_extensions` - List and delete uploaded browser extensions.
