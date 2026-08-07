@@ -55,6 +55,7 @@ describe("durable profile contracts", () => {
   test("creates a profile when no exact match exists", async () => {
     const listCalls: unknown[] = [];
     const createCalls: unknown[] = [];
+    const browserCalls: unknown[] = [];
     kernelClient = {
       profiles: {
         list: (params: unknown) => {
@@ -67,10 +68,13 @@ describe("durable profile contracts", () => {
         },
       },
       browsers: {
-        create: async () => ({
-          session_id: "session-1",
-          browser_live_view_url: "https://example.test/live",
-        }),
+        create: async (params: unknown) => {
+          browserCalls.push(params);
+          return {
+            session_id: "session-1",
+            browser_live_view_url: "https://example.test/live",
+          };
+        },
       },
     };
     const handler = captureTool(registerProfileCapabilities, "manage_profiles");
@@ -82,6 +86,13 @@ describe("durable profile contracts", () => {
 
     expect(listCalls).toEqual([{ name: "Acme" }]);
     expect(createCalls).toEqual([{ name: "Acme" }]);
+    expect(browserCalls).toEqual([
+      {
+        stealth: true,
+        timeout_seconds: 300,
+        profile: { id: "profile-new", save_changes: true },
+      },
+    ]);
     expect(result.isError).toBeUndefined();
   });
 
@@ -112,7 +123,7 @@ describe("durable profile contracts", () => {
       content: [
         {
           type: "text",
-          text: 'Error: multiple profiles match the exact name "Acme". Rename or delete duplicate profiles by ID, then retry setup.',
+          text: 'Error: multiple profiles match the exact name "Acme": Acme (ID: profile-1), Acme (ID: profile-2). Rename or delete duplicate profiles by ID, then retry setup.',
         },
       ],
       isError: true,
@@ -211,20 +222,24 @@ describe("durable profile contracts", () => {
     };
     const handler = captureTool(registerProfileCapabilities, "manage_profiles");
 
-    const result = await handler(
-      {
-        action: "rename",
-        profile_id: "profile-1",
-        new_name: "Renamed",
-      },
-      auth,
-    );
+    for (const selector of [
+      { profile_id: "profile-1" },
+      { profile_name: "Acme" },
+    ]) {
+      const result = await handler(
+        { action: "rename", ...selector, new_name: "Renamed" },
+        auth,
+      );
 
-    expect(updateCalls).toEqual([["profile-1", { name: "Renamed" }]]);
-    expect(JSON.parse(result.content[0].text)).toEqual({
-      id: "profile-1",
-      name: "Renamed",
-    });
+      expect(JSON.parse(result.content[0].text)).toEqual({
+        id: "profile-1",
+        name: "Renamed",
+      });
+    }
+    expect(updateCalls).toEqual([
+      ["profile-1", { name: "Renamed" }],
+      ["Acme", { name: "Renamed" }],
+    ]);
   });
 
   test.each([

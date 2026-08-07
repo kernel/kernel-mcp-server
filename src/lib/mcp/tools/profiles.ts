@@ -119,8 +119,11 @@ export function registerProfileCapabilities(server: McpServer) {
               name: params.profile_name,
             });
             if (existingProfiles.length > 1) {
+              const matches = existingProfiles
+                .map((profile) => `${profile.name} (ID: ${profile.id})`)
+                .join(", ");
               return errorResponse(
-                `Error: multiple profiles match the exact name "${params.profile_name}". Rename or delete duplicate profiles by ID, then retry setup.`,
+                `Error: multiple profiles match the exact name "${params.profile_name}": ${matches}. Rename or delete duplicate profiles by ID, then retry setup.`,
               );
             }
             const existingProfile = existingProfiles[0];
