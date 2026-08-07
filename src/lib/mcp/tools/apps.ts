@@ -46,7 +46,7 @@ export function registerAppCapabilities(server: McpServer) {
   // manage_apps -- List apps, invoke actions, manage deployments, check invocations
   server.tool(
     "manage_apps",
-    'Manage Kernel apps when an agent needs to discover deployed app actions, invoke an app, or inspect deployment/invocation state. Use "list_apps" before invoking an unknown app, "invoke" to run an action, get/list actions to inspect results, and "delete_deployment" to remove a deployment.',
+    'Manage Kernel apps when an agent needs to discover deployed app actions, invoke an app, or inspect deployment/invocation state. Use "list_apps" before invoking an unknown app. "invoke" starts an action asynchronously and returns an invocation_id immediately; poll "get_invocation" with that ID until the invocation reaches a terminal state. Use get/list actions to inspect results and "delete_deployment" to remove a deployment.',
     {
       action: z
         .enum([
@@ -128,32 +128,14 @@ export function registerAppCapabilities(server: McpServer) {
             if (!invocation)
               return errorResponse("Failed to create invocation");
 
-            const stream = await client.invocations.follow(invocation.id);
-            let finalInvocation = invocation;
-            for await (const evt of stream) {
-              if (evt.event === "error") {
-                return errorResponse(
-                  JSON.stringify(
-                    {
-                      status: "error",
-                      invocation_id: invocation.id,
-                      error: evt,
-                    },
-                    null,
-                    2,
-                  ),
-                );
-              }
-              if (evt.event === "invocation_state") {
-                finalInvocation = evt.invocation || finalInvocation;
-                if (
-                  finalInvocation.status === "succeeded" ||
-                  finalInvocation.status === "failed"
-                )
-                  break;
-              }
-            }
-            return jsonResponse(finalInvocation);
+            return jsonResponse({
+              ...invocation,
+              invocation_id: invocation.id,
+              next_action: {
+                action: "get_invocation",
+                invocation_id: invocation.id,
+              },
+            });
           }
           case "get_deployment": {
             if (!params.deployment_id)
