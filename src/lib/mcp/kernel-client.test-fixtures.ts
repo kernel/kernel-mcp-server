@@ -10,7 +10,7 @@ export const unusedKernelClient = new Proxy(
 );
 
 export const kernelClientMock: {
-  factory: (token: string) => unknown;
+  factory: (token: string) => any;
 } = {
   factory: () => unusedKernelClient,
 };

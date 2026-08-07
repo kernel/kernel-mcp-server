@@ -1,6 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
+import type { KernelClient } from "@/lib/mcp/kernel-client";
 import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
 import {
   errorResponse,
@@ -37,13 +41,38 @@ function fullProfileListResponse(profiles: Profile[], query?: string) {
   });
 }
 
-export function registerProfileCapabilities(server: McpServer) {
+function requireProfileIdentifier(
+  params: { profile_name?: string; profile_id?: string },
+  action: "get" | "rename" | "delete",
+) {
+  if (params.profile_name && params.profile_id) {
+    return {
+      ok: false as const,
+      error: "Error: Cannot specify both profile_name and profile_id.",
+    };
+  }
+
+  const identifier = params.profile_name || params.profile_id;
+  if (!identifier) {
+    return {
+      ok: false as const,
+      error: `Error: profile_name or profile_id is required for ${action}.`,
+    };
+  }
+
+  return { ok: true as const, value: identifier };
+}
+
+export function registerProfileCapabilities(
+  server: McpServer,
+  dependencies: McpDependencies = defaultMcpDependencies,
+) {
   server.resource("profiles", "profiles://", async (uri, extra) => {
     if (!extra.authInfo) {
       throw new Error("Authentication required");
     }
 
-    const client = createKernelClient(extra.authInfo.token);
+    const client = dependencies.createKernelClient(extra.authInfo.token);
     const profiles = await listProfiles(client);
     return {
       contents: [
@@ -59,13 +88,17 @@ export function registerProfileCapabilities(server: McpServer) {
     };
   });
 
-  registerJsonResourceTemplate(server, {
-    name: "profile",
-    uriTemplate: "profiles://{profileName}",
-    variableName: "profileName",
-    resourceLabel: "Profile",
-    read: (client, profileName) => client.profiles.retrieve(profileName),
-  });
+  registerJsonResourceTemplate(
+    server,
+    {
+      name: "profile",
+      uriTemplate: "profiles://{profileName}",
+      variableName: "profileName",
+      resourceLabel: "Profile",
+      read: (client, profileName) => client.profiles.retrieve(profileName),
+    },
+    dependencies,
+  );
 
   server.tool(
     "manage_profiles",
@@ -106,7 +139,7 @@ export function registerProfileCapabilities(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
+      const client = dependencies.createKernelClient(extra.authInfo.token);
 
       try {
         switch (params.action) {
@@ -197,54 +230,28 @@ export function registerProfileCapabilities(server: McpServer) {
             );
           }
           case "get": {
-            if (params.profile_name && params.profile_id) {
-              return errorResponse(
-                "Error: Cannot specify both profile_name and profile_id.",
-              );
-            }
-            const identifier = params.profile_name || params.profile_id;
-            if (!identifier) {
-              return errorResponse(
-                "Error: profile_name or profile_id is required for get.",
-              );
-            }
-            const profile = await client.profiles.retrieve(identifier);
+            const identifier = requireProfileIdentifier(params, "get");
+            if (!identifier.ok) return errorResponse(identifier.error);
+            const profile = await client.profiles.retrieve(identifier.value);
             return jsonResponse(profile);
           }
           case "rename": {
-            if (params.profile_name && params.profile_id) {
-              return errorResponse(
-                "Error: Cannot specify both profile_name and profile_id.",
-              );
-            }
-            const identifier = params.profile_name || params.profile_id;
-            if (!identifier) {
-              return errorResponse(
-                "Error: profile_name or profile_id is required for rename.",
-              );
-            }
+            const identifier = requireProfileIdentifier(params, "rename");
+            if (!identifier.ok) return errorResponse(identifier.error);
             if (!params.new_name) {
               return errorResponse("Error: new_name is required for rename.");
             }
-            const profile = await client.profiles.update(identifier, {
+            const profile = await client.profiles.update(identifier.value, {
               name: params.new_name,
             });
             return jsonResponse(profile);
           }
           case "delete": {
-            if (params.profile_name && params.profile_id) {
-              return errorResponse(
-                "Error: Cannot specify both profile_name and profile_id.",
-              );
-            }
-            const identifier = params.profile_name || params.profile_id;
-            if (!identifier)
-              return errorResponse(
-                "Error: profile_name or profile_id is required for delete.",
-              );
-            await client.profiles.delete(identifier);
+            const identifier = requireProfileIdentifier(params, "delete");
+            if (!identifier.ok) return errorResponse(identifier.error);
+            await client.profiles.delete(identifier.value);
             return textResponse(
-              `Profile "${identifier}" deleted successfully.`,
+              `Profile "${identifier.value}" deleted successfully.`,
             );
           }
         }

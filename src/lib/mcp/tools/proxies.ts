@@ -1,6 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { createKernelClient } from "@/lib/mcp/kernel-client";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
 import {
   errorResponse,
   jsonResponse,
@@ -25,7 +28,10 @@ const httpUrlSchema = z
     { message: "URL must use http or https." },
   );
 
-export function registerProxyTools(server: McpServer) {
+export function registerProxyTools(
+  server: McpServer,
+  dependencies: McpDependencies = defaultMcpDependencies,
+) {
   // manage_proxies -- Create, list, get, rename, check, and delete proxy configurations
   server.tool(
     "manage_proxies",
@@ -89,7 +95,7 @@ export function registerProxyTools(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
+      const client = dependencies.createKernelClient(extra.authInfo.token);
 
       try {
         switch (params.action) {

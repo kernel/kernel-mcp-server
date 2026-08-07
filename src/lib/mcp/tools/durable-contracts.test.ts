@@ -1,16 +1,13 @@
 /// <reference types="bun-types" />
 
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { afterEach, describe, expect, test } from "bun:test";
-import {
-  kernelClientMock,
-  resetKernelClientFactory,
-} from "@/lib/mcp/kernel-client.test-fixtures";
-
-const { registerProfileCapabilities } = await import(
-  "@/lib/mcp/tools/profiles"
-);
-const { registerProxyTools } = await import("@/lib/mcp/tools/proxies");
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { describe, expect, test } from "bun:test";
+import type { McpDependencies } from "@/lib/mcp/dependencies";
+import type { KernelClient } from "@/lib/mcp/kernel-client";
+import { registerProfileCapabilities } from "@/lib/mcp/tools/profiles";
+import { registerProxyTools } from "@/lib/mcp/tools/proxies";
 
 type ToolResult = {
   content: Array<{ type: string; text: string }>;
@@ -22,7 +19,15 @@ type ToolHandler = (
   extra: { authInfo?: { token: string } },
 ) => Promise<ToolResult>;
 
-function captureTool(register: (server: McpServer) => void, name: string) {
+type RegisterTool = (server: McpServer, dependencies?: McpDependencies) => void;
+
+function testDependencies(client: unknown): McpDependencies {
+  return {
+    createKernelClient: () => client as KernelClient,
+  };
+}
+
+function captureTool(register: RegisterTool, name: string, client: unknown) {
   let handler: ToolHandler | undefined;
   const server = {
     resource() {},
@@ -33,9 +38,40 @@ function captureTool(register: (server: McpServer) => void, name: string) {
     },
   } as unknown as McpServer;
 
-  register(server);
+  register(server, testDependencies(client));
   if (!handler) throw new Error(`${name} was not registered`);
   return handler;
+}
+
+async function connectTool(register: RegisterTool, kernelClient: unknown) {
+  const server = new McpServer({ name: "test", version: "0.0.0" });
+  const tokens: string[] = [];
+  register(server, {
+    createKernelClient: (token) => {
+      tokens.push(token);
+      return kernelClient as KernelClient;
+    },
+  });
+
+  const client = new Client({ name: "test-client", version: "0.0.0" });
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  const send = clientTransport.send.bind(clientTransport);
+  clientTransport.send = (message, options) =>
+    send(message, {
+      ...options,
+      authInfo: {
+        token: "test-token",
+        clientId: "test-client",
+        scopes: [],
+      },
+    });
+
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+  return { client, tokens };
 }
 
 function profilePage(profiles: Array<{ id: string; name: string }>) {
@@ -48,14 +84,12 @@ function profilePage(profiles: Array<{ id: string; name: string }>) {
 
 const auth = { authInfo: { token: "test-token" } };
 
-afterEach(resetKernelClientFactory);
-
 describe("durable profile contracts", () => {
   test("creates a profile when no exact match exists", async () => {
     const listCalls: unknown[] = [];
     const createCalls: unknown[] = [];
     const browserCalls: unknown[] = [];
-    kernelClientMock.factory = () => ({
+    const client = {
       profiles: {
         list: (params: unknown) => {
           listCalls.push(params);
@@ -75,8 +109,12 @@ describe("durable profile contracts", () => {
           };
         },
       },
-    });
-    const handler = captureTool(registerProfileCapabilities, "manage_profiles");
+    };
+    const handler = captureTool(
+      registerProfileCapabilities,
+      "manage_profiles",
+      client,
+    );
 
     const result = await handler(
       { action: "setup", profile_name: "Acme" },
@@ -97,7 +135,7 @@ describe("durable profile contracts", () => {
 
   test("rejects ambiguous exact profile matches", async () => {
     let browserCreated = false;
-    kernelClientMock.factory = () => ({
+    const client = {
       profiles: {
         list: () =>
           profilePage([
@@ -110,8 +148,12 @@ describe("durable profile contracts", () => {
           browserCreated = true;
         },
       },
-    });
-    const handler = captureTool(registerProfileCapabilities, "manage_profiles");
+    };
+    const handler = captureTool(
+      registerProfileCapabilities,
+      "manage_profiles",
+      client,
+    );
 
     const result = await handler(
       { action: "setup", profile_name: "Acme" },
@@ -132,7 +174,7 @@ describe("durable profile contracts", () => {
 
   test("rejects a missing existing profile", async () => {
     let profileCreated = false;
-    kernelClientMock.factory = () => ({
+    const client = {
       profiles: {
         list: () => profilePage([]),
         create: async () => {
@@ -144,8 +186,12 @@ describe("durable profile contracts", () => {
           throw new Error("browser setup should not start");
         },
       },
-    });
-    const handler = captureTool(registerProfileCapabilities, "manage_profiles");
+    };
+    const handler = captureTool(
+      registerProfileCapabilities,
+      "manage_profiles",
+      client,
+    );
 
     const result = await handler(
       {
@@ -171,7 +217,7 @@ describe("durable profile contracts", () => {
   test("loads the exact existing profile", async () => {
     let profileCreated = false;
     const browserCalls: unknown[] = [];
-    kernelClientMock.factory = () => ({
+    const client = {
       profiles: {
         list: () => profilePage([{ id: "profile-1", name: "Acme" }]),
         create: async () => {
@@ -187,8 +233,12 @@ describe("durable profile contracts", () => {
           };
         },
       },
-    });
-    const handler = captureTool(registerProfileCapabilities, "manage_profiles");
+    };
+    const handler = captureTool(
+      registerProfileCapabilities,
+      "manage_profiles",
+      client,
+    );
 
     const result = await handler(
       { action: "setup", profile_name: "Acme", update_existing: true },
@@ -209,9 +259,9 @@ describe("durable profile contracts", () => {
     expect(result.content[0].text).toContain("Profile ID: profile-1");
   });
 
-  test("renames a profile through the SDK", async () => {
+  test("discovers and renames a profile through the MCP boundary", async () => {
     const updateCalls: unknown[] = [];
-    kernelClientMock.factory = () => ({
+    const { client, tokens } = await connectTool(registerProfileCapabilities, {
       profiles: {
         update: async (...args: unknown[]) => {
           updateCalls.push(args);
@@ -219,26 +269,53 @@ describe("durable profile contracts", () => {
         },
       },
     });
-    const handler = captureTool(registerProfileCapabilities, "manage_profiles");
+    try {
+      const tools = await client.listTools();
+      const tool = tools.tools.find((item) => item.name === "manage_profiles");
+      const schema = tool?.inputSchema as
+        | { properties?: Record<string, { enum?: string[] }> }
+        | undefined;
+      expect(schema?.properties?.action.enum).toContain("rename");
+      expect(schema?.properties).toHaveProperty("profile_id");
+      expect(schema?.properties).toHaveProperty("profile_name");
+      expect(schema?.properties).toHaveProperty("new_name");
 
-    for (const selector of [
-      { profile_id: "profile-1" },
-      { profile_name: "Acme" },
-    ]) {
-      const result = await handler(
-        { action: "rename", ...selector, new_name: "Renamed" },
-        auth,
-      );
-
-      expect(JSON.parse(result.content[0].text)).toEqual({
-        id: "profile-1",
-        name: "Renamed",
+      const invalid = await client.callTool({
+        name: "manage_profiles",
+        arguments: {
+          action: "rename",
+          profile_id: "profile-1",
+          new_name: 123,
+        },
       });
+      expect(invalid.isError).toBe(true);
+      expect(updateCalls).toEqual([]);
+
+      for (const selector of [
+        { profile_id: "profile-1" },
+        { profile_name: "Acme" },
+      ]) {
+        const result = await client.callTool({
+          name: "manage_profiles",
+          arguments: { action: "rename", ...selector, new_name: "Renamed" },
+        });
+
+        expect(result.content).toEqual([
+          {
+            type: "text",
+            text: JSON.stringify({ id: "profile-1", name: "Renamed" }, null, 2),
+          },
+        ]);
+      }
+    } finally {
+      await client.close();
     }
+
     expect(updateCalls).toEqual([
       ["profile-1", { name: "Renamed" }],
       ["Acme", { name: "Renamed" }],
     ]);
+    expect(tokens).toEqual(["test-token", "test-token"]);
   });
 
   test.each([
@@ -259,14 +336,18 @@ describe("durable profile contracts", () => {
     ],
   ])("rejects rename with %s", async (_name, params, wantError) => {
     let updated = false;
-    kernelClientMock.factory = () => ({
+    const client = {
       profiles: {
         update: async () => {
           updated = true;
         },
       },
-    });
-    const handler = captureTool(registerProfileCapabilities, "manage_profiles");
+    };
+    const handler = captureTool(
+      registerProfileCapabilities,
+      "manage_profiles",
+      client,
+    );
 
     const result = await handler({ action: "rename", ...params }, auth);
 
@@ -276,12 +357,67 @@ describe("durable profile contracts", () => {
     });
     expect(updated).toBe(false);
   });
+
+  test.each([
+    [
+      "get",
+      "both identifiers",
+      { profile_id: "profile-1", profile_name: "Acme" },
+      "Error: Cannot specify both profile_name and profile_id.",
+    ],
+    [
+      "get",
+      "no identifier",
+      {},
+      "Error: profile_name or profile_id is required for get.",
+    ],
+    [
+      "delete",
+      "both identifiers",
+      { profile_id: "profile-1", profile_name: "Acme" },
+      "Error: Cannot specify both profile_name and profile_id.",
+    ],
+    [
+      "delete",
+      "no identifier",
+      {},
+      "Error: profile_name or profile_id is required for delete.",
+    ],
+  ])(
+    "preserves %s validation for %s",
+    async (action, _case, params, wantError) => {
+      let called = false;
+      const client = {
+        profiles: {
+          retrieve: async () => {
+            called = true;
+          },
+          delete: async () => {
+            called = true;
+          },
+        },
+      };
+      const handler = captureTool(
+        registerProfileCapabilities,
+        "manage_profiles",
+        client,
+      );
+
+      const result = await handler({ action, ...params }, auth);
+
+      expect(result).toEqual({
+        content: [{ type: "text", text: wantError }],
+        isError: true,
+      });
+      expect(called).toBe(false);
+    },
+  );
 });
 
 describe("durable proxy contracts", () => {
-  test("renames a proxy through the SDK", async () => {
+  test("discovers and renames a proxy through the MCP boundary", async () => {
     const updateCalls: unknown[] = [];
-    kernelClientMock.factory = () => ({
+    const { client, tokens } = await connectTool(registerProxyTools, {
       proxies: {
         update: async (...args: unknown[]) => {
           updateCalls.push(args);
@@ -289,18 +425,48 @@ describe("durable proxy contracts", () => {
         },
       },
     });
-    const handler = captureTool(registerProxyTools, "manage_proxies");
+    try {
+      const tools = await client.listTools();
+      const tool = tools.tools.find((item) => item.name === "manage_proxies");
+      const schema = tool?.inputSchema as
+        | { properties?: Record<string, { enum?: string[] }> }
+        | undefined;
+      expect(schema?.properties?.action.enum).toContain("rename");
+      expect(schema?.properties).toHaveProperty("proxy_id");
+      expect(schema?.properties).toHaveProperty("name");
 
-    const result = await handler(
-      { action: "rename", proxy_id: "proxy-1", name: "Renamed" },
-      auth,
-    );
+      const invalid = await client.callTool({
+        name: "manage_proxies",
+        arguments: {
+          action: "rename",
+          proxy_id: "proxy-1",
+          name: 123,
+        },
+      });
+      expect(invalid.isError).toBe(true);
+      expect(updateCalls).toEqual([]);
+
+      const result = await client.callTool({
+        name: "manage_proxies",
+        arguments: {
+          action: "rename",
+          proxy_id: "proxy-1",
+          name: "Renamed",
+        },
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: JSON.stringify({ id: "proxy-1", name: "Renamed" }, null, 2),
+        },
+      ]);
+    } finally {
+      await client.close();
+    }
 
     expect(updateCalls).toEqual([["proxy-1", { name: "Renamed" }]]);
-    expect(JSON.parse(result.content[0].text)).toEqual({
-      id: "proxy-1",
-      name: "Renamed",
-    });
+    expect(tokens).toEqual(["test-token"]);
   });
 
   test.each([
@@ -312,14 +478,14 @@ describe("durable proxy contracts", () => {
     ["no name", { proxy_id: "proxy-1" }, "Error: name is required for rename."],
   ])("rejects rename with %s", async (_name, params, wantError) => {
     let updated = false;
-    kernelClientMock.factory = () => ({
+    const client = {
       proxies: {
         update: async () => {
           updated = true;
         },
       },
-    });
-    const handler = captureTool(registerProxyTools, "manage_proxies");
+    };
+    const handler = captureTool(registerProxyTools, "manage_proxies", client);
 
     const result = await handler({ action: "rename", ...params }, auth);
 
