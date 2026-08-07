@@ -6,7 +6,6 @@ import {
   expireProjectSelectionScopeCacheForTests,
   projectIDFromParams,
   projectSelectionInputSchema,
-  requestIncludesProjectSelection,
 } from "@/lib/mcp/project-selection";
 
 const originalKernelProject = process.env.KERNEL_PROJECT;
@@ -145,6 +144,46 @@ describe("connectionAllowsProjectSelection", () => {
     ).toBe(true);
   });
 
+  test("keeps project selection stable across token refreshes in one session", async () => {
+    delete process.env.KERNEL_PROJECT;
+    const cacheIdentity = "user:scope\0session_123";
+    let lookups = 0;
+    expect(
+      await connectionAllowsProjectSelection(
+        "jwt.org-wide.old",
+        true,
+        {
+          getJwtContext: async () => {
+            lookups += 1;
+            return "org_123";
+          },
+          createClient: () => {
+            throw new Error("unexpected API client");
+          },
+        },
+        cacheIdentity,
+      ),
+    ).toBe(true);
+
+    expect(
+      await connectionAllowsProjectSelection(
+        "jwt.org-wide.new",
+        true,
+        {
+          getJwtContext: async () => {
+            lookups += 1;
+            throw new Error("unexpected scope refresh");
+          },
+          createClient: () => {
+            throw new Error("unexpected API client");
+          },
+        },
+        cacheIdentity,
+      ),
+    ).toBe(true);
+    expect(lookups).toBe(1);
+  });
+
   test("does not expose project selection when the server is pinned", async () => {
     process.env.KERNEL_PROJECT = "proj_server";
     expect(
@@ -167,21 +206,5 @@ describe("project selection helpers", () => {
     expect(projectIDFromParams({ project_id: "proj_123" })).toBe("proj_123");
     expect(projectIDFromParams({ project_id: "" })).toBeUndefined();
     expect(projectIDFromParams(null)).toBeUndefined();
-  });
-
-  test("keeps project selection enabled for calls that already include it", async () => {
-    const request = new Request("https://mcp.example/mcp", {
-      method: "POST",
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "tools/call",
-        params: {
-          name: "manage_browsers",
-          arguments: { action: "create", project_id: "proj_123" },
-        },
-      }),
-    });
-    expect(await requestIncludesProjectSelection(request)).toBe(true);
   });
 });

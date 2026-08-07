@@ -108,12 +108,14 @@ export async function connectionAllowsProjectSelection(
   token: string,
   jwt: boolean,
   dependencies: ScopeResolutionDependencies = scopeResolutionDependencies,
+  cacheIdentity?: string,
 ) {
   if (process.env.KERNEL_PROJECT) return false;
 
-  const cached = readScopeCache(token);
+  const cacheKey = cacheIdentity ?? token;
+  const cached = readScopeCache(cacheKey);
   if (cached !== undefined) return cached;
-  const stale = readScopeCache(token, true);
+  const stale = readScopeCache(cacheKey, true);
 
   let allowsProjectSelection = false;
   let resolved = true;
@@ -137,35 +139,8 @@ export async function connectionAllowsProjectSelection(
     console.warn("Failed to resolve MCP connection project scope");
   }
 
-  if (resolved) writeScopeCache(token, allowsProjectSelection);
+  if (resolved) writeScopeCache(cacheKey, allowsProjectSelection);
   return resolved ? allowsProjectSelection : (stale ?? false);
-}
-
-export async function requestIncludesProjectSelection(req: Request) {
-  if (req.method !== "POST") return false;
-
-  let body: unknown;
-  try {
-    body = await req.clone().json();
-  } catch {
-    return false;
-  }
-
-  const requests = Array.isArray(body) ? body : [body];
-  return requests.some((request) => {
-    if (!request || typeof request !== "object") return false;
-    const candidate = request as {
-      method?: unknown;
-      params?: { arguments?: unknown };
-    };
-    const args = candidate.params?.arguments;
-    return (
-      candidate.method === "tools/call" &&
-      args !== null &&
-      typeof args === "object" &&
-      projectIDFromParams(args) !== undefined
-    );
-  });
 }
 
 export function clearProjectSelectionScopeCacheForTests() {
