@@ -2,7 +2,11 @@ import {
   ResourceTemplate,
   type McpServer,
 } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
+import type { KernelClient } from "@/lib/mcp/kernel-client";
 
 type JsonResourceTemplateOptions = {
   name: string;
@@ -26,6 +30,7 @@ function templateVariableValue(
 export function registerJsonResourceTemplate(
   server: McpServer,
   options: JsonResourceTemplateOptions,
+  dependencies: McpDependencies = defaultMcpDependencies,
 ) {
   server.resource(
     options.name,
@@ -40,7 +45,7 @@ export function registerJsonResourceTemplate(
         throw new Error(`Invalid ${options.resourceLabel} URI: ${uri}`);
       }
 
-      const client = createKernelClient(extra.authInfo.token);
+      const client = dependencies.createKernelClient(extra.authInfo.token);
       const resource = await options.read(client, identifier);
 
       if (!resource) {
