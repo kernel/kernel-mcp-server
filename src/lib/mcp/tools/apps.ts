@@ -51,7 +51,7 @@ export function registerAppCapabilities(server: McpServer) {
   // manage_apps -- List apps, invoke actions, manage deployments, check invocations
   server.tool(
     "manage_apps",
-    'Manage Kernel apps when an agent needs to discover deployed app actions, invoke an app, or inspect deployment/invocation state. Use "list_apps" before invoking an unknown app. "invoke" starts an action asynchronously and returns an invocation_id immediately. Follow the returned polling interval and attempt limit; if the invocation is still running, report its ID instead of continuing indefinitely. Use get/list actions to inspect results and "delete_deployment" to remove a deployment.',
+    'Manage Kernel apps when an agent needs to discover deployed app actions, invoke an app, or inspect deployment/invocation state. Use "list_apps" before invoking an unknown app. "invoke" starts an action asynchronously and returns an invocation_id immediately. Use "list_invocation_browsers" with that ID to discover browser sessions created by the invocation, and follow the returned polling interval and attempt limit with "get_invocation". If the invocation is still running, report its ID instead of continuing indefinitely. Use get/list actions to inspect results and "delete_deployment" to remove a deployment.',
     {
       action: z
         .enum([
@@ -61,6 +61,7 @@ export function registerAppCapabilities(server: McpServer) {
           "list_deployments",
           "delete_deployment",
           "get_invocation",
+          "list_invocation_browsers",
         ])
         .describe("Operation to perform."),
       app_name: z
@@ -90,7 +91,9 @@ export function registerAppCapabilities(server: McpServer) {
         .optional(),
       invocation_id: z
         .string()
-        .describe("(get_invocation) Invocation ID to retrieve.")
+        .describe(
+          "(get_invocation, list_invocation_browsers) Invocation ID to inspect.",
+        )
         .optional(),
       ...paginationParams,
     },
@@ -138,6 +141,10 @@ export function registerAppCapabilities(server: McpServer) {
               invocation_id: invocation.id,
               next_action: {
                 action: "get_invocation",
+                invocation_id: invocation.id,
+              },
+              browser_action: {
+                action: "list_invocation_browsers",
                 invocation_id: invocation.id,
               },
               polling: invocationPolling,
@@ -191,6 +198,19 @@ export function registerAppCapabilities(server: McpServer) {
                 `Invocation "${params.invocation_id}" not found`,
               );
             return jsonResponse(invocation);
+          }
+          case "list_invocation_browsers": {
+            if (!params.invocation_id)
+              return errorResponse("Error: invocation_id is required.");
+            const browsers = await client.invocations.listBrowsers(
+              params.invocation_id,
+            );
+            return jsonResponse({
+              browsers: browsers.browsers.map((browser) => ({
+                session_id: browser.session_id,
+                browser_live_view_url: browser.browser_live_view_url,
+              })),
+            });
           }
         }
       } catch (error) {

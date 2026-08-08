@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type {
   InvocationCreateParams,
   InvocationCreateResponse,
+  InvocationListBrowsersResponse,
 } from "@onkernel/sdk/resources/invocations";
 
 type InvocationClient = {
@@ -11,6 +12,9 @@ type InvocationClient = {
       input: InvocationCreateParams,
     ) => Promise<InvocationCreateResponse>;
     follow: (invocationId: string) => never;
+    listBrowsers: (
+      invocationId: string,
+    ) => Promise<InvocationListBrowsersResponse>;
   };
 };
 
@@ -62,6 +66,7 @@ describe("manage_apps invoke", () => {
           followCalls += 1;
           throw new Error("invoke must not wait for completion");
         },
+        listBrowsers: async () => ({ browsers: [] }),
       },
     };
 
@@ -92,10 +97,66 @@ describe("manage_apps invoke", () => {
         action: "get_invocation",
         invocation_id: "inv_123",
       },
+      browser_action: {
+        action: "list_invocation_browsers",
+        invocation_id: "inv_123",
+      },
       polling: {
         interval_seconds: 5,
         max_attempts: 60,
       },
+    });
+  });
+
+  test("returns browsers created by an invocation", async () => {
+    let requestedInvocationId = "";
+    kernelClient = {
+      invocations: {
+        create: async () => ({
+          id: "unused",
+          action_name: "unused",
+          status: "queued",
+        }),
+        follow: () => {
+          throw new Error("unused");
+        },
+        listBrowsers: async (invocationId) => {
+          requestedInvocationId = invocationId;
+          return {
+            browsers: [
+              {
+                session_id: "brr_123",
+                browser_live_view_url:
+                  "https://api.onkernel.com/browser/live/signed",
+                cdp_ws_url: "wss://api.onkernel.com/cdp",
+                webdriver_ws_url: "wss://api.onkernel.com/webdriver",
+                created_at: "2026-08-08T00:00:00Z",
+                headless: false,
+                stealth: true,
+                timeout_seconds: 600,
+              },
+            ],
+          };
+        },
+      },
+    };
+
+    const result = await captureManageAppsHandler()(
+      {
+        action: "list_invocation_browsers",
+        invocation_id: "inv_123",
+      },
+      { authInfo: { token: "test-token" } },
+    );
+
+    expect(requestedInvocationId).toBe("inv_123");
+    expect(JSON.parse(result.content[0].text)).toEqual({
+      browsers: [
+        {
+          session_id: "brr_123",
+          browser_live_view_url: "https://api.onkernel.com/browser/live/signed",
+        },
+      ],
     });
   });
 });
