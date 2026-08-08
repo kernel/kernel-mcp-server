@@ -1,6 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { createKernelClient } from "@/lib/mcp/kernel-client";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
 import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
 import {
   errorResponse,
@@ -16,13 +19,16 @@ const invocationPolling = {
   max_attempts: 60,
 } as const;
 
-export function registerAppCapabilities(server: McpServer) {
+export function registerAppCapabilities(
+  server: McpServer,
+  dependencies: McpDependencies = defaultMcpDependencies,
+) {
   server.resource("apps", "apps://", async (uri, extra) => {
     if (!extra.authInfo) {
       throw new Error("Authentication required");
     }
 
-    const client = createKernelClient(extra.authInfo.token);
+    const client = dependencies.createKernelClient(extra.authInfo.token);
     const appsPage = await client.apps.list();
     const items = appsPage.getPaginatedItems();
     return {
@@ -37,16 +43,20 @@ export function registerAppCapabilities(server: McpServer) {
     };
   });
 
-  registerJsonResourceTemplate(server, {
-    name: "app",
-    uriTemplate: "apps://{appName}",
-    variableName: "appName",
-    resourceLabel: "App",
-    read: async (client, appName) => {
-      const appsPage = await client.apps.list({ app_name: appName });
-      return appsPage.getPaginatedItems()[0];
+  registerJsonResourceTemplate(
+    server,
+    {
+      name: "app",
+      uriTemplate: "apps://{appName}",
+      variableName: "appName",
+      resourceLabel: "App",
+      read: async (client, appName) => {
+        const appsPage = await client.apps.list({ app_name: appName });
+        return appsPage.getPaginatedItems()[0];
+      },
     },
-  });
+    dependencies,
+  );
 
   // manage_apps -- List apps, invoke actions, manage deployments, check invocations
   server.tool(
@@ -106,7 +116,7 @@ export function registerAppCapabilities(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
+      const client = dependencies.createKernelClient(extra.authInfo.token);
 
       try {
         switch (params.action) {

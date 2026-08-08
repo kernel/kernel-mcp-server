@@ -1,5 +1,11 @@
-import { describe, expect, mock, test } from "bun:test";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+/// <reference types="bun-types" />
+
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { describe, expect, test } from "bun:test";
+import type { KernelClient } from "@/lib/mcp/kernel-client";
+import { registerAppCapabilities } from "@/lib/mcp/tools/apps";
 import type {
   InvocationCreateParams,
   InvocationCreateResponse,
@@ -18,41 +24,47 @@ type InvocationClient = {
   };
 };
 
-let kernelClient: InvocationClient;
-
-mock.module("@/lib/mcp/kernel-client", () => ({
-  createKernelClient: () => kernelClient,
-}));
-
-const { registerAppCapabilities } = await import("@/lib/mcp/tools/apps");
-
-type ToolResult = { content: Array<{ type: string; text: string }> };
-type ToolHandler = (
-  params: Record<string, unknown>,
-  extra: { authInfo?: { token: string } },
-) => Promise<ToolResult>;
-
-function captureManageAppsHandler() {
-  let handler: ToolHandler | undefined;
-  const server = {
-    resource() {},
-    tool(name: string, ...args: unknown[]) {
-      if (name === "manage_apps") {
-        handler = args.at(-1) as ToolHandler;
-      }
+async function connectApps(kernelClient: InvocationClient) {
+  const server = new McpServer({ name: "test", version: "0.0.0" });
+  const tokens: string[] = [];
+  registerAppCapabilities(server, {
+    createKernelClient: (token) => {
+      tokens.push(token);
+      return kernelClient as unknown as KernelClient;
     },
-  } as unknown as McpServer;
+  });
 
-  registerAppCapabilities(server);
-  if (!handler) throw new Error("manage_apps was not registered");
-  return handler;
+  const client = new Client({ name: "test-client", version: "0.0.0" });
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  const send = clientTransport.send.bind(clientTransport);
+  clientTransport.send = (message, options) =>
+    send(message, {
+      ...options,
+      authInfo: {
+        token: "test-token",
+        clientId: "test-client",
+        scopes: [],
+      },
+    });
+
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+  return { client, server, tokens };
 }
 
-describe("manage_apps invoke", () => {
+function resultJSON(result: Awaited<ReturnType<Client["callTool"]>>) {
+  const content = result.content as Array<{ type: string; text: string }>;
+  return JSON.parse(content[0].text);
+}
+
+describe("manage_apps invocation contract", () => {
   test("returns the invocation ID immediately without following the run", async () => {
     let createInput: unknown;
     let followCalls = 0;
-    kernelClient = {
+    const kernelClient: InvocationClient = {
       invocations: {
         create: async (input) => {
           createInput = input;
@@ -69,48 +81,59 @@ describe("manage_apps invoke", () => {
         listBrowsers: async () => ({ browsers: [] }),
       },
     };
+    const { client, server, tokens } = await connectApps(kernelClient);
 
-    const result = await captureManageAppsHandler()(
-      {
-        action: "invoke",
+    try {
+      const tools = await client.listTools();
+      expect(
+        tools.tools.some((tool) => tool.name === "manage_apps"),
+      ).toBeTrue();
+
+      const result = await client.callTool({
+        name: "manage_apps",
+        arguments: {
+          action: "invoke",
+          app_name: "ts-cua",
+          action_name: "cua-task",
+          payload: '{"query":"open example.com"}',
+        },
+      });
+
+      expect(tokens).toEqual(["test-token"]);
+      expect(createInput).toEqual({
         app_name: "ts-cua",
         action_name: "cua-task",
         payload: '{"query":"open example.com"}',
-      },
-      { authInfo: { token: "test-token" } },
-    );
-
-    expect(createInput).toEqual({
-      app_name: "ts-cua",
-      action_name: "cua-task",
-      payload: '{"query":"open example.com"}',
-      version: "latest",
-      async: true,
-    });
-    expect(followCalls).toBe(0);
-    expect(JSON.parse(result.content[0].text)).toEqual({
-      id: "inv_123",
-      action_name: "cua-task",
-      status: "queued",
-      invocation_id: "inv_123",
-      next_action: {
-        action: "get_invocation",
+        version: "latest",
+        async: true,
+      });
+      expect(followCalls).toBe(0);
+      expect(resultJSON(result)).toEqual({
+        id: "inv_123",
+        action_name: "cua-task",
+        status: "queued",
         invocation_id: "inv_123",
-      },
-      browser_action: {
-        action: "list_invocation_browsers",
-        invocation_id: "inv_123",
-      },
-      polling: {
-        interval_seconds: 5,
-        max_attempts: 60,
-      },
-    });
+        next_action: {
+          action: "get_invocation",
+          invocation_id: "inv_123",
+        },
+        browser_action: {
+          action: "list_invocation_browsers",
+          invocation_id: "inv_123",
+        },
+        polling: {
+          interval_seconds: 5,
+          max_attempts: 60,
+        },
+      });
+    } finally {
+      await Promise.all([client.close(), server.close()]);
+    }
   });
 
   test("returns browsers created by an invocation", async () => {
     let requestedInvocationId = "";
-    kernelClient = {
+    const kernelClient: InvocationClient = {
       invocations: {
         create: async () => ({
           id: "unused",
@@ -140,23 +163,30 @@ describe("manage_apps invoke", () => {
         },
       },
     };
+    const { client, server, tokens } = await connectApps(kernelClient);
 
-    const result = await captureManageAppsHandler()(
-      {
-        action: "list_invocation_browsers",
-        invocation_id: "inv_123",
-      },
-      { authInfo: { token: "test-token" } },
-    );
-
-    expect(requestedInvocationId).toBe("inv_123");
-    expect(JSON.parse(result.content[0].text)).toEqual({
-      browsers: [
-        {
-          session_id: "brr_123",
-          browser_live_view_url: "https://api.onkernel.com/browser/live/signed",
+    try {
+      const result = await client.callTool({
+        name: "manage_apps",
+        arguments: {
+          action: "list_invocation_browsers",
+          invocation_id: "inv_123",
         },
-      ],
-    });
+      });
+
+      expect(tokens).toEqual(["test-token"]);
+      expect(requestedInvocationId).toBe("inv_123");
+      expect(resultJSON(result)).toEqual({
+        browsers: [
+          {
+            session_id: "brr_123",
+            browser_live_view_url:
+              "https://api.onkernel.com/browser/live/signed",
+          },
+        ],
+      });
+    } finally {
+      await Promise.all([client.close(), server.close()]);
+    }
   });
 });
