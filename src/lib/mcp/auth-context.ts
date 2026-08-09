@@ -62,25 +62,44 @@ type ResolveAuthContextOptions = {
   cacheIdentity?: string;
 };
 
-export async function resolveMcpAuthContext({
+type AuthContextResolution =
+  | { context: AuthContext; transientFailure: false }
+  | { context: null; transientFailure: boolean };
+
+function isTransientAuthContextError(error: unknown) {
+  const status =
+    error && typeof error === "object" && "status" in error
+      ? (error as { status?: unknown }).status
+      : undefined;
+  if (typeof status !== "number") return true;
+  return status === 408 || status === 429 || status >= 500;
+}
+
+async function resolveMcpAuthContext({
   token,
   signal,
   dependencies = defaultMcpDependencies,
-}: ResolveAuthContextOptions): Promise<AuthContext | null> {
+}: ResolveAuthContextOptions): Promise<AuthContextResolution> {
   try {
     const context = await dependencies
       .createKernelClient(token)
       .auth.context.retrieve({ signal });
     const parsed = authContextSchema.safeParse(context);
-    if (parsed.success) return parsed.data;
+    if (parsed.success) {
+      return { context: parsed.data, transientFailure: false };
+    }
     console.warn("Received invalid MCP auth context", parsed.error.issues);
+    return { context: null, transientFailure: false };
   } catch (error) {
     console.warn(
       "Failed to resolve MCP auth context",
       error instanceof Error ? error.message : error,
     );
+    return {
+      context: null,
+      transientFailure: isTransientAuthContextError(error),
+    };
   }
-  return null;
 }
 
 export function connectionScopeFromAuthContext(
@@ -122,10 +141,11 @@ export function connectionScopeFromAuthContext(
 }
 
 const CONNECTION_CONTEXT_CACHE_TTL_MS = 5 * 60 * 1000;
+const CONNECTION_CONTEXT_STALE_TTL_MS = 30 * 60 * 1000;
 const MAX_CONNECTION_CONTEXT_CACHE_ENTRIES = 1_000;
 const connectionContextCache = new Map<
   string,
-  { context: McpConnectionContext; expiresAt: number }
+  { context: McpConnectionContext; expiresAt: number; staleUntil: number }
 >();
 
 function connectionContextCacheKey(identity: string) {
@@ -136,7 +156,11 @@ function readConnectionContextCache(identity: string, allowExpired = false) {
   const cached = connectionContextCache.get(
     connectionContextCacheKey(identity),
   );
-  if (!cached || (!allowExpired && cached.expiresAt <= Date.now())) return null;
+  if (!cached) return null;
+  const now = Date.now();
+  if (allowExpired ? cached.staleUntil <= now : cached.expiresAt <= now) {
+    return null;
+  }
   return cached.context;
 }
 
@@ -150,9 +174,11 @@ function writeConnectionContextCache(
     const oldest = connectionContextCache.keys().next().value;
     if (oldest) connectionContextCache.delete(oldest);
   }
+  const now = Date.now();
   connectionContextCache.set(key, {
     context,
-    expiresAt: Date.now() + CONNECTION_CONTEXT_CACHE_TTL_MS,
+    expiresAt: now + CONNECTION_CONTEXT_CACHE_TTL_MS,
+    staleUntil: now + CONNECTION_CONTEXT_STALE_TTL_MS,
   });
 }
 
@@ -170,20 +196,28 @@ export async function resolveMcpConnectionContext({
     ? readConnectionContextCache(cacheIdentity, true)
     : null;
 
-  const authContext = await resolveMcpAuthContext({
+  const resolution = await resolveMcpAuthContext({
     token,
     signal,
     dependencies,
   });
-  if (!authContext) return stale;
+  if (!resolution.context) {
+    if (cacheIdentity && !resolution.transientFailure) {
+      connectionContextCache.delete(connectionContextCacheKey(cacheIdentity));
+    }
+    return resolution.transientFailure ? stale : null;
+  }
 
-  const scope = connectionScopeFromAuthContext(authContext);
+  const scope = connectionScopeFromAuthContext(resolution.context);
   if (!scope) {
     console.warn("Received inconsistent MCP connection scope");
+    if (cacheIdentity) {
+      connectionContextCache.delete(connectionContextCacheKey(cacheIdentity));
+    }
     return null;
   }
 
-  const context = { authContext, scope };
+  const context = { authContext: resolution.context, scope };
   if (cacheIdentity) writeConnectionContextCache(cacheIdentity, context);
   return context;
 }

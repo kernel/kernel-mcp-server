@@ -170,6 +170,20 @@ describe("resolveMcpConnectionContext", () => {
     expect(calls).toEqual(["old-token"]);
   });
 
+  test("does not cache requests without a session identity", async () => {
+    const calls: string[] = [];
+    await resolveMcpConnectionContext({
+      token: "api-key",
+      dependencies: dependencies(response(), calls),
+    });
+    await resolveMcpConnectionContext({
+      token: "api-key",
+      dependencies: dependencies(response(), calls),
+    });
+
+    expect(calls).toEqual(["api-key", "api-key"]);
+  });
+
   test("retains resolved scope during a transient refresh failure", async () => {
     const cacheIdentity = "user_123\0session_123";
     const first = await resolveMcpConnectionContext({
@@ -189,6 +203,59 @@ describe("resolveMcpConnectionContext", () => {
     });
 
     expect(refreshed).toBe(first);
+  });
+
+  test("invalidates cached scope after credential rejection", async () => {
+    const cacheIdentity = "user_123\0session_123";
+    await resolveMcpConnectionContext({
+      token: "old-token",
+      cacheIdentity,
+      dependencies: dependencies(response()),
+    });
+    expireMcpConnectionContextCacheForTests();
+    const rejected = await resolveMcpConnectionContext({
+      token: "revoked-token",
+      cacheIdentity,
+      dependencies: {
+        createKernelClient: () => {
+          throw Object.assign(new Error("revoked"), { status: 401 });
+        },
+      },
+    });
+
+    expect(rejected).toBeNull();
+  });
+
+  test("invalidates cached scope after an inconsistent response", async () => {
+    const cacheIdentity = "user_123\0session_123";
+    await resolveMcpConnectionContext({
+      token: "old-token",
+      cacheIdentity,
+      dependencies: dependencies(response()),
+    });
+    expireMcpConnectionContextCacheForTests();
+    const inconsistent = await resolveMcpConnectionContext({
+      token: "new-token",
+      cacheIdentity,
+      dependencies: dependencies(
+        response({
+          credentialProjectId: "project_1",
+          effectiveProjectId: "project_2",
+        }),
+      ),
+    });
+    const transient = await resolveMcpConnectionContext({
+      token: "newer-token",
+      cacheIdentity,
+      dependencies: {
+        createKernelClient: () => {
+          throw new Error("temporary outage");
+        },
+      },
+    });
+
+    expect(inconsistent).toBeNull();
+    expect(transient).toBeNull();
   });
 
   test("fails closed when auth context is unavailable or malformed", async () => {

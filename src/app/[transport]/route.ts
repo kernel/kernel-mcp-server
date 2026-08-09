@@ -84,6 +84,7 @@ async function handleMcpRequestWithIdentity({
   scopes,
   authInfoExtra,
   transportSessionId,
+  connectionContextCacheIdentity,
   observeConnection,
 }: {
   req: NextRequest;
@@ -92,6 +93,7 @@ async function handleMcpRequestWithIdentity({
   scopes: string[];
   authInfoExtra: AuthInfoExtra;
   transportSessionId: string | null;
+  connectionContextCacheIdentity?: string;
   observeConnection: boolean;
 }) {
   const [mcpApps, connectionContext] = await Promise.all([
@@ -103,9 +105,7 @@ async function handleMcpRequestWithIdentity({
     resolveMcpConnectionContext({
       token,
       signal: req.signal,
-      cacheIdentity: transportSessionId
-        ? `${authSubject}\0${transportSessionId}`
-        : token,
+      cacheIdentity: connectionContextCacheIdentity,
     }),
   ]);
   if (!connectionContext) {
@@ -185,13 +185,17 @@ async function handleAuthenticatedRequest(
 
   // Capability state is keyed only after Clerk verifies the JWT, and uses
   // the verified user plus this signed MCP transport session.
+  const authSubject = mcpAppsAuthSubject({ token, userId });
   return await handleMcpRequestWithIdentity({
     req,
     token,
-    authSubject: mcpAppsAuthSubject({ token, userId }),
+    authSubject,
     scopes: ["openid"],
     authInfoExtra: { userId, clerkToken: token },
     transportSessionId,
+    connectionContextCacheIdentity: transportSessionId
+      ? `${authSubject}\0${transportSessionId}`
+      : undefined,
     observeConnection,
   });
 }
