@@ -24,8 +24,11 @@ export function registerAppCapabilities(server: McpServer) {
     uriTemplate: "kernel://orgs/{organizationId}/projects/{projectId}/apps",
     emptyText: "No apps found",
     read: async (client) => {
-      const appsPage = await client.apps.list();
-      return appsPage.getPaginatedItems();
+      const apps = [];
+      for await (const app of client.apps.list()) {
+        apps.push(app);
+      }
+      return apps;
     },
   });
 

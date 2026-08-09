@@ -324,8 +324,11 @@ export function registerBrowserCapabilities(server: McpServer) {
     uriTemplate: "kernel://orgs/{organizationId}/projects/{projectId}/browsers",
     emptyText: "No browsers found",
     read: async (client) => {
-      const browsersPage = await client.browsers.list();
-      return browsersPage.getPaginatedItems();
+      const browsers = [];
+      for await (const browser of client.browsers.list()) {
+        browsers.push(browser);
+      }
+      return browsers;
     },
   });
 
