@@ -21,7 +21,7 @@ const NON_AUTH_TOOLSETS = [
   "credential_providers",
 ].join(",");
 
-function captureRegistration(mcpApps: boolean, projectSelection = false) {
+function captureRegistration(mcpApps: boolean) {
   const legacyTools: string[] = [];
   const appTools: string[] = [];
   const resources: string[] = [];
@@ -46,7 +46,7 @@ function captureRegistration(mcpApps: boolean, projectSelection = false) {
       return { enable() {}, disable() {} };
     },
   } as unknown as McpServer;
-  registerMcpCapabilities(server, { mcpApps, projectSelection });
+  registerMcpCapabilities(server, { mcpApps });
   return { legacyTools, appTools, resources, schemas };
 }
 
@@ -102,13 +102,11 @@ describe("project selection registration", () => {
     "begin_auth_login",
   ];
 
-  test("advertises project_id only for project-scoped resource tools", () => {
-    const orgWide = captureRegistration(true, true);
-    const projectScoped = captureRegistration(true, false);
+  test("advertises one stable project-aware tool contract", () => {
+    const registration = captureRegistration(true);
 
     for (const name of projectScopedTools) {
-      expect(orgWide.schemas.get(name)).toHaveProperty("project_id");
-      expect(projectScoped.schemas.get(name)).not.toHaveProperty("project_id");
+      expect(registration.schemas.get(name)).toHaveProperty("project_id");
     }
 
     for (const name of [
@@ -116,17 +114,7 @@ describe("project selection registration", () => {
       "search_docs",
       "manage_credential_providers",
     ]) {
-      expect(orgWide.schemas.get(name)).not.toHaveProperty("project_id");
-    }
-
-    for (const name of ["manage_projects", "manage_api_keys"]) {
-      const orgWideProjectID = orgWide.schemas.get(name)?.project_id as {
-        description?: string;
-      };
-      const scopedProjectID = projectScoped.schemas.get(name)?.project_id as {
-        description?: string;
-      };
-      expect(orgWideProjectID.description).toBe(scopedProjectID.description);
+      expect(registration.schemas.get(name)).not.toHaveProperty("project_id");
     }
   });
 });

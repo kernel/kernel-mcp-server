@@ -7,8 +7,8 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import {
+  projectIDForOperation,
   projectSelectionInputSchema,
-  type ProjectSelectionOptions,
 } from "@/lib/mcp/project-selection";
 
 type BrowserCurlParams = Parameters<KernelClient["browsers"]["curl"]>[1];
@@ -27,15 +27,12 @@ function curlUrlError(url: string) {
   return undefined;
 }
 
-export function registerBrowserCurlTool(
-  server: McpServer,
-  options: ProjectSelectionOptions = {},
-) {
+export function registerBrowserCurlTool(server: McpServer) {
   server.tool(
     "browser_curl",
     "Send an HTTP request through an existing Kernel browser session's Chrome network stack. Use when the request needs that browser session's cookies, proxy, network context, or origin behavior; do not use for general documentation lookup or web search.",
     {
-      ...projectSelectionInputSchema(options.projectSelection),
+      ...projectSelectionInputSchema(),
       session_id: z.string().describe("Browser session ID."),
       url: z.string().url().describe("Target http or https URL."),
       method: z
@@ -72,7 +69,7 @@ export function registerBrowserCurlTool(
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(
         extra.authInfo.token,
-        params.project_id,
+        projectIDForOperation(extra.authInfo, params.project_id),
       );
 
       try {

@@ -3,20 +3,17 @@ import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import { throwToolError } from "@/lib/mcp/responses";
 import {
+  projectIDForOperation,
   projectSelectionInputSchema,
-  type ProjectSelectionOptions,
 } from "@/lib/mcp/project-selection";
 
-export function registerShellTool(
-  server: McpServer,
-  options: ProjectSelectionOptions = {},
-) {
+export function registerShellTool(server: McpServer) {
   // exec_command -- Execute shell commands inside a browser VM
   server.tool(
     "exec_command",
     'Execute a command synchronously inside a browser VM. Returns stdout, stderr, and exit code. The command field is the executable; use args for its arguments. Common uses: read files (command: "cat", args: ["/var/log/supervisord.log"]), list dirs (command: "ls", args: ["/var/log"]), check DNS (command: "cat", args: ["/etc/resolv.conf"]), test connectivity (command: "curl", args: ["-I", "https://example.com"]).',
     {
-      ...projectSelectionInputSchema(options.projectSelection),
+      ...projectSelectionInputSchema(),
       session_id: z.string().describe("Browser session ID."),
       command: z
         .string()
@@ -46,7 +43,10 @@ export function registerShellTool(
       extra,
     ) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token, project_id);
+      const client = createKernelClient(
+        extra.authInfo.token,
+        projectIDForOperation(extra.authInfo, project_id),
+      );
 
       try {
         const result = await client.browsers.process.exec(session_id, {

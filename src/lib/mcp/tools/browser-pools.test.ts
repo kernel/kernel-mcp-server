@@ -3,6 +3,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { z } from "zod";
+import { projectScopedExtra } from "@/lib/mcp/auth-context.test-fixtures";
 import {
   kernelClientMock,
   resetKernelClientFactory,
@@ -39,7 +40,7 @@ function captureBrowserPoolTool() {
   return { handler, schema };
 }
 
-const auth = { authInfo: { token: "test-token" } };
+const auth = projectScopedExtra();
 
 function pool() {
   return {

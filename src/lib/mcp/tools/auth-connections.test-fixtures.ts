@@ -1,4 +1,5 @@
 import { expect } from "bun:test";
+import { projectScopedAuthInfo } from "@/lib/mcp/auth-context.test-fixtures";
 import type { KernelClient } from "@/lib/mcp/kernel-client";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type {
@@ -142,7 +143,7 @@ export function assertNoSecrets(value: unknown) {
   expect(json).not.toContain("untrusted website text");
 }
 
-export function captureHandler(projectSelection = false) {
+export function captureHandler() {
   let handler: ((params: any, extra: any) => Promise<any>) | undefined;
   let schema: Record<string, any> | undefined;
   const server = {
@@ -153,10 +154,20 @@ export function captureHandler(projectSelection = false) {
       ...rest: any[]
     ) {
       schema = inputSchema;
-      handler = rest[rest.length - 1];
+      const capturedHandler = rest[rest.length - 1];
+      handler = (params, extra) =>
+        capturedHandler(params, {
+          ...extra,
+          authInfo: extra.authInfo
+            ? {
+                ...projectScopedAuthInfo(params.project_id ?? "proj_test"),
+                ...extra.authInfo,
+              }
+            : undefined,
+        });
     },
   } as unknown as McpServer;
-  registerAuthConnectionTools(server, { projectSelection });
+  registerAuthConnectionTools(server);
   return {
     get handler() {
       return handler!;

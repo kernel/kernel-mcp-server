@@ -263,7 +263,7 @@ One additional Managed Auth helper (`begin_auth_login`) is marked app-only (`_me
 
 Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_DISABLED_TOOLSETS` to a comma-separated list. For example, `KERNEL_MCP_DISABLED_TOOLSETS=api_keys` prevents `manage_api_keys` from being registered.
 
-Call `get_connection_context` before deciding whether to create or select a project. When `authorization.effective_scope.project_id` is non-null, the connection is already fixed to that project. Organization-wide connections return a null effective project and receive an optional `project_id` parameter on tools that operate on project-scoped resources. Use the same `project_id` for follow-up operations on a browser, profile, pool, proxy, app, managed-auth connection, or credential.
+Call `get_connection_context` before deciding whether to create or select a project. Its canonical `connection_scope` reports whether the connection is organization-wide or fixed to a project. Project-scoped tools always advertise `project_id`: organization-wide connections must pass the selected project, while fixed-project connections may omit it or pass the matching ID. Project resources use project-qualified `kernel://orgs/{organizationId}/projects/{projectId}/...` URIs. Authorization remains enforced by the Kernel API; selecting a project never grants access to it.
 
 ### manage\_\* tools
 
@@ -292,14 +292,12 @@ Call `get_connection_context` before deciding whether to create or select a proj
 
 ## Resources
 
-- `browsers://` - List browser sessions
-- `browser-pools://` - List browser pools
-- `profiles://` - List browser profiles
-- `apps://` - List deployed apps
-- `browsers://{session_id}` - Access one browser session
-- `browser-pools://{id_or_name}` - Access one browser pool
-- `profiles://{profile_name}` - Access one browser profile
-- `apps://{app_name}` - Access one deployed app
+Project resources use the prefix `kernel://orgs/{organization_id}/projects/{project_id}`.
+
+- `/browsers` and `/browsers/{session_id}` - List or access browser sessions
+- `/browser-pools` and `/browser-pools/{id_or_name}` - List or access browser pools
+- `/profiles` and `/profiles/{profile_name}` - List or access browser profiles
+- `/apps` and `/apps/{app_name}` - List or access deployed apps
 
 ## Prompts
 

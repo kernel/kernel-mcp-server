@@ -46,7 +46,7 @@ describe("manage_auth_connections programmatic surface", () => {
   });
 
   test("constructs a project-scoped client from the optional selector", async () => {
-    const { handler, schema } = captureHandler(true);
+    const { handler, schema } = captureHandler();
     let selectedProject: string | undefined;
     kernelClientMock.factory = (_token, projectID) => {
       selectedProject = projectID;

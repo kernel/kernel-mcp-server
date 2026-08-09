@@ -9,20 +9,17 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import {
+  projectIDForOperation,
   projectSelectionInputSchema,
-  type ProjectSelectionOptions,
 } from "@/lib/mcp/project-selection";
 
-export function registerReplayTools(
-  server: McpServer,
-  options: ProjectSelectionOptions = {},
-) {
+export function registerReplayTools(server: McpServer) {
   // manage_replays -- Start, stop, and list video replay recordings for a session
   server.tool(
     "manage_replays",
     'Manage video replay recordings for a browser session. Use "start" to begin recording a session (returns a replay_id and a viewable URL), "stop" to end a recording and persist the video, or "list" to see all replays for a session with their view URLs. Recording is session-scoped: start once, run your automation, then stop -- rather than recording each action separately. Requires a paid Kernel plan; not available on the free tier.',
     {
-      ...projectSelectionInputSchema(options.projectSelection),
+      ...projectSelectionInputSchema(),
       action: z
         .enum(["start", "stop", "list"])
         .describe("Operation to perform."),
@@ -60,7 +57,7 @@ export function registerReplayTools(
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(
         extra.authInfo.token,
-        params.project_id,
+        projectIDForOperation(extra.authInfo, params.project_id),
       );
 
       try {

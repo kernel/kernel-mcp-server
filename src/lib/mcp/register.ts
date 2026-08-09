@@ -23,20 +23,15 @@ import { registerProjectCapabilities } from "@/lib/mcp/tools/projects";
 import { registerProxyTools } from "@/lib/mcp/tools/proxies";
 import { registerReplayTools } from "@/lib/mcp/tools/replays";
 import { registerShellTool } from "@/lib/mcp/tools/shell";
-import type { ProjectSelectionOptions } from "@/lib/mcp/project-selection";
-
-type McpToolOptions = ProjectSelectionOptions & McpDependencies;
-type McpRegistrationOptions = ProjectSelectionOptions & {
+type McpToolOptions = McpDependencies;
+type McpRegistrationOptions = {
   mcpApps?: boolean;
   dependencies?: McpDependencies;
 };
 type RegisterMcpToolset = (server: McpServer, options: McpToolOptions) => void;
 
-function registerManagedAuthCapabilities(
-  server: McpServer,
-  options: McpRegistrationOptions,
-) {
-  registerAuthConnectionTools(server, options);
+function registerManagedAuthCapabilities(server: McpServer) {
+  registerAuthConnectionTools(server);
 }
 
 const mcpToolRegistrations = [
@@ -141,21 +136,19 @@ export function registerMcpCapabilities(
   server: McpServer,
   {
     mcpApps = false,
-    projectSelection = false,
     dependencies = defaultMcpDependencies,
   }: McpRegistrationOptions = {},
 ) {
   const disabledToolsets = disabledMcpToolsetsFromEnv();
-  const options = { ...dependencies, projectSelection };
 
   registerKernelPrompts(server);
-  // Connection metadata is always available so clients can determine which
-  // project-scoped tool schema applies, even when other toolsets are disabled.
-  registerConnectionContextTool(server, dependencies);
+  // Connection metadata remains available so clients can select the correct
+  // project target even when other toolsets are disabled.
+  registerConnectionContextTool(server);
 
   for (const [toolset, registerToolset] of mcpToolRegistrations) {
     if (toolsetEnabled(disabledToolsets, toolset)) {
-      registerToolset(server, options);
+      registerToolset(server, dependencies);
     }
   }
 
@@ -163,6 +156,6 @@ export function registerMcpCapabilities(
   // adds one interactive launcher (plus its app-only implementation tools and
   // resource) without replacing or narrowing manage_auth_connections.
   if (mcpApps && toolsetEnabled(disabledToolsets, "auth_connections")) {
-    registerAuthLoginApp(server, options);
+    registerAuthLoginApp(server);
   }
 }

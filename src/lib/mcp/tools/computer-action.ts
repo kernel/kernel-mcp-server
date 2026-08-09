@@ -8,8 +8,8 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import {
+  projectIDForOperation,
   projectSelectionInputSchema,
-  type ProjectSelectionOptions,
 } from "@/lib/mcp/project-selection";
 
 type ComputerClient = KernelClient["browsers"]["computer"];
@@ -250,16 +250,13 @@ async function executeComputerActionPrefix(
   return { ok: true, executedActionCount };
 }
 
-export function registerComputerActionTool(
-  server: McpServer,
-  options: ProjectSelectionOptions = {},
-) {
+export function registerComputerActionTool(server: McpServer) {
   // computer_action -- Execute one or more computer actions on a browser session
   server.tool(
     "computer_action",
     "Execute computer actions on a browser session. Pass a single action for simple operations (e.g. one click or one screenshot), or pass multiple actions to batch them into a single request for lower latency (e.g. click, type, press_key in one call). Use sleep actions between steps when the page needs time to react (e.g. after a click that triggers navigation or animation). IMPORTANT: Always include a screenshot as the last action so you can see the result of your actions. Action types: click_mouse, move_mouse, type_text, press_key, scroll, drag_mouse, set_cursor, sleep, write_clipboard, read_clipboard, screenshot, get_mouse_position. screenshot, read_clipboard, and get_mouse_position return data, so they must be the last action if included.",
     {
-      ...projectSelectionInputSchema(options.projectSelection),
+      ...projectSelectionInputSchema(),
       session_id: z.string().describe("Browser session ID."),
       actions: z
         .array(computerActionSchema)
@@ -277,7 +274,10 @@ export function registerComputerActionTool(
     },
     async ({ session_id, actions, project_id }, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token, project_id);
+      const client = createKernelClient(
+        extra.authInfo.token,
+        projectIDForOperation(extra.authInfo, project_id),
+      );
 
       try {
         const placementError = terminalActionPlacementError(actions);

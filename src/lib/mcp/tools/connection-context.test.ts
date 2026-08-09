@@ -4,7 +4,6 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, test } from "bun:test";
-import type { KernelClient } from "@/lib/mcp/kernel-client";
 import { registerConnectionContextTool } from "@/lib/mcp/tools/connection-context";
 
 type ToolResult = {
@@ -12,8 +11,8 @@ type ToolResult = {
 };
 
 describe("get_connection_context", () => {
-  test("returns the authoritative API auth context through MCP", async () => {
-    const context = {
+  test("returns the canonical request scope through MCP", async () => {
+    const authContext = {
       authentication: {
         credential_id: "key_123",
         method: "api_key",
@@ -26,18 +25,8 @@ describe("get_connection_context", () => {
       organization: { id: "org_123" },
       principal: { id: "key_123", type: "api_key" },
     };
-    const tokens: string[] = [];
     const server = new McpServer({ name: "test", version: "0.0.0" });
-    registerConnectionContextTool(server, {
-      createKernelClient: (token) => {
-        tokens.push(token);
-        return {
-          auth: {
-            context: { retrieve: async () => context },
-          },
-        } as unknown as KernelClient;
-      },
-    });
+    registerConnectionContextTool(server);
 
     const client = new Client({ name: "test-client", version: "0.0.0" });
     const [clientTransport, serverTransport] =
@@ -50,6 +39,17 @@ describe("get_connection_context", () => {
           token: "secret-token",
           clientId: "test-client",
           scopes: [],
+          extra: {
+            connectionContext: {
+              authContext,
+              scope: {
+                kind: "project",
+                organizationId: "org_123",
+                projectId: "proj_123",
+                source: "credential",
+              },
+            },
+          },
         },
       });
 
@@ -67,8 +67,16 @@ describe("get_connection_context", () => {
         name: "get_connection_context",
         arguments: {},
       })) as ToolResult;
-      expect(tokens).toEqual(["secret-token"]);
-      expect(JSON.parse(result.content[0].text)).toEqual(context);
+      expect(JSON.parse(result.content[0].text)).toEqual({
+        ...authContext,
+        connection_scope: {
+          kind: "project",
+          organization_id: "org_123",
+          project_id: "proj_123",
+          source: "credential",
+          project_id_required: false,
+        },
+      });
     } finally {
       await client.close();
       await server.close();

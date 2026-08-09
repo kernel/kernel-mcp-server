@@ -10,20 +10,17 @@ import {
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 import {
+  projectIDForOperation,
   projectSelectionInputSchema,
-  type ProjectSelectionOptions,
 } from "@/lib/mcp/project-selection";
 
-export function registerCredentialTools(
-  server: McpServer,
-  options: ProjectSelectionOptions = {},
-) {
+export function registerCredentialTools(server: McpServer) {
   // manage_credentials -- Manage stored credentials for managed auth
   server.tool(
     "manage_credentials",
     'Manage credentials stored in Kernel for managed auth. "list" discovers credentials (optionally filtered by domain), "get" returns a credential\'s metadata (values are never returned), "totp_code" returns the current 6-digit TOTP for credentials with a configured totp_secret, "create" stores a new credential, "update" changes its name/values/sso_provider/totp_secret (values are merged with existing), and "delete" removes a credential by ID or name.',
     {
-      ...projectSelectionInputSchema(options.projectSelection),
+      ...projectSelectionInputSchema(),
       action: z
         .enum(["list", "get", "totp_code", "create", "update", "delete"])
         .describe("Operation to perform."),
@@ -74,7 +71,7 @@ export function registerCredentialTools(
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(
         extra.authInfo.token,
-        params.project_id,
+        projectIDForOperation(extra.authInfo, params.project_id),
       );
 
       try {

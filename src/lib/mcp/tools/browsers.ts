@@ -7,7 +7,10 @@ import {
   type BrowserConfigResult,
 } from "@/lib/mcp/browser-config";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
-import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
+import {
+  registerJsonResourceCollection,
+  registerJsonResourceTemplate,
+} from "@/lib/mcp/resource-templates";
 import {
   errorResponse,
   jsonResponse,
@@ -17,8 +20,8 @@ import {
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 import {
+  projectIDForOperation,
   projectSelectionInputSchema,
-  type ProjectSelectionOptions,
 } from "@/lib/mcp/project-selection";
 import {
   TELEMETRY_EVENT_CATALOG,
@@ -315,35 +318,21 @@ function buildSshPortForwardingInfo(
   };
 }
 
-export function registerBrowserCapabilities(
-  server: McpServer,
-  options: ProjectSelectionOptions = {},
-) {
-  server.resource("browsers", "browsers://", async (uri, extra) => {
-    if (!extra.authInfo) {
-      throw new Error("Authentication required");
-    }
-
-    const client = createKernelClient(extra.authInfo.token);
-    const browsersPage = await client.browsers.list();
-    const items = browsersPage.getPaginatedItems();
-    return {
-      contents: [
-        {
-          uri: uri.toString(),
-          mimeType: "application/json",
-          text:
-            items.length > 0
-              ? JSON.stringify(items, null, 2)
-              : "No browsers found",
-        },
-      ],
-    };
+export function registerBrowserCapabilities(server: McpServer) {
+  registerJsonResourceCollection(server, {
+    name: "browsers",
+    uriTemplate: "kernel://orgs/{organizationId}/projects/{projectId}/browsers",
+    emptyText: "No browsers found",
+    read: async (client) => {
+      const browsersPage = await client.browsers.list();
+      return browsersPage.getPaginatedItems();
+    },
   });
 
   registerJsonResourceTemplate(server, {
     name: "browser",
-    uriTemplate: "browsers://{sessionId}",
+    uriTemplate:
+      "kernel://orgs/{organizationId}/projects/{projectId}/browsers/{sessionId}",
     variableName: "sessionId",
     resourceLabel: "Browser session",
     read: (client, sessionId) => client.browsers.retrieve(sessionId),
@@ -354,7 +343,7 @@ export function registerBrowserCapabilities(
     "manage_browsers",
     'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished.',
     {
-      ...projectSelectionInputSchema(options.projectSelection),
+      ...projectSelectionInputSchema(),
       action: z
         .enum(["create", "update", "list", "get", "get_telemetry", "delete"])
         .describe("Operation to perform."),
@@ -561,7 +550,7 @@ export function registerBrowserCapabilities(
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(
         extra.authInfo.token,
-        params.project_id,
+        projectIDForOperation(extra.authInfo, params.project_id),
       );
 
       try {

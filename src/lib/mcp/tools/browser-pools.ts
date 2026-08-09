@@ -7,7 +7,10 @@ import {
   type BrowserCreateConfigParams,
 } from "@/lib/mcp/browser-config";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
-import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
+import {
+  registerJsonResourceCollection,
+  registerJsonResourceTemplate,
+} from "@/lib/mcp/resource-templates";
 import {
   jsonResponse,
   errorResponse,
@@ -17,8 +20,8 @@ import {
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 import {
+  projectIDForOperation,
   projectSelectionInputSchema,
-  type ProjectSelectionOptions,
 } from "@/lib/mcp/project-selection";
 
 type BrowserPoolCreateParams = Parameters<
@@ -213,37 +216,25 @@ function summarizeAcquiredBrowser(browser: BrowserPoolAcquireResponse) {
   };
 }
 
-export function registerBrowserPoolCapabilities(
-  server: McpServer,
-  options: ProjectSelectionOptions = {},
-) {
-  server.resource("browser_pools", "browser-pools://", async (uri, extra) => {
-    if (!extra.authInfo) {
-      throw new Error("Authentication required");
-    }
-
-    const client = createKernelClient(extra.authInfo.token);
-    const pools = [];
-    for await (const pool of client.browserPools.list()) {
-      pools.push(pool);
-    }
-    return {
-      contents: [
-        {
-          uri: uri.toString(),
-          mimeType: "application/json",
-          text:
-            pools.length > 0
-              ? JSON.stringify(pools.map(summarizeBrowserPool), null, 2)
-              : "No browser pools found",
-        },
-      ],
-    };
+export function registerBrowserPoolCapabilities(server: McpServer) {
+  registerJsonResourceCollection(server, {
+    name: "browser_pools",
+    uriTemplate:
+      "kernel://orgs/{organizationId}/projects/{projectId}/browser-pools",
+    emptyText: "No browser pools found",
+    read: async (client) => {
+      const pools = [];
+      for await (const pool of client.browserPools.list()) {
+        pools.push(summarizeBrowserPool(pool));
+      }
+      return pools;
+    },
   });
 
   registerJsonResourceTemplate(server, {
     name: "browser_pool",
-    uriTemplate: "browser-pools://{idOrName}",
+    uriTemplate:
+      "kernel://orgs/{organizationId}/projects/{projectId}/browser-pools/{idOrName}",
     variableName: "idOrName",
     resourceLabel: "Browser pool",
     read: (client, idOrName) => client.browserPools.retrieve(idOrName),
@@ -254,7 +245,7 @@ export function registerBrowserPoolCapabilities(
     "manage_browser_pools",
     'Manage pre-warmed browser pools when an agent needs fast browser acquisition or reusable session capacity. Use "list" for a compact pool inventory, "get" for full details, "acquire" before controlling a pooled browser, and "release" when the browser should return to the pool.',
     {
-      ...projectSelectionInputSchema(options.projectSelection),
+      ...projectSelectionInputSchema(),
       action: z
         .enum([
           "create",
@@ -416,7 +407,7 @@ export function registerBrowserPoolCapabilities(
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(
         extra.authInfo.token,
-        params.project_id,
+        projectIDForOperation(extra.authInfo, params.project_id),
       );
 
       try {

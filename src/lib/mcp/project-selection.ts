@@ -1,107 +1,49 @@
-import type { AuthContext } from "@onkernel/sdk/resources/auth/context";
-import { createHash } from "crypto";
+import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { z } from "zod";
-import { resolveMcpAuthContext } from "@/lib/mcp/auth-context";
-import {
-  defaultMcpDependencies,
-  type McpDependencies,
-} from "@/lib/mcp/dependencies";
-
-export interface ProjectSelectionOptions {
-  projectSelection?: boolean;
-}
+import type { McpConnectionContext } from "@/lib/mcp/auth-context";
 
 const projectIDSchema = z
   .string()
   .min(1)
   .describe(
-    "Project ID used to scope this operation. Available only on organization-wide connections. Preserve it for subsequent operations on the same resource.",
+    "Project ID used to scope this operation. Required on organization-wide connections. On project-scoped connections, omit it or pass the fixed project ID returned by get_connection_context.",
   )
   .optional();
 
-export function projectSelectionInputSchema(enabled = false): {
+export function projectSelectionInputSchema(): {
   project_id: typeof projectIDSchema;
 } {
-  // MCP tool registration needs one stable inferred handler type even though
-  // project-scoped connections omit this property from their runtime schema.
-  return (enabled ? { project_id: projectIDSchema } : {}) as {
-    project_id: typeof projectIDSchema;
-  };
+  return { project_id: projectIDSchema };
 }
 
-const SCOPE_CACHE_TTL_MS = 5 * 60 * 1000;
-const MAX_SCOPE_CACHE_ENTRIES = 1_000;
-const scopeCache = new Map<
-  string,
-  { allowsProjectSelection: boolean; expiresAt: number }
->();
-
-function scopeCacheKey(token: string) {
-  return createHash("sha256").update(token).digest("hex");
-}
-
-function readScopeCache(token: string, allowExpired = false) {
-  const cached = scopeCache.get(scopeCacheKey(token));
-  if (!cached || (!allowExpired && cached.expiresAt <= Date.now())) {
-    return undefined;
+export function connectionContextFromAuthInfo(
+  authInfo: AuthInfo,
+): McpConnectionContext {
+  const context = authInfo.extra?.connectionContext;
+  if (!context || typeof context !== "object" || !("scope" in context)) {
+    throw new Error("Kernel connection scope is unavailable");
   }
-  return cached.allowsProjectSelection;
+  return context as McpConnectionContext;
 }
 
-function writeScopeCache(token: string, allowsProjectSelection: boolean) {
-  const key = scopeCacheKey(token);
-  scopeCache.delete(key);
-  if (scopeCache.size >= MAX_SCOPE_CACHE_ENTRIES) {
-    const oldest = scopeCache.keys().next().value;
-    if (oldest) scopeCache.delete(oldest);
-  }
-  scopeCache.set(key, {
-    allowsProjectSelection,
-    expiresAt: Date.now() + SCOPE_CACHE_TTL_MS,
-  });
-}
-
-type ScopeResolutionDependencies = Pick<McpDependencies, "createKernelClient">;
-
-type ConnectionProjectSelectionOptions = {
-  token: string;
-  dependencies?: ScopeResolutionDependencies;
-  cacheIdentity?: string;
-  authContext?: Promise<AuthContext | null>;
-};
-
-export async function connectionAllowsProjectSelection({
-  token,
-  dependencies = defaultMcpDependencies,
-  cacheIdentity,
-  authContext,
-}: ConnectionProjectSelectionOptions) {
-  if (process.env.KERNEL_PROJECT) return false;
-
-  const cacheKey = cacheIdentity ?? token;
-  const cached = readScopeCache(cacheKey);
-  if (cached !== undefined) return cached;
-  // A successfully resolved capability remains authoritative during later
-  // transient failures, including OAuth token refreshes in the same session.
-  const stale = readScopeCache(cacheKey, true);
-
-  const context = await (authContext ??
-    resolveMcpAuthContext({ token, dependencies }));
-  if (!context) {
-    if (stale !== undefined) return stale;
-    throw new Error("Unable to resolve MCP connection project scope");
+export function projectIDForOperation(
+  authInfo: AuthInfo,
+  requestedProjectId?: string,
+): string {
+  const { scope } = connectionContextFromAuthInfo(authInfo);
+  if (scope.kind === "organization") {
+    if (!requestedProjectId) {
+      throw new Error(
+        "project_id is required for project-scoped operations on an organization-wide connection",
+      );
+    }
+    return requestedProjectId;
   }
 
-  const allowsProjectSelection =
-    context.authorization.credential_scope.project_id === null;
-  writeScopeCache(cacheKey, allowsProjectSelection);
-  return allowsProjectSelection;
-}
-
-export function clearProjectSelectionScopeCacheForTests() {
-  scopeCache.clear();
-}
-
-export function expireProjectSelectionScopeCacheForTests() {
-  for (const entry of scopeCache.values()) entry.expiresAt = 0;
+  if (requestedProjectId && requestedProjectId !== scope.projectId) {
+    throw new Error(
+      `project_id must match this connection's fixed project (${scope.projectId})`,
+    );
+  }
+  return scope.projectId;
 }

@@ -24,6 +24,25 @@ const authContextSchema: z.ZodType<AuthContext> = z.object({
   }),
 });
 
+export type ConnectionScope =
+  | {
+      kind: "organization";
+      organizationId: string;
+      projectId: null;
+      source: "credential";
+    }
+  | {
+      kind: "project";
+      organizationId: string;
+      projectId: string;
+      source: "credential" | "server_pin";
+    };
+
+export type McpConnectionContext = {
+  authContext: AuthContext;
+  scope: ConnectionScope;
+};
+
 export type McpConnectionAnalyticsContext = {
   authMethod: "api_key" | "oauth";
   credentialScope: "organization" | "project";
@@ -62,51 +81,86 @@ export async function resolveMcpAuthContext({
   return null;
 }
 
-type ResolveConnectionAnalyticsOptions = ResolveAuthContextOptions & {
-  authContext?: Promise<AuthContext | null>;
-  serverProjectId?: string;
-};
+export function connectionScopeFromAuthContext(
+  context: AuthContext,
+  serverProjectId = process.env.KERNEL_PROJECT,
+): ConnectionScope | null {
+  const organizationId = context.organization.id;
+  const credentialProjectId = context.authorization.credential_scope.project_id;
+  const effectiveProjectId = context.authorization.effective_scope.project_id;
 
-export async function resolveMcpConnectionAnalyticsContext({
+  if (credentialProjectId) {
+    if (effectiveProjectId !== credentialProjectId) return null;
+    if (serverProjectId && serverProjectId !== credentialProjectId) return null;
+    return {
+      kind: "project",
+      organizationId,
+      projectId: credentialProjectId,
+      source: "credential",
+    };
+  }
+
+  if (serverProjectId) {
+    if (effectiveProjectId !== serverProjectId) return null;
+    return {
+      kind: "project",
+      organizationId,
+      projectId: serverProjectId,
+      source: "server_pin",
+    };
+  }
+
+  if (effectiveProjectId) return null;
+  return {
+    kind: "organization",
+    organizationId,
+    projectId: null,
+    source: "credential",
+  };
+}
+
+export async function resolveMcpConnectionContext({
   token,
   signal,
   dependencies,
+}: ResolveAuthContextOptions): Promise<McpConnectionContext | null> {
+  const authContext = await resolveMcpAuthContext({
+    token,
+    signal,
+    dependencies,
+  });
+  if (!authContext) return null;
+
+  const scope = connectionScopeFromAuthContext(authContext);
+  if (!scope) {
+    console.warn("Received inconsistent MCP connection scope");
+    return null;
+  }
+  return { authContext, scope };
+}
+
+export function connectionAnalyticsFromContext({
   authContext,
-  serverProjectId = process.env.KERNEL_PROJECT,
-}: ResolveConnectionAnalyticsOptions): Promise<McpConnectionAnalyticsContext | null> {
-  const context = await (authContext ??
-    resolveMcpAuthContext({ token, signal, dependencies }));
-  if (!context) return null;
-
+  scope,
+}: McpConnectionContext): McpConnectionAnalyticsContext | null {
   const isApiKey =
-    context.authentication.method === "api_key" &&
-    context.authentication.source === "api_key" &&
-    context.principal.type === "api_key";
+    authContext.authentication.method === "api_key" &&
+    authContext.authentication.source === "api_key" &&
+    authContext.principal.type === "api_key";
   const isOAuth =
-    context.authentication.method === "jwt" &&
-    context.authentication.source === "oauth" &&
-    context.principal.type === "user";
+    authContext.authentication.method === "jwt" &&
+    authContext.authentication.source === "oauth" &&
+    authContext.principal.type === "user";
   if (!isApiKey && !isOAuth) return null;
-
-  const credentialProjectId = context.authorization.credential_scope.project_id;
-  const effectiveProjectId = context.authorization.effective_scope.project_id;
-  if (credentialProjectId && effectiveProjectId !== credentialProjectId) {
-    return null;
-  }
-  if (!credentialProjectId && effectiveProjectId && !serverProjectId) {
-    return null;
-  }
-  if (serverProjectId && effectiveProjectId !== serverProjectId) {
-    return null;
-  }
 
   return {
     authMethod: isApiKey ? "api_key" : "oauth",
-    credentialScope: credentialProjectId ? "project" : "organization",
-    connectionScope: effectiveProjectId ? "project" : "organization",
-    scopeSource:
-      !credentialProjectId && effectiveProjectId ? "server_pin" : "credential",
-    organizationId: context.organization.id,
-    userId: isOAuth ? context.principal.id : null,
+    credentialScope: authContext.authorization.credential_scope.project_id
+      ? "project"
+      : "organization",
+    connectionScope: scope.kind,
+    scopeSource: scope.source,
+    organizationId: scope.organizationId,
+    userId: isOAuth ? authContext.principal.id : null,
   };
 }

@@ -4,6 +4,10 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, test } from "bun:test";
+import {
+  projectScopedAuthInfo,
+  projectScopedExtra,
+} from "@/lib/mcp/auth-context.test-fixtures";
 import type { McpDependencies } from "@/lib/mcp/dependencies";
 import type { KernelClient } from "@/lib/mcp/kernel-client";
 import { registerProfileCapabilities } from "@/lib/mcp/tools/profiles";
@@ -60,11 +64,7 @@ async function connectTool(register: RegisterTool, kernelClient: unknown) {
   clientTransport.send = (message, options) =>
     send(message, {
       ...options,
-      authInfo: {
-        token: "test-token",
-        clientId: "test-client",
-        scopes: [],
-      },
+      authInfo: projectScopedAuthInfo(),
     });
 
   await Promise.all([
@@ -82,7 +82,7 @@ function profilePage(profiles: Array<{ id: string; name: string }>) {
   };
 }
 
-const auth = { authInfo: { token: "test-token" } };
+const auth = projectScopedExtra();
 
 describe("durable profile contracts", () => {
   test("creates a profile when no exact match exists", async () => {

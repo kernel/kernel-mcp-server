@@ -20,8 +20,8 @@ import {
 import { managedAuthBrowserTelemetrySchema } from "@/lib/mcp/tools/managed-auth-telemetry";
 import { errorResponse } from "@/lib/mcp/responses";
 import {
+  projectIDForOperation,
   projectSelectionInputSchema,
-  type ProjectSelectionOptions,
 } from "@/lib/mcp/project-selection";
 
 export { initializeDeclaresMcpApps };
@@ -50,8 +50,8 @@ export function managedAuthResourceMeta() {
   };
 }
 
-const authLoginInputSchema = (projectSelection = false) => ({
-  ...projectSelectionInputSchema(projectSelection),
+const authLoginInputSchema = () => ({
+  ...projectSelectionInputSchema(),
   mode: z.enum(["new_login", "reauth"]),
   connection_id: z.string().min(1).optional(),
   domain: z.string().optional(),
@@ -107,10 +107,7 @@ function inputFromParams(params: AuthLoginInput): AuthLoginInput {
   };
 }
 
-export function registerAuthLoginApp(
-  server: McpServer,
-  options: ProjectSelectionOptions = {},
-) {
+export function registerAuthLoginApp(server: McpServer) {
   const resourceMeta = managedAuthResourceMeta();
 
   server.registerResource(
@@ -141,7 +138,7 @@ export function registerAuthLoginApp(
       title: "Open secure managed-auth login",
       description:
         'Open Kernel\'s secure interactive login panel so the user can enter credentials and MFA without exposing them to the conversation. Use this when a user directly asks to log in/sign in, or after a protected browser task discovers authentication is needed and the user consents. A direct request to log in is already consent; do not ask again. First list manage_auth_connections for the exact domain across all pages. Reuse an authenticated connection, ask the user to choose only when multiple relevant accounts exist, or call this tool with mode="reauth" and connection_id for an existing connection that needs authentication. If none exists, call with mode="new_login", domain, and a concise stable profile_name derived from the service (for example "hacker-news") unless the user supplied one; do not ask solely for a profile name. Replay recording and default operational browser telemetry are enabled unless explicitly disabled with record_session=false or browser_telemetry={enabled:false}. This launcher never creates or starts a flow—the App does that only after the user clicks Continue. Immediately follow the returned next_action, repeat its read-only wait while pending, then resume the original task using the authenticated profile_name. Never ask for passwords, credentials, OTPs, or MFA values in chat.',
-      inputSchema: authLoginInputSchema(options.projectSelection),
+      inputSchema: authLoginInputSchema(),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -158,7 +155,10 @@ export function registerAuthLoginApp(
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const input = inputFromParams(params);
+      const input = {
+        ...inputFromParams(params),
+        project_id: projectIDForOperation(extra.authInfo, params.project_id),
+      };
       const validationError = validateAuthLoginInput(input);
       if (validationError) return errorResponse(`Error: ${validationError}`);
       const client = createKernelClient(extra.authInfo.token, input.project_id);
@@ -227,7 +227,7 @@ export function registerAuthLoginApp(
       title: "Begin secure managed authentication (app-only)",
       description:
         "Start or resume the secure managed-auth flow after the App user clicks Continue.",
-      inputSchema: authLoginInputSchema(options.projectSelection),
+      inputSchema: authLoginInputSchema(),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -254,7 +254,10 @@ export function registerAuthLoginApp(
         MCP_APPS_GATE_DENIED_MESSAGE,
       );
       if (gateError) return errorResponse(gateError);
-      const input = inputFromParams(params);
+      const input = {
+        ...inputFromParams(params),
+        project_id: projectIDForOperation(extra.authInfo, params.project_id),
+      };
       const validationError = validateAuthLoginInput(input);
       if (validationError) return errorResponse(`Error: ${validationError}`);
       const client = createKernelClient(extra.authInfo.token, input.project_id);

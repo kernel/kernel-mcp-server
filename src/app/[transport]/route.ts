@@ -12,8 +12,8 @@ import {
   isMcpAnalyticsEnabled,
 } from "@/lib/mcp/analytics";
 import {
-  resolveMcpAuthContext,
-  resolveMcpConnectionAnalyticsContext,
+  connectionAnalyticsFromContext,
+  resolveMcpConnectionContext,
 } from "@/lib/mcp/auth-context";
 import { mcpAppsAuthSubject } from "@/lib/mcp-apps-marker";
 import { requestUsesMcpApps } from "@/lib/mcp-apps-request";
@@ -21,7 +21,6 @@ import {
   createMcpTransportSession,
   verifyMcpTransportSession,
 } from "@/lib/mcp-transport-session";
-import { connectionAllowsProjectSelection } from "@/lib/mcp/project-selection";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
 import { name, version } from "../../../server.json";
 
@@ -63,39 +62,15 @@ function createAuthErrorResponse(
 // Handler variants keep per-connection capabilities out of tools/list unless
 // the authenticated connection can use them.
 const serverInfo = { serverInfo: { name, version } };
-function createHandler({
-  mcpApps = false,
-  projectSelection = false,
-}: {
-  mcpApps?: boolean;
-  projectSelection?: boolean;
-} = {}) {
+function createHandler({ mcpApps = false }: { mcpApps?: boolean } = {}) {
   return createMcpHandler((server) => {
     instrumentMcpAnalytics(server);
-    registerMcpCapabilities(server, { mcpApps, projectSelection });
+    registerMcpCapabilities(server, { mcpApps });
   }, serverInfo);
 }
 
 const handler = createHandler();
-const projectSelectionHandler = createHandler({ projectSelection: true });
 const mcpAppsHandler = createHandler({ mcpApps: true });
-const mcpAppsProjectSelectionHandler = createHandler({
-  mcpApps: true,
-  projectSelection: true,
-});
-
-function selectHandler({
-  mcpApps,
-  projectSelection,
-}: {
-  mcpApps: boolean;
-  projectSelection: boolean;
-}) {
-  if (mcpApps) {
-    return projectSelection ? mcpAppsProjectSelectionHandler : mcpAppsHandler;
-  }
-  return projectSelection ? projectSelectionHandler : handler;
-}
 
 type AuthInfoExtra = {
   userId: string | null;
@@ -119,42 +94,32 @@ async function handleMcpRequestWithIdentity({
   transportSessionId: string | null;
   observeConnection: boolean;
 }) {
-  const observeConnectionAnalytics =
-    observeConnection && isMcpAnalyticsEnabled();
-  const authContext = observeConnectionAnalytics
-    ? resolveMcpAuthContext({ token, signal: req.signal })
-    : undefined;
-  const connectionAnalyticsPromise = observeConnectionAnalytics
-    ? resolveMcpConnectionAnalyticsContext({
-        token,
-        signal: req.signal,
-        authContext,
-      })
-    : Promise.resolve(null);
-  const projectSelectionCacheIdentity = transportSessionId
-    ? `${authSubject}\0${transportSessionId}`
-    : undefined;
-  const [mcpApps, projectSelection, connectionAnalytics] = await Promise.all([
+  const [mcpApps, connectionContext] = await Promise.all([
     requestUsesMcpApps(req, {
       authSubject,
       transportSessionId,
       ttlSeconds: 24 * 60 * 60,
     }),
-    connectionAllowsProjectSelection({
-      token,
-      cacheIdentity: projectSelectionCacheIdentity,
-      authContext,
-    }),
-    connectionAnalyticsPromise,
+    resolveMcpConnectionContext({ token, signal: req.signal }),
   ]);
-  const selectedHandler = selectHandler({ mcpApps, projectSelection });
+  if (!connectionContext) {
+    throw new Error("Unable to resolve Kernel connection scope");
+  }
+  const connectionAnalytics =
+    observeConnection && isMcpAnalyticsEnabled()
+      ? connectionAnalyticsFromContext(connectionContext)
+      : null;
   const authHandler = withMcpAuth(
-    selectedHandler,
+    mcpApps ? mcpAppsHandler : handler,
     async () => ({
       token,
       scopes,
       clientId: "mcp-server",
-      extra: { ...authInfoExtra, connectionAnalytics },
+      extra: {
+        ...authInfoExtra,
+        connectionContext,
+        connectionAnalytics,
+      },
     }),
     {
       required: true,
