@@ -1,14 +1,17 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { toSafeAuthConnection } from "./managed-auth-state";
 import {
   assertNoSecrets,
   captureHandler,
   connection,
   kernelClientMock,
+  resetKernelClientFactory,
   unusedKernelClient,
 } from "./auth-connections.test-fixtures";
 
 describe("manage_auth_connections programmatic surface", () => {
+  afterEach(resetKernelClientFactory);
+
   test("keeps every legacy action and adds wait", () => {
     const { schema } = captureHandler();
     expect(schema?.action.safeParse("list").success).toBe(true);

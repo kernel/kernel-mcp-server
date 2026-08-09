@@ -1,23 +1,18 @@
+/// <reference types="bun-types" />
+
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, test } from "bun:test";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { KernelClient } from "@/lib/mcp/kernel-client";
 import { registerConnectionContextTool } from "@/lib/mcp/tools/connection-context";
 
+type ToolResult = {
+  content: Array<{ type: string; text: string }>;
+};
+
 describe("get_connection_context", () => {
-  test("returns the authoritative API auth context", async () => {
-    let handler:
-      | ((params: unknown, extra: unknown) => Promise<any>)
-      | undefined;
-    const server = {
-      tool(
-        _name: string,
-        _description: string,
-        _schema: object,
-        ...rest: any[]
-      ) {
-        handler = rest[rest.length - 1];
-      },
-    } as unknown as McpServer;
+  test("returns the authoritative API auth context through MCP", async () => {
     const context = {
       authentication: {
         credential_id: "key_123",
@@ -31,11 +26,11 @@ describe("get_connection_context", () => {
       organization: { id: "org_123" },
       principal: { id: "key_123", type: "api_key" },
     };
-    let receivedToken: string | undefined;
-
+    const tokens: string[] = [];
+    const server = new McpServer({ name: "test", version: "0.0.0" });
     registerConnectionContextTool(server, {
       createKernelClient: (token) => {
-        receivedToken = token;
+        tokens.push(token);
         return {
           auth: {
             context: { retrieve: async () => context },
@@ -44,8 +39,39 @@ describe("get_connection_context", () => {
       },
     });
 
-    const result = await handler!({}, { authInfo: { token: "secret-token" } });
-    expect(receivedToken).toBe("secret-token");
-    expect(JSON.parse(result.content[0].text)).toEqual(context);
+    const client = new Client({ name: "test-client", version: "0.0.0" });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    const send = clientTransport.send.bind(clientTransport);
+    clientTransport.send = (message, options) =>
+      send(message, {
+        ...options,
+        authInfo: {
+          token: "secret-token",
+          clientId: "test-client",
+          scopes: [],
+        },
+      });
+
+    await Promise.all([
+      server.connect(serverTransport),
+      client.connect(clientTransport),
+    ]);
+    try {
+      const tools = await client.listTools();
+      expect(tools.tools.map((tool) => tool.name)).toContain(
+        "get_connection_context",
+      );
+
+      const result = (await client.callTool({
+        name: "get_connection_context",
+        arguments: {},
+      })) as ToolResult;
+      expect(tokens).toEqual(["secret-token"]);
+      expect(JSON.parse(result.content[0].text)).toEqual(context);
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 });
