@@ -1,8 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import type { KernelClient } from "@/lib/mcp/kernel-client";
 import {
+  clearMcpConnectionContextCacheForTests,
   connectionAnalyticsFromContext,
   connectionScopeFromAuthContext,
+  expireMcpConnectionContextCacheForTests,
   resolveMcpConnectionContext,
 } from "@/lib/mcp/auth-context";
 
@@ -46,6 +48,8 @@ function dependencies(body: unknown, calls?: string[]) {
     },
   };
 }
+
+afterEach(clearMcpConnectionContextCacheForTests);
 
 describe("resolveMcpConnectionContext", () => {
   test("normalizes organization-wide API-key scope", async () => {
@@ -147,6 +151,44 @@ describe("resolveMcpConnectionContext", () => {
         "project_2",
       ),
     ).toBeNull();
+  });
+
+  test("reuses normalized scope across token refreshes in one session", async () => {
+    const calls: string[] = [];
+    const first = await resolveMcpConnectionContext({
+      token: "old-token",
+      cacheIdentity: "user_123\0session_123",
+      dependencies: dependencies(response(), calls),
+    });
+    const refreshed = await resolveMcpConnectionContext({
+      token: "new-token",
+      cacheIdentity: "user_123\0session_123",
+      dependencies: dependencies(response(), calls),
+    });
+
+    expect(refreshed).toBe(first);
+    expect(calls).toEqual(["old-token"]);
+  });
+
+  test("retains resolved scope during a transient refresh failure", async () => {
+    const cacheIdentity = "user_123\0session_123";
+    const first = await resolveMcpConnectionContext({
+      token: "old-token",
+      cacheIdentity,
+      dependencies: dependencies(response()),
+    });
+    expireMcpConnectionContextCacheForTests();
+    const refreshed = await resolveMcpConnectionContext({
+      token: "new-token",
+      cacheIdentity,
+      dependencies: {
+        createKernelClient: () => {
+          throw new Error("temporary outage");
+        },
+      },
+    });
+
+    expect(refreshed).toBe(first);
   });
 
   test("fails closed when auth context is unavailable or malformed", async () => {

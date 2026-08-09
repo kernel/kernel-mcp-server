@@ -1,4 +1,5 @@
 import type { AuthContext } from "@onkernel/sdk/resources/auth/context";
+import { createHash } from "crypto";
 import { z } from "zod";
 import {
   defaultMcpDependencies,
@@ -58,6 +59,7 @@ type ResolveAuthContextOptions = {
   token: string;
   signal?: AbortSignal;
   dependencies?: AuthContextDependencies;
+  cacheIdentity?: string;
 };
 
 export async function resolveMcpAuthContext({
@@ -119,24 +121,79 @@ export function connectionScopeFromAuthContext(
   };
 }
 
+const CONNECTION_CONTEXT_CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_CONNECTION_CONTEXT_CACHE_ENTRIES = 1_000;
+const connectionContextCache = new Map<
+  string,
+  { context: McpConnectionContext; expiresAt: number }
+>();
+
+function connectionContextCacheKey(identity: string) {
+  return createHash("sha256").update(identity).digest("hex");
+}
+
+function readConnectionContextCache(identity: string, allowExpired = false) {
+  const cached = connectionContextCache.get(
+    connectionContextCacheKey(identity),
+  );
+  if (!cached || (!allowExpired && cached.expiresAt <= Date.now())) return null;
+  return cached.context;
+}
+
+function writeConnectionContextCache(
+  identity: string,
+  context: McpConnectionContext,
+) {
+  const key = connectionContextCacheKey(identity);
+  connectionContextCache.delete(key);
+  if (connectionContextCache.size >= MAX_CONNECTION_CONTEXT_CACHE_ENTRIES) {
+    const oldest = connectionContextCache.keys().next().value;
+    if (oldest) connectionContextCache.delete(oldest);
+  }
+  connectionContextCache.set(key, {
+    context,
+    expiresAt: Date.now() + CONNECTION_CONTEXT_CACHE_TTL_MS,
+  });
+}
+
 export async function resolveMcpConnectionContext({
   token,
   signal,
   dependencies,
+  cacheIdentity,
 }: ResolveAuthContextOptions): Promise<McpConnectionContext | null> {
+  if (cacheIdentity) {
+    const cached = readConnectionContextCache(cacheIdentity);
+    if (cached) return cached;
+  }
+  const stale = cacheIdentity
+    ? readConnectionContextCache(cacheIdentity, true)
+    : null;
+
   const authContext = await resolveMcpAuthContext({
     token,
     signal,
     dependencies,
   });
-  if (!authContext) return null;
+  if (!authContext) return stale;
 
   const scope = connectionScopeFromAuthContext(authContext);
   if (!scope) {
     console.warn("Received inconsistent MCP connection scope");
     return null;
   }
-  return { authContext, scope };
+
+  const context = { authContext, scope };
+  if (cacheIdentity) writeConnectionContextCache(cacheIdentity, context);
+  return context;
+}
+
+export function clearMcpConnectionContextCacheForTests() {
+  connectionContextCache.clear();
+}
+
+export function expireMcpConnectionContextCacheForTests() {
+  for (const entry of connectionContextCache.values()) entry.expiresAt = 0;
 }
 
 export function connectionAnalyticsFromContext({

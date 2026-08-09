@@ -100,7 +100,13 @@ async function handleMcpRequestWithIdentity({
       transportSessionId,
       ttlSeconds: 24 * 60 * 60,
     }),
-    resolveMcpConnectionContext({ token, signal: req.signal }),
+    resolveMcpConnectionContext({
+      token,
+      signal: req.signal,
+      cacheIdentity: transportSessionId
+        ? `${authSubject}\0${transportSessionId}`
+        : token,
+    }),
   ]);
   if (!connectionContext) {
     throw new Error("Unable to resolve Kernel connection scope");
