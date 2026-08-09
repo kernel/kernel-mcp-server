@@ -19,18 +19,29 @@ afterEach(() => {
   }
 });
 
+function authContext(projectID: string | null) {
+  return {
+    authentication: {
+      method: "api_key" as const,
+      source: "api_key" as const,
+      credential_id: "key_123",
+    },
+    principal: { type: "api_key" as const, id: "key_123" },
+    organization: { id: "org_123" },
+    authorization: {
+      credential_scope: { project_id: projectID },
+      effective_scope: { project_id: projectID },
+    },
+  };
+}
+
 function dependencies(projectID: string | null) {
   return {
     createKernelClient: () =>
       ({
         auth: {
           context: {
-            retrieve: async () => ({
-              authorization: {
-                credential_scope: { project_id: projectID },
-                effective_scope: { project_id: projectID },
-              },
-            }),
+            retrieve: async () => authContext(projectID),
           },
         },
       }) as unknown as KernelClient,
@@ -71,12 +82,7 @@ describe("connectionAllowsProjectSelection", () => {
             context: {
               retrieve: async () => {
                 contextCalls += 1;
-                return {
-                  authorization: {
-                    credential_scope: { project_id: null },
-                    effective_scope: { project_id: null },
-                  },
-                };
+                return authContext(null);
               },
             },
           },
@@ -85,6 +91,25 @@ describe("connectionAllowsProjectSelection", () => {
     });
     expect(receivedToken).toBe(token);
     expect(contextCalls).toBe(1);
+  });
+
+  test("reuses an auth context resolved for connection analytics", async () => {
+    delete process.env.KERNEL_PROJECT;
+    const context = await dependencies(null)
+      .createKernelClient()
+      .auth.context.retrieve();
+    expect(
+      await connectionAllowsProjectSelection(
+        "org-wide-token",
+        {
+          createKernelClient: () => {
+            throw new Error("unexpected duplicate context lookup");
+          },
+        },
+        undefined,
+        Promise.resolve(context),
+      ),
+    ).toBe(true);
   });
 
   test("keeps a previously resolved scope during a transient refresh failure", async () => {
@@ -115,12 +140,7 @@ describe("connectionAllowsProjectSelection", () => {
             context: {
               retrieve: async () => {
                 lookups += 1;
-                return {
-                  authorization: {
-                    credential_scope: { project_id: null },
-                    effective_scope: { project_id: null },
-                  },
-                };
+                return authContext(null);
               },
             },
           },

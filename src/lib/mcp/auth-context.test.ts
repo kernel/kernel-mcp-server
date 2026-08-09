@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { resolveMcpConnectionAnalyticsContext } from "@/lib/mcp/auth-context";
+import type { KernelClient } from "@/lib/mcp/kernel-client";
+import {
+  resolveMcpAuthContext,
+  resolveMcpConnectionAnalyticsContext,
+} from "@/lib/mcp/auth-context";
 
 function response({
   method = "api_key",
@@ -31,12 +35,17 @@ function response({
   };
 }
 
-function fetchResponse(body: unknown, status = 200) {
-  return async () =>
-    new Response(JSON.stringify(body), {
-      status,
-      headers: { "Content-Type": "application/json" },
-    });
+function dependencies(body: unknown, calls?: string[]) {
+  return {
+    createKernelClient: (token: string) => {
+      calls?.push(token);
+      return {
+        auth: {
+          context: { retrieve: async () => body },
+        },
+      } as unknown as KernelClient;
+    },
+  };
 }
 
 describe("resolveMcpConnectionAnalyticsContext", () => {
@@ -44,7 +53,7 @@ describe("resolveMcpConnectionAnalyticsContext", () => {
     const context = await resolveMcpConnectionAnalyticsContext({
       token: "sk_secret",
       enabled: true,
-      fetchImpl: fetchResponse(response()),
+      dependencies: dependencies(response()),
     });
 
     expect(context).toEqual({
@@ -62,7 +71,7 @@ describe("resolveMcpConnectionAnalyticsContext", () => {
     const context = await resolveMcpConnectionAnalyticsContext({
       token: "sk_secret",
       enabled: true,
-      fetchImpl: fetchResponse(
+      dependencies: dependencies(
         response({
           credentialProjectId: "project_123",
           effectiveProjectId: "project_123",
@@ -79,7 +88,7 @@ describe("resolveMcpConnectionAnalyticsContext", () => {
     const context = await resolveMcpConnectionAnalyticsContext({
       token: "jwt.secret.value",
       enabled: true,
-      fetchImpl: fetchResponse(
+      dependencies: dependencies(
         response({
           method: "jwt",
           source: "oauth",
@@ -94,60 +103,54 @@ describe("resolveMcpConnectionAnalyticsContext", () => {
   });
 
   test("classifies KERNEL_PROJECT as a server pin", async () => {
-    let request: Request | undefined;
-    const fetchImpl = async (
-      input: string | URL | Request,
-      init?: RequestInit,
-    ) => {
-      request = new Request(input, init);
-      return new Response(
-        JSON.stringify(response({ effectiveProjectId: "project_pinned" })),
-      );
-    };
-
+    const calls: string[] = [];
     const context = await resolveMcpConnectionAnalyticsContext({
       token: "sk_secret",
       enabled: true,
-      fetchImpl,
+      dependencies: dependencies(
+        response({ effectiveProjectId: "project_pinned" }),
+        calls,
+      ),
       serverProjectId: "project_pinned",
     });
 
-    expect(request?.headers.get("X-Kernel-Project-Id")).toBe("project_pinned");
+    expect(calls).toEqual(["sk_secret"]);
     expect(context?.credentialScope).toBe("organization");
     expect(context?.connectionScope).toBe("project");
     expect(context?.scopeSource).toBe("server_pin");
   });
 
-  test("does not fetch when analytics is disabled", async () => {
-    let calls = 0;
+  test("does not resolve auth context when analytics is disabled", async () => {
+    const calls: string[] = [];
     const context = await resolveMcpConnectionAnalyticsContext({
       token: "sk_secret",
       enabled: false,
-      fetchImpl: async () => {
-        calls += 1;
-        return new Response();
-      },
+      dependencies: dependencies(response(), calls),
     });
 
     expect(context).toBeNull();
-    expect(calls).toBe(0);
+    expect(calls).toEqual([]);
   });
 
-  test("fails closed for unavailable, malformed, or unsupported context", async () => {
+  test("fails closed for unavailable, malformed, unsupported, or inconsistent context", async () => {
     const unavailable = await resolveMcpConnectionAnalyticsContext({
       token: "sk_secret",
       enabled: true,
-      fetchImpl: fetchResponse({}, 503),
+      dependencies: {
+        createKernelClient: () => {
+          throw new Error("API unavailable");
+        },
+      },
     });
     const malformed = await resolveMcpConnectionAnalyticsContext({
       token: "sk_secret",
       enabled: true,
-      fetchImpl: fetchResponse({ authentication: {} }),
+      dependencies: dependencies({ authentication: {} }),
     });
     const dashboard = await resolveMcpConnectionAnalyticsContext({
       token: "jwt.secret.value",
       enabled: true,
-      fetchImpl: fetchResponse(
+      dependencies: dependencies(
         response({
           method: "jwt",
           source: "dashboard",
@@ -156,9 +159,46 @@ describe("resolveMcpConnectionAnalyticsContext", () => {
         }),
       ),
     });
+    const inconsistent = await resolveMcpConnectionAnalyticsContext({
+      token: "sk_secret",
+      enabled: true,
+      dependencies: dependencies(
+        response({
+          credentialProjectId: "project_1",
+          effectiveProjectId: "project_2",
+        }),
+      ),
+    });
 
     expect(unavailable).toBeNull();
     expect(malformed).toBeNull();
     expect(dashboard).toBeNull();
+    expect(inconsistent).toBeNull();
+  });
+
+  test("can reuse an already resolved auth context", async () => {
+    const calls: string[] = [];
+    const authContext = resolveMcpAuthContext({
+      token: "oauth-token",
+      enabled: true,
+      dependencies: dependencies(
+        response({
+          method: "jwt",
+          source: "oauth",
+          principalType: "user",
+          principalId: "user_kernel_123",
+        }),
+        calls,
+      ),
+    });
+
+    const context = await resolveMcpConnectionAnalyticsContext({
+      token: "oauth-token",
+      enabled: true,
+      authContext,
+    });
+
+    expect(context?.authMethod).toBe("oauth");
+    expect(calls).toEqual(["oauth-token"]);
   });
 });

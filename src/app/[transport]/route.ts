@@ -11,7 +11,10 @@ import {
   instrumentMcpAnalytics,
   isMcpAnalyticsEnabled,
 } from "@/lib/mcp/analytics";
-import { resolveMcpConnectionAnalyticsContext } from "@/lib/mcp/auth-context";
+import {
+  resolveMcpAuthContext,
+  resolveMcpConnectionAnalyticsContext,
+} from "@/lib/mcp/auth-context";
 import { mcpAppsAuthSubject } from "@/lib/mcp-apps-marker";
 import { requestUsesMcpApps } from "@/lib/mcp-apps-request";
 import {
@@ -110,13 +113,21 @@ async function handleAuthenticatedRequest(
     );
   }
 
-  const connectionAnalytics = observeConnection
-    ? await resolveMcpConnectionAnalyticsContext({
+  const observeConnectionAnalytics =
+    observeConnection && isMcpAnalyticsEnabled();
+  const authContext = observeConnectionAnalytics
+    ? resolveMcpAuthContext({
         token,
-        enabled: isMcpAnalyticsEnabled(),
+        enabled: true,
         signal: req.signal,
       })
-    : null;
+    : undefined;
+  const connectionAnalyticsPromise = resolveMcpConnectionAnalyticsContext({
+    token,
+    enabled: observeConnectionAnalytics,
+    signal: req.signal,
+    authContext,
+  });
 
   if (!isValidJwtFormat(token)) {
     // Opaque API keys are authenticated by the Kernel API rather than Clerk.
@@ -124,7 +135,7 @@ async function handleAuthenticatedRequest(
     const projectSelectionCacheIdentity = transportSessionId
       ? `${authSubject}\0${transportSessionId}`
       : undefined;
-    const [mcpApps, projectSelection] = await Promise.all([
+    const [mcpApps, projectSelection, connectionAnalytics] = await Promise.all([
       requestUsesMcpApps(req, {
         authSubject,
         transportSessionId,
@@ -134,7 +145,9 @@ async function handleAuthenticatedRequest(
         token,
         undefined,
         projectSelectionCacheIdentity,
+        authContext,
       ),
+      connectionAnalyticsPromise,
     ]);
     const selectedHandler = selectHandler({ mcpApps, projectSelection });
     const authHandler = withMcpAuth(
@@ -175,7 +188,7 @@ async function handleAuthenticatedRequest(
     const projectSelectionCacheIdentity = transportSessionId
       ? `${authSubject}\0${transportSessionId}`
       : undefined;
-    const [mcpApps, projectSelection] = await Promise.all([
+    const [mcpApps, projectSelection, connectionAnalytics] = await Promise.all([
       requestUsesMcpApps(req, {
         authSubject,
         transportSessionId,
@@ -185,7 +198,9 @@ async function handleAuthenticatedRequest(
         token,
         undefined,
         projectSelectionCacheIdentity,
+        authContext,
       ),
+      connectionAnalyticsPromise,
     ]);
     const selectedHandler = selectHandler({ mcpApps, projectSelection });
 
@@ -245,11 +260,10 @@ export async function POST(req: NextRequest): Promise<Response> {
   } catch {
     // Let the MCP transport return its normal parse error.
   }
-  const initializeParams =
-    parsed?.method === "initialize" ? parsed.params : undefined;
+  const isInitialize = parsed?.method === "initialize";
+  const initializeParams = isInitialize ? parsed?.params : undefined;
   const isStreamableInitialize =
-    new URL(req.url).pathname.endsWith("/mcp") &&
-    parsed?.method === "initialize";
+    new URL(req.url).pathname.endsWith("/mcp") && isInitialize;
   const session = isStreamableInitialize
     ? createMcpTransportSession({
         clientName: initializeParams?.clientInfo?.name,
@@ -271,7 +285,7 @@ export async function POST(req: NextRequest): Promise<Response> {
       signal: req.signal,
     }),
     session?.id ?? null,
-    isStreamableInitialize,
+    isInitialize,
   );
 
   if (!session) return response;

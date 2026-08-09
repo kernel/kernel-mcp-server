@@ -1,6 +1,11 @@
+import type { AuthContext } from "@onkernel/sdk/resources/auth/context";
 import { z } from "zod";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
 
-const authContextSchema = z.object({
+const authContextSchema: z.ZodType<AuthContext> = z.object({
   authentication: z.object({
     method: z.enum(["api_key", "jwt"]),
     source: z.enum(["api_key", "oauth", "dashboard"]),
@@ -28,17 +33,38 @@ export type McpConnectionAnalyticsContext = {
   userId: string | null;
 };
 
-type Fetch = (
-  input: string | URL | Request,
-  init?: RequestInit,
-) => Promise<Response>;
+type AuthContextDependencies = Pick<McpDependencies, "createKernelClient">;
 
-type ResolveOptions = {
+type ResolveAuthContextOptions = {
   token: string;
   enabled: boolean;
   signal?: AbortSignal;
-  fetchImpl?: Fetch;
-  apiBaseUrl?: string;
+  dependencies?: AuthContextDependencies;
+};
+
+export async function resolveMcpAuthContext({
+  token,
+  enabled,
+  signal,
+  dependencies = defaultMcpDependencies,
+}: ResolveAuthContextOptions): Promise<AuthContext | null> {
+  if (!enabled) return null;
+
+  try {
+    const context = await dependencies
+      .createKernelClient(token)
+      .auth.context.retrieve({ signal });
+    const parsed = authContextSchema.safeParse(context);
+    if (parsed.success) return parsed.data;
+    console.warn("Received invalid MCP auth context");
+  } catch {
+    console.warn("Failed to resolve MCP auth context");
+  }
+  return null;
+}
+
+type ResolveConnectionAnalyticsOptions = ResolveAuthContextOptions & {
+  authContext?: Promise<AuthContext | null>;
   serverProjectId?: string;
 };
 
@@ -46,49 +72,16 @@ export async function resolveMcpConnectionAnalyticsContext({
   token,
   enabled,
   signal,
-  fetchImpl = fetch,
-  apiBaseUrl = process.env.API_BASE_URL ?? "https://api.onkernel.com",
+  dependencies,
+  authContext,
   serverProjectId = process.env.KERNEL_PROJECT,
-}: ResolveOptions): Promise<McpConnectionAnalyticsContext | null> {
+}: ResolveConnectionAnalyticsOptions): Promise<McpConnectionAnalyticsContext | null> {
   if (!enabled) return null;
 
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
-    "X-Source": "mcp-server",
-    "X-Referral-Source": "mcp.onkernel.com",
-  };
-  if (serverProjectId) headers["X-Kernel-Project-Id"] = serverProjectId;
+  const context = await (authContext ??
+    resolveMcpAuthContext({ token, enabled, signal, dependencies }));
+  if (!context) return null;
 
-  let response: Response;
-  try {
-    response = await fetchImpl(
-      new URL("auth/context", `${apiBaseUrl.replace(/\/$/, "")}/`),
-      { headers, signal },
-    );
-  } catch {
-    console.warn("Failed to resolve MCP connection analytics context");
-    return null;
-  }
-
-  if (!response.ok) {
-    console.warn("Failed to resolve MCP connection analytics context");
-    return null;
-  }
-
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    console.warn("Received invalid MCP connection analytics context");
-    return null;
-  }
-  const parsed = authContextSchema.safeParse(body);
-  if (!parsed.success) {
-    console.warn("Received invalid MCP connection analytics context");
-    return null;
-  }
-
-  const context = parsed.data;
   const isApiKey =
     context.authentication.method === "api_key" &&
     context.authentication.source === "api_key" &&
@@ -101,11 +94,7 @@ export async function resolveMcpConnectionAnalyticsContext({
 
   const credentialProjectId = context.authorization.credential_scope.project_id;
   const effectiveProjectId = context.authorization.effective_scope.project_id;
-  if (
-    credentialProjectId &&
-    effectiveProjectId &&
-    credentialProjectId !== effectiveProjectId
-  ) {
+  if (credentialProjectId && effectiveProjectId !== credentialProjectId) {
     return null;
   }
   if (!credentialProjectId && effectiveProjectId && !serverProjectId) {

@@ -1,5 +1,7 @@
+import type { AuthContext } from "@onkernel/sdk/resources/auth/context";
 import { createHash } from "crypto";
 import { z } from "zod";
+import { resolveMcpAuthContext } from "@/lib/mcp/auth-context";
 import {
   defaultMcpDependencies,
   type McpDependencies,
@@ -73,6 +75,7 @@ export async function connectionAllowsProjectSelection(
   token: string,
   dependencies: ScopeResolutionDependencies = defaultMcpDependencies,
   cacheIdentity?: string,
+  authContext?: Promise<AuthContext | null>,
 ) {
   if (process.env.KERNEL_PROJECT) return false;
 
@@ -81,18 +84,14 @@ export async function connectionAllowsProjectSelection(
   if (cached !== undefined) return cached;
   const stale = readScopeCache(cacheKey, true);
 
-  try {
-    const context = await dependencies
-      .createKernelClient(token)
-      .auth.context.retrieve();
-    const allowsProjectSelection =
-      context.authorization.credential_scope.project_id === null;
-    writeScopeCache(cacheKey, allowsProjectSelection);
-    return allowsProjectSelection;
-  } catch {
-    console.warn("Failed to resolve MCP connection project scope");
-    return stale ?? false;
-  }
+  const context = await (authContext ??
+    resolveMcpAuthContext({ token, enabled: true, dependencies }));
+  if (!context) return stale ?? false;
+
+  const allowsProjectSelection =
+    context.authorization.credential_scope.project_id === null;
+  writeScopeCache(cacheKey, allowsProjectSelection);
+  return allowsProjectSelection;
 }
 
 export function clearProjectSelectionScopeCacheForTests() {
