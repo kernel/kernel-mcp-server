@@ -255,7 +255,7 @@ Many other MCP-capable tools accept:
 
 Configure these values wherever the tool expects MCP server settings.
 
-## Tools (17 model-facing, plus 1 app-only helper)
+## Tools (18 model-facing, plus 1 app-only helper)
 
 Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Standalone tools handle high-frequency and interactive workflows.
 
@@ -263,7 +263,7 @@ One additional Managed Auth helper (`begin_auth_login`) is marked app-only (`_me
 
 Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_DISABLED_TOOLSETS` to a comma-separated list. For example, `KERNEL_MCP_DISABLED_TOOLSETS=api_keys` prevents `manage_api_keys` from being registered.
 
-Organization-wide connections receive an optional `project_id` parameter on tools that operate on project-scoped resources. Use the same `project_id` for follow-up operations on a browser, profile, pool, proxy, app, managed-auth connection, or credential. Project-scoped connections do not advertise this parameter because their project is fixed by authentication.
+Call `get_connection_context` before deciding whether to create or select a project. When `authorization.effective_scope.project_id` is non-null, the connection is already fixed to that project. Organization-wide connections return a null effective project and receive an optional `project_id` parameter on tools that operate on project-scoped resources. Use the same `project_id` for follow-up operations on a browser, profile, pool, proxy, app, managed-auth connection, or credential.
 
 ### manage\_\* tools
 
@@ -282,6 +282,7 @@ Organization-wide connections receive an optional `project_id` parameter on tool
 
 ### Standalone tools
 
+- `get_connection_context` - Inspect the authenticated principal, organization, credential scope, and effective project scope.
 - `computer_action` - Mouse, keyboard, clipboard, and screenshot controls for browser sessions (click, type, press_key, scroll, move, get_position, read_clipboard, write_clipboard, screenshot).
 - `browser_curl` - Send HTTP requests through an existing browser session's Chrome network stack.
 - `execute_playwright_code` - Execute Playwright/TypeScript code against an existing browser session. Does not create or delete browsers - use `manage_browsers` for session lifecycle.

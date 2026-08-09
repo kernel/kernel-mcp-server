@@ -19,126 +19,86 @@ afterEach(() => {
   }
 });
 
-function dependencies({
-  jwtContext = null,
-  projectID = null,
-}: {
-  jwtContext?: string | null;
-  projectID?: string | null;
-}) {
+function dependencies(projectID: string | null) {
   return {
-    getJwtContext: async () => jwtContext,
-    createClient: () =>
+    createKernelClient: () =>
       ({
-        apiKeys: {
-          list: async () => ({
-            getPaginatedItems: () => [{ project_id: projectID }],
-          }),
+        auth: {
+          context: {
+            retrieve: async () => ({
+              authorization: {
+                credential_scope: { project_id: projectID },
+                effective_scope: { project_id: projectID },
+              },
+            }),
+          },
         },
       }) as unknown as KernelClient,
   };
 }
 
 describe("connectionAllowsProjectSelection", () => {
-  test("allows legacy organization-wide OAuth connections", async () => {
+  test("allows organization-wide credentials", async () => {
     delete process.env.KERNEL_PROJECT;
     expect(
       await connectionAllowsProjectSelection(
-        "jwt.org-wide.1",
-        true,
-        dependencies({ jwtContext: "org_123" }),
+        "org-wide-token",
+        dependencies(null),
       ),
     ).toBe(true);
   });
 
-  test("allows structured organization-wide OAuth connections", async () => {
+  test("does not allow project-scoped credentials", async () => {
     delete process.env.KERNEL_PROJECT;
     expect(
       await connectionAllowsProjectSelection(
-        "jwt.org-wide.2",
-        true,
-        dependencies({
-          jwtContext: JSON.stringify({ access_scope: "organization" }),
-        }),
-      ),
-    ).toBe(true);
-  });
-
-  test("does not allow project-scoped OAuth connections", async () => {
-    delete process.env.KERNEL_PROJECT;
-    expect(
-      await connectionAllowsProjectSelection(
-        "jwt.project.1",
-        true,
-        dependencies({
-          jwtContext: JSON.stringify({
-            access_scope: "project",
-            project_id: "proj_123",
-          }),
-        }),
+        "project-token",
+        dependencies("proj_123"),
       ),
     ).toBe(false);
   });
 
-  test("uses the authenticated API key metadata to distinguish scope", async () => {
+  test("resolves scope from the authenticated API context", async () => {
     delete process.env.KERNEL_PROJECT;
-    expect(
-      await connectionAllowsProjectSelection(
-        "sk_11111111-1111-1111-1111-111111111111.secret",
-        false,
-        dependencies({ projectID: null }),
-      ),
-    ).toBe(true);
-    expect(
-      await connectionAllowsProjectSelection(
-        "sk_22222222-2222-2222-2222-222222222222.secret",
-        false,
-        dependencies({ projectID: "proj_123" }),
-      ),
-    ).toBe(false);
-  });
-
-  test("looks up API key scope without sending the key secret as a query", async () => {
-    delete process.env.KERNEL_PROJECT;
-    let query: string | undefined;
-    const token = "sk_33333333-3333-3333-3333-333333333333.secret";
-    await connectionAllowsProjectSelection(token, false, {
-      getJwtContext: async () => null,
-      createClient: () =>
-        ({
-          apiKeys: {
-            list: async (params: { query?: string }) => {
-              query = params.query;
-              return {
-                getPaginatedItems: () => [{ project_id: null }],
-              };
+    const token = "sk_identifier.secret";
+    let receivedToken: string | undefined;
+    let contextCalls = 0;
+    await connectionAllowsProjectSelection(token, {
+      createKernelClient: (candidate) => {
+        receivedToken = candidate;
+        return {
+          auth: {
+            context: {
+              retrieve: async () => {
+                contextCalls += 1;
+                return {
+                  authorization: {
+                    credential_scope: { project_id: null },
+                    effective_scope: { project_id: null },
+                  },
+                };
+              },
             },
           },
-        }) as unknown as KernelClient,
+        } as unknown as KernelClient;
+      },
     });
-    expect(query).toBe("sk_33333333-3333-3333-3333-333333333333");
-    expect(query).not.toContain("secret");
+    expect(receivedToken).toBe(token);
+    expect(contextCalls).toBe(1);
   });
 
   test("keeps a previously resolved scope during a transient refresh failure", async () => {
     delete process.env.KERNEL_PROJECT;
-    const token = "jwt.org-wide.stale";
+    const token = "org-wide-stale";
     expect(
-      await connectionAllowsProjectSelection(
-        token,
-        true,
-        dependencies({ jwtContext: "org_123" }),
-      ),
+      await connectionAllowsProjectSelection(token, dependencies(null)),
     ).toBe(true);
 
     expireProjectSelectionScopeCacheForTests();
     expect(
-      await connectionAllowsProjectSelection(token, true, {
-        getJwtContext: async () => {
+      await connectionAllowsProjectSelection(token, {
+        createKernelClient: () => {
           throw new Error("temporary outage");
-        },
-        createClient: () => {
-          throw new Error("unexpected API client");
         },
       }),
     ).toBe(true);
@@ -148,34 +108,39 @@ describe("connectionAllowsProjectSelection", () => {
     delete process.env.KERNEL_PROJECT;
     const cacheIdentity = "user:scope\0session_123";
     let lookups = 0;
+    const firstDependencies = {
+      createKernelClient: () =>
+        ({
+          auth: {
+            context: {
+              retrieve: async () => {
+                lookups += 1;
+                return {
+                  authorization: {
+                    credential_scope: { project_id: null },
+                    effective_scope: { project_id: null },
+                  },
+                };
+              },
+            },
+          },
+        }) as unknown as KernelClient,
+    };
     expect(
       await connectionAllowsProjectSelection(
-        "jwt.org-wide.old",
-        true,
-        {
-          getJwtContext: async () => {
-            lookups += 1;
-            return "org_123";
-          },
-          createClient: () => {
-            throw new Error("unexpected API client");
-          },
-        },
+        "old-token",
+        firstDependencies,
         cacheIdentity,
       ),
     ).toBe(true);
 
     expect(
       await connectionAllowsProjectSelection(
-        "jwt.org-wide.new",
-        true,
+        "new-token",
         {
-          getJwtContext: async () => {
+          createKernelClient: () => {
             lookups += 1;
             throw new Error("unexpected scope refresh");
-          },
-          createClient: () => {
-            throw new Error("unexpected API client");
           },
         },
         cacheIdentity,
@@ -188,9 +153,8 @@ describe("connectionAllowsProjectSelection", () => {
     process.env.KERNEL_PROJECT = "proj_server";
     expect(
       await connectionAllowsProjectSelection(
-        "jwt.org-wide.3",
-        true,
-        dependencies({ jwtContext: "org_123" }),
+        "org-wide-token",
+        dependencies(null),
       ),
     ).toBe(false);
   });

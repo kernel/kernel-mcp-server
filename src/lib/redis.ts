@@ -147,16 +147,6 @@ export async function setOrgIdForJwt({
   await withReconnect(() => client.setEx(key, ttlSeconds, orgId));
 }
 
-export async function getJwtAuthorizationContextValue({
-  jwt,
-}: {
-  jwt: string;
-}): Promise<string | null> {
-  await ensureConnected();
-  const key = `jwt:${hashJwt(jwt)}`;
-  return await withReconnect(() => client.get(key));
-}
-
 export { client as redisClient };
 
 // MCP Apps capability markers. Streamable HTTP creates one McpServer per

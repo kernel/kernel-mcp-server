@@ -118,7 +118,6 @@ async function handleAuthenticatedRequest(
       }),
       connectionAllowsProjectSelection(
         token,
-        false,
         undefined,
         projectSelectionCacheIdentity,
       ),
@@ -166,7 +165,6 @@ async function handleAuthenticatedRequest(
       }),
       connectionAllowsProjectSelection(
         token,
-        true,
         undefined,
         projectSelectionCacheIdentity,
       ),

@@ -56,12 +56,18 @@ describe("MCP Apps additive registration", () => {
     process.env.KERNEL_MCP_DISABLED_TOOLSETS = NON_AUTH_TOOLSETS;
     try {
       const base = captureRegistration(false);
-      expect(base.legacyTools).toEqual(["manage_auth_connections"]);
+      expect(base.legacyTools).toEqual([
+        "get_connection_context",
+        "manage_auth_connections",
+      ]);
       expect(base.appTools).toEqual([]);
       expect(base.resources).toEqual([]);
 
       const withApps = captureRegistration(true);
-      expect(withApps.legacyTools).toEqual(["manage_auth_connections"]);
+      expect(withApps.legacyTools).toEqual([
+        "get_connection_context",
+        "manage_auth_connections",
+      ]);
       expect(withApps.appTools).toEqual([
         "open_auth_login",
         "begin_auth_login",
@@ -105,7 +111,11 @@ describe("project selection registration", () => {
       expect(projectScoped.schemas.get(name)).not.toHaveProperty("project_id");
     }
 
-    for (const name of ["search_docs", "manage_credential_providers"]) {
+    for (const name of [
+      "get_connection_context",
+      "search_docs",
+      "manage_credential_providers",
+    ]) {
       expect(orgWide.schemas.get(name)).not.toHaveProperty("project_id");
     }
 

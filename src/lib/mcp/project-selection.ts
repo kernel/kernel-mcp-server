@@ -1,7 +1,9 @@
 import { createHash } from "crypto";
 import { z } from "zod";
-import { createKernelClient } from "@/lib/mcp/kernel-client";
-import { getJwtAuthorizationContextValue } from "@/lib/redis";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
 
 export interface ProjectSelectionOptions {
   projectSelection?: boolean;
@@ -65,49 +67,11 @@ function writeScopeCache(token: string, allowsProjectSelection: boolean) {
   });
 }
 
-function jwtContextAllowsProjectSelection(value: string | null) {
-  if (!value) return false;
-  if (value.startsWith("org_")) return true;
-
-  try {
-    const context: unknown = JSON.parse(value);
-    return (
-      context !== null &&
-      typeof context === "object" &&
-      (context as { access_scope?: unknown }).access_scope === "organization"
-    );
-  } catch {
-    return false;
-  }
-}
-
-function apiKeyIdentifier(token: string) {
-  const [identifier, secret, extra] = token.split(".");
-  if (
-    extra !== undefined ||
-    !identifier?.startsWith("sk_") ||
-    !secret ||
-    identifier.length <= 3
-  ) {
-    return undefined;
-  }
-  return identifier;
-}
-
-type ScopeResolutionDependencies = {
-  getJwtContext: typeof getJwtAuthorizationContextValue;
-  createClient: typeof createKernelClient;
-};
-
-const scopeResolutionDependencies: ScopeResolutionDependencies = {
-  getJwtContext: getJwtAuthorizationContextValue,
-  createClient: createKernelClient,
-};
+type ScopeResolutionDependencies = Pick<McpDependencies, "createKernelClient">;
 
 export async function connectionAllowsProjectSelection(
   token: string,
-  jwt: boolean,
-  dependencies: ScopeResolutionDependencies = scopeResolutionDependencies,
+  dependencies: ScopeResolutionDependencies = defaultMcpDependencies,
   cacheIdentity?: string,
 ) {
   if (process.env.KERNEL_PROJECT) return false;
@@ -117,30 +81,18 @@ export async function connectionAllowsProjectSelection(
   if (cached !== undefined) return cached;
   const stale = readScopeCache(cacheKey, true);
 
-  let allowsProjectSelection = false;
-  let resolved = true;
   try {
-    if (jwt) {
-      const context = await dependencies.getJwtContext({ jwt: token });
-      allowsProjectSelection = jwtContextAllowsProjectSelection(context);
-    } else {
-      const identifier = apiKeyIdentifier(token);
-      if (identifier) {
-        const page = await dependencies.createClient(token).apiKeys.list({
-          query: identifier,
-          limit: 1,
-        });
-        const key = page.getPaginatedItems()[0];
-        allowsProjectSelection = key?.project_id === null;
-      }
-    }
+    const context = await dependencies
+      .createKernelClient(token)
+      .auth.context.retrieve();
+    const allowsProjectSelection =
+      context.authorization.credential_scope.project_id === null;
+    writeScopeCache(cacheKey, allowsProjectSelection);
+    return allowsProjectSelection;
   } catch {
-    resolved = false;
     console.warn("Failed to resolve MCP connection project scope");
+    return stale ?? false;
   }
-
-  if (resolved) writeScopeCache(cacheKey, allowsProjectSelection);
-  return resolved ? allowsProjectSelection : (stale ?? false);
 }
 
 export function clearProjectSelectionScopeCacheForTests() {

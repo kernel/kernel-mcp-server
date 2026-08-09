@@ -12,6 +12,7 @@ import { registerBrowserPoolCapabilities } from "@/lib/mcp/tools/browser-pools";
 import { registerBrowserCurlTool } from "@/lib/mcp/tools/browser-curl";
 import { registerBrowserCapabilities } from "@/lib/mcp/tools/browsers";
 import { registerComputerActionTool } from "@/lib/mcp/tools/computer-action";
+import { registerConnectionContextTool } from "@/lib/mcp/tools/connection-context";
 import { registerCredentialProviderTools } from "@/lib/mcp/tools/credential-providers";
 import { registerCredentialTools } from "@/lib/mcp/tools/credentials";
 import { registerDocsTools } from "@/lib/mcp/tools/docs";
@@ -29,10 +30,7 @@ type McpRegistrationOptions = ProjectSelectionOptions & {
   mcpApps?: boolean;
   dependencies?: McpDependencies;
 };
-type RegisterMcpToolset = (
-  server: McpServer,
-  options: McpToolOptions,
-) => void;
+type RegisterMcpToolset = (server: McpServer, options: McpToolOptions) => void;
 
 function registerManagedAuthCapabilities(
   server: McpServer,
@@ -151,6 +149,7 @@ export function registerMcpCapabilities(
   const options = { ...dependencies, projectSelection };
 
   registerKernelPrompts(server);
+  registerConnectionContextTool(server, dependencies);
 
   for (const [toolset, registerToolset] of mcpToolRegistrations) {
     if (toolsetEnabled(disabledToolsets, toolset)) {
