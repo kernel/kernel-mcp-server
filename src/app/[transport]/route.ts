@@ -153,6 +153,8 @@ async function handleAuthenticatedRequest(
 
   if (!isValidJwtFormat(token)) {
     // Opaque API keys are authenticated by the Kernel API rather than Clerk.
+    // Do not cache their context: /auth/context must revalidate the credential
+    // on every request so revoked keys cannot keep using a cached scope.
     return await handleMcpRequestWithIdentity({
       req,
       token,
