@@ -2,7 +2,7 @@
 
 import {
   CreateOrganization,
-  UserButton,
+  SignOutButton,
   useAuth,
   useOrganizationList,
   useUser,
@@ -243,9 +243,11 @@ function SelectOrgContent(): React.ReactElement {
     return (
       <Col className="min-h-screen items-center justify-center">
         <div className="absolute top-6 right-6">
-          <UserButton
-            afterSignOutUrl={`/select-org?${searchParams.toString()}`}
-          />
+          <SignOutButton redirectUrl={`/select-org?${searchParams.toString()}`}>
+            <button className="border-[0.5px] border-foreground px-4 py-2 text-sm cursor-pointer hover:underline">
+              switch account
+            </button>
+          </SignOutButton>
         </div>
         <Col className="text-center max-w-md mx-auto p-8 gap-8">
           <Col className="items-center gap-4">
@@ -278,9 +280,11 @@ function SelectOrgContent(): React.ReactElement {
   return (
     <Col className="min-h-screen items-center justify-center">
       <div className="absolute top-6 right-6">
-        <UserButton
-          afterSignOutUrl={`/select-org?${searchParams.toString()}`}
-        />
+        <SignOutButton redirectUrl={`/select-org?${searchParams.toString()}`}>
+          <button className="border-[0.5px] border-foreground px-4 py-2 text-sm cursor-pointer hover:underline">
+            switch account
+          </button>
+        </SignOutButton>
       </div>
 
       <Col className="max-w-md w-full mx-auto p-8 gap-8">
