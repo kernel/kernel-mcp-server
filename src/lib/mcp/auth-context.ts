@@ -37,28 +37,27 @@ type AuthContextDependencies = Pick<McpDependencies, "createKernelClient">;
 
 type ResolveAuthContextOptions = {
   token: string;
-  enabled: boolean;
   signal?: AbortSignal;
   dependencies?: AuthContextDependencies;
 };
 
 export async function resolveMcpAuthContext({
   token,
-  enabled,
   signal,
   dependencies = defaultMcpDependencies,
 }: ResolveAuthContextOptions): Promise<AuthContext | null> {
-  if (!enabled) return null;
-
   try {
     const context = await dependencies
       .createKernelClient(token)
       .auth.context.retrieve({ signal });
     const parsed = authContextSchema.safeParse(context);
     if (parsed.success) return parsed.data;
-    console.warn("Received invalid MCP auth context");
-  } catch {
-    console.warn("Failed to resolve MCP auth context");
+    console.warn("Received invalid MCP auth context", parsed.error.issues);
+  } catch (error) {
+    console.warn(
+      "Failed to resolve MCP auth context",
+      error instanceof Error ? error.message : error,
+    );
   }
   return null;
 }
@@ -70,16 +69,13 @@ type ResolveConnectionAnalyticsOptions = ResolveAuthContextOptions & {
 
 export async function resolveMcpConnectionAnalyticsContext({
   token,
-  enabled,
   signal,
   dependencies,
   authContext,
   serverProjectId = process.env.KERNEL_PROJECT,
 }: ResolveConnectionAnalyticsOptions): Promise<McpConnectionAnalyticsContext | null> {
-  if (!enabled) return null;
-
   const context = await (authContext ??
-    resolveMcpAuthContext({ token, enabled, signal, dependencies }));
+    resolveMcpAuthContext({ token, signal, dependencies }));
   if (!context) return null;
 
   const isApiKey =

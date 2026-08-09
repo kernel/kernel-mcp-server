@@ -149,6 +149,8 @@ export function registerMcpCapabilities(
   const options = { ...dependencies, projectSelection };
 
   registerKernelPrompts(server);
+  // Connection metadata is always available so clients can determine which
+  // project-scoped tool schema applies, even when other toolsets are disabled.
   registerConnectionContextTool(server, dependencies);
 
   for (const [toolset, registerToolset] of mcpToolRegistrations) {

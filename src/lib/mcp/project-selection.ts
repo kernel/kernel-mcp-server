@@ -11,10 +11,6 @@ export interface ProjectSelectionOptions {
   projectSelection?: boolean;
 }
 
-export interface ProjectSelectionParams {
-  project_id?: string;
-}
-
 const projectIDSchema = z
   .string()
   .min(1)
@@ -26,17 +22,11 @@ const projectIDSchema = z
 export function projectSelectionInputSchema(enabled = false): {
   project_id: typeof projectIDSchema;
 } {
+  // MCP tool registration needs one stable inferred handler type even though
+  // project-scoped connections omit this property from their runtime schema.
   return (enabled ? { project_id: projectIDSchema } : {}) as {
     project_id: typeof projectIDSchema;
   };
-}
-
-export function projectIDFromParams(params: unknown): string | undefined {
-  if (!params || typeof params !== "object") return undefined;
-  const projectID = (params as ProjectSelectionParams).project_id;
-  return typeof projectID === "string" && projectID.length > 0
-    ? projectID
-    : undefined;
 }
 
 const SCOPE_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -59,11 +49,13 @@ function readScopeCache(token: string, allowExpired = false) {
 }
 
 function writeScopeCache(token: string, allowsProjectSelection: boolean) {
+  const key = scopeCacheKey(token);
+  scopeCache.delete(key);
   if (scopeCache.size >= MAX_SCOPE_CACHE_ENTRIES) {
     const oldest = scopeCache.keys().next().value;
     if (oldest) scopeCache.delete(oldest);
   }
-  scopeCache.set(scopeCacheKey(token), {
+  scopeCache.set(key, {
     allowsProjectSelection,
     expiresAt: Date.now() + SCOPE_CACHE_TTL_MS,
   });
@@ -71,22 +63,34 @@ function writeScopeCache(token: string, allowsProjectSelection: boolean) {
 
 type ScopeResolutionDependencies = Pick<McpDependencies, "createKernelClient">;
 
-export async function connectionAllowsProjectSelection(
-  token: string,
-  dependencies: ScopeResolutionDependencies = defaultMcpDependencies,
-  cacheIdentity?: string,
-  authContext?: Promise<AuthContext | null>,
-) {
+type ConnectionProjectSelectionOptions = {
+  token: string;
+  dependencies?: ScopeResolutionDependencies;
+  cacheIdentity?: string;
+  authContext?: Promise<AuthContext | null>;
+};
+
+export async function connectionAllowsProjectSelection({
+  token,
+  dependencies = defaultMcpDependencies,
+  cacheIdentity,
+  authContext,
+}: ConnectionProjectSelectionOptions) {
   if (process.env.KERNEL_PROJECT) return false;
 
   const cacheKey = cacheIdentity ?? token;
   const cached = readScopeCache(cacheKey);
   if (cached !== undefined) return cached;
+  // A successfully resolved capability remains authoritative during later
+  // transient failures, including OAuth token refreshes in the same session.
   const stale = readScopeCache(cacheKey, true);
 
   const context = await (authContext ??
-    resolveMcpAuthContext({ token, enabled: true, dependencies }));
-  if (!context) return stale ?? false;
+    resolveMcpAuthContext({ token, dependencies }));
+  if (!context) {
+    if (stale !== undefined) return stale;
+    throw new Error("Unable to resolve MCP connection project scope");
+  }
 
   const allowsProjectSelection =
     context.authorization.credential_scope.project_id === null;

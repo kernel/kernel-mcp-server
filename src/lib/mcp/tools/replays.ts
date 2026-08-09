@@ -9,7 +9,6 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import {
-  projectIDFromParams,
   projectSelectionInputSchema,
   type ProjectSelectionOptions,
 } from "@/lib/mcp/project-selection";
@@ -61,7 +60,7 @@ export function registerReplayTools(
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(
         extra.authInfo.token,
-        projectIDFromParams(params),
+        params.project_id,
       );
 
       try {

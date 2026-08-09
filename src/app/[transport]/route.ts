@@ -97,6 +97,73 @@ function selectHandler({
   return projectSelection ? projectSelectionHandler : handler;
 }
 
+type AuthInfoExtra = {
+  userId: string | null;
+  clerkToken: string | null;
+};
+
+async function handleMcpRequestWithIdentity({
+  req,
+  token,
+  authSubject,
+  scopes,
+  authInfoExtra,
+  transportSessionId,
+  observeConnection,
+}: {
+  req: NextRequest;
+  token: string;
+  authSubject: string;
+  scopes: string[];
+  authInfoExtra: AuthInfoExtra;
+  transportSessionId: string | null;
+  observeConnection: boolean;
+}) {
+  const observeConnectionAnalytics =
+    observeConnection && isMcpAnalyticsEnabled();
+  const authContext = observeConnectionAnalytics
+    ? resolveMcpAuthContext({ token, signal: req.signal })
+    : undefined;
+  const connectionAnalyticsPromise = observeConnectionAnalytics
+    ? resolveMcpConnectionAnalyticsContext({
+        token,
+        signal: req.signal,
+        authContext,
+      })
+    : Promise.resolve(null);
+  const projectSelectionCacheIdentity = transportSessionId
+    ? `${authSubject}\0${transportSessionId}`
+    : undefined;
+  const [mcpApps, projectSelection, connectionAnalytics] = await Promise.all([
+    requestUsesMcpApps(req, {
+      authSubject,
+      transportSessionId,
+      ttlSeconds: 24 * 60 * 60,
+    }),
+    connectionAllowsProjectSelection({
+      token,
+      cacheIdentity: projectSelectionCacheIdentity,
+      authContext,
+    }),
+    connectionAnalyticsPromise,
+  ]);
+  const selectedHandler = selectHandler({ mcpApps, projectSelection });
+  const authHandler = withMcpAuth(
+    selectedHandler,
+    async () => ({
+      token,
+      scopes,
+      clientId: "mcp-server",
+      extra: { ...authInfoExtra, connectionAnalytics },
+    }),
+    {
+      required: true,
+      resourceMetadataPath: "/.well-known/oauth-protected-resource/mcp",
+    },
+  );
+  return await authHandler(req);
+}
+
 async function handleAuthenticatedRequest(
   req: NextRequest,
   transportSessionId: string | null = null,
@@ -113,126 +180,49 @@ async function handleAuthenticatedRequest(
     );
   }
 
-  const observeConnectionAnalytics =
-    observeConnection && isMcpAnalyticsEnabled();
-  const authContext = observeConnectionAnalytics
-    ? resolveMcpAuthContext({
-        token,
-        enabled: true,
-        signal: req.signal,
-      })
-    : undefined;
-  const connectionAnalyticsPromise = resolveMcpConnectionAnalyticsContext({
-    token,
-    enabled: observeConnectionAnalytics,
-    signal: req.signal,
-    authContext,
-  });
-
   if (!isValidJwtFormat(token)) {
     // Opaque API keys are authenticated by the Kernel API rather than Clerk.
-    const authSubject = mcpAppsAuthSubject({ token });
-    const projectSelectionCacheIdentity = transportSessionId
-      ? `${authSubject}\0${transportSessionId}`
-      : undefined;
-    const [mcpApps, projectSelection, connectionAnalytics] = await Promise.all([
-      requestUsesMcpApps(req, {
-        authSubject,
-        transportSessionId,
-        ttlSeconds: 24 * 60 * 60,
-      }),
-      connectionAllowsProjectSelection(
-        token,
-        undefined,
-        projectSelectionCacheIdentity,
-        authContext,
-      ),
-      connectionAnalyticsPromise,
-    ]);
-    const selectedHandler = selectHandler({ mcpApps, projectSelection });
-    const authHandler = withMcpAuth(
-      selectedHandler,
-      async () => ({
-        token,
-        scopes: ["apikey"],
-        clientId: "mcp-server",
-        extra: {
-          userId: null,
-          clerkToken: null,
-          connectionAnalytics,
-        },
-      }),
-      {
-        required: true,
-        resourceMetadataPath: "/.well-known/oauth-protected-resource/mcp",
-      },
-    );
-    return await authHandler(req);
+    return await handleMcpRequestWithIdentity({
+      req,
+      token,
+      authSubject: mcpAppsAuthSubject({ token }),
+      scopes: ["apikey"],
+      authInfoExtra: { userId: null, clerkToken: null },
+      transportSessionId,
+      observeConnection,
+    });
   }
 
+  let userId: string;
   try {
     const payload = await verifyToken(token, {
       secretKey: process.env.CLERK_SECRET_KEY,
     });
-
     if (!payload.sub) {
       return createAuthErrorResponse(
         "invalid_token",
         "Invalid token: No user ID found in token payload",
       );
     }
-
-    // Capability state is keyed only after Clerk verifies the JWT, and uses
-    // the verified user plus this signed MCP transport session.
-    const authSubject = mcpAppsAuthSubject({ token, userId: payload.sub });
-    const projectSelectionCacheIdentity = transportSessionId
-      ? `${authSubject}\0${transportSessionId}`
-      : undefined;
-    const [mcpApps, projectSelection, connectionAnalytics] = await Promise.all([
-      requestUsesMcpApps(req, {
-        authSubject,
-        transportSessionId,
-        ttlSeconds: 24 * 60 * 60,
-      }),
-      connectionAllowsProjectSelection(
-        token,
-        undefined,
-        projectSelectionCacheIdentity,
-        authContext,
-      ),
-      connectionAnalyticsPromise,
-    ]);
-    const selectedHandler = selectHandler({ mcpApps, projectSelection });
-
-    // Create authenticated handler with auth info
-    const authHandler = withMcpAuth(
-      selectedHandler,
-      async (_req, _providedToken) => {
-        // Return auth info with validated user data
-        return {
-          token: token, // Use the validated token
-          scopes: ["openid"],
-          clientId: "mcp-server",
-          extra: {
-            userId: payload.sub,
-            clerkToken: token,
-            connectionAnalytics,
-          },
-        };
-      },
-      {
-        required: true,
-        resourceMetadataPath: "/.well-known/oauth-protected-resource/mcp",
-      },
-    );
-
-    return await authHandler(req);
+    userId = payload.sub;
   } catch (authError) {
     return createAuthErrorResponse(
       "invalid_token",
       `Invalid token: ${authError instanceof Error ? authError.message : "Authentication failed"}`,
     );
   }
+
+  // Capability state is keyed only after Clerk verifies the JWT, and uses
+  // the verified user plus this signed MCP transport session.
+  return await handleMcpRequestWithIdentity({
+    req,
+    token,
+    authSubject: mcpAppsAuthSubject({ token, userId }),
+    scopes: ["openid"],
+    authInfoExtra: { userId, clerkToken: token },
+    transportSessionId,
+    observeConnection,
+  });
 }
 
 export async function GET(req: NextRequest): Promise<Response> {

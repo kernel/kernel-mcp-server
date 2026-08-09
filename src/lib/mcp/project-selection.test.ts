@@ -4,7 +4,6 @@ import {
   clearProjectSelectionScopeCacheForTests,
   connectionAllowsProjectSelection,
   expireProjectSelectionScopeCacheForTests,
-  projectIDFromParams,
   projectSelectionInputSchema,
 } from "@/lib/mcp/project-selection";
 
@@ -52,21 +51,35 @@ describe("connectionAllowsProjectSelection", () => {
   test("allows organization-wide credentials", async () => {
     delete process.env.KERNEL_PROJECT;
     expect(
-      await connectionAllowsProjectSelection(
-        "org-wide-token",
-        dependencies(null),
-      ),
+      await connectionAllowsProjectSelection({
+        token: "org-wide-token",
+        dependencies: dependencies(null),
+      }),
     ).toBe(true);
   });
 
   test("does not allow project-scoped credentials", async () => {
     delete process.env.KERNEL_PROJECT;
     expect(
-      await connectionAllowsProjectSelection(
-        "project-token",
-        dependencies("proj_123"),
-      ),
+      await connectionAllowsProjectSelection({
+        token: "project-token",
+        dependencies: dependencies("proj_123"),
+      }),
     ).toBe(false);
+  });
+
+  test("fails the request when initial scope resolution is unavailable", async () => {
+    delete process.env.KERNEL_PROJECT;
+    await expect(
+      connectionAllowsProjectSelection({
+        token: "unresolved-token",
+        dependencies: {
+          createKernelClient: () => {
+            throw new Error("temporary outage");
+          },
+        },
+      }),
+    ).rejects.toThrow("Unable to resolve MCP connection project scope");
   });
 
   test("resolves scope from the authenticated API context", async () => {
@@ -74,19 +87,22 @@ describe("connectionAllowsProjectSelection", () => {
     const token = "sk_identifier.secret";
     let receivedToken: string | undefined;
     let contextCalls = 0;
-    await connectionAllowsProjectSelection(token, {
-      createKernelClient: (candidate) => {
-        receivedToken = candidate;
-        return {
-          auth: {
-            context: {
-              retrieve: async () => {
-                contextCalls += 1;
-                return authContext(null);
+    await connectionAllowsProjectSelection({
+      token,
+      dependencies: {
+        createKernelClient: (candidate) => {
+          receivedToken = candidate;
+          return {
+            auth: {
+              context: {
+                retrieve: async () => {
+                  contextCalls += 1;
+                  return authContext(null);
+                },
               },
             },
-          },
-        } as unknown as KernelClient;
+          } as unknown as KernelClient;
+        },
       },
     });
     expect(receivedToken).toBe(token);
@@ -99,16 +115,15 @@ describe("connectionAllowsProjectSelection", () => {
       .createKernelClient()
       .auth.context.retrieve();
     expect(
-      await connectionAllowsProjectSelection(
-        "org-wide-token",
-        {
+      await connectionAllowsProjectSelection({
+        token: "org-wide-token",
+        dependencies: {
           createKernelClient: () => {
             throw new Error("unexpected duplicate context lookup");
           },
         },
-        undefined,
-        Promise.resolve(context),
-      ),
+        authContext: Promise.resolve(context),
+      }),
     ).toBe(true);
   });
 
@@ -116,14 +131,20 @@ describe("connectionAllowsProjectSelection", () => {
     delete process.env.KERNEL_PROJECT;
     const token = "org-wide-stale";
     expect(
-      await connectionAllowsProjectSelection(token, dependencies(null)),
+      await connectionAllowsProjectSelection({
+        token,
+        dependencies: dependencies(null),
+      }),
     ).toBe(true);
 
     expireProjectSelectionScopeCacheForTests();
     expect(
-      await connectionAllowsProjectSelection(token, {
-        createKernelClient: () => {
-          throw new Error("temporary outage");
+      await connectionAllowsProjectSelection({
+        token,
+        dependencies: {
+          createKernelClient: () => {
+            throw new Error("temporary outage");
+          },
         },
       }),
     ).toBe(true);
@@ -147,24 +168,24 @@ describe("connectionAllowsProjectSelection", () => {
         }) as unknown as KernelClient,
     };
     expect(
-      await connectionAllowsProjectSelection(
-        "old-token",
-        firstDependencies,
+      await connectionAllowsProjectSelection({
+        token: "old-token",
+        dependencies: firstDependencies,
         cacheIdentity,
-      ),
+      }),
     ).toBe(true);
 
     expect(
-      await connectionAllowsProjectSelection(
-        "new-token",
-        {
+      await connectionAllowsProjectSelection({
+        token: "new-token",
+        dependencies: {
           createKernelClient: () => {
             lookups += 1;
             throw new Error("unexpected scope refresh");
           },
         },
         cacheIdentity,
-      ),
+      }),
     ).toBe(true);
     expect(lookups).toBe(1);
   });
@@ -172,10 +193,10 @@ describe("connectionAllowsProjectSelection", () => {
   test("does not expose project selection when the server is pinned", async () => {
     process.env.KERNEL_PROJECT = "proj_server";
     expect(
-      await connectionAllowsProjectSelection(
-        "org-wide-token",
-        dependencies(null),
-      ),
+      await connectionAllowsProjectSelection({
+        token: "org-wide-token",
+        dependencies: dependencies(null),
+      }),
     ).toBe(false);
   });
 });
@@ -184,11 +205,5 @@ describe("project selection helpers", () => {
   test("omits the schema unless selection is enabled", () => {
     expect(projectSelectionInputSchema(false)).not.toHaveProperty("project_id");
     expect(projectSelectionInputSchema(true)).toHaveProperty("project_id");
-  });
-
-  test("reads only non-empty project IDs", () => {
-    expect(projectIDFromParams({ project_id: "proj_123" })).toBe("proj_123");
-    expect(projectIDFromParams({ project_id: "" })).toBeUndefined();
-    expect(projectIDFromParams(null)).toBeUndefined();
   });
 });

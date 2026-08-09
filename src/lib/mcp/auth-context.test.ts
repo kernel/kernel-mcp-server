@@ -52,7 +52,6 @@ describe("resolveMcpConnectionAnalyticsContext", () => {
   test("classifies an organization-wide API key without identifying its owner", async () => {
     const context = await resolveMcpConnectionAnalyticsContext({
       token: "sk_secret",
-      enabled: true,
       dependencies: dependencies(response()),
     });
 
@@ -70,7 +69,6 @@ describe("resolveMcpConnectionAnalyticsContext", () => {
   test("classifies a project-scoped API key", async () => {
     const context = await resolveMcpConnectionAnalyticsContext({
       token: "sk_secret",
-      enabled: true,
       dependencies: dependencies(
         response({
           credentialProjectId: "project_123",
@@ -87,7 +85,6 @@ describe("resolveMcpConnectionAnalyticsContext", () => {
   test("identifies OAuth with the canonical user principal", async () => {
     const context = await resolveMcpConnectionAnalyticsContext({
       token: "jwt.secret.value",
-      enabled: true,
       dependencies: dependencies(
         response({
           method: "jwt",
@@ -106,7 +103,6 @@ describe("resolveMcpConnectionAnalyticsContext", () => {
     const calls: string[] = [];
     const context = await resolveMcpConnectionAnalyticsContext({
       token: "sk_secret",
-      enabled: true,
       dependencies: dependencies(
         response({ effectiveProjectId: "project_pinned" }),
         calls,
@@ -120,22 +116,9 @@ describe("resolveMcpConnectionAnalyticsContext", () => {
     expect(context?.scopeSource).toBe("server_pin");
   });
 
-  test("does not resolve auth context when analytics is disabled", async () => {
-    const calls: string[] = [];
-    const context = await resolveMcpConnectionAnalyticsContext({
-      token: "sk_secret",
-      enabled: false,
-      dependencies: dependencies(response(), calls),
-    });
-
-    expect(context).toBeNull();
-    expect(calls).toEqual([]);
-  });
-
   test("fails closed for unavailable, malformed, unsupported, or inconsistent context", async () => {
     const unavailable = await resolveMcpConnectionAnalyticsContext({
       token: "sk_secret",
-      enabled: true,
       dependencies: {
         createKernelClient: () => {
           throw new Error("API unavailable");
@@ -144,12 +127,10 @@ describe("resolveMcpConnectionAnalyticsContext", () => {
     });
     const malformed = await resolveMcpConnectionAnalyticsContext({
       token: "sk_secret",
-      enabled: true,
       dependencies: dependencies({ authentication: {} }),
     });
     const dashboard = await resolveMcpConnectionAnalyticsContext({
       token: "jwt.secret.value",
-      enabled: true,
       dependencies: dependencies(
         response({
           method: "jwt",
@@ -161,7 +142,6 @@ describe("resolveMcpConnectionAnalyticsContext", () => {
     });
     const inconsistent = await resolveMcpConnectionAnalyticsContext({
       token: "sk_secret",
-      enabled: true,
       dependencies: dependencies(
         response({
           credentialProjectId: "project_1",
@@ -180,7 +160,6 @@ describe("resolveMcpConnectionAnalyticsContext", () => {
     const calls: string[] = [];
     const authContext = resolveMcpAuthContext({
       token: "oauth-token",
-      enabled: true,
       dependencies: dependencies(
         response({
           method: "jwt",
@@ -194,7 +173,6 @@ describe("resolveMcpConnectionAnalyticsContext", () => {
 
     const context = await resolveMcpConnectionAnalyticsContext({
       token: "oauth-token",
-      enabled: true,
       authContext,
     });
 

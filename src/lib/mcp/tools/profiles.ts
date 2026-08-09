@@ -16,7 +16,6 @@ import {
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 import {
-  projectIDFromParams,
   projectSelectionInputSchema,
   type ProjectSelectionOptions,
 } from "@/lib/mcp/project-selection";
@@ -149,7 +148,7 @@ export function registerProfileCapabilities(
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = options.createKernelClient(
         extra.authInfo.token,
-        projectIDFromParams(params),
+        params.project_id,
       );
 
       try {

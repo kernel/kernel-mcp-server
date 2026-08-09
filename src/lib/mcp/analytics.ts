@@ -142,13 +142,13 @@ function registerMissingCapabilityTool(server: McpServer) {
   );
 }
 
+const ANALYTICS_CONTEXT_PROPERTY = "__mcp_connection_analytics_context";
+
 /**
  * Captures every tool call, tools/list, and initialize handled by the server as a
  * `$mcp_*` PostHog event, and advertises the tool agents use to report a capability the
  * server doesn't have. No-op when POSTHOG_PROJECT_TOKEN is unset.
  */
-const ANALYTICS_CONTEXT_PROPERTY = "__mcp_connection_analytics_context";
-
 function connectionAnalyticsContext(extra: unknown) {
   const authInfo = (extra as { authInfo?: { extra?: unknown } } | undefined)
     ?.authInfo;
@@ -178,7 +178,15 @@ export function enrichMcpAnalyticsEvent(event: {
   event.properties["$mcp_credential_scope"] = context.credentialScope;
   event.properties["$mcp_connection_scope"] = context.connectionScope;
   event.properties["$mcp_scope_source"] = context.scopeSource;
-  event.properties.$groups = { organization: context.organizationId };
+  const currentGroups = event.properties.$groups;
+  event.properties.$groups = {
+    ...(currentGroups &&
+    typeof currentGroups === "object" &&
+    !Array.isArray(currentGroups)
+      ? currentGroups
+      : {}),
+    organization: context.organizationId,
+  };
 
   const sessionId = event.properties[PostHogMCPAnalyticsProperty.SessionId];
   if (typeof sessionId === "string" && sessionId) {

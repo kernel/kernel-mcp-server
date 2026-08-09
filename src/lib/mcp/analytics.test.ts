@@ -53,6 +53,25 @@ describe("enrichMcpAnalyticsEvent", () => {
     expect(event.properties[privateContextProperty]).toBeUndefined();
   });
 
+  test("preserves existing PostHog groups", () => {
+    const event = initializeEvent("session_1", {
+      authMethod: "api_key",
+      credentialScope: "organization",
+      connectionScope: "organization",
+      scopeSource: "credential",
+      organizationId: "org_123",
+      userId: null,
+    });
+    event.properties.$groups = { client: "client_123" };
+
+    enrichMcpAnalyticsEvent(event);
+
+    expect(event.properties.$groups).toEqual({
+      client: "client_123",
+      organization: "org_123",
+    });
+  });
+
   test("uses canonical Kernel user identity only for OAuth", () => {
     const event = initializeEvent("session_1", {
       authMethod: "oauth",
