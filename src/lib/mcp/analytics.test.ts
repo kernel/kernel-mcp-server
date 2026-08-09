@@ -97,6 +97,15 @@ describe("enrichMcpAnalyticsEvent", () => {
     );
   });
 
+  test("passes through events without properties", () => {
+    const event = {
+      event: PostHogMCPAnalyticsEvent.Initialize,
+      distinct_id: "session_1",
+    };
+
+    expect(enrichMcpAnalyticsEvent(event)).toBe(event);
+  });
+
   test("does not add connection properties to other MCP events", () => {
     const event: {
       event: string;

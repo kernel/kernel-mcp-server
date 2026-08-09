@@ -161,8 +161,10 @@ function connectionAnalyticsContext(extra: unknown) {
 export function enrichMcpAnalyticsEvent(event: {
   event: string;
   distinct_id: string;
-  properties: Record<string, unknown>;
+  properties?: Record<string, unknown>;
 }) {
+  if (!event.properties) return event;
+
   const context = event.properties[ANALYTICS_CONTEXT_PROPERTY] as
     | McpConnectionAnalyticsContext
     | undefined;
@@ -230,9 +232,9 @@ export function instrumentMcpAnalytics(server: McpServer) {
     beforeSend: (event) => {
       if (event.event === PostHogMCPAnalyticsEvent.Exception) return null;
 
-      enrichMcpAnalyticsEvent(event);
       const properties = event.properties;
       if (!properties) return event;
+      enrichMcpAnalyticsEvent(event);
 
       for (const key of Object.keys(properties)) {
         if (!SENT_PROPERTIES.has(key)) delete properties[key];
