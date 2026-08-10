@@ -10,7 +10,7 @@ export const unusedKernelClient = new Proxy(
 );
 
 export const kernelClientMock: {
-  factory: (token: string) => any;
+  factory: (token: string, projectID?: string) => any;
 } = {
   factory: () => unusedKernelClient,
 };
@@ -20,5 +20,6 @@ export function resetKernelClientFactory() {
 }
 
 mock.module("@/lib/mcp/kernel-client", () => ({
-  createKernelClient: (token: string) => kernelClientMock.factory(token),
+  createKernelClient: (token: string, projectID?: string) =>
+    kernelClientMock.factory(token, projectID),
 }));

@@ -5,7 +5,10 @@ import {
   type McpDependencies,
 } from "@/lib/mcp/dependencies";
 import type { KernelClient } from "@/lib/mcp/kernel-client";
-import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
+import {
+  registerJsonResourceCollection,
+  registerJsonResourceTemplate,
+} from "@/lib/mcp/resource-templates";
 import {
   errorResponse,
   itemsJsonResponse,
@@ -15,6 +18,10 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
+import {
+  projectIDForOperation,
+  projectSelectionInputSchema,
+} from "@/lib/mcp/project-selection";
 
 type ProfileListParams = NonNullable<
   Parameters<KernelClient["profiles"]["list"]>[0]
@@ -65,45 +72,40 @@ function requireProfileIdentifier(
 
 export function registerProfileCapabilities(
   server: McpServer,
-  dependencies: McpDependencies = defaultMcpDependencies,
+  options: McpDependencies = {
+    ...defaultMcpDependencies,
+  },
 ) {
-  server.resource("profiles", "profiles://", async (uri, extra) => {
-    if (!extra.authInfo) {
-      throw new Error("Authentication required");
-    }
-
-    const client = dependencies.createKernelClient(extra.authInfo.token);
-    const profiles = await listProfiles(client);
-    return {
-      contents: [
-        {
-          uri: uri.toString(),
-          mimeType: "application/json",
-          text:
-            profiles.length > 0
-              ? JSON.stringify(profiles, null, 2)
-              : "No profiles found",
-        },
-      ],
-    };
-  });
+  registerJsonResourceCollection(
+    server,
+    {
+      name: "profiles",
+      uriTemplate:
+        "kernel://orgs/{organizationId}/projects/{projectId}/profiles",
+      emptyText: "No profiles found",
+      read: (client) => listProfiles(client),
+    },
+    options,
+  );
 
   registerJsonResourceTemplate(
     server,
     {
       name: "profile",
-      uriTemplate: "profiles://{profileName}",
+      uriTemplate:
+        "kernel://orgs/{organizationId}/projects/{projectId}/profiles/{profileName}",
       variableName: "profileName",
       resourceLabel: "Profile",
       read: (client, profileName) => client.profiles.retrieve(profileName),
     },
-    dependencies,
+    options,
   );
 
   server.tool(
     "manage_profiles",
     'Manage browser profiles when an agent needs persistent cookies, login state, or reusable browser state. Use "setup" for a guided login session, "list" to find a profile, "get" to retrieve one, "rename" to change its name, and "delete" only when a profile should be removed. Do not rename a profile while a browser is using it because that session may no longer save changes back to the profile.',
     {
+      ...projectSelectionInputSchema(),
       action: z
         .enum(["setup", "list", "get", "rename", "delete"])
         .describe("Operation to perform."),
@@ -139,7 +141,10 @@ export function registerProfileCapabilities(
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = dependencies.createKernelClient(extra.authInfo.token);
+      const client = options.createKernelClient(
+        extra.authInfo.token,
+        projectIDForOperation(extra.authInfo, params.project_id),
+      );
 
       try {
         switch (params.action) {

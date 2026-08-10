@@ -1,4 +1,5 @@
 import { expect } from "bun:test";
+import { projectScopedAuthInfo } from "@/lib/mcp/auth-context.test-fixtures";
 import type { KernelClient } from "@/lib/mcp/kernel-client";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type {
@@ -153,7 +154,17 @@ export function captureHandler() {
       ...rest: any[]
     ) {
       schema = inputSchema;
-      handler = rest[rest.length - 1];
+      const capturedHandler = rest[rest.length - 1];
+      handler = (params, extra) =>
+        capturedHandler(params, {
+          ...extra,
+          authInfo: extra.authInfo
+            ? {
+                ...projectScopedAuthInfo(params.project_id ?? "proj_test"),
+                ...extra.authInfo,
+              }
+            : undefined,
+        });
     },
   } as unknown as McpServer;
   registerAuthConnectionTools(server);

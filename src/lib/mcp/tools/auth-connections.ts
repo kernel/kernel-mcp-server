@@ -14,6 +14,10 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
+import {
+  projectIDForOperation,
+  projectSelectionInputSchema,
+} from "@/lib/mcp/project-selection";
 
 // The additive wait action returns a sanitized snapshot (safeJsonResponse);
 // every pre-existing action keeps its established raw response shape.
@@ -35,6 +39,7 @@ export function registerAuthConnectionTools(server: McpServer) {
     "manage_auth_connections",
     'Manage reusable authenticated profiles for third-party websites. Before a browser task that needs a user account, call "list" with the exact domain_filter and inspect every page. If one relevant connection is AUTHENTICATED, create the browser with its profile_name. If multiple relevant accounts exist, ask the user which one to use. If authentication is needed and open_auth_login is available, prefer that secure App so credentials and MFA never enter chat: a direct user request to log in is already consent; if login is only discovered incidentally, ask first. For a new App login, choose a concise stable profile name derived from the service unless the user specified one. The programmatic actions remain available for every client: "create" a connection, "login" to start a hosted flow, "submit" fields/MFA/SSO, "get" status, "delete", or "wait" for completion. After authentication, resume the original task with manage_browsers using the verified profile_name.',
     {
+      ...projectSelectionInputSchema(),
       action: z
         .enum(["create", "list", "get", "delete", "login", "submit", "wait"])
         .describe("Operation to perform."),
@@ -172,7 +177,10 @@ export function registerAuthConnectionTools(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
+      const client = createKernelClient(
+        extra.authInfo.token,
+        projectIDForOperation(extra.authInfo, params.project_id),
+      );
 
       const buildProxy = () =>
         params.proxy_id || params.proxy_name
