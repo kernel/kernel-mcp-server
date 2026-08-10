@@ -1,11 +1,12 @@
 /// <reference types="bun-types" />
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, test } from "bun:test";
 import type { McpDependencies } from "@/lib/mcp/dependencies";
-import type { KernelClient } from "@/lib/mcp/kernel-client";
+import {
+  connectTestMcp,
+  testMcpDependencies,
+} from "@/lib/mcp/mcp-test-fixtures";
 import { registerProfileCapabilities } from "@/lib/mcp/tools/profiles";
 import { registerProxyTools } from "@/lib/mcp/tools/proxies";
 
@@ -21,12 +22,6 @@ type ToolHandler = (
 
 type RegisterTool = (server: McpServer, dependencies?: McpDependencies) => void;
 
-function testDependencies(client: unknown): McpDependencies {
-  return {
-    createKernelClient: () => client as KernelClient,
-  };
-}
-
 function captureTool(register: RegisterTool, name: string, client: unknown) {
   let handler: ToolHandler | undefined;
   const server = {
@@ -38,40 +33,9 @@ function captureTool(register: RegisterTool, name: string, client: unknown) {
     },
   } as unknown as McpServer;
 
-  register(server, testDependencies(client));
+  register(server, testMcpDependencies(client));
   if (!handler) throw new Error(`${name} was not registered`);
   return handler;
-}
-
-async function connectTool(register: RegisterTool, kernelClient: unknown) {
-  const server = new McpServer({ name: "test", version: "0.0.0" });
-  const tokens: string[] = [];
-  register(server, {
-    createKernelClient: (token) => {
-      tokens.push(token);
-      return kernelClient as KernelClient;
-    },
-  });
-
-  const client = new Client({ name: "test-client", version: "0.0.0" });
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
-  const send = clientTransport.send.bind(clientTransport);
-  clientTransport.send = (message, options) =>
-    send(message, {
-      ...options,
-      authInfo: {
-        token: "test-token",
-        clientId: "test-client",
-        scopes: [],
-      },
-    });
-
-  await Promise.all([
-    server.connect(serverTransport),
-    client.connect(clientTransport),
-  ]);
-  return { client, tokens };
 }
 
 function profilePage(profiles: Array<{ id: string; name: string }>) {
@@ -261,14 +225,17 @@ describe("durable profile contracts", () => {
 
   test("discovers and renames a profile through the MCP boundary", async () => {
     const updateCalls: unknown[] = [];
-    const { client, tokens } = await connectTool(registerProfileCapabilities, {
-      profiles: {
-        update: async (...args: unknown[]) => {
-          updateCalls.push(args);
-          return { id: "profile-1", name: "Renamed" };
+    const { client, tokens, close } = await connectTestMcp(
+      registerProfileCapabilities,
+      {
+        profiles: {
+          update: async (...args: unknown[]) => {
+            updateCalls.push(args);
+            return { id: "profile-1", name: "Renamed" };
+          },
         },
       },
-    });
+    );
     try {
       const tools = await client.listTools();
       const tool = tools.tools.find((item) => item.name === "manage_profiles");
@@ -308,7 +275,7 @@ describe("durable profile contracts", () => {
         ]);
       }
     } finally {
-      await client.close();
+      await close();
     }
 
     expect(updateCalls).toEqual([
@@ -417,7 +384,7 @@ describe("durable profile contracts", () => {
 describe("durable proxy contracts", () => {
   test("discovers and renames a proxy through the MCP boundary", async () => {
     const updateCalls: unknown[] = [];
-    const { client, tokens } = await connectTool(registerProxyTools, {
+    const { client, tokens, close } = await connectTestMcp(registerProxyTools, {
       proxies: {
         update: async (...args: unknown[]) => {
           updateCalls.push(args);
@@ -462,7 +429,7 @@ describe("durable proxy contracts", () => {
         },
       ]);
     } finally {
-      await client.close();
+      await close();
     }
 
     expect(updateCalls).toEqual([["proxy-1", { name: "Renamed" }]]);

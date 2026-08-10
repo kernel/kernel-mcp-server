@@ -1,10 +1,7 @@
 /// <reference types="bun-types" />
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, test } from "bun:test";
-import type { KernelClient } from "@/lib/mcp/kernel-client";
+import { connectTestMcp, toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
 import { registerAppCapabilities } from "@/lib/mcp/tools/apps";
 import type {
   InvocationCreateParams,
@@ -23,42 +20,6 @@ type InvocationClient = {
     ) => Promise<InvocationListBrowsersResponse>;
   };
 };
-
-async function connectApps(kernelClient: InvocationClient) {
-  const server = new McpServer({ name: "test", version: "0.0.0" });
-  const tokens: string[] = [];
-  registerAppCapabilities(server, {
-    createKernelClient: (token) => {
-      tokens.push(token);
-      return kernelClient as unknown as KernelClient;
-    },
-  });
-
-  const client = new Client({ name: "test-client", version: "0.0.0" });
-  const [clientTransport, serverTransport] =
-    InMemoryTransport.createLinkedPair();
-  const send = clientTransport.send.bind(clientTransport);
-  clientTransport.send = (message, options) =>
-    send(message, {
-      ...options,
-      authInfo: {
-        token: "test-token",
-        clientId: "test-client",
-        scopes: [],
-      },
-    });
-
-  await Promise.all([
-    server.connect(serverTransport),
-    client.connect(clientTransport),
-  ]);
-  return { client, server, tokens };
-}
-
-function resultJSON(result: Awaited<ReturnType<Client["callTool"]>>) {
-  const content = result.content as Array<{ type: string; text: string }>;
-  return JSON.parse(content[0].text);
-}
 
 describe("manage_apps invocation contract", () => {
   test("returns the invocation ID immediately without following the run", async () => {
@@ -81,7 +42,10 @@ describe("manage_apps invocation contract", () => {
         listBrowsers: async () => ({ browsers: [] }),
       },
     };
-    const { client, server, tokens } = await connectApps(kernelClient);
+    const { client, tokens, close } = await connectTestMcp(
+      registerAppCapabilities,
+      kernelClient,
+    );
 
     try {
       const tools = await client.listTools();
@@ -108,26 +72,14 @@ describe("manage_apps invocation contract", () => {
         async: true,
       });
       expect(followCalls).toBe(0);
-      expect(resultJSON(result)).toEqual({
+      expect(toolResultJSON(result)).toEqual({
         id: "inv_123",
         action_name: "cua-task",
         status: "queued",
         invocation_id: "inv_123",
-        next_action: {
-          action: "get_invocation",
-          invocation_id: "inv_123",
-        },
-        browser_action: {
-          action: "list_invocation_browsers",
-          invocation_id: "inv_123",
-        },
-        polling: {
-          interval_seconds: 5,
-          max_attempts: 60,
-        },
       });
     } finally {
-      await Promise.all([client.close(), server.close()]);
+      await close();
     }
   });
 
@@ -163,7 +115,10 @@ describe("manage_apps invocation contract", () => {
         },
       },
     };
-    const { client, server, tokens } = await connectApps(kernelClient);
+    const { client, tokens, close } = await connectTestMcp(
+      registerAppCapabilities,
+      kernelClient,
+    );
 
     try {
       const result = await client.callTool({
@@ -176,7 +131,7 @@ describe("manage_apps invocation contract", () => {
 
       expect(tokens).toEqual(["test-token"]);
       expect(requestedInvocationId).toBe("inv_123");
-      expect(resultJSON(result)).toEqual({
+      expect(toolResultJSON(result)).toEqual({
         browsers: [
           {
             session_id: "brr_123",
@@ -186,7 +141,7 @@ describe("manage_apps invocation contract", () => {
         ],
       });
     } finally {
-      await Promise.all([client.close(), server.close()]);
+      await close();
     }
   });
 });

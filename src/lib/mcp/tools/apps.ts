@@ -14,11 +14,6 @@ import {
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 
-const invocationPolling = {
-  interval_seconds: 5,
-  max_attempts: 60,
-} as const;
-
 export function registerAppCapabilities(
   server: McpServer,
   dependencies: McpDependencies = defaultMcpDependencies,
@@ -61,7 +56,7 @@ export function registerAppCapabilities(
   // manage_apps -- List apps, invoke actions, manage deployments, check invocations
   server.tool(
     "manage_apps",
-    'Manage Kernel apps when an agent needs to discover deployed app actions, invoke an app, or inspect deployment/invocation state. Use "list_apps" before invoking an unknown app. "invoke" starts an action asynchronously and returns an invocation_id immediately. Use "list_invocation_browsers" with that ID to discover browser sessions created by the invocation, and follow the returned polling interval and attempt limit with "get_invocation". If the invocation is still running, report its ID instead of continuing indefinitely. Use get/list actions to inspect results and "delete_deployment" to remove a deployment.',
+    'Manage Kernel apps when an agent needs to discover deployed app actions, invoke an app, or inspect deployment/invocation state. Use "list_apps" before invoking an unknown app. "invoke" starts an action asynchronously and returns an invocation_id immediately. Use "list_invocation_browsers" with that ID to discover browser sessions created by the invocation, and use "get_invocation" after a short delay to inspect its state. Do not poll indefinitely; if the invocation is still running, report its ID. Use get/list actions to inspect results and "delete_deployment" to remove a deployment.',
     {
       action: z
         .enum([
@@ -149,15 +144,6 @@ export function registerAppCapabilities(
             return jsonResponse({
               ...invocation,
               invocation_id: invocation.id,
-              next_action: {
-                action: "get_invocation",
-                invocation_id: invocation.id,
-              },
-              browser_action: {
-                action: "list_invocation_browsers",
-                invocation_id: invocation.id,
-              },
-              polling: invocationPolling,
             });
           }
           case "get_deployment": {
