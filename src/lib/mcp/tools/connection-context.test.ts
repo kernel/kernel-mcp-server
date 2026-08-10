@@ -19,8 +19,8 @@ describe("get_connection_context", () => {
         source: "api_key",
       },
       authorization: {
-        credential_scope: { project_id: "proj_123" },
-        effective_scope: { project_id: "proj_123" },
+        credential_scope: { project_id: null },
+        effective_scope: { project_id: null },
       },
       organization: { id: "org_123" },
       principal: { id: "key_123", type: "api_key" },
@@ -43,9 +43,9 @@ describe("get_connection_context", () => {
             connectionContext: {
               authContext,
               scope: {
-                kind: "project",
+                kind: "organization",
                 organizationId: "org_123",
-                projectId: "proj_123",
+                projectId: null,
                 source: "credential",
               },
             },
@@ -70,9 +70,9 @@ describe("get_connection_context", () => {
       expect(JSON.parse(result.content[0].text)).toEqual({
         ...authContext,
         connection_scope: {
-          kind: "project",
+          kind: "organization",
           organization_id: "org_123",
-          project_id: "proj_123",
+          project_id: null,
           source: "credential",
           project_id_required: false,
         },

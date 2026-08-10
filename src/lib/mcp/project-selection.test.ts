@@ -48,9 +48,9 @@ describe("project selection schema", () => {
 });
 
 describe("projectIDForOperation", () => {
-  test("requires a target for organization-wide connections", () => {
+  test("preserves unscoped access for organization-wide connections", () => {
     const info = authInfo(organizationScope);
-    expect(() => projectIDForOperation(info)).toThrow("project_id is required");
+    expect(projectIDForOperation(info)).toBeUndefined();
     expect(projectIDForOperation(info, "proj_123")).toBe("proj_123");
   });
 

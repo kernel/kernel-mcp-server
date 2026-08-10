@@ -6,7 +6,7 @@ const projectIDSchema = z
   .string()
   .min(1)
   .describe(
-    "Project ID used to scope this operation. Required on organization-wide connections. On project-scoped connections, omit it or pass the fixed project ID returned by get_connection_context.",
+    "Optional project ID used to scope this operation. On organization-wide connections, omit it to use the API's organization-wide or default-project behavior. On project-scoped connections, omit it or pass the fixed project ID returned by get_connection_context.",
   )
   .optional();
 
@@ -29,14 +29,9 @@ export function connectionContextFromAuthInfo(
 export function projectIDForOperation(
   authInfo: AuthInfo,
   requestedProjectId?: string,
-): string {
+): string | undefined {
   const { scope } = connectionContextFromAuthInfo(authInfo);
   if (scope.kind === "organization") {
-    if (!requestedProjectId) {
-      throw new Error(
-        "project_id is required for project-scoped operations on an organization-wide connection",
-      );
-    }
     return requestedProjectId;
   }
 

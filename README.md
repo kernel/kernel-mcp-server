@@ -263,7 +263,7 @@ One additional Managed Auth helper (`begin_auth_login`) is marked app-only (`_me
 
 Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_DISABLED_TOOLSETS` to a comma-separated list. For example, `KERNEL_MCP_DISABLED_TOOLSETS=api_keys` prevents `manage_api_keys` from being registered.
 
-Call `get_connection_context` before deciding whether to create or select a project. Its canonical `connection_scope` reports whether the connection is organization-wide or fixed to a project. Project-scoped tools always advertise `project_id`: organization-wide connections must pass the selected project, while fixed-project connections may omit it or pass the matching ID. Project resources use project-qualified `kernel://orgs/{organizationId}/projects/{projectId}/...` URIs. Authorization remains enforced by the Kernel API; selecting a project never grants access to it.
+Call `get_connection_context` before deciding whether to create or select a project. Its canonical `connection_scope` reports whether the connection is organization-wide or fixed to a project. Project-scoped tools always advertise an optional `project_id`: organization-wide connections may omit it to preserve organization-wide reads and API default-project behavior, while fixed-project connections may omit it or pass the matching ID. Project resources use project-qualified `kernel://orgs/{organizationId}/projects/{projectId}/...` URIs. Authorization remains enforced by the Kernel API; selecting a project never grants access to it.
 
 ### manage\_\* tools
 
