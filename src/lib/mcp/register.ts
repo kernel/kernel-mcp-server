@@ -12,6 +12,7 @@ import { registerBrowserPoolCapabilities } from "@/lib/mcp/tools/browser-pools";
 import { registerBrowserCurlTool } from "@/lib/mcp/tools/browser-curl";
 import { registerBrowserCapabilities } from "@/lib/mcp/tools/browsers";
 import { registerComputerActionTool } from "@/lib/mcp/tools/computer-action";
+import { registerConnectionContextTool } from "@/lib/mcp/tools/connection-context";
 import { registerCredentialProviderTools } from "@/lib/mcp/tools/credential-providers";
 import { registerCredentialTools } from "@/lib/mcp/tools/credentials";
 import { registerDocsTools } from "@/lib/mcp/tools/docs";
@@ -22,11 +23,12 @@ import { registerProjectCapabilities } from "@/lib/mcp/tools/projects";
 import { registerProxyTools } from "@/lib/mcp/tools/proxies";
 import { registerReplayTools } from "@/lib/mcp/tools/replays";
 import { registerShellTool } from "@/lib/mcp/tools/shell";
-
-type RegisterMcpToolset = (
-  server: McpServer,
-  dependencies?: McpDependencies,
-) => void;
+type McpToolOptions = McpDependencies;
+type McpRegistrationOptions = {
+  mcpApps?: boolean;
+  dependencies?: McpDependencies;
+};
+type RegisterMcpToolset = (server: McpServer, options: McpToolOptions) => void;
 
 function registerManagedAuthCapabilities(server: McpServer) {
   registerAuthConnectionTools(server);
@@ -135,11 +137,14 @@ export function registerMcpCapabilities(
   {
     mcpApps = false,
     dependencies = defaultMcpDependencies,
-  }: { mcpApps?: boolean; dependencies?: McpDependencies } = {},
+  }: McpRegistrationOptions = {},
 ) {
   const disabledToolsets = disabledMcpToolsetsFromEnv();
 
   registerKernelPrompts(server);
+  // Connection metadata remains available so clients can select the correct
+  // project target even when other toolsets are disabled.
+  registerConnectionContextTool(server);
 
   for (const [toolset, registerToolset] of mcpToolRegistrations) {
     if (toolsetEnabled(disabledToolsets, toolset)) {

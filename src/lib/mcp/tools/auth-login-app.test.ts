@@ -3,6 +3,7 @@ import { encodeSessionId } from "@posthog/mcp";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MANAGED_AUTH_APP_HTML } from "@/lib/mcp/apps/generated/managed-auth-app";
+import { projectScopedExtra } from "@/lib/mcp/auth-context.test-fixtures";
 import {
   kernelClientMock,
   resetKernelClientFactory,
@@ -187,7 +188,7 @@ describe("managed-auth MCP App registration", () => {
         domain: "example.com",
         profile_name: "work",
       },
-      { authInfo: { token: "unused-api-key" } },
+      projectScopedExtra("proj_test", "unused-api-key"),
     );
     expect(result.structuredContent).toEqual({
       kind: "kernel.managed_auth.launcher",
@@ -201,6 +202,7 @@ describe("managed-auth MCP App registration", () => {
           domain_filter: "example.com",
           profile_name: "work",
           wait_seconds: 25,
+          project_id: "proj_test",
         },
       },
     });
@@ -216,7 +218,7 @@ describe("managed-auth MCP App registration", () => {
       .get("begin_auth_login")!
       .handler(
         { mode: "reauth", connection_id: "conn_1" },
-        { authInfo: { token: "unused-api-key" } },
+        projectScopedExtra("proj_test", "unused-api-key"),
       );
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("MCP Apps-capable hosts");
@@ -255,7 +257,7 @@ describe("managed-auth MCP App registration", () => {
       const result = await tools.get("begin_auth_login")!.handler(
         { mode: "reauth", connection_id: "conn_1" },
         {
-          authInfo: { token: "unused-api-key" },
+          ...projectScopedExtra("proj_test", "unused-api-key"),
           requestInfo: {
             headers: {
               "mcp-session-id": encodeSessionId({
@@ -377,7 +379,7 @@ describe("managed-auth MCP App registration", () => {
         .get("open_auth_login")!
         .handler(
           { mode: "reauth", connection_id: "conn_1" },
-          { authInfo: { token: "unused-api-key" } },
+          projectScopedExtra("proj_test", "unused-api-key"),
         );
       const args = result.structuredContent.next_action.arguments;
       expect(args).toMatchObject({
@@ -423,7 +425,7 @@ describe("managed-auth MCP App registration", () => {
         .get("open_auth_login")!
         .handler(
           { mode: "reauth", connection_id: "conn_1" },
-          { authInfo: { token: "unused-api-key" } },
+          projectScopedExtra("proj_test", "unused-api-key"),
         );
       const token =
         result.structuredContent.next_action.arguments.flow_checkpoint;
@@ -470,7 +472,7 @@ describe("managed-auth MCP App registration", () => {
         .get("open_auth_login")!
         .handler(
           { mode: "reauth", connection_id: "conn_1" },
-          { authInfo: { token: "unused-api-key" } },
+          projectScopedExtra("proj_test", "unused-api-key"),
         );
       const token =
         result.structuredContent.next_action.arguments.flow_checkpoint;

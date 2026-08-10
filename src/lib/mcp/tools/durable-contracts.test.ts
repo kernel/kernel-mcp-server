@@ -2,6 +2,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, test } from "bun:test";
+import { projectScopedExtra } from "@/lib/mcp/auth-context.test-fixtures";
 import type { McpDependencies } from "@/lib/mcp/dependencies";
 import {
   connectTestMcp,
@@ -46,7 +47,7 @@ function profilePage(profiles: Array<{ id: string; name: string }>) {
   };
 }
 
-const auth = { authInfo: { token: "test-token" } };
+const auth = projectScopedExtra();
 
 describe("durable profile contracts", () => {
   test("creates a profile when no exact match exists", async () => {

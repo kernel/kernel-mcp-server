@@ -7,6 +7,7 @@ import {
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { PostHog } from "posthog-node";
 import { z } from "zod";
+import type { McpConnectionAnalyticsContext } from "@/lib/mcp/auth-context";
 
 const projectToken = process.env.POSTHOG_PROJECT_TOKEN;
 
@@ -32,7 +33,12 @@ const posthog = projectToken
 // returned).
 const SENT_PROPERTIES = new Set<string>([
   "$groups",
+  "$insert_id",
   "$process_person_profile",
+  "$mcp_auth_method",
+  "$mcp_connection_scope",
+  "$mcp_credential_scope",
+  "$mcp_scope_source",
   PostHogMCPAnalyticsProperty.ClientName,
   PostHogMCPAnalyticsProperty.ClientVersion,
   PostHogMCPAnalyticsProperty.DurationMs,
@@ -136,11 +142,69 @@ function registerMissingCapabilityTool(server: McpServer) {
   );
 }
 
+const ANALYTICS_CONTEXT_PROPERTY = "__mcp_connection_analytics_context";
+
 /**
  * Captures every tool call, tools/list, and initialize handled by the server as a
  * `$mcp_*` PostHog event, and advertises the tool agents use to report a capability the
  * server doesn't have. No-op when POSTHOG_PROJECT_TOKEN is unset.
  */
+function connectionAnalyticsContext(extra: unknown) {
+  const authInfo = (extra as { authInfo?: { extra?: unknown } } | undefined)
+    ?.authInfo;
+  const authExtra = authInfo?.extra as
+    | { connectionAnalytics?: McpConnectionAnalyticsContext }
+    | undefined;
+  return authExtra?.connectionAnalytics;
+}
+
+export function enrichMcpAnalyticsEvent(event: {
+  event: string;
+  distinct_id: string;
+  properties?: Record<string, unknown>;
+}) {
+  if (!event.properties) return event;
+
+  const context = event.properties[ANALYTICS_CONTEXT_PROPERTY] as
+    | McpConnectionAnalyticsContext
+    | undefined;
+  delete event.properties[ANALYTICS_CONTEXT_PROPERTY];
+
+  if (event.event !== PostHogMCPAnalyticsEvent.Initialize || !context) {
+    return event;
+  }
+
+  event.properties["$mcp_auth_method"] = context.authMethod;
+  event.properties["$mcp_credential_scope"] = context.credentialScope;
+  event.properties["$mcp_connection_scope"] = context.connectionScope;
+  event.properties["$mcp_scope_source"] = context.scopeSource;
+  const currentGroups = event.properties.$groups;
+  event.properties.$groups = {
+    ...(currentGroups &&
+    typeof currentGroups === "object" &&
+    !Array.isArray(currentGroups)
+      ? currentGroups
+      : {}),
+    organization: context.organizationId,
+  };
+
+  const sessionId = event.properties[PostHogMCPAnalyticsProperty.SessionId];
+  if (typeof sessionId === "string" && sessionId) {
+    event.properties.$insert_id = `mcp-connection:${sessionId}`;
+  }
+
+  if (context.userId) {
+    event.distinct_id = context.userId;
+    delete event.properties.$process_person_profile;
+  }
+
+  return event;
+}
+
+export function isMcpAnalyticsEnabled() {
+  return posthog !== null;
+}
+
 export function instrumentMcpAnalytics(server: McpServer) {
   if (!posthog) return;
 
@@ -157,12 +221,17 @@ export function instrumentMcpAnalytics(server: McpServer) {
     // A failed tool call otherwise fans out into a second `$exception` event whose
     // `$exception_list` is built from the text the tool returned.
     enableExceptionAutocapture: false,
-    // Events are attributed to the analytics session, with no person created. The only
-    // id this server holds is the Clerk subject, while every other producer in these
-    // projects identifies people by their Kernel user id — identifying on the subject
-    // would mint a second profile per person. Resolving the Kernel user id needs an
-    // API that doesn't exist yet, so user-level reporting is out of scope until then.
+    // Keep general MCP telemetry session-scoped. The initialize event alone uses the
+    // canonical Kernel user ID when auth context identifies a user; API-key principals
+    // remain anonymous because their principal ID identifies the credential itself.
     identify: null,
+    // Connection context is present only on initialize. beforeSend turns this private,
+    // typed value into allow-listed analytics properties and removes it before capture.
+    eventProperties: (request, extra) => {
+      if (request.method !== "initialize") return null;
+      const context = connectionAnalyticsContext(extra);
+      return context ? { [ANALYTICS_CONTEXT_PROPERTY]: context } : null;
+    },
     // No part of a call is safe to capture: arguments carry free-form input (credential
     // field maps, curl headers and bodies, typed text, shell commands, Playwright
     // source), results are serialized to a JSON string (see jsonResponse) so the SDK's
@@ -173,6 +242,7 @@ export function instrumentMcpAnalytics(server: McpServer) {
 
       const properties = event.properties;
       if (!properties) return event;
+      enrichMcpAnalyticsEvent(event);
 
       for (const key of Object.keys(properties)) {
         if (!SENT_PROPERTIES.has(key)) delete properties[key];

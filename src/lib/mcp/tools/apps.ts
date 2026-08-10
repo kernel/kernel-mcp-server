@@ -4,7 +4,10 @@ import {
   defaultMcpDependencies,
   type McpDependencies,
 } from "@/lib/mcp/dependencies";
-import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
+import {
+  registerJsonResourceCollection,
+  registerJsonResourceTemplate,
+} from "@/lib/mcp/resource-templates";
 import {
   errorResponse,
   jsonResponse,
@@ -13,36 +16,38 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
+import {
+  projectIDForOperation,
+  projectSelectionInputSchema,
+} from "@/lib/mcp/project-selection";
 
 export function registerAppCapabilities(
   server: McpServer,
   dependencies: McpDependencies = defaultMcpDependencies,
 ) {
-  server.resource("apps", "apps://", async (uri, extra) => {
-    if (!extra.authInfo) {
-      throw new Error("Authentication required");
-    }
-
-    const client = dependencies.createKernelClient(extra.authInfo.token);
-    const appsPage = await client.apps.list();
-    const items = appsPage.getPaginatedItems();
-    return {
-      contents: [
-        {
-          uri: uri.toString(),
-          mimeType: "application/json",
-          text:
-            items.length > 0 ? JSON.stringify(items, null, 2) : "No apps found",
-        },
-      ],
-    };
-  });
+  registerJsonResourceCollection(
+    server,
+    {
+      name: "apps",
+      uriTemplate: "kernel://orgs/{organizationId}/projects/{projectId}/apps",
+      emptyText: "No apps found",
+      read: async (client) => {
+        const apps = [];
+        for await (const app of client.apps.list()) {
+          apps.push(app);
+        }
+        return apps;
+      },
+    },
+    dependencies,
+  );
 
   registerJsonResourceTemplate(
     server,
     {
       name: "app",
-      uriTemplate: "apps://{appName}",
+      uriTemplate:
+        "kernel://orgs/{organizationId}/projects/{projectId}/apps/{appName}",
       variableName: "appName",
       resourceLabel: "App",
       read: async (client, appName) => {
@@ -58,6 +63,7 @@ export function registerAppCapabilities(
     "manage_apps",
     'Manage Kernel apps when an agent needs to discover deployed app actions, invoke an app, or inspect deployment/invocation state. Use "list_apps" before invoking an unknown app. "invoke" starts an action asynchronously and returns an invocation_id immediately. Use "list_invocation_browsers" with that ID to discover browser sessions created by the invocation, and use "get_invocation" after a short delay to inspect its state. Do not poll indefinitely; if the invocation is still running, report its ID. Use get/list actions to inspect results and "delete_deployment" to remove a deployment.',
     {
+      ...projectSelectionInputSchema(),
       action: z
         .enum([
           "list_apps",
@@ -111,7 +117,10 @@ export function registerAppCapabilities(
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = dependencies.createKernelClient(extra.authInfo.token);
+      const client = dependencies.createKernelClient(
+        extra.authInfo.token,
+        projectIDForOperation(extra.authInfo, params.project_id),
+      );
 
       try {
         switch (params.action) {
