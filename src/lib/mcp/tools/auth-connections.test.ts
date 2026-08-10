@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { organizationWideAuthInfo } from "@/lib/mcp/auth-context.test-fixtures";
 import { toSafeAuthConnection } from "./managed-auth-state";
 import {
   assertNoSecrets,
@@ -45,7 +46,7 @@ describe("manage_auth_connections programmatic surface", () => {
     expect(schema?.sign_in_option_id).toBeUndefined();
   });
 
-  test("constructs a project-scoped client from the optional selector", async () => {
+  test("passes the optional project selector through to the client", async () => {
     const { handler, schema } = captureHandler();
     let selectedProject: string | undefined;
     kernelClientMock.factory = (_token, projectID) => {
@@ -62,16 +63,16 @@ describe("manage_auth_connections programmatic surface", () => {
         },
       };
     };
-    try {
-      expect(schema?.project_id).toBeDefined();
-      await handler(
-        { action: "list", project_id: "proj_123" },
-        { authInfo: { token: "test-token" } },
-      );
-      expect(selectedProject).toBe("proj_123");
-    } finally {
-      kernelClientMock.factory = () => unusedKernelClient;
-    }
+
+    expect(schema?.project_id).toBeDefined();
+    await handler(
+      { action: "list", project_id: "proj_123" },
+      { authInfo: { token: "test-token" } },
+    );
+    expect(selectedProject).toBe("proj_123");
+
+    await handler({ action: "list" }, { authInfo: organizationWideAuthInfo() });
+    expect(selectedProject).toBeUndefined();
   });
 
   test("forwards replay and browser telemetry settings on create and login", async () => {

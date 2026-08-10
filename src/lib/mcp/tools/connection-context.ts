@@ -5,7 +5,7 @@ import { jsonResponse } from "@/lib/mcp/responses";
 export function registerConnectionContextTool(server: McpServer) {
   server.tool(
     "get_connection_context",
-    "Inspect the authenticated Kernel connection before a project-scoped operation. connection_scope.kind=organization requires project_id on project-scoped tools and resources. connection_scope.kind=project is fixed to connection_scope.project_id; omit project_id or pass that exact value.",
+    "Inspect the authenticated Kernel connection before a project-scoped operation. connection_scope.kind=organization may omit project_id for organization-wide reads and default-project creates, or pass one to select a project. connection_scope.kind=project is fixed to connection_scope.project_id; omit project_id or pass that exact value.",
     {},
     {
       title: "Get Kernel connection context",
@@ -26,7 +26,7 @@ export function registerConnectionContextTool(server: McpServer) {
           organization_id: scope.organizationId,
           project_id: scope.projectId,
           source: scope.source,
-          project_id_required: scope.kind === "organization",
+          project_id_required: false,
         },
       });
     },
