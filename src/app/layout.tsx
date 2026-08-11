@@ -119,9 +119,9 @@ export default function RootLayout({
         <body className={`${inter.variable} ${ibmPlexMono.variable} font-sans overscroll-y-none`}>
           <ThemeProvider
             attribute="class"
-            defaultTheme="light"
+            forcedTheme="light"
             disableTransitionOnChange
-            enableSystem
+            enableSystem={false}
           >
             <main>{children}</main>
           </ThemeProvider>
