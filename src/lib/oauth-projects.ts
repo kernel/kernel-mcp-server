@@ -19,9 +19,53 @@ export class OAuthProjectsError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
   }
+}
+
+async function fetchProjectsApi(
+  fetcher: OAuthProjectsFetcher,
+  input: URL,
+  init: RequestInit,
+): Promise<Response> {
+  try {
+    return await fetcher(input, init);
+  } catch (error) {
+    throw new OAuthProjectsError("Project API request failed", 502, {
+      cause: error,
+    });
+  }
+}
+
+async function parseProjectsJson(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch (error) {
+    throw new OAuthProjectsError("Invalid project API response", 502, {
+      cause: error,
+    });
+  }
+}
+
+function parseOAuthProject(value: unknown): OAuthProject {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new OAuthProjectsError("Invalid project API response", 502);
+  }
+  const project = value as Record<string, unknown>;
+  if (
+    typeof project.id !== "string" ||
+    typeof project.name !== "string" ||
+    (project.status !== "active" && project.status !== "archived")
+  ) {
+    throw new OAuthProjectsError("Invalid project API response", 502);
+  }
+  return {
+    id: project.id,
+    name: project.name,
+    status: project.status,
+  };
 }
 
 function apiBaseUrl(): string {
@@ -57,7 +101,7 @@ export async function listOAuthProjectsPage({
   url.searchParams.set("offset", String(offset));
   if (query) url.searchParams.set("query", query);
 
-  const response = await fetcher(url, {
+  const response = await fetchProjectsApi(fetcher, url, {
     headers: projectHeaders(clerkSessionToken),
     cache: "no-store",
   });
@@ -70,7 +114,11 @@ export async function listOAuthProjectsPage({
     );
   }
 
-  const page = (await response.json()) as OAuthProject[];
+  const value = await parseProjectsJson(response);
+  if (!Array.isArray(value)) {
+    throw new OAuthProjectsError("Invalid project API response", 502);
+  }
+  const page = value.map(parseOAuthProject);
   const hasMore = response.headers.get("X-Has-More") === "true";
   const nextOffsetValue = response.headers.get("X-Next-Offset");
   const nextOffset = nextOffsetValue ? Number(nextOffsetValue) : undefined;
@@ -103,7 +151,7 @@ export async function requireActiveOAuthProject({
     `/org/projects/${encodeURIComponent(projectId)}`,
     apiBaseUrl(),
   );
-  const response = await fetcher(url, {
+  const response = await fetchProjectsApi(fetcher, url, {
     headers: projectHeaders(clerkSessionToken),
     cache: "no-store",
   });
@@ -118,7 +166,7 @@ export async function requireActiveOAuthProject({
     );
   }
 
-  const project = (await response.json()) as OAuthProject;
+  const project = parseOAuthProject(await parseProjectsJson(response));
   if (project.status !== "active" || project.id !== projectId) {
     throw new OAuthProjectsError("Project not found or inactive", 404);
   }

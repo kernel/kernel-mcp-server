@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
 import type { AuthorizeDependencies } from "./route";
+import { OAuthProjectsError } from "@/lib/oauth-projects";
 
 process.env.KERNEL_CLI_PROD_CLIENT_ID ??= "cli_prod";
 process.env.KERNEL_CLI_STAGING_CLIENT_ID ??= "cli_staging";
@@ -17,7 +18,12 @@ function request(query: string) {
 function dependencies({
   userId = "user_1",
   orgId = "org_1",
-}: { userId?: string | null; orgId?: string | null } = {}) {
+  projectError,
+}: {
+  userId?: string | null;
+  orgId?: string | null;
+  projectError?: Error;
+} = {}) {
   const requestContexts: Parameters<
     AuthorizeDependencies["setRequestContext"]
   >[0][] = [];
@@ -43,6 +49,7 @@ function dependencies({
       },
       requireProject: async (value) => {
         projects.push(value);
+        if (projectError) throw projectError;
         return { id: value.projectId, name: "project", status: "active" };
       },
     } satisfies AuthorizeDependencies,
@@ -114,6 +121,21 @@ describe("GET /authorize", () => {
       access_scope: "project",
       project_id: "proj_1",
     });
+  });
+
+  test("reports project API failures as temporarily unavailable", async () => {
+    const deps = dependencies({
+      projectError: new OAuthProjectsError("upstream unavailable", 502),
+    });
+    const response = await authorizeRequest(
+      request(
+        "client_id=client_1&org_id=org_1&access_scope=project&project_id=proj_1&code_challenge=challenge&code_challenge_method=S256",
+      ),
+      deps.value,
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: "server_error" });
   });
 
   test("rejects project scope without S256 PKCE", async () => {

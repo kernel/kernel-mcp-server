@@ -100,6 +100,42 @@ describe("OAuth project lookup", () => {
     }
   });
 
+  test("normalizes transport, JSON, and schema failures", async () => {
+    const transportFailure = mock(async () => {
+      throw new Error("connection reset");
+    });
+    const invalidJson = mock(
+      async () =>
+        new Response("{", {
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const invalidPage = mock(async () =>
+      Response.json([{ id: 1, name: "one", status: "active" }]),
+    );
+    const invalidProject = mock(async () =>
+      Response.json({ id: "proj_1", name: "one", status: "unknown" }),
+    );
+
+    for (const fetcher of [transportFailure, invalidJson, invalidPage]) {
+      await expect(
+        listOAuthProjectsPage({
+          clerkSessionToken: "session-token",
+          fetcher,
+        }),
+      ).rejects.toMatchObject({ status: 502 });
+    }
+    for (const fetcher of [transportFailure, invalidJson, invalidProject]) {
+      await expect(
+        requireActiveOAuthProject({
+          clerkSessionToken: "session-token",
+          projectId: "proj_1",
+          fetcher,
+        }),
+      ).rejects.toMatchObject({ status: 502 });
+    }
+  });
+
   test("fails on API and pagination errors", async () => {
     const unavailable = mock(async () => new Response(null, { status: 503 }));
     await expect(
