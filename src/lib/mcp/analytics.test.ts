@@ -1,9 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { PostHog } from "posthog-node";
 import {
   PostHogMCPAnalyticsEvent,
   PostHogMCPAnalyticsProperty,
 } from "@posthog/mcp";
-import { enrichMcpAnalyticsEvent } from "@/lib/mcp/analytics";
+import {
+  enrichMcpAnalyticsEvent,
+  instrumentMcpAnalytics,
+  sanitizeMcpAnalyticsEvent,
+} from "@/lib/mcp/analytics";
 
 const privateContextProperty = "__mcp_connection_analytics_context";
 
@@ -151,5 +157,261 @@ describe("enrichMcpAnalyticsEvent", () => {
     expect(event.distinct_id).toBe("session_1");
     expect(event.properties.$mcp_auth_method).toBeUndefined();
     expect(event.properties[privateContextProperty]).toBeUndefined();
+  });
+});
+
+type CaptureEvent = {
+  event: string;
+  distinct_id: string;
+  properties: Record<string, unknown>;
+  timestamp: string;
+  type: "capture";
+};
+
+function toolCallEvent(properties: Record<string, unknown> = {}): CaptureEvent {
+  return {
+    event: PostHogMCPAnalyticsEvent.ToolCall,
+    distinct_id: "ses_123",
+    properties: {
+      [PostHogMCPAnalyticsProperty.SessionId]: "ses_123",
+      [PostHogMCPAnalyticsProperty.ToolName]: "manage_browsers",
+      ...properties,
+    },
+    timestamp: new Date(0).toISOString(),
+    type: "capture",
+  };
+}
+
+describe("sanitizeMcpAnalyticsEvent", () => {
+  test("keeps $groups so every event carries org attribution", async () => {
+    const event = toolCallEvent({ $groups: { organization: "org_123" } });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    expect(result?.properties.$groups).toEqual({ organization: "org_123" });
+  });
+
+  test("drops call payloads and error text, keeps call metadata", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.Parameters]: { stealth: true },
+      [PostHogMCPAnalyticsProperty.Response]: { result: "secret" },
+      [PostHogMCPAnalyticsProperty.ErrorMessage]: "upstream said no",
+      [PostHogMCPAnalyticsProperty.DurationMs]: 42,
+      [PostHogMCPAnalyticsProperty.IsError]: false,
+    });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    expect(
+      result?.properties[PostHogMCPAnalyticsProperty.Parameters],
+    ).toBeUndefined();
+    expect(
+      result?.properties[PostHogMCPAnalyticsProperty.Response],
+    ).toBeUndefined();
+    expect(
+      result?.properties[PostHogMCPAnalyticsProperty.ErrorMessage],
+    ).toBeUndefined();
+    expect(result?.properties[PostHogMCPAnalyticsProperty.DurationMs]).toBe(42);
+    expect(result?.properties[PostHogMCPAnalyticsProperty.IsError]).toBe(false);
+  });
+
+  test("drops $set so no person properties can flow", async () => {
+    const event = toolCallEvent({ $set: { email: "agent@example.com" } });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    expect(result?.properties.$set).toBeUndefined();
+  });
+
+  test("redacts emails, URLs, and tokens from intent", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.Intent]:
+        "Checking out on https://shop.example.com/cart for buyer@example.com with key sk_abc123DEF456",
+    });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    const intent = result?.properties[
+      PostHogMCPAnalyticsProperty.Intent
+    ] as string;
+    expect(intent).toContain("[url]");
+    expect(intent).toContain("[email]");
+    expect(intent).toContain("[token]");
+    expect(intent).not.toContain("buyer@example.com");
+    expect(intent).not.toContain("sk_abc123DEF456");
+  });
+
+  test("deletes non-string intents", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.Intent]: { goal: "payload" },
+    });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    expect(
+      result?.properties[PostHogMCPAnalyticsProperty.Intent],
+    ).toBeUndefined();
+  });
+
+  test("drops capability reports that carry no usable context", async () => {
+    const event = toolCallEvent({});
+    event.event = PostHogMCPAnalyticsEvent.MissingCapability;
+
+    expect(await sanitizeMcpAnalyticsEvent(event)).toBeNull();
+  });
+
+  test("keeps capability reports with a sanitized context", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.Intent]:
+        "Wanted to fan one automation out over many sessions at once.",
+    });
+    event.event = PostHogMCPAnalyticsEvent.MissingCapability;
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    expect(result).not.toBeNull();
+    expect(result?.properties[PostHogMCPAnalyticsProperty.Intent]).toBe(
+      "Wanted to fan one automation out over many sessions at once.",
+    );
+  });
+
+  test("drops $exception events", async () => {
+    const event = toolCallEvent({});
+    event.event = PostHogMCPAnalyticsEvent.Exception;
+
+    expect(await sanitizeMcpAnalyticsEvent(event)).toBeNull();
+  });
+});
+
+describe("instrumentMcpAnalytics (SDK integration)", () => {
+  const ORG = "org_integration";
+
+  // mcp-handler builds a fresh McpServer per HTTP request, so each simulated request
+  // gets its own instrumented server and the SDK's per-session identity cache starts
+  // cold — this is exactly the deployed topology.
+  function makeServer(captured: { event?: string }[]) {
+    const server = new McpServer({ name: "test", version: "0.0.0" });
+    const fakePosthog = {
+      capture: (event: unknown) => captured.push(event as { event?: string }),
+    } as unknown as PostHog;
+    instrumentMcpAnalytics(server, fakePosthog);
+    server.tool("ping", {}, async () => ({
+      content: [{ type: "text" as const, text: "pong" }],
+    }));
+    return server;
+  }
+
+  async function simulateRequest(
+    captured: { event?: string }[],
+    method: string,
+    params: Record<string, unknown>,
+  ) {
+    const server = makeServer(captured);
+    const extra = {
+      authInfo: {
+        token: "sk_test",
+        clientId: "mcp-server",
+        scopes: ["apikey"],
+        extra: { connectionContext: { scope: { organizationId: ORG } } },
+      },
+      signal: new AbortController().signal,
+      requestInfo: { headers: {} },
+    };
+    const handlers = (
+      server.server as unknown as {
+        _requestHandlers: Map<
+          string,
+          (req: unknown, extra: unknown) => Promise<unknown>
+        >;
+      }
+    )._requestHandlers;
+    const handler = handlers.get(method);
+    if (!handler) throw new Error(`no handler registered for ${method}`);
+    await handler({ jsonrpc: "2.0", id: 1, method, params }, extra);
+    // The SDK's event sink captures fire-and-forget; give it a tick to flush.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  test("attributes initialize, tools/list, and tools/call to the organization", async () => {
+    const captured: { event?: string }[] = [];
+
+    await simulateRequest(captured, "initialize", {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: { name: "test-client", version: "0.0.0" },
+    });
+    await simulateRequest(captured, "tools/list", {});
+    await simulateRequest(captured, "tools/call", {
+      name: "ping",
+      arguments: {
+        context: "Verifying org attribution on an integration path.",
+      },
+    });
+
+    const byEvent = new Map(captured.map((e) => [e.event, e]));
+    const initialize = byEvent.get("$mcp_initialize") as {
+      properties: Record<string, unknown>;
+    };
+    const toolsList = byEvent.get("$mcp_tools_list") as {
+      distinctId: string;
+      properties: Record<string, unknown>;
+    };
+    const toolCall = byEvent.get("$mcp_tool_call") as {
+      distinctId: string;
+      properties: Record<string, unknown>;
+    };
+
+    // Every captured event carries org attribution...
+    for (const event of [initialize, toolsList, toolCall]) {
+      expect(event).toBeDefined();
+      expect(event.properties.$groups).toEqual({ organization: ORG });
+      expect(event.properties.$process_person_profile).toBe(false);
+    }
+
+    // ...including tools/list: $groups arrives via eventProperties, which runs on
+    // every captured event, so the per-request server topology (fresh McpServer per
+    // HTTP request, cold SDK identity cache) can't leave it anonymous. Distinct ids
+    // stay session-scoped everywhere.
+    expect(toolsList.distinctId).toStartWith("ses_");
+    expect(toolCall.distinctId).toStartWith("ses_");
+
+    // identify stays unwired, so no $identify event is ever published.
+    expect(byEvent.has("$identify")).toBe(false);
+  });
+
+  test("stays anonymous when no connection context is attached", async () => {
+    const captured: { event?: string }[] = [];
+    const server = makeServer(captured);
+    const extra = {
+      authInfo: {
+        token: "sk_test",
+        clientId: "mcp-server",
+        scopes: ["apikey"],
+      },
+      signal: new AbortController().signal,
+      requestInfo: { headers: {} },
+    };
+    const handlers = (
+      server.server as unknown as {
+        _requestHandlers: Map<
+          string,
+          (req: unknown, extra: unknown) => Promise<unknown>
+        >;
+      }
+    )._requestHandlers;
+    await handlers.get("tools/list")!(
+      { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
+      extra,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const toolsList = captured.find((e) => e.event === "$mcp_tools_list") as {
+      distinctId: string;
+      properties: Record<string, unknown>;
+    };
+    expect(toolsList).toBeDefined();
+    expect(toolsList.properties.$groups).toBeUndefined();
+    expect(toolsList.properties.$process_person_profile).toBe(false);
+    expect(toolsList.distinctId).toStartWith("ses_");
   });
 });
