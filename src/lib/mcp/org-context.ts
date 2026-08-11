@@ -1,4 +1,4 @@
-import { createHmac } from "crypto";
+import { createHash } from "crypto";
 import type { UserIdentity } from "@posthog/mcp";
 import type { McpConnectionContext } from "@/lib/mcp/auth-context";
 
@@ -6,18 +6,12 @@ import type { McpConnectionContext } from "@/lib/mcp/auth-context";
 // ($process_person_profile is pinned false in the sanitizer), and the only person id
 // this server holds at request time — the Clerk subject — isn't the Kernel user id
 // other producers identify on. But the SDK needs a distinct id to carry the org group,
-// so derive an org-pseudonymous one: a keyed hash of the org id, stable for the
-// organization and joinable to neither the Clerk subject nor the Kernel user id nor
-// the org id itself. The mcporg_ prefix keeps it from being mistaken for a real
-// (org_…) id in PostHog.
+// so derive a synthetic one from the org id instead: stable for the organization, and
+// prefixed mcporg_ so it's never mistaken for a real (org_…) id in PostHog. The hash
+// is deliberately unkeyed — it isn't a secret; every event already carries the real
+// org id in $groups.organization.
 function orgPseudonymousDistinctId(orgId: string): string {
-  const secretKey = process.env.CLERK_SECRET_KEY;
-  if (!secretKey) {
-    throw new Error("CLERK_SECRET_KEY environment variable must be set");
-  }
-  // Domain-separate the message so this pseudonym can never collide with other
-  // HMAC uses keyed by the same secret elsewhere in the codebase.
-  const digest = createHmac("sha256", secretKey)
+  const digest = createHash("sha256")
     .update(`mcp-analytics-org:${orgId}`)
     .digest("hex");
   return `mcporg_${digest.slice(0, 32)}`;

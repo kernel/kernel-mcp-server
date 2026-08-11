@@ -2,8 +2,6 @@
 
 import { describe, expect, test } from "bun:test";
 
-process.env.CLERK_SECRET_KEY ??= "test-clerk-secret";
-
 import { resolveMcpOrgIdentity } from "@/lib/mcp/org-context";
 
 function extraWithOrg(orgId: string) {

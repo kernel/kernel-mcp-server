@@ -11,8 +11,6 @@ import {
   sanitizeMcpAnalyticsEvent,
 } from "@/lib/mcp/analytics";
 
-process.env.CLERK_SECRET_KEY ??= "test-clerk-secret";
-
 const privateContextProperty = "__mcp_connection_analytics_context";
 
 function initializeEvent(
