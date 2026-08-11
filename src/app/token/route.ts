@@ -172,6 +172,8 @@ export async function tokenRequest(
     );
   }
 
+  let persistedAuthorizationContext = authorizationContext;
+
   // Internal context parameters are not part of Clerk's token endpoint.
   params.delete("org_id");
   params.delete("project_id");
@@ -263,6 +265,12 @@ export async function tokenRequest(
           "Organization membership is no longer active",
         );
       }
+      if (!authorizationContext.clerk_user_id) {
+        persistedAuthorizationContext = {
+          ...authorizationContext,
+          clerk_user_id: payload.sub,
+        };
+      }
     }
 
     const issuedRefreshToken = clerkTokens.refresh_token;
@@ -294,7 +302,7 @@ export async function tokenRequest(
       ...(grantType === "refresh_token" && refreshToken
         ? { oldRefreshToken: refreshToken }
         : {}),
-      authorizationContext,
+      authorizationContext: persistedAuthorizationContext,
       jwtTtlSeconds: clerkTokens.expires_in,
       refreshTtlSeconds: REFRESH_TOKEN_ORG_TTL_SECONDS,
       ...(contextResult.requestCodeChallenge

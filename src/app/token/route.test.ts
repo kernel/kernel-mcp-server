@@ -241,6 +241,11 @@ describe("POST /token", () => {
     expect(deps.calls.memberships).toEqual([
       { clerkUserId: "user_1", clerkOrgId: "org_1" },
     ]);
+    expect(deps.calls.persisted[0].authorizationContext).toMatchObject({
+      clerk_user_id: "user_1",
+      clerk_org_id: "org_1",
+      access_scope: "organization",
+    });
   });
 
   test("fails closed on subject and membership mismatches", async () => {

@@ -5,6 +5,7 @@ import type { AuthorizeDependencies } from "./route";
 process.env.KERNEL_CLI_PROD_CLIENT_ID ??= "cli_prod";
 process.env.KERNEL_CLI_STAGING_CLIENT_ID ??= "cli_staging";
 process.env.KERNEL_CLI_DEV_CLIENT_ID ??= "cli_dev";
+process.env.OAUTH_LEGACY_NON_PKCE_CLIENT_IDS = "legacy_client";
 process.env.NEXT_PUBLIC_CLERK_DOMAIN ??= "clerk.example.test";
 
 const { authorizeRequest } = await import("./route");
@@ -144,16 +145,36 @@ describe("GET /authorize", () => {
     expect(deps.requestContexts).toHaveLength(0);
   });
 
-  test("requires PKCE for shared clients", async () => {
+  test("requires PKCE outside the legacy client allowlist", async () => {
     const deps = dependencies();
     const response = await authorizeRequest(
-      request("client_id=cli_prod&org_id=org_1&access_scope=organization"),
+      request("client_id=client_1&org_id=org_1&access_scope=organization"),
       deps.value,
     );
 
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ error: "invalid_request" });
     expect(deps.clientContexts).toHaveLength(0);
+  });
+
+  test("stores organization scope for an allowlisted legacy client", async () => {
+    const deps = dependencies();
+    const response = await authorizeRequest(
+      request("client_id=legacy_client&org_id=org_1&access_scope=organization"),
+      deps.value,
+    );
+
+    expect(response.status).toBe(307);
+    expect(deps.clientContexts).toEqual([
+      expect.objectContaining({
+        clientId: "legacy_client",
+        authorizationContext: expect.objectContaining({
+          clerk_user_id: "user_1",
+          clerk_org_id: "org_1",
+          access_scope: "organization",
+        }),
+      }),
+    ]);
   });
 
   test("rejects an organization that is not active for the user", async () => {

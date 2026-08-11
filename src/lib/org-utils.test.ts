@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
   type OAuthAuthorizationContext,
+  organizationAuthorizationContext,
   projectAuthorizationContext,
 } from "./oauth-context";
 import type { AuthorizationContextDependencies } from "./org-utils";
@@ -8,6 +9,7 @@ import type { AuthorizationContextDependencies } from "./org-utils";
 process.env.KERNEL_CLI_PROD_CLIENT_ID ??= "cli_prod";
 process.env.KERNEL_CLI_STAGING_CLIENT_ID ??= "cli_staging";
 process.env.KERNEL_CLI_DEV_CLIENT_ID ??= "cli_dev";
+process.env.OAUTH_LEGACY_NON_PKCE_CLIENT_IDS = "legacy_client";
 
 const { resolveAuthorizationContext } = await import("./org-utils");
 
@@ -78,10 +80,46 @@ describe("resolveAuthorizationContext", () => {
     expect(result.authorizationContext).toEqual(refreshContext);
   });
 
-  test("shared clients cannot supply authorization context directly", async () => {
+  test("does not resolve client context outside the legacy allowlist", async () => {
+    clientContext = projectAuthorizationContext({
+      clerkUserId: "user_1",
+      clerkOrgId: "org_1",
+      projectId: "proj_1",
+    });
+
     const result = await resolveContext({
       grantType: "authorization_code",
-      clientId: "cli_prod",
+      clientId: "client_1",
+    });
+
+    expect(result.authorizationContext).toBeNull();
+    expect(result.error?.status).toBe(400);
+  });
+
+  test("resolves organization context for an allowlisted legacy client", async () => {
+    clientContext = organizationAuthorizationContext({
+      clerkUserId: "user_1",
+      clerkOrgId: "org_1",
+    });
+
+    const result = await resolveContext({
+      grantType: "authorization_code",
+      clientId: "legacy_client",
+    });
+
+    expect(result.authorizationContext).toEqual(clientContext);
+  });
+
+  test("rejects project context for an allowlisted legacy client", async () => {
+    clientContext = projectAuthorizationContext({
+      clerkUserId: "user_1",
+      clerkOrgId: "org_1",
+      projectId: "proj_1",
+    });
+
+    const result = await resolveContext({
+      grantType: "authorization_code",
+      clientId: "legacy_client",
     });
 
     expect(result.authorizationContext).toBeNull();

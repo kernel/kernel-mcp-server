@@ -4,10 +4,11 @@ import {
   getAuthorizationContextForRefreshTokenSliding,
   getAuthorizationContextForRequest,
 } from "./redis";
-import { REFRESH_TOKEN_ORG_TTL_SECONDS } from "./const";
+import { isLegacyNonPkceClient, REFRESH_TOKEN_ORG_TTL_SECONDS } from "./const";
 import {
   deriveS256CodeChallenge,
   type OAuthAuthorizationContext,
+  ORGANIZATION_ACCESS_SCOPE,
 } from "./oauth-context";
 
 function createErrorResponse(
@@ -96,11 +97,32 @@ export async function resolveAuthorizationContext(
       }
     }
 
+    if (!isLegacyNonPkceClient(clientId)) {
+      return {
+        authorizationContext: null,
+        error: createErrorResponse(
+          "invalid_grant",
+          "PKCE authorization context required. Please re-authorize.",
+        ),
+      };
+    }
+
     try {
       const authorizationContext = await dependencies.getClientContext({
         clientId,
       });
-      if (authorizationContext) return { authorizationContext };
+      if (authorizationContext?.access_scope === ORGANIZATION_ACCESS_SCOPE) {
+        return { authorizationContext };
+      }
+      if (authorizationContext) {
+        return {
+          authorizationContext: null,
+          error: createErrorResponse(
+            "invalid_grant",
+            "Legacy non-PKCE authorization must be organization-wide.",
+          ),
+        };
+      }
     } catch (error) {
       console.error("[org-utils] failed to read client authorization context", {
         error,

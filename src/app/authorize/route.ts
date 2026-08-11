@@ -4,7 +4,7 @@ import {
   setAuthorizationContextForClientId,
   setAuthorizationContextForRequest,
 } from "@/lib/redis";
-import { SHARED_CLIENT_IDS } from "@/lib/const";
+import { isLegacyNonPkceClient, SHARED_CLIENT_IDS } from "@/lib/const";
 import {
   authorizationContextFromSelection,
   type OAuthAuthorizationContext,
@@ -151,10 +151,10 @@ export async function authorizeRequest(
       "PKCE requires code_challenge and code_challenge_method=S256",
     );
   }
-  if (SHARED_CLIENT_IDS.includes(clientId) && !codeChallenge) {
+  if (!codeChallenge && !isLegacyNonPkceClient(clientId)) {
     return errorResponse(
       "invalid_request",
-      "Shared OAuth clients require PKCE with S256",
+      "OAuth clients require PKCE with S256",
     );
   }
 
@@ -215,8 +215,7 @@ export async function authorizeRequest(
         ttlSeconds: 60 * 60,
       });
     } else {
-      // Compatibility for existing non-PKCE organization-wide clients. New
-      // project-scoped grants always require the PKCE-bound request mapping.
+      // Compatibility is limited to explicitly allowlisted legacy clients.
       await dependencies.setClientContext({
         clientId,
         authorizationContext,
