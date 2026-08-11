@@ -5,11 +5,13 @@ import {
   PostHogMCPAnalyticsProperty,
   type BeforeSendFn,
 } from "@posthog/mcp";
-import { resolveMcpOrgIdentity } from "@/lib/mcp/org-context";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { PostHog } from "posthog-node";
 import { z } from "zod";
-import type { McpConnectionAnalyticsContext } from "@/lib/mcp/auth-context";
+import type {
+  McpConnectionAnalyticsContext,
+  McpConnectionContext,
+} from "@/lib/mcp/auth-context";
 
 const projectToken = process.env.POSTHOG_PROJECT_TOKEN;
 
@@ -148,22 +150,13 @@ const ANALYTICS_CONTEXT_PROPERTY = "__mcp_connection_analytics_context";
 
 /**
  * Enforces the SENT_PROPERTIES allow-list on every event the SDK builds and sanitizes
- * the free-form intent. Pins $process_person_profile to false: the SDK omits the flag
- * once an identity is resolved, but the identity it resolves here is an org-pseudonymous
- * id (see resolveMcpOrgIdentity), never a person, so person processing stays off —
- * except when enrichMcpAnalyticsEvent deliberately un-pins it for the one event that
- * carries a real person id (an OAuth initialize). $identify is dropped outright:
- * PostHog rejects it in personless mode, and every capture event already carries
- * $groups independently of it.
+ * the free-form intent.
  */
 export const sanitizeMcpAnalyticsEvent: BeforeSendFn = (event) => {
   if (event.event === PostHogMCPAnalyticsEvent.Exception) return null;
-  if (event.event === PostHogMCPAnalyticsEvent.Identify) return null;
 
   const properties = event.properties;
   if (!properties) return event;
-
-  properties["$process_person_profile"] = false;
   enrichMcpAnalyticsEvent(event);
 
   for (const key of Object.keys(properties)) {
@@ -205,6 +198,18 @@ function connectionAnalyticsContext(extra: unknown) {
     | { connectionAnalytics?: McpConnectionAnalyticsContext }
     | undefined;
   return authExtra?.connectionAnalytics;
+}
+
+// The route resolves the Kernel connection context at auth time and attaches it to
+// authInfo.extra on every request, so reading the org id out of the request extras
+// adds no I/O.
+function connectionOrgId(extra: unknown) {
+  const authInfo = (extra as { authInfo?: { extra?: unknown } } | undefined)
+    ?.authInfo;
+  const authExtra = authInfo?.extra as
+    | { connectionContext?: McpConnectionContext | null }
+    | undefined;
+  return authExtra?.connectionContext?.scope.organizationId;
 }
 
 export function enrichMcpAnalyticsEvent(event: {
@@ -273,31 +278,24 @@ export function instrumentMcpAnalytics(
     // A failed tool call otherwise fans out into a second `$exception` event whose
     // `$exception_list` is built from the text the tool returned.
     enableExceptionAutocapture: false,
+    // Keep general MCP telemetry session-scoped. The initialize event alone uses the
+    // canonical Kernel user ID when auth context identifies a user; API-key principals
+    // remain anonymous because their principal ID identifies the credential itself.
+    identify: null,
     // Attributes every event to the caller's organization via $groups — the same
     // convention as the Kernel API's own events (api_call sends $groups with
-    // organization = org id). The distinct id the SDK requires in order to carry
-    // groups is an org-pseudonymous hash, never a person id, and beforeSend pins
-    // $process_person_profile to false, so no person profiles are created from it.
-    // The identity comes from the connection context the route resolves at auth
-    // time, so this adds no I/O per request. Events stay session-scoped beyond
-    // that: the initialize event alone uses the canonical Kernel user ID when auth
-    // context identifies a user (see enrichMcpAnalyticsEvent).
-    identify: (_request, extra) => resolveMcpOrgIdentity(extra),
-    // Stamps $groups on every captured event, not just the ones identify covers: the
-    // SDK only runs the identify callback on initialize and tools/call, and
-    // mcp-handler builds a fresh McpServer per HTTP request, so the SDK's per-session
-    // identity cache is always cold when a tools/list request arrives. eventProperties
-    // runs on tools/list too, and the identity read adds no I/O (the route resolved
-    // the connection context at auth time). On tool calls this overwrites the
-    // identity-derived $groups with the identical value.
+    // organization = org id). Stamped here rather than through the SDK's identify
+    // callback because identify never runs for tools/list, and mcp-handler builds a
+    // fresh McpServer per HTTP request, so the SDK's per-session identity cache is
+    // always cold when a tools/list request arrives.
     //
     // The connection analytics context is present only on initialize. beforeSend turns
     // this private, typed value into allow-listed analytics properties and removes it
     // before capture.
-    eventProperties: async (request, extra) => {
-      const identity = await resolveMcpOrgIdentity(extra);
-      const properties: Record<string, unknown> = identity
-        ? { $groups: identity.groups }
+    eventProperties: (request, extra) => {
+      const orgId = connectionOrgId(extra);
+      const properties: Record<string, unknown> = orgId
+        ? { $groups: { organization: orgId } }
         : {};
       if (request.method === "initialize") {
         const context = connectionAnalyticsContext(extra);

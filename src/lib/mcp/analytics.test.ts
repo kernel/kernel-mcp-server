@@ -191,41 +191,6 @@ describe("sanitizeMcpAnalyticsEvent", () => {
     expect(result?.properties.$groups).toEqual({ organization: "org_123" });
   });
 
-  test("pins $process_person_profile to false even when an identity is set", async () => {
-    // Once the SDK resolves an identity it stops setting the flag; the identity it
-    // resolves here is org-pseudonymous, never a person, so the flag must stay false.
-    const event = toolCallEvent({
-      $groups: { organization: "org_123" },
-    });
-    event.distinct_id = "mcporg_abc123";
-
-    const result = await sanitizeMcpAnalyticsEvent(event);
-
-    expect(result?.properties.$process_person_profile).toBe(false);
-  });
-
-  test("lets an OAuth initialize keep person processing and the canonical user id", async () => {
-    const event = toolCallEvent({
-      $process_person_profile: false,
-      [privateContextProperty]: {
-        authMethod: "oauth",
-        credentialScope: "organization",
-        connectionScope: "organization",
-        scopeSource: "credential",
-        organizationId: "org_123",
-        userId: "user_kernel_123",
-      },
-    });
-    event.event = PostHogMCPAnalyticsEvent.Initialize;
-
-    const result = await sanitizeMcpAnalyticsEvent(event);
-
-    expect(result?.distinct_id).toBe("user_kernel_123");
-    expect(result?.properties.$process_person_profile).toBeUndefined();
-    expect(result?.properties.$groups).toEqual({ organization: "org_123" });
-    expect(result?.properties[privateContextProperty]).toBeUndefined();
-  });
-
   test("drops call payloads and error text, keeps call metadata", async () => {
     const event = toolCallEvent({
       [PostHogMCPAnalyticsProperty.Parameters]: { stealth: true },
@@ -308,15 +273,6 @@ describe("sanitizeMcpAnalyticsEvent", () => {
     expect(result?.properties[PostHogMCPAnalyticsProperty.Intent]).toBe(
       "Wanted to fan one automation out over many sessions at once.",
     );
-  });
-
-  test("drops $identify events", async () => {
-    // The SDK publishes one per session once identify resolves; PostHog rejects it in
-    // personless mode, and every capture event already carries $groups independently.
-    const event = toolCallEvent({ $groups: { organization: "org_123" } });
-    event.event = PostHogMCPAnalyticsEvent.Identify;
-
-    expect(await sanitizeMcpAnalyticsEvent(event)).toBeNull();
   });
 
   test("drops $exception events", async () => {
@@ -412,16 +368,14 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       expect(event.properties.$process_person_profile).toBe(false);
     }
 
-    // ...including tools/list, which the identify callback never sees: the SDK only
-    // resolves identity on initialize and tools/call, so $groups must arrive via
-    // eventProperties here.
+    // ...including tools/list: $groups arrives via eventProperties, which runs on
+    // every captured event, so the per-request server topology (fresh McpServer per
+    // HTTP request, cold SDK identity cache) can't leave it anonymous. Distinct ids
+    // stay session-scoped everywhere.
     expect(toolsList.distinctId).toStartWith("ses_");
+    expect(toolCall.distinctId).toStartWith("ses_");
 
-    // Tool calls get the org-pseudonymous distinct id from identify.
-    expect(toolCall.distinctId).toStartWith("mcporg_");
-    expect(toolCall.distinctId).not.toContain(ORG);
-
-    // $identify is dropped, not sent.
+    // identify stays unwired, so no $identify event is ever published.
     expect(byEvent.has("$identify")).toBe(false);
   });
 
