@@ -147,7 +147,6 @@ function SelectOrgContent(): React.ReactElement {
     }
 
     const timeout = setTimeout(() => {
-      setSelectedScope("organization");
       void loadProjectsPage({
         organizationId: selectedOrgId,
         query: projectQuery,
@@ -200,7 +199,7 @@ function SelectOrgContent(): React.ReactElement {
   };
 
   const handleAuthorize = (): void => {
-    if (!selectedOrgId || isSelecting) return;
+    if (!selectedOrgId || !selectedScope || isSelecting) return;
     setIsSelecting(true);
 
     const authorizeUrl = new URL("/authorize", window.location.origin);
@@ -385,9 +384,10 @@ function SelectOrgContent(): React.ReactElement {
                       <input
                         type="search"
                         value={projectQuery}
-                        onChange={(event) =>
-                          setProjectQuery(event.target.value)
-                        }
+                        onChange={(event) => {
+                          setProjectQuery(event.target.value);
+                          setSelectedScope("");
+                        }}
                         placeholder="search projects"
                         aria-label="search projects"
                         className="w-full bg-transparent border-[0.5px] border-[#e1dccf] px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-foreground"
@@ -483,7 +483,11 @@ function SelectOrgContent(): React.ReactElement {
             onClick={
               stage === "organization" ? handleOrgConfirm : handleAuthorize
             }
-            disabled={isSelecting || !selectedOrgId}
+            disabled={
+              isSelecting ||
+              !selectedOrgId ||
+              (stage === "scope" && !selectedScope)
+            }
             className="flex-1 bg-foreground text-background py-3 px-4 font-[250] text-sm hover:underline disabled:opacity-50 cursor-pointer"
           >
             {isSelecting

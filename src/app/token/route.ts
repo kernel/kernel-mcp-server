@@ -1,11 +1,6 @@
 import { clerkClient, verifyToken } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
-import {
-  deleteAuthorizationContextForRequest,
-  rotateAuthorizationContextForRefreshToken,
-  setAuthorizationContextForJwt,
-  setAuthorizationContextForRefreshToken,
-} from "@/lib/redis";
+import { persistOAuthTokenContexts } from "@/lib/redis";
 import { resolveAuthorizationContext } from "@/lib/org-utils";
 import { REFRESH_TOKEN_ORG_TTL_SECONDS } from "@/lib/const";
 import { normalizeLocalhostUri } from "@/lib/auth-utils";
@@ -109,10 +104,7 @@ export interface TokenDependencies {
     options: { secretKey?: string },
   ) => Promise<{ sub?: string }>;
   hasMembership: typeof hasOrganizationMembership;
-  setJwtContext: typeof setAuthorizationContextForJwt;
-  setRefreshContext: typeof setAuthorizationContextForRefreshToken;
-  rotateRefreshContext: typeof rotateAuthorizationContextForRefreshToken;
-  deleteRequestContext: typeof deleteAuthorizationContextForRequest;
+  persistContexts: typeof persistOAuthTokenContexts;
 }
 
 const tokenDependencies: TokenDependencies = {
@@ -120,10 +112,7 @@ const tokenDependencies: TokenDependencies = {
   resolveContext: resolveAuthorizationContext,
   verify: verifyToken,
   hasMembership: hasOrganizationMembership,
-  setJwtContext: setAuthorizationContextForJwt,
-  setRefreshContext: setAuthorizationContextForRefreshToken,
-  rotateRefreshContext: rotateAuthorizationContextForRefreshToken,
-  deleteRequestContext: deleteAuthorizationContextForRequest,
+  persistContexts: persistOAuthTokenContexts,
 };
 
 export async function tokenRequest(
@@ -188,7 +177,28 @@ export async function tokenRequest(
   params.delete("project_id");
   params.delete("access_scope");
 
+  // New refresh contexts carry the user, so validate membership before Clerk
+  // rotates the one-time credential. Legacy org-only contexts still require
+  // post-exchange identity discovery until they expire.
+  const refreshContextUserId =
+    grantType === "refresh_token"
+      ? authorizationContext.clerk_user_id
+      : undefined;
+
   try {
+    if (
+      refreshContextUserId &&
+      !(await dependencies.hasMembership(
+        refreshContextUserId,
+        authorizationContext.clerk_org_id,
+      ))
+    ) {
+      return createErrorResponse(
+        "invalid_grant",
+        "Organization membership is no longer active",
+      );
+    }
+
     const clerkResponse = await dependencies.exchange(
       `https://${clerkDomain}/oauth/token`,
       {
@@ -223,34 +233,36 @@ export async function tokenRequest(
       );
     }
 
-    const payload = await dependencies.verify(clerkTokens.id_token, {
-      secretKey: process.env.CLERK_SECRET_KEY,
-    });
-    if (!payload.sub) {
-      return createErrorResponse(
-        "invalid_grant",
-        "OAuth provider returned a token without a subject",
-      );
-    }
-    if (
-      authorizationContext.clerk_user_id &&
-      authorizationContext.clerk_user_id !== payload.sub
-    ) {
-      return createErrorResponse(
-        "invalid_grant",
-        "OAuth token subject does not match authorization context",
-      );
-    }
-    if (
-      !(await dependencies.hasMembership(
-        payload.sub,
-        authorizationContext.clerk_org_id,
-      ))
-    ) {
-      return createErrorResponse(
-        "invalid_grant",
-        "Organization membership is no longer active",
-      );
+    if (!refreshContextUserId) {
+      const payload = await dependencies.verify(clerkTokens.id_token, {
+        secretKey: process.env.CLERK_SECRET_KEY,
+      });
+      if (!payload.sub) {
+        return createErrorResponse(
+          "invalid_grant",
+          "OAuth provider returned a token without a subject",
+        );
+      }
+      if (
+        authorizationContext.clerk_user_id &&
+        authorizationContext.clerk_user_id !== payload.sub
+      ) {
+        return createErrorResponse(
+          "invalid_grant",
+          "OAuth token subject does not match authorization context",
+        );
+      }
+      if (
+        !(await dependencies.hasMembership(
+          payload.sub,
+          authorizationContext.clerk_org_id,
+        ))
+      ) {
+        return createErrorResponse(
+          "invalid_grant",
+          "Organization membership is no longer active",
+        );
+      }
     }
 
     const issuedRefreshToken = clerkTokens.refresh_token;
@@ -263,55 +275,37 @@ export async function tokenRequest(
       );
     }
     const finalJwt = clerkTokens.id_token;
-    await dependencies.setJwtContext({
-      jwt: finalJwt,
-      authorizationContext,
-      ttlSeconds: clerkTokens.expires_in,
-    });
-
-    if (grantType === "authorization_code") {
-      await dependencies.setRefreshContext({
-        refreshToken: issuedRefreshToken,
-        authorizationContext,
-        ttlSeconds: REFRESH_TOKEN_ORG_TTL_SECONDS,
-      });
-    } else if (grantType === "refresh_token") {
-      if (!refreshToken) {
-        return createErrorResponse(
-          "invalid_grant",
-          "Missing required parameter: refresh_token",
-        );
-      }
-      await dependencies.rotateRefreshContext({
-        oldRefreshToken: refreshToken,
-        newRefreshToken: issuedRefreshToken,
-        authorizationContext,
-        ttlSeconds: REFRESH_TOKEN_ORG_TTL_SECONDS,
-      });
-    } else {
+    if (grantType === "refresh_token" && !refreshToken) {
+      return createErrorResponse(
+        "invalid_grant",
+        "Missing required parameter: refresh_token",
+      );
+    }
+    if (grantType !== "authorization_code" && grantType !== "refresh_token") {
       return createErrorResponse(
         "unsupported_grant_type",
         `Grant type '${grantType}' is not supported`,
       );
     }
 
-    if (contextResult.requestCodeChallenge) {
-      try {
-        await dependencies.deleteRequestContext({
-          clientId,
-          codeChallenge: contextResult.requestCodeChallenge,
-        });
-      } catch (error) {
-        // The provider has already consumed the authorization code and both
-        // token mappings are durable. Let the short pending-context TTL clean up.
-        console.warn(
-          "[token] failed to delete consumed authorization context",
-          {
-            error,
-          },
-        );
-      }
-    }
+    await dependencies.persistContexts({
+      jwt: finalJwt,
+      newRefreshToken: issuedRefreshToken,
+      ...(grantType === "refresh_token" && refreshToken
+        ? { oldRefreshToken: refreshToken }
+        : {}),
+      authorizationContext,
+      jwtTtlSeconds: clerkTokens.expires_in,
+      refreshTtlSeconds: REFRESH_TOKEN_ORG_TTL_SECONDS,
+      ...(contextResult.requestCodeChallenge
+        ? {
+            consumedRequest: {
+              clientId,
+              codeChallenge: contextResult.requestCodeChallenge,
+            },
+          }
+        : {}),
+    });
 
     return NextResponse.json(
       {

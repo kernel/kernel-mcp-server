@@ -30,6 +30,7 @@ function dependencies({
   subject = "user_1",
   member = true,
   clerkStatus = 200,
+  membershipError,
   clerkTokens = {
     access_token: "clerk-access",
     id_token: "header.payload.signature",
@@ -44,15 +45,15 @@ function dependencies({
   subject?: string;
   member?: boolean;
   clerkStatus?: number;
+  membershipError?: Error;
   clerkTokens?: Record<string, unknown>;
 } = {}) {
   const calls = {
     resolve: [] as Parameters<TokenDependencies["resolveContext"]>[0][],
     exchanges: [] as URLSearchParams[],
-    jwt: [] as Parameters<TokenDependencies["setJwtContext"]>[0][],
-    refresh: [] as Parameters<TokenDependencies["setRefreshContext"]>[0][],
-    rotate: [] as Parameters<TokenDependencies["rotateRefreshContext"]>[0][],
-    deleted: [] as Parameters<TokenDependencies["deleteRequestContext"]>[0][],
+    verifications: [] as string[],
+    memberships: [] as Array<{ clerkUserId: string; clerkOrgId: string }>,
+    persisted: [] as Parameters<TokenDependencies["persistContexts"]>[0][],
   };
 
   return {
@@ -73,19 +74,17 @@ function dependencies({
         );
         return Response.json(clerkTokens, { status: clerkStatus });
       },
-      verify: async () => ({ sub: subject }),
-      hasMembership: async () => member,
-      setJwtContext: async (value) => {
-        calls.jwt.push(value);
+      verify: async (token) => {
+        calls.verifications.push(token);
+        return { sub: subject };
       },
-      setRefreshContext: async (value) => {
-        calls.refresh.push(value);
+      hasMembership: async (clerkUserId, clerkOrgId) => {
+        calls.memberships.push({ clerkUserId, clerkOrgId });
+        if (membershipError) throw membershipError;
+        return member;
       },
-      rotateRefreshContext: async (value) => {
-        calls.rotate.push(value);
-      },
-      deleteRequestContext: async (value) => {
-        calls.deleted.push(value);
+      persistContexts: async (value) => {
+        calls.persisted.push(value);
       },
     } satisfies TokenDependencies,
   };
@@ -103,6 +102,7 @@ describe("POST /token", () => {
         org_id: "forged-org",
         access_scope: "project",
         project_id: "forged-project",
+        refresh_token: "unrelated-refresh",
       }),
       deps.value,
     );
@@ -114,14 +114,23 @@ describe("POST /token", () => {
       org_id: "org_1",
       access_scope: "organization",
     });
-    expect(deps.calls.jwt).toHaveLength(1);
-    expect(deps.calls.refresh).toHaveLength(1);
-    expect(deps.calls.deleted).toEqual([
-      { clientId: "client_1", codeChallenge: "derived-challenge" },
+    expect(deps.calls.persisted).toEqual([
+      expect.objectContaining({
+        jwt: "header.payload.signature",
+        newRefreshToken: "refresh-new",
+        authorizationContext: expect.objectContaining({
+          access_scope: "organization",
+        }),
+        consumedRequest: {
+          clientId: "client_1",
+          codeChallenge: "derived-challenge",
+        },
+      }),
     ]);
     expect(deps.calls.exchanges[0].has("org_id")).toBe(false);
     expect(deps.calls.exchanges[0].has("project_id")).toBe(false);
     expect(deps.calls.exchanges[0].has("access_scope")).toBe(false);
+    expect(deps.calls.persisted[0]).not.toHaveProperty("oldRefreshToken");
   });
 
   test("returns the server-bound project scope", async () => {
@@ -175,7 +184,7 @@ describe("POST /token", () => {
       clientId: "cli_prod",
       refreshToken: "refresh-old",
     });
-    expect(deps.calls.rotate).toEqual([
+    expect(deps.calls.persisted).toEqual([
       expect.objectContaining({
         oldRefreshToken: "refresh-old",
         newRefreshToken: "refresh-new",
@@ -185,8 +194,53 @@ describe("POST /token", () => {
         }),
       }),
     ]);
+    expect(deps.calls.memberships).toEqual([
+      { clerkUserId: "user_1", clerkOrgId: "org_1" },
+    ]);
+    expect(deps.calls.verifications).toHaveLength(0);
     expect(deps.calls.exchanges[0].has("org_id")).toBe(false);
     expect(deps.calls.exchanges[0].has("project_id")).toBe(false);
+  });
+
+  test("checks refresh membership before asking Clerk to rotate", async () => {
+    const deps = dependencies({
+      membershipError: new Error("clerk unavailable"),
+    });
+    const response = await tokenRequest(
+      request({
+        grant_type: "refresh_token",
+        client_id: "client_1",
+        refresh_token: "refresh-old",
+      }),
+      deps.value,
+    );
+
+    expect(response.status).toBe(500);
+    expect(deps.calls.exchanges).toHaveLength(0);
+    expect(deps.calls.persisted).toHaveLength(0);
+  });
+
+  test("keeps post-exchange validation for legacy refresh context", async () => {
+    const deps = dependencies({
+      authorizationContext: organizationAuthorizationContext({
+        clerkOrgId: "org_1",
+      }),
+    });
+    const response = await tokenRequest(
+      request({
+        grant_type: "refresh_token",
+        client_id: "client_1",
+        refresh_token: "refresh-old",
+      }),
+      deps.value,
+    );
+
+    expect(response.status).toBe(200);
+    expect(deps.calls.exchanges).toHaveLength(1);
+    expect(deps.calls.verifications).toEqual(["header.payload.signature"]);
+    expect(deps.calls.memberships).toEqual([
+      { clerkUserId: "user_1", clerkOrgId: "org_1" },
+    ]);
   });
 
   test("fails closed on subject and membership mismatches", async () => {
@@ -201,7 +255,7 @@ describe("POST /token", () => {
       wrongSubject.value,
     );
     expect(subjectResponse.status).toBe(400);
-    expect(wrongSubject.calls.jwt).toHaveLength(0);
+    expect(wrongSubject.calls.persisted).toHaveLength(0);
 
     const removedMember = dependencies({ member: false });
     const memberResponse = await tokenRequest(
@@ -213,7 +267,8 @@ describe("POST /token", () => {
       removedMember.value,
     );
     expect(memberResponse.status).toBe(400);
-    expect(removedMember.calls.rotate).toHaveLength(0);
+    expect(removedMember.calls.exchanges).toHaveLength(0);
+    expect(removedMember.calls.persisted).toHaveLength(0);
   });
 
   test("does not persist partial context when provider response is invalid", async () => {
@@ -228,7 +283,7 @@ describe("POST /token", () => {
       providerFailure.value,
     );
     expect(failedResponse.status).toBe(400);
-    expect(providerFailure.calls.jwt).toHaveLength(0);
+    expect(providerFailure.calls.persisted).toHaveLength(0);
 
     const missingRefresh = dependencies({
       clerkTokens: {
@@ -248,6 +303,6 @@ describe("POST /token", () => {
       missingRefresh.value,
     );
     expect(missingRefreshResponse.status).toBe(400);
-    expect(missingRefresh.calls.jwt).toHaveLength(0);
+    expect(missingRefresh.calls.persisted).toHaveLength(0);
   });
 });

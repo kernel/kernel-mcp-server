@@ -155,19 +155,6 @@ export async function getAuthorizationContextForRequest({
   return value ? parseAuthorizationContext(value) : null;
 }
 
-export async function deleteAuthorizationContextForRequest({
-  clientId,
-  codeChallenge,
-}: {
-  clientId: string;
-  codeChallenge: string;
-}): Promise<void> {
-  await ensureConnected();
-  await withReconnect(() =>
-    client.del(authorizationRequestKey(clientId, codeChallenge)),
-  );
-}
-
 export async function setAuthorizationContextForClientId({
   clientId,
   authorizationContext,
@@ -196,27 +183,6 @@ export async function getAuthorizationContextForClientId({
   await ensureConnected();
   const value = await withReconnect(() => client.get(`client:${clientId}`));
   return value ? parseAuthorizationContext(value) : null;
-}
-
-export async function setAuthorizationContextForJwt({
-  jwt,
-  authorizationContext,
-  ttlSeconds,
-}: {
-  jwt: string;
-  authorizationContext: OAuthAuthorizationContext;
-  ttlSeconds: number;
-}): Promise<void> {
-  await ensureConnected();
-  const hashedJwt = hashJwt(jwt);
-  const key = `jwt:${hashedJwt}`;
-  await withReconnect(() =>
-    client.setEx(
-      key,
-      ttlSeconds,
-      serializeAuthorizationContext(authorizationContext),
-    ),
-  );
 }
 
 export { client as redisClient };
@@ -277,26 +243,6 @@ export async function hasMcpAppsClient({
   return value !== null;
 }
 
-export async function setAuthorizationContextForRefreshToken({
-  refreshToken,
-  authorizationContext,
-  ttlSeconds,
-}: {
-  refreshToken: string;
-  authorizationContext: OAuthAuthorizationContext;
-  ttlSeconds: number;
-}): Promise<void> {
-  await ensureConnected();
-  const key = `refresh:${hashOpaqueToken(refreshToken)}`;
-  await withReconnect(() =>
-    client.setEx(
-      key,
-      ttlSeconds,
-      serializeAuthorizationContext(authorizationContext),
-    ),
-  );
-}
-
 export async function getAuthorizationContextForRefreshTokenSliding({
   refreshToken,
   ttlSeconds,
@@ -312,29 +258,50 @@ export async function getAuthorizationContextForRefreshTokenSliding({
   return value ? parseAuthorizationContext(value) : null;
 }
 
-export async function rotateAuthorizationContextForRefreshToken({
-  oldRefreshToken,
+export async function persistOAuthTokenContexts({
+  jwt,
   newRefreshToken,
+  oldRefreshToken,
   authorizationContext,
-  ttlSeconds,
+  jwtTtlSeconds,
+  refreshTtlSeconds,
+  consumedRequest,
 }: {
-  oldRefreshToken: string;
+  jwt: string;
   newRefreshToken: string;
+  oldRefreshToken?: string;
   authorizationContext: OAuthAuthorizationContext;
-  ttlSeconds: number;
+  jwtTtlSeconds: number;
+  refreshTtlSeconds: number;
+  consumedRequest?: { clientId: string; codeChallenge: string };
 }): Promise<void> {
   await ensureConnected();
-  const oldKey = `refresh:${hashOpaqueToken(oldRefreshToken)}`;
-  const newKey = `refresh:${hashOpaqueToken(newRefreshToken)}`;
+  const jwtKey = `jwt:${hashJwt(jwt)}`;
+  const newRefreshKey = `refresh:${hashOpaqueToken(newRefreshToken)}`;
+  const oldRefreshKey = oldRefreshToken
+    ? `refresh:${hashOpaqueToken(oldRefreshToken)}`
+    : undefined;
   const value = serializeAuthorizationContext(authorizationContext);
 
-  if (oldKey === newKey) {
-    await withReconnect(() => client.setEx(newKey, ttlSeconds, value));
-    return;
-  }
-
   await withReconnect(async () => {
-    await client.multi().setEx(newKey, ttlSeconds, value).del(oldKey).exec();
+    const transaction = client
+      .multi()
+      .setEx(jwtKey, jwtTtlSeconds, value)
+      .setEx(newRefreshKey, refreshTtlSeconds, value);
+
+    if (oldRefreshKey && oldRefreshKey !== newRefreshKey) {
+      transaction.del(oldRefreshKey);
+    }
+    if (consumedRequest) {
+      transaction.del(
+        authorizationRequestKey(
+          consumedRequest.clientId,
+          consumedRequest.codeChallenge,
+        ),
+      );
+    }
+
+    await transaction.exec();
   });
 }
 
