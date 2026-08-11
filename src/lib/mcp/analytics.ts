@@ -254,10 +254,13 @@ export function isMcpAnalyticsEnabled() {
   return posthog !== null;
 }
 
-export function instrumentMcpAnalytics(server: McpServer) {
-  if (!posthog) return;
+export function instrumentMcpAnalytics(
+  server: McpServer,
+  client: PostHog | null = posthog,
+) {
+  if (!client) return;
 
-  instrument(server, posthog, {
+  instrument(server, client, {
     // Records a `$mcp_missing_capability` event, carrying the reported gap as $mcp_intent,
     // when an agent calls the tool registered by registerMissingCapabilityTool.
     reportMissing: true,
@@ -280,12 +283,27 @@ export function instrumentMcpAnalytics(server: McpServer) {
     // that: the initialize event alone uses the canonical Kernel user ID when auth
     // context identifies a user (see enrichMcpAnalyticsEvent).
     identify: (_request, extra) => resolveMcpOrgIdentity(extra),
-    // Connection context is present only on initialize. beforeSend turns this private,
-    // typed value into allow-listed analytics properties and removes it before capture.
-    eventProperties: (request, extra) => {
-      if (request.method !== "initialize") return null;
-      const context = connectionAnalyticsContext(extra);
-      return context ? { [ANALYTICS_CONTEXT_PROPERTY]: context } : null;
+    // Stamps $groups on every captured event, not just the ones identify covers: the
+    // SDK only runs the identify callback on initialize and tools/call, and
+    // mcp-handler builds a fresh McpServer per HTTP request, so the SDK's per-session
+    // identity cache is always cold when a tools/list request arrives. eventProperties
+    // runs on tools/list too, and the identity read adds no I/O (the route resolved
+    // the connection context at auth time). On tool calls this overwrites the
+    // identity-derived $groups with the identical value.
+    //
+    // The connection analytics context is present only on initialize. beforeSend turns
+    // this private, typed value into allow-listed analytics properties and removes it
+    // before capture.
+    eventProperties: async (request, extra) => {
+      const identity = await resolveMcpOrgIdentity(extra);
+      const properties: Record<string, unknown> = identity
+        ? { $groups: identity.groups }
+        : {};
+      if (request.method === "initialize") {
+        const context = connectionAnalyticsContext(extra);
+        if (context) properties[ANALYTICS_CONTEXT_PROPERTY] = context;
+      }
+      return Object.keys(properties).length > 0 ? properties : null;
     },
     // No part of a call is safe to capture: arguments carry free-form input (credential
     // field maps, curl headers and bodies, typed text, shell commands, Playwright

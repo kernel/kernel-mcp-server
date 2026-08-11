@@ -1,12 +1,17 @@
 import { describe, expect, test } from "bun:test";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { PostHog } from "posthog-node";
 import {
   PostHogMCPAnalyticsEvent,
   PostHogMCPAnalyticsProperty,
 } from "@posthog/mcp";
 import {
   enrichMcpAnalyticsEvent,
+  instrumentMcpAnalytics,
   sanitizeMcpAnalyticsEvent,
 } from "@/lib/mcp/analytics";
+
+process.env.CLERK_SECRET_KEY ??= "test-clerk-secret";
 
 const privateContextProperty = "__mcp_connection_analytics_context";
 
@@ -194,7 +199,6 @@ describe("sanitizeMcpAnalyticsEvent", () => {
     const event = toolCallEvent({
       $groups: { organization: "org_123" },
     });
-    delete event.properties.$process_person_profile;
     event.distinct_id = "mcporg_abc123";
 
     const result = await sanitizeMcpAnalyticsEvent(event);
@@ -322,5 +326,140 @@ describe("sanitizeMcpAnalyticsEvent", () => {
     event.event = PostHogMCPAnalyticsEvent.Exception;
 
     expect(await sanitizeMcpAnalyticsEvent(event)).toBeNull();
+  });
+});
+
+describe("instrumentMcpAnalytics (SDK integration)", () => {
+  const ORG = "org_integration";
+
+  // mcp-handler builds a fresh McpServer per HTTP request, so each simulated request
+  // gets its own instrumented server and the SDK's per-session identity cache starts
+  // cold — this is exactly the deployed topology.
+  function makeServer(captured: { event?: string }[]) {
+    const server = new McpServer({ name: "test", version: "0.0.0" });
+    const fakePosthog = {
+      capture: (event: unknown) => captured.push(event as { event?: string }),
+    } as unknown as PostHog;
+    instrumentMcpAnalytics(server, fakePosthog);
+    server.tool("ping", {}, async () => ({
+      content: [{ type: "text" as const, text: "pong" }],
+    }));
+    return server;
+  }
+
+  async function simulateRequest(
+    captured: { event?: string }[],
+    method: string,
+    params: Record<string, unknown>,
+  ) {
+    const server = makeServer(captured);
+    const extra = {
+      authInfo: {
+        token: "sk_test",
+        clientId: "mcp-server",
+        scopes: ["apikey"],
+        extra: { connectionContext: { scope: { organizationId: ORG } } },
+      },
+      signal: new AbortController().signal,
+      requestInfo: { headers: {} },
+    };
+    const handlers = (
+      server.server as unknown as {
+        _requestHandlers: Map<
+          string,
+          (req: unknown, extra: unknown) => Promise<unknown>
+        >;
+      }
+    )._requestHandlers;
+    const handler = handlers.get(method);
+    if (!handler) throw new Error(`no handler registered for ${method}`);
+    await handler({ jsonrpc: "2.0", id: 1, method, params }, extra);
+    // The SDK's event sink captures fire-and-forget; give it a tick to flush.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  test("attributes initialize, tools/list, and tools/call to the organization", async () => {
+    const captured: { event?: string }[] = [];
+
+    await simulateRequest(captured, "initialize", {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: { name: "test-client", version: "0.0.0" },
+    });
+    await simulateRequest(captured, "tools/list", {});
+    await simulateRequest(captured, "tools/call", {
+      name: "ping",
+      arguments: {
+        context: "Verifying org attribution on an integration path.",
+      },
+    });
+
+    const byEvent = new Map(captured.map((e) => [e.event, e]));
+    const initialize = byEvent.get("$mcp_initialize") as {
+      properties: Record<string, unknown>;
+    };
+    const toolsList = byEvent.get("$mcp_tools_list") as {
+      distinctId: string;
+      properties: Record<string, unknown>;
+    };
+    const toolCall = byEvent.get("$mcp_tool_call") as {
+      distinctId: string;
+      properties: Record<string, unknown>;
+    };
+
+    // Every captured event carries org attribution...
+    for (const event of [initialize, toolsList, toolCall]) {
+      expect(event).toBeDefined();
+      expect(event.properties.$groups).toEqual({ organization: ORG });
+      expect(event.properties.$process_person_profile).toBe(false);
+    }
+
+    // ...including tools/list, which the identify callback never sees: the SDK only
+    // resolves identity on initialize and tools/call, so $groups must arrive via
+    // eventProperties here.
+    expect(toolsList.distinctId).toStartWith("ses_");
+
+    // Tool calls get the org-pseudonymous distinct id from identify.
+    expect(toolCall.distinctId).toStartWith("mcporg_");
+    expect(toolCall.distinctId).not.toContain(ORG);
+
+    // $identify is dropped, not sent.
+    expect(byEvent.has("$identify")).toBe(false);
+  });
+
+  test("stays anonymous when no connection context is attached", async () => {
+    const captured: { event?: string }[] = [];
+    const server = makeServer(captured);
+    const extra = {
+      authInfo: {
+        token: "sk_test",
+        clientId: "mcp-server",
+        scopes: ["apikey"],
+      },
+      signal: new AbortController().signal,
+      requestInfo: { headers: {} },
+    };
+    const handlers = (
+      server.server as unknown as {
+        _requestHandlers: Map<
+          string,
+          (req: unknown, extra: unknown) => Promise<unknown>
+        >;
+      }
+    )._requestHandlers;
+    await handlers.get("tools/list")!(
+      { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} },
+      extra,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const toolsList = captured.find((e) => e.event === "$mcp_tools_list") as {
+      distinctId: string;
+      properties: Record<string, unknown>;
+    };
+    expect(toolsList).toBeDefined();
+    expect(toolsList.properties.$groups).toBeUndefined();
+    expect(toolsList.properties.$process_person_profile).toBe(false);
+    expect(toolsList.distinctId).toStartWith("ses_");
   });
 });

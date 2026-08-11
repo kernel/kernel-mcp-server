@@ -15,7 +15,12 @@ function orgPseudonymousDistinctId(orgId: string): string {
   if (!secretKey) {
     throw new Error("CLERK_SECRET_KEY environment variable must be set");
   }
-  return `mcporg_${createHmac("sha256", secretKey).update(orgId).digest("hex").slice(0, 32)}`;
+  // Domain-separate the message so this pseudonym can never collide with other
+  // HMAC uses keyed by the same secret elsewhere in the codebase.
+  const digest = createHmac("sha256", secretKey)
+    .update(`mcp-analytics-org:${orgId}`)
+    .digest("hex");
+  return `mcporg_${digest.slice(0, 32)}`;
 }
 
 /**
