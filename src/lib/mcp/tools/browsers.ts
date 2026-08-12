@@ -220,31 +220,22 @@ const telemetryDurationUnitsInMilliseconds = {
   h: 3_600_000,
 } as const;
 
+const telemetryDurationPart =
+  /((?:\d+(?:\.\d*)?|\.\d+))(ns|us|µs|μs|ms|s|m|h)/g;
+const telemetryDuration =
+  /^[+-]?(?:0|(?:(?:\d+(?:\.\d*)?|\.\d+)(?:ns|us|µs|μs|ms|s|m|h))+)$/;
+
 function resolveTelemetryTimeParam(value: string, now: Date) {
-  if (/^[+-]?0$/.test(value)) return now.toISOString();
+  if (!telemetryDuration.test(value)) return value;
 
   const sign = value.startsWith("-") ? -1 : 1;
-  const duration = value.match(/^[+-]?(.*)$/)?.[1] ?? value;
-  const parts = duration.matchAll(
-    /((?:\d+(?:\.\d*)?|\.\d+))(ns|us|µs|μs|ms|s|m|h)/g,
-  );
   let milliseconds = 0;
-  let parsedLength = 0;
-  for (const part of parts) {
-    if (part.index !== parsedLength) return value;
+  for (const [, amount, unit] of value.matchAll(telemetryDurationPart)) {
     milliseconds +=
-      Number(part[1]) *
+      Number(amount) *
       telemetryDurationUnitsInMilliseconds[
-        part[2] as keyof typeof telemetryDurationUnitsInMilliseconds
+        unit as keyof typeof telemetryDurationUnitsInMilliseconds
       ];
-    parsedLength += part[0].length;
-  }
-  if (
-    parsedLength !== duration.length ||
-    parsedLength === 0 ||
-    !Number.isFinite(milliseconds)
-  ) {
-    return value;
   }
   const resolved = new Date(now.getTime() - sign * milliseconds);
   return Number.isNaN(resolved.getTime()) ? value : resolved.toISOString();

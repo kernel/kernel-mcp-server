@@ -176,7 +176,33 @@ describe("manage_browsers telemetry", () => {
     }
   });
 
-  test("serves browser resources through injected dependencies", async () => {
+  test("documents compact telemetry recovery on the tool schema", async () => {
+    const kernelClient = { browsers: {} };
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      kernelClient,
+    );
+
+    try {
+      const tools = await client.listTools();
+      const tool = tools.tools.find(({ name }) => name === "manage_browsers");
+      const compact = tool?.inputSchema.properties?.compact as
+        | { description?: string }
+        | undefined;
+
+      expect(compact?.description).toContain(
+        "body, headers, post_data, or png",
+      );
+      expect(compact?.description).toContain("exact page");
+      expect(compact?.description).toContain("raw_replay");
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe("browser resources", () => {
+  test("uses injected dependencies", async () => {
     const kernelClient = {
       browsers: {
         list: async function* () {
@@ -204,30 +230,6 @@ describe("manage_browsers telemetry", () => {
       expect(JSON.parse(item.contents[0].text)).toEqual({
         session_id: "brr_123",
       });
-    } finally {
-      await close();
-    }
-  });
-
-  test("documents compact telemetry recovery on the tool schema", async () => {
-    const kernelClient = { browsers: {} };
-    const { client, close } = await connectTestMcp(
-      registerBrowserCapabilities,
-      kernelClient,
-    );
-
-    try {
-      const tools = await client.listTools();
-      const tool = tools.tools.find(({ name }) => name === "manage_browsers");
-      const compact = tool?.inputSchema.properties?.compact as
-        | { description?: string }
-        | undefined;
-
-      expect(compact?.description).toContain(
-        "body, headers, post_data, or png",
-      );
-      expect(compact?.description).toContain("exact page");
-      expect(compact?.description).toContain("raw_replay");
     } finally {
       await close();
     }
