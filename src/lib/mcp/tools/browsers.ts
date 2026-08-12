@@ -209,64 +209,58 @@ type BrowserTelemetryReadParams = {
   compact?: boolean;
 };
 
-const telemetryDurationUnitsInMilliseconds = {
-  ns: 1 / 1_000_000,
-  us: 1 / 1_000,
-  µs: 1 / 1_000,
-  μs: 1 / 1_000,
-  ms: 1,
-  s: 1_000,
-  m: 60_000,
-  h: 3_600_000,
-} as const;
+const maxRawTelemetryEvents = 5;
+// Producers cap each archived record at 1,000,000 bytes. This leaves room for
+// the page envelope while ensuring one response cannot carry multiple max-size records.
+const maxRawTelemetryResponseBytes = 1024 * 1024;
 
-const telemetryDurationPart =
-  /((?:\d+(?:\.\d*)?|\.\d+))(ns|us|µs|μs|ms|s|m|h)/g;
-const telemetryDuration =
-  /^[+-]?(?:0|(?:(?:\d+(?:\.\d*)?|\.\d+)(?:ns|us|µs|μs|ms|s|m|h))+)$/;
-
-function resolveTelemetryTimeParam(value: string, now: Date) {
-  if (!telemetryDuration.test(value)) return value;
-
-  const sign = value.startsWith("-") ? -1 : 1;
-  let milliseconds = 0;
-  for (const [, amount, unit] of value.matchAll(telemetryDurationPart)) {
-    milliseconds +=
-      Number(amount) *
-      telemetryDurationUnitsInMilliseconds[
-        unit as keyof typeof telemetryDurationUnitsInMilliseconds
-      ];
+function rawTelemetryPageError(items: TelemetryEnvelope[]) {
+  for (const { event } of items) {
+    const data = "data" in event ? event.data : undefined;
+    if (data && typeof data === "object" && "png" in data) {
+      return "Raw screenshot PNGs are not available in JSON telemetry responses.";
+    }
   }
-  const resolved = new Date(now.getTime() - sign * milliseconds);
-  return Number.isNaN(resolved.getTime()) ? value : resolved.toISOString();
+  return undefined;
 }
 
 async function readBrowserTelemetry(
   client: KernelClient,
   params: BrowserTelemetryReadParams,
 ) {
-  // Pin the page to one absolute window so raw_replay cannot move as new
-  // telemetry arrives or relative time bounds age.
-  const now = new Date();
-  const query: TelemetryEventsQuery = {
-    limit: params.limit ?? 100,
-    until: params.until
-      ? resolveTelemetryTimeParam(params.until, now)
-      : now.toISOString(),
-    order: params.order ?? "asc",
-  };
-  if (params.categories) query.category = params.categories;
-  if (params.offset !== undefined) {
-    query.offset = params.offset;
-  } else if (params.since !== undefined) {
-    query.since = resolveTelemetryTimeParam(params.since, now);
+  if (params.compact === false) {
+    if (params.limit === undefined || params.limit > maxRawTelemetryEvents) {
+      return errorResponse(
+        `Error: compact=false requires an explicit limit between 1 and ${maxRawTelemetryEvents}.`,
+      );
+    }
+    if (!params.categories) {
+      return errorResponse(
+        "Error: compact=false requires at least one explicit category.",
+      );
+    }
+    if (params.categories.includes("screenshot")) {
+      return errorResponse(
+        "Error: compact=false does not support the screenshot category because PNGs are not returned in JSON.",
+      );
+    }
   }
 
+  const query: TelemetryEventsQuery = { limit: params.limit ?? 100 };
+  if (params.categories) query.category = params.categories;
+  if (params.offset !== undefined) query.offset = params.offset;
+  if (params.since !== undefined) query.since = params.since;
+  if (params.until !== undefined) query.until = params.until;
+  if (params.order !== undefined) query.order = params.order;
+
   // Avoid the API's five-minute default. The archive can't predate the
-  // session, so the epoch reads the full session without a browser lookup.
+  // session, so the epoch reads the full session without a browser lookup;
+  // until-only reads already start at the stream head and desc reads anchor
+  // at the stream tail.
   if (
     query.offset === undefined &&
     query.since === undefined &&
+    query.until === undefined &&
     query.order !== "desc"
   ) {
     query.since = "1970-01-01T00:00:00Z";
@@ -306,33 +300,50 @@ async function readBrowserTelemetry(
         })
       : ascPagingNote;
 
-  const rawReplay =
-    params.compact === false
+  const rawReplayBestEffort =
+    params.compact === false ||
+    !query.category ||
+    query.category.includes("screenshot")
       ? undefined
       : {
           action: "get_telemetry",
           session_id: params.session_id,
           ...(params.project_id && { project_id: params.project_id }),
           ...(query.category && { categories: query.category }),
-          limit: query.limit,
+          limit: Math.min(query.limit ?? 100, maxRawTelemetryEvents),
           ...(query.offset !== undefined && { offset: query.offset }),
           ...(query.since && { since: query.since }),
           ...(query.until && { until: query.until }),
-          order: query.order,
+          ...(query.order && { order: query.order }),
           compact: false,
         };
 
+  const response = {
+    items,
+    has_more: page.has_more,
+    next_offset: page.next_offset,
+    ...(rawReplayBestEffort && {
+      raw_replay_best_effort: rawReplayBestEffort,
+    }),
+    ...(note && { note }),
+  };
+  if (params.compact === false) {
+    const rawError = rawTelemetryPageError(pageItems);
+    if (rawError) return errorResponse(`Error: ${rawError}`);
+  }
+
   // Single-line JSON rather than the pretty-printed house helpers: a page
   // carries up to 100 events and indentation would inflate the token cost.
-  return textResponse(
-    JSON.stringify({
-      items,
-      has_more: page.has_more,
-      next_offset: page.next_offset,
-      ...(rawReplay && { raw_replay: rawReplay }),
-      ...(note && { note }),
-    }),
-  );
+  const serializedResponse = JSON.stringify(response);
+  if (
+    params.compact === false &&
+    Buffer.byteLength(serializedResponse, "utf8") > maxRawTelemetryResponseBytes
+  ) {
+    return errorResponse(
+      `Error: raw telemetry response exceeds ${maxRawTelemetryResponseBytes} bytes. Reduce limit or narrow the category and time window.`,
+    );
+  }
+  return textResponse(serializedResponse);
 }
 
 function browserSessionNextActions(sessionId: string) {
@@ -420,7 +431,7 @@ export function registerBrowserCapabilities(
   // manage_browsers -- Manage browser sessions and read archived telemetry
   server.tool(
     "manage_browsers",
-    'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished. get_telemetry compacts events by default; set compact=false on a narrowly filtered page when raw headers, request data, response bodies, or other omitted fields are needed.',
+    'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
     {
       ...projectSelectionInputSchema(),
       action: z
@@ -590,7 +601,7 @@ export function registerBrowserCapabilities(
       compact: z
         .boolean()
         .describe(
-          "(get_telemetry) Defaults to true. Compact items flatten the event envelope, add an ISO time, and omit data fields named body, headers, post_data, or png plus any data field over 8 KiB; omitted_fields lists removals. To recover them from the exact page, call manage_browsers with the returned raw_replay arguments. Raw events may be large, so narrow the categories, time window, and limit first.",
+          "(get_telemetry) Defaults to true. Compact items flatten the event envelope, add an ISO time, and omit data fields named body, headers, post_data, or png plus any data field over 8 KiB; omitted_fields lists removals. An eligible category-filtered compact response includes raw_replay_best_effort arguments targeting the same page start, but late events or retention may change results between calls. Raw mode requires explicit categories and limit<=5, rejects screenshot PNGs, and caps the serialized response at 1 MiB.",
         )
         .optional(),
       telemetry_enabled: z

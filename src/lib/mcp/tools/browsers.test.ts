@@ -1,5 +1,6 @@
 /// <reference types="bun-types" />
 
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { describe, expect, test } from "bun:test";
 import { connectTestMcp, toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
 import { registerBrowserCapabilities } from "@/lib/mcp/tools/browsers";
@@ -21,14 +22,14 @@ const event = {
   },
 };
 
-function telemetryClient(queries: unknown[]) {
+function telemetryClient(queries: unknown[], items: unknown[] = [event]) {
   return {
     browsers: {
       telemetry: {
         events: async (_sessionId: string, query: unknown) => {
           queries.push(query);
           return {
-            getPaginatedItems: () => [event],
+            getPaginatedItems: () => items,
             has_more: true,
             next_offset: 43,
           };
@@ -38,12 +39,17 @@ function telemetryClient(queries: unknown[]) {
   };
 }
 
+function toolResultText(result: Awaited<ReturnType<Client["callTool"]>>) {
+  const content = result.content as Array<{ type: string; text: string }>;
+  return content[0].text;
+}
+
 type TextResourceResult = {
   contents: Array<{ text: string }>;
 };
 
 describe("manage_browsers telemetry", () => {
-  test("re-fetches the same cursor page without compaction", async () => {
+  test("re-fetches a cursor page without compaction", async () => {
     const queries: unknown[] = [];
     const { client, close } = await connectTestMcp(
       registerBrowserCapabilities,
@@ -68,7 +74,7 @@ describe("manage_browsers telemetry", () => {
       const raw = toolResultJSON(
         await client.callTool({
           name: "manage_browsers",
-          arguments: compact.raw_replay as Record<string, unknown>,
+          arguments: compact.raw_replay_best_effort,
         }),
       );
 
@@ -85,24 +91,35 @@ describe("manage_browsers telemetry", () => {
           omitted_fields: ["headers", "post_data", "body"],
         },
       ]);
-      expect(compact.raw_replay).toMatchObject({
+      expect(compact.raw_replay_best_effort).toEqual({
         ...page,
         compact: false,
       });
-      expect(Date.parse(compact.raw_replay.until as string)).toBeNumber();
       expect(raw).toEqual({
         items: [event],
         has_more: true,
         next_offset: 43,
       });
-      expect(queries).toHaveLength(2);
-      expect(queries[1]).toEqual(queries[0]);
+      expect(queries).toEqual([
+        {
+          limit: 1,
+          category: ["network"],
+          offset: 41,
+          order: "asc",
+        },
+        {
+          limit: 1,
+          category: ["network"],
+          offset: 41,
+          order: "asc",
+        },
+      ]);
     } finally {
       await close();
     }
   });
 
-  test("pins an offset-less newest-first page for raw replay", async () => {
+  test("preserves API time and tail semantics", async () => {
     const queries: unknown[] = [];
     const { client, close } = await connectTestMcp(
       registerBrowserCapabilities,
@@ -110,7 +127,7 @@ describe("manage_browsers telemetry", () => {
     );
 
     try {
-      const compact = toolResultJSON(
+      const descending = toolResultJSON(
         await client.callTool({
           name: "manage_browsers",
           arguments: {
@@ -122,27 +139,41 @@ describe("manage_browsers telemetry", () => {
           },
         }),
       );
-      await client.callTool({
-        name: "manage_browsers",
-        arguments: compact.raw_replay as Record<string, unknown>,
-      });
+      const relative = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action: "get_telemetry",
+            session_id: "brr_123",
+            categories: ["network"],
+            since: "30m",
+            until: "5m",
+            limit: 1,
+          },
+        }),
+      );
 
-      expect(compact.raw_replay).toMatchObject({
-        action: "get_telemetry",
-        session_id: "brr_123",
-        categories: ["network"],
-        limit: 1,
-        order: "desc",
+      expect(queries).toEqual([
+        { limit: 1, category: ["network"], order: "desc" },
+        {
+          limit: 1,
+          category: ["network"],
+          since: "30m",
+          until: "5m",
+        },
+      ]);
+      expect(descending.raw_replay_best_effort).not.toHaveProperty("until");
+      expect(relative.raw_replay_best_effort).toMatchObject({
+        since: "30m",
+        until: "5m",
         compact: false,
       });
-      expect(Date.parse(compact.raw_replay.until as string)).toBeNumber();
-      expect(queries[1]).toEqual(queries[0]);
     } finally {
       await close();
     }
   });
 
-  test("resolves relative windows once for raw replay", async () => {
+  test("requires an explicit small raw limit", async () => {
     const queries: unknown[] = [];
     const { client, close } = await connectTestMcp(
       registerBrowserCapabilities,
@@ -150,33 +181,139 @@ describe("manage_browsers telemetry", () => {
     );
 
     try {
-      const compact = toolResultJSON(
-        await client.callTool({
-          name: "manage_browsers",
-          arguments: {
-            action: "get_telemetry",
-            session_id: "brr_123",
-            since: "30m",
-            until: "5m",
-            limit: 1,
-          },
-        }),
-      );
-      await client.callTool({
+      const missing = await client.callTool({
         name: "manage_browsers",
-        arguments: compact.raw_replay as Record<string, unknown>,
+        arguments: {
+          action: "get_telemetry",
+          session_id: "brr_123",
+          categories: ["network"],
+          compact: false,
+        },
+      });
+      const tooLarge = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "get_telemetry",
+          session_id: "brr_123",
+          categories: ["network"],
+          limit: 6,
+          compact: false,
+        },
       });
 
-      const since = Date.parse(compact.raw_replay.since as string);
-      const until = Date.parse(compact.raw_replay.until as string);
-      expect(until - since).toBe(25 * 60 * 1_000);
-      expect(queries[1]).toEqual(queries[0]);
+      expect(missing.isError).toBeTrue();
+      expect(toolResultText(missing)).toContain(
+        "explicit limit between 1 and 5",
+      );
+      expect(tooLarge.isError).toBeTrue();
+      expect(toolResultText(tooLarge)).toContain(
+        "explicit limit between 1 and 5",
+      );
+      expect(queries).toEqual([]);
     } finally {
       await close();
     }
   });
 
-  test("documents compact telemetry recovery on the tool schema", async () => {
+  test("caps the serialized raw response", async () => {
+    const queries: unknown[] = [];
+    const oversizedEvents = [1, 2, 3].map((seq) => ({
+      ...event,
+      seq,
+      event: {
+        ...event.event,
+        data: { body: "x".repeat(400_000) },
+      },
+    }));
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      telemetryClient(queries, oversizedEvents),
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "get_telemetry",
+          session_id: "brr_123",
+          categories: ["network"],
+          limit: 3,
+          compact: false,
+        },
+      });
+
+      expect(result.isError).toBeTrue();
+      expect(toolResultText(result)).toContain(
+        "raw telemetry response exceeds 1048576 bytes",
+      );
+    } finally {
+      await close();
+    }
+  });
+
+  test("keeps screenshot PNGs out of raw JSON", async () => {
+    const queries: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      telemetryClient(queries),
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "get_telemetry",
+          session_id: "brr_123",
+          categories: ["screenshot"],
+          limit: 1,
+          compact: false,
+        },
+      });
+
+      expect(result.isError).toBeTrue();
+      expect(toolResultText(result)).toContain(
+        "does not support the screenshot category",
+      );
+      expect(queries).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects PNG fields returned under another category", async () => {
+    const queries: unknown[] = [];
+    const pngEvent = {
+      ...event,
+      event: { ...event.event, data: { png: "base64" } },
+    };
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      telemetryClient(queries, [pngEvent]),
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "get_telemetry",
+          session_id: "brr_123",
+          categories: ["network"],
+          limit: 1,
+          compact: false,
+        },
+      });
+
+      expect(result.isError).toBeTrue();
+      expect(toolResultText(result)).toContain(
+        "Raw screenshot PNGs are not available",
+      );
+      expect(queries).toHaveLength(1);
+    } finally {
+      await close();
+    }
+  });
+
+  test("documents bounded best-effort raw replay", async () => {
     const kernelClient = { browsers: {} };
     const { client, close } = await connectTestMcp(
       registerBrowserCapabilities,
@@ -193,8 +330,12 @@ describe("manage_browsers telemetry", () => {
       expect(compact?.description).toContain(
         "body, headers, post_data, or png",
       );
-      expect(compact?.description).toContain("exact page");
-      expect(compact?.description).toContain("raw_replay");
+      expect(compact?.description).toContain("raw_replay_best_effort");
+      expect(compact?.description).toContain(
+        "late events or retention may change results",
+      );
+      expect(compact?.description).toContain("limit<=5");
+      expect(compact?.description).toContain("1 MiB");
     } finally {
       await close();
     }
