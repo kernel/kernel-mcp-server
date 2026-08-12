@@ -15,14 +15,16 @@ export function primaryActionLabel({
   if (isPending) {
     return stage === "organization"
       ? "loading access options..."
-      : "authorizing...";
+      : "opening consent...";
   }
 
   if (stage === "organization") {
-    return organizationName ? `continue with ${organizationName}` : "continue";
+    return organizationName
+      ? `choose access for ${organizationName}`
+      : "choose access";
   }
 
-  if (scope === "organization") return "authorize organization-wide";
-  if (scope === "project") return "authorize selected project";
+  if (scope === "organization") return "review organization-wide access";
+  if (scope === "project") return "review project access";
   return "select access to continue";
 }

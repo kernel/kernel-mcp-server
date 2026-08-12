@@ -10,7 +10,7 @@ describe("select organization primary action", () => {
         organizationName: "Kernel",
         scope: "organization",
       }),
-    ).toBe("continue with Kernel");
+    ).toBe("choose access for Kernel");
     expect(
       primaryActionLabel({
         stage: "organization",
@@ -21,21 +21,21 @@ describe("select organization primary action", () => {
     ).toBe("loading access options...");
   });
 
-  test("describes organization, project, unselected, and pending authorization", () => {
+  test("describes organization, project, unselected, and pending consent states", () => {
     expect(
       primaryActionLabel({
         stage: "scope",
         isPending: false,
         scope: "organization",
       }),
-    ).toBe("authorize organization-wide");
+    ).toBe("review organization-wide access");
     expect(
       primaryActionLabel({
         stage: "scope",
         isPending: false,
         scope: "project",
       }),
-    ).toBe("authorize selected project");
+    ).toBe("review project access");
     expect(
       primaryActionLabel({
         stage: "scope",
@@ -49,6 +49,6 @@ describe("select organization primary action", () => {
         isPending: true,
         scope: "project",
       }),
-    ).toBe("authorizing...");
+    ).toBe("opening consent...");
   });
 });
