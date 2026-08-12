@@ -7,6 +7,7 @@ const isPublicRoute = createRouteMatcher([
   "/(.well-known)(.*)",
   "/register",
   "/authorize",
+  "/oauth-consent",
   "/token",
   // Public only at this narrow relay boundary. The route itself accepts an
   // unauthenticated single-use exchange and validates scoped managed-auth JWTs
