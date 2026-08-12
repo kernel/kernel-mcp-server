@@ -292,7 +292,6 @@ function SelectOrgContent(): React.ReactElement {
   const primaryAction = primaryActionLabel({
     stage,
     isPending: isSelecting,
-    organizationName: selectedOrg?.name,
     scope: selectedScopeKind,
   });
 

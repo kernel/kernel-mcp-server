@@ -2,53 +2,51 @@ import { describe, expect, test } from "bun:test";
 import { primaryActionLabel } from "./primary-action";
 
 describe("select organization primary action", () => {
-  test("describes the selected organization and pending access-options load", () => {
+  test("labels organization selection and its pending state", () => {
     expect(
       primaryActionLabel({
         stage: "organization",
         isPending: false,
-        organizationName: "Kernel",
         scope: "organization",
       }),
-    ).toBe("choose access for Kernel");
+    ).toBe("select organization");
     expect(
       primaryActionLabel({
         stage: "organization",
         isPending: true,
-        organizationName: "Kernel",
         scope: "organization",
       }),
-    ).toBe("loading access options...");
+    ).toBe("selecting organization...");
   });
 
-  test("describes organization, project, unselected, and pending consent states", () => {
+  test("labels organization, project, unselected, and pending scope states", () => {
     expect(
       primaryActionLabel({
         stage: "scope",
         isPending: false,
         scope: "organization",
       }),
-    ).toBe("review organization-wide access");
+    ).toBe("select organization scope");
     expect(
       primaryActionLabel({
         stage: "scope",
         isPending: false,
         scope: "project",
       }),
-    ).toBe("review project access");
+    ).toBe("select project scope");
     expect(
       primaryActionLabel({
         stage: "scope",
         isPending: false,
         scope: "none",
       }),
-    ).toBe("select access to continue");
+    ).toBe("select scope");
     expect(
       primaryActionLabel({
         stage: "scope",
         isPending: true,
         scope: "project",
       }),
-    ).toBe("opening consent...");
+    ).toBe("selecting scope...");
   });
 });
