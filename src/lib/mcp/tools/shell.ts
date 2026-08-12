@@ -1,6 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { createKernelClient } from "@/lib/mcp/kernel-client";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
 import { longOperationOptions } from "@/lib/mcp/request-options";
 import { throwToolError } from "@/lib/mcp/responses";
 import {
@@ -15,7 +18,12 @@ const DEFAULT_TIMEOUT_SEC = 60;
 // the timeout the bound exists to prevent.
 const MAX_TIMEOUT_SEC = 150;
 
-export function registerShellTool(server: McpServer) {
+export function registerShellTool(
+  server: McpServer,
+  options: McpDependencies = {
+    ...defaultMcpDependencies,
+  },
+) {
   // exec_command -- Execute shell commands inside a browser VM
   server.tool(
     "exec_command",
@@ -54,7 +62,7 @@ export function registerShellTool(server: McpServer) {
       extra,
     ) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(
+      const client = options.createKernelClient(
         extra.authInfo.token,
         projectIDForOperation(extra.authInfo, project_id),
       );
