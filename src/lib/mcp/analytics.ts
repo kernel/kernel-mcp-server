@@ -15,6 +15,30 @@ import type {
 
 const projectToken = process.env.POSTHOG_PROJECT_TOKEN;
 
+export type OAuthTokenExchangeAnalytics = {
+  grantType: "authorization_code" | "refresh_token" | "unknown";
+  clientType: "kernel_cli" | "registered_client" | "unknown";
+  accessScope: "organization" | "project" | "unknown";
+  stage:
+    | "request_validation"
+    | "context_resolution"
+    | "membership_validation"
+    | "provider_exchange"
+    | "provider_response_validation"
+    | "persistence"
+    | "complete";
+  outcome: "success" | "error";
+  errorCode?:
+    | "invalid_request"
+    | "invalid_grant"
+    | "unsupported_grant_type"
+    | "server_error";
+  statusCode: number;
+  durationMs: number;
+};
+
+export const OAUTH_TOKEN_EXCHANGE_EVENT = "oauth_token_exchange";
+
 if (!projectToken && process.env.NODE_ENV !== "production") {
   console.error(
     "POSTHOG_PROJECT_TOKEN variable required by PostHog is missing or un-configured, this causes events to be silently missed. This error stops appearing once POSTHOG_PROJECT_TOKEN is configured",
@@ -257,6 +281,38 @@ export function enrichMcpAnalyticsEvent(event: {
 
 export function isMcpAnalyticsEnabled() {
   return posthog !== null;
+}
+
+export function captureOAuthTokenExchange(
+  exchange: OAuthTokenExchangeAnalytics,
+  client: PostHog | null = posthog,
+) {
+  const properties = {
+    oauth_grant_type: exchange.grantType,
+    oauth_client_type: exchange.clientType,
+    oauth_access_scope: exchange.accessScope,
+    oauth_stage: exchange.stage,
+    oauth_outcome: exchange.outcome,
+    oauth_error_code: exchange.errorCode,
+    http_status_code: exchange.statusCode,
+    duration_ms: exchange.durationMs,
+  };
+
+  console.info("[oauth] token exchange outcome", properties);
+  if (!client) return;
+
+  try {
+    client.capture({
+      distinctId: "oauth-token-exchange",
+      event: OAUTH_TOKEN_EXCHANGE_EVENT,
+      properties: {
+        $process_person_profile: false,
+        ...properties,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to capture OAuth token exchange analytics", error);
+  }
 }
 
 export function instrumentMcpAnalytics(
