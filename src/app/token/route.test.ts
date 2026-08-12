@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import type { TokenDependencies } from "./route";
 import {
   organizationAuthorizationContext,
@@ -31,6 +31,7 @@ function dependencies({
   member = true,
   clerkStatus = 200,
   membershipError,
+  contextError,
   clerkTokens = {
     access_token: "clerk-access",
     id_token: "header.payload.signature",
@@ -46,6 +47,14 @@ function dependencies({
   member?: boolean;
   clerkStatus?: number;
   membershipError?: Error;
+  contextError?: {
+    error:
+      | "invalid_request"
+      | "invalid_grant"
+      | "unsupported_grant_type"
+      | "server_error";
+    status: number;
+  };
   clerkTokens?: Record<string, unknown>;
 } = {}) {
   const calls = {
@@ -54,6 +63,9 @@ function dependencies({
     verifications: [] as string[],
     memberships: [] as Array<{ clerkUserId: string; clerkOrgId: string }>,
     persisted: [] as Parameters<TokenDependencies["persistContexts"]>[0][],
+    outcomes: [] as Parameters<
+      NonNullable<TokenDependencies["recordExchange"]>
+    >[0][],
   };
 
   return {
@@ -61,6 +73,15 @@ function dependencies({
     value: {
       resolveContext: async (value) => {
         calls.resolve.push(value);
+        if (contextError) {
+          return {
+            authorizationContext: null,
+            error: NextResponse.json(
+              { error: contextError.error },
+              { status: contextError.status },
+            ),
+          };
+        }
         return {
           authorizationContext,
           ...(value.grantType === "authorization_code"
@@ -85,6 +106,9 @@ function dependencies({
       },
       persistContexts: async (value) => {
         calls.persisted.push(value);
+      },
+      recordExchange: (value) => {
+        calls.outcomes.push(value);
       },
     } satisfies TokenDependencies,
   };
@@ -131,6 +155,16 @@ describe("POST /token", () => {
     expect(deps.calls.exchanges[0].has("project_id")).toBe(false);
     expect(deps.calls.exchanges[0].has("access_scope")).toBe(false);
     expect(deps.calls.persisted[0]).not.toHaveProperty("oldRefreshToken");
+    expect(deps.calls.outcomes).toEqual([
+      expect.objectContaining({
+        grantType: "authorization_code",
+        clientType: "registered_client",
+        accessScope: "organization",
+        stage: "complete",
+        outcome: "success",
+        statusCode: 200,
+      }),
+    ]);
   });
 
   test("returns the server-bound project scope", async () => {
@@ -155,6 +189,13 @@ describe("POST /token", () => {
       org_id: "org_1",
       access_scope: "project",
       project_id: "proj_1",
+    });
+    expect(deps.calls.outcomes[0]).toMatchObject({
+      grantType: "authorization_code",
+      clientType: "registered_client",
+      accessScope: "project",
+      stage: "complete",
+      outcome: "success",
     });
   });
 
@@ -200,6 +241,35 @@ describe("POST /token", () => {
     expect(deps.calls.verifications).toHaveLength(0);
     expect(deps.calls.exchanges[0].has("org_id")).toBe(false);
     expect(deps.calls.exchanges[0].has("project_id")).toBe(false);
+    expect(deps.calls.outcomes[0]).toMatchObject({
+      grantType: "refresh_token",
+      clientType: "kernel_cli",
+      accessScope: "project",
+      stage: "complete",
+      outcome: "success",
+    });
+  });
+
+  test("records the OAuth error returned by context resolution", async () => {
+    const deps = dependencies({
+      contextError: { error: "server_error", status: 500 },
+    });
+    const response = await tokenRequest(
+      request({
+        grant_type: "refresh_token",
+        client_id: "client_1",
+        refresh_token: "refresh-old",
+      }),
+      deps.value,
+    );
+
+    expect(response.status).toBe(500);
+    expect(deps.calls.outcomes[0]).toMatchObject({
+      stage: "context_resolution",
+      outcome: "error",
+      errorCode: "server_error",
+      statusCode: 500,
+    });
   });
 
   test("checks refresh membership before asking Clerk to rotate", async () => {
@@ -218,6 +288,15 @@ describe("POST /token", () => {
     expect(response.status).toBe(500);
     expect(deps.calls.exchanges).toHaveLength(0);
     expect(deps.calls.persisted).toHaveLength(0);
+    expect(deps.calls.outcomes[0]).toMatchObject({
+      grantType: "refresh_token",
+      clientType: "registered_client",
+      accessScope: "organization",
+      stage: "membership_validation",
+      outcome: "error",
+      errorCode: "server_error",
+      statusCode: 500,
+    });
   });
 
   test("keeps post-exchange validation for legacy refresh context", async () => {
@@ -289,6 +368,12 @@ describe("POST /token", () => {
     );
     expect(failedResponse.status).toBe(400);
     expect(providerFailure.calls.persisted).toHaveLength(0);
+    expect(providerFailure.calls.outcomes[0]).toMatchObject({
+      stage: "provider_exchange",
+      outcome: "error",
+      errorCode: "invalid_grant",
+      statusCode: 400,
+    });
 
     const missingRefresh = dependencies({
       clerkTokens: {

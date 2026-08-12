@@ -6,8 +6,10 @@ import {
   PostHogMCPAnalyticsProperty,
 } from "@posthog/mcp";
 import {
+  captureOAuthTokenExchange,
   enrichMcpAnalyticsEvent,
   instrumentMcpAnalytics,
+  OAUTH_TOKEN_EXCHANGE_EVENT,
   sanitizeMcpAnalyticsEvent,
 } from "@/lib/mcp/analytics";
 
@@ -280,6 +282,49 @@ describe("sanitizeMcpAnalyticsEvent", () => {
     event.event = PostHogMCPAnalyticsEvent.Exception;
 
     expect(await sanitizeMcpAnalyticsEvent(event)).toBeNull();
+  });
+});
+
+describe("captureOAuthTokenExchange", () => {
+  test("captures only bounded outcome metadata", () => {
+    const captured: unknown[] = [];
+    const fakePosthog = {
+      capture: (event: unknown) => captured.push(event),
+    } as unknown as PostHog;
+
+    captureOAuthTokenExchange(
+      {
+        grantType: "refresh_token",
+        clientType: "kernel_cli",
+        accessScope: "project",
+        stage: "complete",
+        outcome: "success",
+        statusCode: 200,
+        durationMs: 42,
+      },
+      fakePosthog,
+    );
+
+    expect(captured).toEqual([
+      {
+        distinctId: "oauth-token-exchange",
+        event: OAUTH_TOKEN_EXCHANGE_EVENT,
+        properties: {
+          $process_person_profile: false,
+          oauth_grant_type: "refresh_token",
+          oauth_client_type: "kernel_cli",
+          oauth_access_scope: "project",
+          oauth_stage: "complete",
+          oauth_outcome: "success",
+          oauth_error_code: undefined,
+          http_status_code: 200,
+          duration_ms: 42,
+        },
+      },
+    ]);
+    expect(JSON.stringify(captured)).not.toContain("access_token");
+    expect(JSON.stringify(captured)).not.toContain("refresh_token_hash");
+    expect(JSON.stringify(captured)).not.toContain("code_verifier");
   });
 });
 

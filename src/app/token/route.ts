@@ -1,9 +1,14 @@
 import { clerkClient, verifyToken } from "@clerk/nextjs/server";
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { persistOAuthTokenContexts } from "@/lib/redis";
 import { resolveAuthorizationContext } from "@/lib/org-utils";
 import { REFRESH_TOKEN_ORG_TTL_SECONDS } from "@/lib/const";
 import { normalizeLocalhostUri } from "@/lib/auth-utils";
+import {
+  captureOAuthTokenExchange,
+  flushMcpAnalytics,
+  type OAuthTokenExchangeAnalytics,
+} from "@/lib/mcp/analytics";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -23,8 +28,10 @@ export async function OPTIONS(): Promise<NextResponse> {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
 }
 
+type OAuthErrorCode = NonNullable<OAuthTokenExchangeAnalytics["errorCode"]>;
+
 function createErrorResponse(
-  error: string,
+  error: OAuthErrorCode,
   errorDescription: string,
   status = 400,
 ) {
@@ -105,6 +112,7 @@ export interface TokenDependencies {
   ) => Promise<{ sub?: string }>;
   hasMembership: typeof hasOrganizationMembership;
   persistContexts: typeof persistOAuthTokenContexts;
+  recordExchange?: (exchange: OAuthTokenExchangeAnalytics) => void;
 }
 
 const tokenDependencies: TokenDependencies = {
@@ -113,15 +121,89 @@ const tokenDependencies: TokenDependencies = {
   verify: verifyToken,
   hasMembership: hasOrganizationMembership,
   persistContexts: persistOAuthTokenContexts,
+  recordExchange: captureOAuthTokenExchange,
 };
+
+function clientType(
+  clientId: string | null,
+): OAuthTokenExchangeAnalytics["clientType"] {
+  if (!clientId) return "unknown";
+  const cliClientIds = [
+    process.env.KERNEL_CLI_PROD_CLIENT_ID,
+    process.env.KERNEL_CLI_STAGING_CLIENT_ID,
+    process.env.KERNEL_CLI_DEV_CLIENT_ID,
+  ].filter(Boolean);
+  return cliClientIds.includes(clientId) ? "kernel_cli" : "registered_client";
+}
+
+function normalizedGrantType(
+  grantType: string,
+): OAuthTokenExchangeAnalytics["grantType"] {
+  return grantType === "authorization_code" || grantType === "refresh_token"
+    ? grantType
+    : "unknown";
+}
+
+async function oauthErrorCode(response: NextResponse): Promise<OAuthErrorCode> {
+  try {
+    const body = (await response.clone().json()) as { error?: unknown };
+    if (
+      body.error === "invalid_request" ||
+      body.error === "invalid_grant" ||
+      body.error === "unsupported_grant_type" ||
+      body.error === "server_error"
+    ) {
+      return body.error;
+    }
+  } catch {
+    // Fall back to the status without logging the response body.
+  }
+  return response.status >= 500 ? "server_error" : "invalid_grant";
+}
 
 export async function tokenRequest(
   request: NextRequest,
   dependencies: TokenDependencies = tokenDependencies,
 ): Promise<NextResponse> {
+  const startedAt = Date.now();
+  let grantTypeForAnalytics: OAuthTokenExchangeAnalytics["grantType"] =
+    "unknown";
+  let clientTypeForAnalytics: OAuthTokenExchangeAnalytics["clientType"] =
+    "unknown";
+  let accessScopeForAnalytics: OAuthTokenExchangeAnalytics["accessScope"] =
+    "unknown";
+  let stage: OAuthTokenExchangeAnalytics["stage"] = "request_validation";
+
+  const finish = (
+    response: NextResponse,
+    errorCode?: OAuthErrorCode,
+  ): NextResponse => {
+    try {
+      dependencies.recordExchange?.({
+        grantType: grantTypeForAnalytics,
+        clientType: clientTypeForAnalytics,
+        accessScope: accessScopeForAnalytics,
+        stage,
+        outcome: response.ok ? "success" : "error",
+        ...(errorCode ? { errorCode } : {}),
+        statusCode: response.status,
+        durationMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      console.error("Failed to record OAuth token exchange outcome", error);
+    }
+    return response;
+  };
+  const fail = (
+    error: OAuthErrorCode,
+    description: string,
+    status = 400,
+  ): NextResponse =>
+    finish(createErrorResponse(error, description, status), error);
+
   const contentType = request.headers.get("content-type");
   if (!contentType?.includes("application/x-www-form-urlencoded")) {
-    return createErrorResponse(
+    return fail(
       "invalid_request",
       "Content-Type must be application/x-www-form-urlencoded",
     );
@@ -129,11 +211,7 @@ export async function tokenRequest(
 
   const clerkDomain = process.env.NEXT_PUBLIC_CLERK_DOMAIN;
   if (!clerkDomain) {
-    return createErrorResponse(
-      "server_error",
-      "Server configuration error",
-      500,
-    );
+    return fail("server_error", "Server configuration error", 500);
   }
 
   const body = await request.formData();
@@ -148,29 +226,35 @@ export async function tokenRequest(
   }
 
   const grantType = body.get("grant_type")?.toString() || "";
+  grantTypeForAnalytics = normalizedGrantType(grantType);
   const { clientId } = clientCredentials(request, body, params);
+  clientTypeForAnalytics = clientType(clientId);
   if (!clientId) {
-    return createErrorResponse(
-      "invalid_request",
-      "Missing required parameter: client_id",
-    );
+    return fail("invalid_request", "Missing required parameter: client_id");
   }
 
   const refreshToken = body.get("refresh_token")?.toString();
+  stage = "context_resolution";
   const contextResult = await dependencies.resolveContext({
     grantType,
     clientId,
     codeVerifier: body.get("code_verifier")?.toString(),
     refreshToken,
   });
-  if (contextResult.error) return contextResult.error;
+  if (contextResult.error) {
+    return finish(
+      contextResult.error,
+      await oauthErrorCode(contextResult.error),
+    );
+  }
   const authorizationContext = contextResult.authorizationContext;
   if (!authorizationContext) {
-    return createErrorResponse(
+    return fail(
       "invalid_grant",
       "Authorization context not found. Please re-authorize.",
     );
   }
+  accessScopeForAnalytics = authorizationContext.access_scope;
 
   let persistedAuthorizationContext = authorizationContext;
 
@@ -188,6 +272,7 @@ export async function tokenRequest(
       : undefined;
 
   try {
+    stage = "membership_validation";
     if (
       refreshContextUserId &&
       !(await dependencies.hasMembership(
@@ -195,12 +280,13 @@ export async function tokenRequest(
         authorizationContext.clerk_org_id,
       ))
     ) {
-      return createErrorResponse(
+      return fail(
         "invalid_grant",
         "Organization membership is no longer active",
       );
     }
 
+    stage = "provider_exchange";
     const clerkResponse = await dependencies.exchange(
       `https://${clerkDomain}/oauth/token`,
       {
@@ -210,7 +296,7 @@ export async function tokenRequest(
       },
     );
     if (!clerkResponse.ok) {
-      return createErrorResponse(
+      return fail(
         "invalid_grant",
         grantType === "refresh_token"
           ? "Failed to refresh token"
@@ -218,9 +304,10 @@ export async function tokenRequest(
       );
     }
 
+    stage = "provider_response_validation";
     const clerkTokens = (await clerkResponse.json()) as ClerkTokenResponse;
     if (!clerkTokens.id_token) {
-      return createErrorResponse(
+      return fail(
         "invalid_grant",
         "Failed to retrieve id_token from OAuth provider",
       );
@@ -229,7 +316,7 @@ export async function tokenRequest(
       !Number.isFinite(clerkTokens.expires_in) ||
       clerkTokens.expires_in <= 0
     ) {
-      return createErrorResponse(
+      return fail(
         "invalid_grant",
         "OAuth provider returned an invalid token lifetime",
       );
@@ -240,7 +327,7 @@ export async function tokenRequest(
         secretKey: process.env.CLERK_SECRET_KEY,
       });
       if (!payload.sub) {
-        return createErrorResponse(
+        return fail(
           "invalid_grant",
           "OAuth provider returned a token without a subject",
         );
@@ -249,18 +336,19 @@ export async function tokenRequest(
         authorizationContext.clerk_user_id &&
         authorizationContext.clerk_user_id !== payload.sub
       ) {
-        return createErrorResponse(
+        return fail(
           "invalid_grant",
           "OAuth token subject does not match authorization context",
         );
       }
+      stage = "membership_validation";
       if (
         !(await dependencies.hasMembership(
           payload.sub,
           authorizationContext.clerk_org_id,
         ))
       ) {
-        return createErrorResponse(
+        return fail(
           "invalid_grant",
           "Organization membership is no longer active",
         );
@@ -273,9 +361,10 @@ export async function tokenRequest(
       }
     }
 
+    stage = "provider_response_validation";
     const issuedRefreshToken = clerkTokens.refresh_token;
     if (!issuedRefreshToken) {
-      return createErrorResponse(
+      return fail(
         "invalid_grant",
         grantType === "refresh_token"
           ? "OAuth provider did not rotate the refresh token"
@@ -284,18 +373,16 @@ export async function tokenRequest(
     }
     const finalJwt = clerkTokens.id_token;
     if (grantType === "refresh_token" && !refreshToken) {
-      return createErrorResponse(
-        "invalid_grant",
-        "Missing required parameter: refresh_token",
-      );
+      return fail("invalid_grant", "Missing required parameter: refresh_token");
     }
     if (grantType !== "authorization_code" && grantType !== "refresh_token") {
-      return createErrorResponse(
+      return fail(
         "unsupported_grant_type",
         `Grant type '${grantType}' is not supported`,
       );
     }
 
+    stage = "persistence";
     await dependencies.persistContexts({
       jwt: finalJwt,
       newRefreshToken: issuedRefreshToken,
@@ -315,25 +402,30 @@ export async function tokenRequest(
         : {}),
     });
 
-    return NextResponse.json(
-      {
-        ...clerkTokens,
-        access_token: finalJwt,
-        expires_in: clerkTokens.expires_in,
-        org_id: authorizationContext.clerk_org_id,
-        access_scope: authorizationContext.access_scope,
-        ...(authorizationContext.project_id
-          ? { project_id: authorizationContext.project_id }
-          : {}),
-      },
-      { headers: CORS_HEADERS },
+    stage = "complete";
+    return finish(
+      NextResponse.json(
+        {
+          ...clerkTokens,
+          access_token: finalJwt,
+          expires_in: clerkTokens.expires_in,
+          org_id: authorizationContext.clerk_org_id,
+          access_scope: authorizationContext.access_scope,
+          ...(authorizationContext.project_id
+            ? { project_id: authorizationContext.project_id }
+            : {}),
+        },
+        { headers: CORS_HEADERS },
+      ),
     );
   } catch (error) {
     console.error("[token] token exchange failed", { error });
-    return createErrorResponse("server_error", "Internal server error", 500);
+    return fail("server_error", "Internal server error", 500);
   }
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  return tokenRequest(request);
+  const response = await tokenRequest(request);
+  after(flushMcpAnalytics);
+  return response;
 }
