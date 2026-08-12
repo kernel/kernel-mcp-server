@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import {
+  APIConnectionError,
+  APIConnectionTimeoutError,
+  APIUserAbortError,
+} from "@onkernel/sdk";
 import type { KernelClient } from "@/lib/mcp/kernel-client";
 import {
   clearMcpConnectionContextCacheForTests,
@@ -63,6 +68,14 @@ function rejection(status: number) {
   return {
     createKernelClient: () => {
       throw Object.assign(new Error("rejected"), { status });
+    },
+  };
+}
+
+function throwing(error: unknown) {
+  return {
+    createKernelClient: (): KernelClient => {
+      throw error;
     },
   };
 }
@@ -226,11 +239,9 @@ describe("resolveMcpConnectionContext", () => {
       await resolveMcpConnectionContext({
         token: "new-token",
         cacheIdentity,
-        dependencies: {
-          createKernelClient: () => {
-            throw new Error("temporary outage");
-          },
-        },
+        dependencies: throwing(
+          new APIConnectionError({ message: "temporary outage" }),
+        ),
       }),
     );
 
@@ -275,11 +286,9 @@ describe("resolveMcpConnectionContext", () => {
     const transient = await resolveMcpConnectionContext({
       token: "newer-token",
       cacheIdentity,
-      dependencies: {
-        createKernelClient: () => {
-          throw new Error("temporary outage");
-        },
-      },
+      dependencies: throwing(
+        new APIConnectionError({ message: "temporary outage" }),
+      ),
     });
 
     expect(inconsistent).toEqual({ status: "invalid" });
@@ -289,11 +298,9 @@ describe("resolveMcpConnectionContext", () => {
   test("fails closed when auth context is unavailable or malformed", async () => {
     const unavailable = await resolveMcpConnectionContext({
       token: "sk_secret",
-      dependencies: {
-        createKernelClient: () => {
-          throw new Error("API unavailable");
-        },
-      },
+      dependencies: throwing(
+        new APIConnectionError({ message: "API unavailable" }),
+      ),
     });
     const malformed = await resolveMcpConnectionContext({
       token: "sk_secret",
@@ -304,26 +311,64 @@ describe("resolveMcpConnectionContext", () => {
     expect(malformed).toEqual({ status: "invalid" });
   });
 
-  test("separates a rejected credential from an unresolvable scope", async () => {
-    expect(
-      await resolveMcpConnectionContext({
-        token: "revoked",
-        dependencies: rejection(401),
-      }),
-    ).toEqual({ status: "rejected", statusCode: 401 });
-    expect(
-      await resolveMcpConnectionContext({
-        token: "wrong-project",
-        dependencies: rejection(403),
-      }),
-    ).toEqual({ status: "rejected", statusCode: 403 });
+  test("keeps each answer the Kernel API gives about a credential distinct", async () => {
+    for (const status of [401, 403, 404]) {
+      expect(
+        await resolveMcpConnectionContext({
+          token: "credential",
+          dependencies: rejection(status),
+        }),
+      ).toEqual({ status: "rejected", statusCode: status });
+    }
+  });
+
+  test("treats retryable statuses as unavailable and keeps the upstream status", async () => {
     for (const status of [408, 429, 500, 502, 503]) {
       expect(
         await resolveMcpConnectionContext({
           token: "sk_secret",
           dependencies: rejection(status),
         }),
+      ).toEqual({ status: "unavailable", statusCode: status });
+    }
+  });
+
+  test("treats a request the API could not understand as our bug", async () => {
+    for (const status of [400, 409, 422]) {
+      expect(
+        await resolveMcpConnectionContext({
+          token: "sk_secret",
+          dependencies: rejection(status),
+        }),
+      ).toEqual({ status: "invalid" });
+    }
+  });
+
+  test("retries transport failures but surfaces unknown throws", async () => {
+    for (const error of [
+      new APIConnectionError({ message: "socket hang up" }),
+      new APIConnectionTimeoutError({ message: "timed out" }),
+      new APIUserAbortError({ message: "client went away" }),
+    ]) {
+      expect(
+        await resolveMcpConnectionContext({
+          token: "sk_secret",
+          dependencies: throwing(error),
+        }),
       ).toEqual({ status: "unavailable" });
+    }
+
+    for (const error of [
+      new TypeError("cannot read properties of undefined"),
+      new Error("unexpected"),
+      "not even an error",
+    ]) {
+      expect(
+        await resolveMcpConnectionContext({
+          token: "sk_secret",
+          dependencies: throwing(error),
+        }),
+      ).toEqual({ status: "invalid" });
     }
   });
 });

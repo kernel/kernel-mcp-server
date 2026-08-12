@@ -38,56 +38,72 @@ export async function OPTIONS(_req: NextRequest): Promise<Response> {
   });
 }
 
+const CORS_HEADERS = {
+  "Content-Type": "application/json",
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+};
+
+function errorResponse(
+  status: number,
+  error: string,
+  description: string,
+  headers: Record<string, string> = {},
+): Response {
+  return new Response(
+    JSON.stringify({ error, error_description: description }),
+    { status, headers: { ...CORS_HEADERS, ...headers } },
+  );
+}
+
 // Helper function to create authentication error response
 function createAuthErrorResponse(
   error: string = "invalid_token",
   description: string = "Missing or invalid access token",
 ): Response {
-  return new Response(
-    JSON.stringify({
-      error,
-      error_description: description,
-    }),
-    {
-      status: 401,
-      headers: {
-        "WWW-Authenticate": `Bearer realm="OAuth", error="${error}", error_description="${description}"`,
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-      },
-    },
-  );
+  return errorResponse(401, error, description, {
+    "WWW-Authenticate": `Bearer realm="OAuth", error="${error}", error_description="${description}"`,
+  });
 }
 
 // A credential the Kernel API rejects is the caller's problem, and a scope we
 // cannot resolve right now is worth retrying. Neither is a server fault, so
-// neither should reach the error handler as a thrown 500.
+// neither should reach the error handler as a thrown 500. Each rejection keeps
+// the upstream meaning: only 401 tells a client its credential is bad, so only
+// 401 may prompt it to discard one.
 export function connectionScopeFailureResponse(
   failure: Exclude<McpConnectionContextFailure, { status: "invalid" }>,
 ): Response {
   if (failure.status === "rejected") {
-    return createAuthErrorResponse(
-      "invalid_token",
-      "The Kernel API rejected this credential",
-    );
+    switch (failure.statusCode) {
+      case 403:
+        return errorResponse(
+          403,
+          "insufficient_scope",
+          "This credential is not scoped to the requested Kernel project",
+          {
+            "WWW-Authenticate": `Bearer realm="OAuth", error="insufficient_scope"`,
+          },
+        );
+      case 404:
+        return errorResponse(
+          404,
+          "project_not_found",
+          "The Kernel project for this connection was not found or is inactive",
+        );
+      default:
+        return createAuthErrorResponse(
+          "invalid_token",
+          "The Kernel API rejected this credential",
+        );
+    }
   }
-  return new Response(
-    JSON.stringify({
-      error: "temporarily_unavailable",
-      error_description: "Unable to resolve Kernel connection scope",
-    }),
-    {
-      status: 503,
-      headers: {
-        "Retry-After": "1",
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-      },
-    },
+  return errorResponse(
+    503,
+    "temporarily_unavailable",
+    "Unable to resolve Kernel connection scope",
+    { "Retry-After": "1" },
   );
 }
 
@@ -147,7 +163,7 @@ async function handleMcpRequestWithIdentity({
       outcome: connection.status,
       credentialType,
       upstreamStatusCode:
-        connection.status === "rejected" ? connection.statusCode : undefined,
+        connection.status === "invalid" ? undefined : connection.statusCode,
     });
     if (connection.status === "invalid") {
       throw new Error("Unable to resolve Kernel connection scope");

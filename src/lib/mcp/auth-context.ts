@@ -1,3 +1,4 @@
+import { APIConnectionError, APIUserAbortError } from "@onkernel/sdk";
 import type { AuthContext } from "@onkernel/sdk/resources/auth/context";
 import { createHash } from "crypto";
 import { z } from "zod";
@@ -67,7 +68,7 @@ type ResolveAuthContextOptions = {
 // answered with something we cannot normalize.
 export type McpConnectionContextFailure =
   | { status: "rejected"; statusCode: number }
-  | { status: "unavailable" }
+  | { status: "unavailable"; statusCode?: number }
   | { status: "invalid" };
 
 export type McpConnectionContextResult =
@@ -78,16 +79,36 @@ type AuthContextResolution =
   | { context: AuthContext; failure: null }
   | { context: null; failure: McpConnectionContextFailure };
 
+// The Kernel API answers about a credential with 401 (unauthenticated), 403
+// (authenticated but not entitled to this project) or 404 (project missing or
+// inactive). Any other 4xx means we sent a request it could not understand,
+// which is our bug rather than the caller's.
+const REJECTION_STATUSES = new Set([401, 403, 404]);
+
 function classifyAuthContextError(error: unknown): McpConnectionContextFailure {
   const status =
     error && typeof error === "object" && "status" in error
       ? (error as { status?: unknown }).status
       : undefined;
-  if (typeof status !== "number") return { status: "unavailable" };
-  if (status === 408 || status === 429 || status >= 500) {
+
+  if (typeof status === "number") {
+    if (REJECTION_STATUSES.has(status)) {
+      return { status: "rejected", statusCode: status };
+    }
+    if (status === 408 || status === 429 || status >= 500) {
+      return { status: "unavailable", statusCode: status };
+    }
+    return { status: "invalid" };
+  }
+
+  // Only a failure to reach the API is worth retrying. Anything else thrown
+  // without a status is a bug on our side and must keep surfacing as one.
+  if (
+    error instanceof APIConnectionError ||
+    error instanceof APIUserAbortError
+  ) {
     return { status: "unavailable" };
   }
-  if (status >= 400) return { status: "rejected", statusCode: status };
   return { status: "invalid" };
 }
 
