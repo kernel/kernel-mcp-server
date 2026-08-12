@@ -1,7 +1,13 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { createKernelClient } from "@/lib/mcp/kernel-client";
-import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
+import {
+  registerJsonResourceCollection,
+  registerJsonResourceTemplate,
+} from "@/lib/mcp/resource-templates";
 import {
   errorResponse,
   jsonResponse,
@@ -10,44 +16,54 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
+import {
+  projectIDForOperation,
+  projectSelectionInputSchema,
+} from "@/lib/mcp/project-selection";
 
-export function registerAppCapabilities(server: McpServer) {
-  server.resource("apps", "apps://", async (uri, extra) => {
-    if (!extra.authInfo) {
-      throw new Error("Authentication required");
-    }
-
-    const client = createKernelClient(extra.authInfo.token);
-    const appsPage = await client.apps.list();
-    const items = appsPage.getPaginatedItems();
-    return {
-      contents: [
-        {
-          uri: uri.toString(),
-          mimeType: "application/json",
-          text:
-            items.length > 0 ? JSON.stringify(items, null, 2) : "No apps found",
-        },
-      ],
-    };
-  });
-
-  registerJsonResourceTemplate(server, {
-    name: "app",
-    uriTemplate: "apps://{appName}",
-    variableName: "appName",
-    resourceLabel: "App",
-    read: async (client, appName) => {
-      const appsPage = await client.apps.list({ app_name: appName });
-      return appsPage.getPaginatedItems()[0];
+export function registerAppCapabilities(
+  server: McpServer,
+  dependencies: McpDependencies = defaultMcpDependencies,
+) {
+  registerJsonResourceCollection(
+    server,
+    {
+      name: "apps",
+      uriTemplate: "kernel://orgs/{organizationId}/projects/{projectId}/apps",
+      emptyText: "No apps found",
+      read: async (client) => {
+        const apps = [];
+        for await (const app of client.apps.list()) {
+          apps.push(app);
+        }
+        return apps;
+      },
     },
-  });
+    dependencies,
+  );
+
+  registerJsonResourceTemplate(
+    server,
+    {
+      name: "app",
+      uriTemplate:
+        "kernel://orgs/{organizationId}/projects/{projectId}/apps/{appName}",
+      variableName: "appName",
+      resourceLabel: "App",
+      read: async (client, appName) => {
+        const appsPage = await client.apps.list({ app_name: appName });
+        return appsPage.getPaginatedItems()[0];
+      },
+    },
+    dependencies,
+  );
 
   // manage_apps -- List apps, invoke actions, manage deployments, check invocations
   server.tool(
     "manage_apps",
-    'Manage Kernel apps when an agent needs to discover deployed app actions, invoke an app, or inspect deployment/invocation state. Use "list_apps" before invoking an unknown app, "invoke" to run an action, get/list actions to inspect results, and "delete_deployment" to remove a deployment.',
+    'Manage Kernel apps when an agent needs to discover deployed app actions, invoke an app, or inspect deployment/invocation state. Use "list_apps" before invoking an unknown app. "invoke" starts an action asynchronously and returns an invocation_id immediately. Use "list_invocation_browsers" with that ID to discover browser sessions created by the invocation, and use "get_invocation" after a short delay to inspect its state. Do not poll indefinitely; if the invocation is still running, report its ID. Use get/list actions to inspect results and "delete_deployment" to remove a deployment.',
     {
+      ...projectSelectionInputSchema(),
       action: z
         .enum([
           "list_apps",
@@ -56,6 +72,7 @@ export function registerAppCapabilities(server: McpServer) {
           "list_deployments",
           "delete_deployment",
           "get_invocation",
+          "list_invocation_browsers",
         ])
         .describe("Operation to perform."),
       app_name: z
@@ -85,7 +102,9 @@ export function registerAppCapabilities(server: McpServer) {
         .optional(),
       invocation_id: z
         .string()
-        .describe("(get_invocation) Invocation ID to retrieve.")
+        .describe(
+          "(get_invocation, list_invocation_browsers) Invocation ID to inspect.",
+        )
         .optional(),
       ...paginationParams,
     },
@@ -98,7 +117,10 @@ export function registerAppCapabilities(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
+      const client = dependencies.createKernelClient(
+        extra.authInfo.token,
+        projectIDForOperation(extra.authInfo, params.project_id),
+      );
 
       try {
         switch (params.action) {
@@ -128,32 +150,10 @@ export function registerAppCapabilities(server: McpServer) {
             if (!invocation)
               return errorResponse("Failed to create invocation");
 
-            const stream = await client.invocations.follow(invocation.id);
-            let finalInvocation = invocation;
-            for await (const evt of stream) {
-              if (evt.event === "error") {
-                return errorResponse(
-                  JSON.stringify(
-                    {
-                      status: "error",
-                      invocation_id: invocation.id,
-                      error: evt,
-                    },
-                    null,
-                    2,
-                  ),
-                );
-              }
-              if (evt.event === "invocation_state") {
-                finalInvocation = evt.invocation || finalInvocation;
-                if (
-                  finalInvocation.status === "succeeded" ||
-                  finalInvocation.status === "failed"
-                )
-                  break;
-              }
-            }
-            return jsonResponse(finalInvocation);
+            return jsonResponse({
+              ...invocation,
+              invocation_id: invocation.id,
+            });
           }
           case "get_deployment": {
             if (!params.deployment_id)
@@ -203,6 +203,19 @@ export function registerAppCapabilities(server: McpServer) {
                 `Invocation "${params.invocation_id}" not found`,
               );
             return jsonResponse(invocation);
+          }
+          case "list_invocation_browsers": {
+            if (!params.invocation_id)
+              return errorResponse("Error: invocation_id is required.");
+            const browsers = await client.invocations.listBrowsers(
+              params.invocation_id,
+            );
+            return jsonResponse({
+              browsers: browsers.browsers.map((browser) => ({
+                session_id: browser.session_id,
+                browser_live_view_url: browser.browser_live_view_url,
+              })),
+            });
           }
         }
       } catch (error) {

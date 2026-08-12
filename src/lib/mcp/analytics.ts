@@ -3,10 +3,15 @@ import {
   instrument,
   PostHogMCPAnalyticsEvent,
   PostHogMCPAnalyticsProperty,
+  type BeforeSendFn,
 } from "@posthog/mcp";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { PostHog } from "posthog-node";
 import { z } from "zod";
+import type {
+  McpConnectionAnalyticsContext,
+  McpConnectionContext,
+} from "@/lib/mcp/auth-context";
 
 const projectToken = process.env.POSTHOG_PROJECT_TOKEN;
 
@@ -32,7 +37,12 @@ const posthog = projectToken
 // returned).
 const SENT_PROPERTIES = new Set<string>([
   "$groups",
+  "$insert_id",
   "$process_person_profile",
+  "$mcp_auth_method",
+  "$mcp_connection_scope",
+  "$mcp_credential_scope",
+  "$mcp_scope_source",
   PostHogMCPAnalyticsProperty.ClientName,
   PostHogMCPAnalyticsProperty.ClientVersion,
   PostHogMCPAnalyticsProperty.DurationMs,
@@ -136,15 +146,126 @@ function registerMissingCapabilityTool(server: McpServer) {
   );
 }
 
+const ANALYTICS_CONTEXT_PROPERTY = "__mcp_connection_analytics_context";
+
+/**
+ * Enforces the SENT_PROPERTIES allow-list on every event the SDK builds and sanitizes
+ * the free-form intent.
+ */
+export const sanitizeMcpAnalyticsEvent: BeforeSendFn = (event) => {
+  if (event.event === PostHogMCPAnalyticsEvent.Exception) return null;
+
+  const properties = event.properties;
+  if (!properties) return event;
+  enrichMcpAnalyticsEvent(event);
+
+  for (const key of Object.keys(properties)) {
+    if (!SENT_PROPERTIES.has(key)) delete properties[key];
+  }
+
+  // Only a string is an intent. Anything else is a client sending an object or an array
+  // through the argument, which would land in PostHog as a serialized payload.
+  const intent = properties[PostHogMCPAnalyticsProperty.Intent];
+  const sanitized = typeof intent === "string" ? sanitizeIntent(intent) : "";
+  if (sanitized) {
+    properties[PostHogMCPAnalyticsProperty.Intent] = sanitized;
+  } else {
+    delete properties[PostHogMCPAnalyticsProperty.Intent];
+  }
+
+  // The SDK answers a get_more_tools call before the registered schema validates it, so a
+  // report can arrive with no usable context: missing, blank, or not a string. The reported
+  // gap is the entire event, so drop the ones that don't carry one rather than count them.
+  if (
+    event.event === PostHogMCPAnalyticsEvent.MissingCapability &&
+    !sanitized
+  ) {
+    return null;
+  }
+
+  return event;
+};
+
 /**
  * Captures every tool call, tools/list, and initialize handled by the server as a
  * `$mcp_*` PostHog event, and advertises the tool agents use to report a capability the
  * server doesn't have. No-op when POSTHOG_PROJECT_TOKEN is unset.
  */
-export function instrumentMcpAnalytics(server: McpServer) {
-  if (!posthog) return;
+function connectionAnalyticsContext(extra: unknown) {
+  const authInfo = (extra as { authInfo?: { extra?: unknown } } | undefined)
+    ?.authInfo;
+  const authExtra = authInfo?.extra as
+    | { connectionAnalytics?: McpConnectionAnalyticsContext }
+    | undefined;
+  return authExtra?.connectionAnalytics;
+}
 
-  instrument(server, posthog, {
+// The route resolves the Kernel connection context at auth time and attaches it to
+// authInfo.extra on every request, so reading the org id out of the request extras
+// adds no I/O.
+function connectionOrgId(extra: unknown) {
+  const authInfo = (extra as { authInfo?: { extra?: unknown } } | undefined)
+    ?.authInfo;
+  const authExtra = authInfo?.extra as
+    | { connectionContext?: McpConnectionContext | null }
+    | undefined;
+  return authExtra?.connectionContext?.scope.organizationId;
+}
+
+export function enrichMcpAnalyticsEvent(event: {
+  event: string;
+  distinct_id: string;
+  properties?: Record<string, unknown>;
+}) {
+  if (!event.properties) return event;
+
+  const context = event.properties[ANALYTICS_CONTEXT_PROPERTY] as
+    | McpConnectionAnalyticsContext
+    | undefined;
+  delete event.properties[ANALYTICS_CONTEXT_PROPERTY];
+
+  if (event.event !== PostHogMCPAnalyticsEvent.Initialize || !context) {
+    return event;
+  }
+
+  event.properties["$mcp_auth_method"] = context.authMethod;
+  event.properties["$mcp_credential_scope"] = context.credentialScope;
+  event.properties["$mcp_connection_scope"] = context.connectionScope;
+  event.properties["$mcp_scope_source"] = context.scopeSource;
+  const currentGroups = event.properties.$groups;
+  event.properties.$groups = {
+    ...(currentGroups &&
+    typeof currentGroups === "object" &&
+    !Array.isArray(currentGroups)
+      ? currentGroups
+      : {}),
+    organization: context.organizationId,
+  };
+
+  const sessionId = event.properties[PostHogMCPAnalyticsProperty.SessionId];
+  if (typeof sessionId === "string" && sessionId) {
+    event.properties.$insert_id = `mcp-connection:${sessionId}`;
+  }
+
+  if (context.userId) {
+    event.distinct_id = context.userId;
+    delete event.properties.$process_person_profile;
+  }
+
+  return event;
+}
+
+export function isMcpAnalyticsEnabled() {
+  return posthog !== null;
+}
+
+export function instrumentMcpAnalytics(
+  server: McpServer,
+  client: PostHog | null = posthog,
+) {
+  if (!client) return;
+
+  instrument(server, client, {
     // Records a `$mcp_missing_capability` event, carrying the reported gap as $mcp_intent,
     // when an agent calls the tool registered by registerMissingCapabilityTool.
     reportMissing: true,
@@ -157,50 +278,37 @@ export function instrumentMcpAnalytics(server: McpServer) {
     // A failed tool call otherwise fans out into a second `$exception` event whose
     // `$exception_list` is built from the text the tool returned.
     enableExceptionAutocapture: false,
-    // Events are attributed to the analytics session, with no person created. The only
-    // id this server holds is the Clerk subject, while every other producer in these
-    // projects identifies people by their Kernel user id — identifying on the subject
-    // would mint a second profile per person. Resolving the Kernel user id needs an
-    // API that doesn't exist yet, so user-level reporting is out of scope until then.
+    // Keep general MCP telemetry session-scoped. The initialize event alone uses the
+    // canonical Kernel user ID when auth context identifies a user; API-key principals
+    // remain anonymous because their principal ID identifies the credential itself.
     identify: null,
+    // Attributes every event to the caller's organization via $groups — the same
+    // convention as the Kernel API's own events (api_call sends $groups with
+    // organization = org id). Stamped here rather than through the SDK's identify
+    // callback because identify never runs for tools/list, and mcp-handler builds a
+    // fresh McpServer per HTTP request, so the SDK's per-session identity cache is
+    // always cold when a tools/list request arrives.
+    //
+    // The connection analytics context is present only on initialize. beforeSend turns
+    // this private, typed value into allow-listed analytics properties and removes it
+    // before capture.
+    eventProperties: (request, extra) => {
+      const orgId = connectionOrgId(extra);
+      const properties: Record<string, unknown> = orgId
+        ? { $groups: { organization: orgId } }
+        : {};
+      if (request.method === "initialize") {
+        const context = connectionAnalyticsContext(extra);
+        if (context) properties[ANALYTICS_CONTEXT_PROPERTY] = context;
+      }
+      return Object.keys(properties).length > 0 ? properties : null;
+    },
     // No part of a call is safe to capture: arguments carry free-form input (credential
     // field maps, curl headers and bodies, typed text, shell commands, Playwright
     // source), results are serialized to a JSON string (see jsonResponse) so the SDK's
     // key-name redaction can't see inside them, and a tool's error text is whatever
     // upstream returned. Send call metadata only.
-    beforeSend: (event) => {
-      if (event.event === PostHogMCPAnalyticsEvent.Exception) return null;
-
-      const properties = event.properties;
-      if (!properties) return event;
-
-      for (const key of Object.keys(properties)) {
-        if (!SENT_PROPERTIES.has(key)) delete properties[key];
-      }
-
-      // Only a string is an intent. Anything else is a client sending an object or an array
-      // through the argument, which would land in PostHog as a serialized payload.
-      const intent = properties[PostHogMCPAnalyticsProperty.Intent];
-      const sanitized =
-        typeof intent === "string" ? sanitizeIntent(intent) : "";
-      if (sanitized) {
-        properties[PostHogMCPAnalyticsProperty.Intent] = sanitized;
-      } else {
-        delete properties[PostHogMCPAnalyticsProperty.Intent];
-      }
-
-      // The SDK answers a get_more_tools call before the registered schema validates it, so a
-      // report can arrive with no usable context: missing, blank, or not a string. The reported
-      // gap is the entire event, so drop the ones that don't carry one rather than count them.
-      if (
-        event.event === PostHogMCPAnalyticsEvent.MissingCapability &&
-        !sanitized
-      ) {
-        return null;
-      }
-
-      return event;
-    },
+    beforeSend: sanitizeMcpAnalyticsEvent,
   });
 
   registerMissingCapabilityTool(server);

@@ -24,7 +24,7 @@ The Kernel MCP Server bridges AI assistants (like Claude, Cursor, or other MCP-c
 
 **Open-source & fully-managed** — the complete codebase is available here, and we run the production instance so you don't need to deploy anything.
 
-The server uses OAuth 2.0 authentication via [Clerk](https://clerk.com) to ensure secure access to your Kernel resources.
+The server uses OAuth 2.0 authentication via [Clerk](https://clerk.com) to ensure secure access to your Kernel resources. During authorization, users can grant organization-wide access or restrict the resulting access and refresh tokens to one Kernel project. Project-scoped tokens cannot switch projects; organization-wide authorization remains available for existing workflows.
 
 For a deeper dive into why and how we built this server, see our blog post: [Introducing Kernel MCP Server](https://blog.onkernel.com/p/introducing-kernel-mcp-server).
 
@@ -255,13 +255,15 @@ Many other MCP-capable tools accept:
 
 Configure these values wherever the tool expects MCP server settings.
 
-## Tools (17 model-facing, plus 1 app-only helper)
+## Tools (18 model-facing, plus 1 app-only helper)
 
 Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Standalone tools handle high-frequency and interactive workflows.
 
 One additional Managed Auth helper (`begin_auth_login`) is marked app-only (`_meta.ui.visibility: ["app"]`); it refuses to execute on hosts that do not declare MCP Apps support. The App forwards the server-issued signed flow checkpoint to the shared `manage_auth_connections` `wait` action, so flow identity and terminal-state decisions stay on the server.
 
 Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_DISABLED_TOOLSETS` to a comma-separated list. For example, `KERNEL_MCP_DISABLED_TOOLSETS=api_keys` prevents `manage_api_keys` from being registered.
+
+Call `get_connection_context` before deciding whether to create or select a project. Its canonical `connection_scope` reports whether the connection is organization-wide or fixed to a project. Project-scoped tools always advertise an optional `project_id`: organization-wide connections may omit it to preserve organization-wide reads and API default-project behavior, while fixed-project connections may omit it or pass the matching ID. Project resources use project-qualified `kernel://orgs/{organizationId}/projects/{projectId}/...` URIs. Authorization remains enforced by the Kernel API; selecting a project never grants access to it.
 
 ### manage\_\* tools
 
@@ -280,6 +282,7 @@ Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_
 
 ### Standalone tools
 
+- `get_connection_context` - Inspect the authenticated principal, organization, credential scope, and effective project scope.
 - `computer_action` - Mouse, keyboard, clipboard, and screenshot controls for browser sessions (click, type, press_key, scroll, move, get_position, read_clipboard, write_clipboard, screenshot).
 - `browser_curl` - Send HTTP requests through an existing browser session's Chrome network stack.
 - `execute_playwright_code` - Execute Playwright/TypeScript code against an existing browser session. Does not create or delete browsers - use `manage_browsers` for session lifecycle.
@@ -289,14 +292,12 @@ Self-hosted deployments can hide sensitive tool families by setting `KERNEL_MCP_
 
 ## Resources
 
-- `browsers://` - List browser sessions
-- `browser-pools://` - List browser pools
-- `profiles://` - List browser profiles
-- `apps://` - List deployed apps
-- `browsers://{session_id}` - Access one browser session
-- `browser-pools://{id_or_name}` - Access one browser pool
-- `profiles://{profile_name}` - Access one browser profile
-- `apps://{app_name}` - Access one deployed app
+Project resources use the prefix `kernel://orgs/{organization_id}/projects/{project_id}`.
+
+- `/browsers` and `/browsers/{session_id}` - List or access browser sessions
+- `/browser-pools` and `/browser-pools/{id_or_name}` - List or access browser pools
+- `/profiles` and `/profiles/{profile_name}` - List or access browser profiles
+- `/apps` and `/apps/{app_name}` - List or access deployed apps
 
 ## Prompts
 

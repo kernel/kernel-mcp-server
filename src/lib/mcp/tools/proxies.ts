@@ -1,6 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { createKernelClient } from "@/lib/mcp/kernel-client";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
 import {
   errorResponse,
   jsonResponse,
@@ -9,6 +12,10 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
+import {
+  projectIDForOperation,
+  projectSelectionInputSchema,
+} from "@/lib/mcp/project-selection";
 
 const httpUrlSchema = z
   .string()
@@ -25,18 +32,24 @@ const httpUrlSchema = z
     { message: "URL must use http or https." },
   );
 
-export function registerProxyTools(server: McpServer) {
-  // manage_proxies -- Create, list, get, check, and delete proxy configurations
+export function registerProxyTools(
+  server: McpServer,
+  options: McpDependencies = {
+    ...defaultMcpDependencies,
+  },
+) {
+  // manage_proxies -- Create, list, get, rename, check, and delete proxy configurations
   server.tool(
     "manage_proxies",
-    'Manage proxy configurations for routing browser traffic. Use "create" to add a proxy, "list" to see all proxies, "get" to retrieve one, "check" to test connectivity (optionally against a target URL), or "delete" to remove one. Proxy quality for bot detection avoidance, best to worst: mobile > residential > ISP > datacenter.',
+    'Manage proxy configurations for routing browser traffic. Use "create" to add a proxy, "list" to see all proxies, "get" to retrieve one, "rename" to change its name, "check" to test connectivity (optionally against a target URL), or "delete" to remove one. Proxy quality for bot detection avoidance, best to worst: mobile > residential > ISP > datacenter.',
     {
+      ...projectSelectionInputSchema(),
       action: z
-        .enum(["create", "list", "get", "check", "delete"])
+        .enum(["create", "list", "get", "rename", "check", "delete"])
         .describe("Operation to perform."),
       proxy_id: z
         .string()
-        .describe("(get, check, delete) Proxy ID.")
+        .describe("(get, rename, check, delete) Proxy ID.")
         .optional(),
       check_url: httpUrlSchema
         .describe(
@@ -49,7 +62,7 @@ export function registerProxyTools(server: McpServer) {
         .optional(),
       name: z
         .string()
-        .describe("(create) Readable name for the proxy.")
+        .describe("(create, rename) Readable name for the proxy.")
         .optional(),
       country: z
         .string()
@@ -89,7 +102,10 @@ export function registerProxyTools(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
+      const client = options.createKernelClient(
+        extra.authInfo.token,
+        projectIDForOperation(extra.authInfo, params.project_id),
+      );
 
       try {
         switch (params.action) {
@@ -149,6 +165,18 @@ export function registerProxyTools(server: McpServer) {
               return errorResponse("Error: proxy_id is required for get.");
             }
             const proxy = await client.proxies.retrieve(params.proxy_id);
+            return jsonResponse(proxy);
+          }
+          case "rename": {
+            if (!params.proxy_id) {
+              return errorResponse("Error: proxy_id is required for rename.");
+            }
+            if (!params.name) {
+              return errorResponse("Error: name is required for rename.");
+            }
+            const proxy = await client.proxies.update(params.proxy_id, {
+              name: params.name,
+            });
             return jsonResponse(proxy);
           }
           case "check": {

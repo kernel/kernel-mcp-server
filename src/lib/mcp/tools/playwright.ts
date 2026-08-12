@@ -1,11 +1,16 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
+import {
+  projectIDForOperation,
+  projectSelectionInputSchema,
+} from "@/lib/mcp/project-selection";
 import { longOperationOptions } from "@/lib/mcp/request-options";
 import { throwToolError } from "@/lib/mcp/responses";
 
-// The browser VM's own default script timeout. Our request has to outlast it, or the
-// transport gives up while the script is still running.
+// The script budget the browser VM enforces. It is sent explicitly so the deadline the VM
+// cancels on and the deadline our request waits for come from one value, and our request
+// always outlasts the VM's rather than giving up while the script is still running.
 const SCRIPT_BUDGET_SEC = 60;
 
 export function registerPlaywrightTool(server: McpServer) {
@@ -14,10 +19,11 @@ export function registerPlaywrightTool(server: McpServer) {
     "execute_playwright_code",
     "Execute Playwright/TypeScript automation code against an existing Kernel browser session. Does not create or delete browsers -- use manage_browsers to manage session lifecycle.",
     {
+      ...projectSelectionInputSchema(),
       code: z
         .string()
         .describe(
-          'Playwright/TypeScript code with `page`, `context`, and `browser` objects in scope; the value you `return` is sent back. Example: `await page.goto(\'https://example.com\'); return await page.title();` Return only what you need — prefer a targeted selector (e.g. `await page.locator(\'h1\').innerText()`) or a region-scoped snapshot (e.g. `await page.locator(\'main\').ariaSnapshot()`) rather than dumping the whole page.',
+          "Playwright/TypeScript code with `page`, `context`, and `browser` objects in scope; the value you `return` is sent back. Example: `await page.goto('https://example.com'); return await page.title();` Return only what you need — prefer a targeted selector (e.g. `await page.locator('h1').innerText()`) or a region-scoped snapshot (e.g. `await page.locator('main').ariaSnapshot()`) rather than dumping the whole page.",
         ),
       session_id: z
         .string()
@@ -31,9 +37,12 @@ export function registerPlaywrightTool(server: McpServer) {
       idempotentHint: false,
       openWorldHint: true,
     },
-    async ({ code, session_id }, extra) => {
+    async ({ code, session_id, project_id }, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
+      const client = createKernelClient(
+        extra.authInfo.token,
+        projectIDForOperation(extra.authInfo, project_id),
+      );
 
       try {
         if (!code || typeof code !== "string")
@@ -41,7 +50,7 @@ export function registerPlaywrightTool(server: McpServer) {
 
         const response = await client.browsers.playwright.execute(
           session_id,
-          { code },
+          { code, timeout_sec: SCRIPT_BUDGET_SEC },
           longOperationOptions(SCRIPT_BUDGET_SEC),
         );
 

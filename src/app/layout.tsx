@@ -55,11 +55,11 @@ export default function RootLayout({
       appearance={{
         variables: {
           colorPrimary: '#81b300',
-          colorText: '#1c2024',
-          colorTextSecondary: '#60646c',
+          colorForeground: '#1c2024',
+          colorMutedForeground: '#60646c',
           colorBackground: '#f2f0e7',
-          colorInputBackground: '#f2f0e7',
-          colorInputText: '#1c2024',
+          colorInput: '#f2f0e7',
+          colorInputForeground: '#1c2024',
           fontFamily: 'var(--font-inter), Inter, sans-serif',
           borderRadius: '0px',
         },
@@ -119,9 +119,9 @@ export default function RootLayout({
         <body className={`${inter.variable} ${ibmPlexMono.variable} font-sans overscroll-y-none`}>
           <ThemeProvider
             attribute="class"
-            defaultTheme="light"
+            forcedTheme="light"
             disableTransitionOnChange
-            enableSystem
+            enableSystem={false}
           >
             <main>{children}</main>
           </ThemeProvider>

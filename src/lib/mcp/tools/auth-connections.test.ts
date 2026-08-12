@@ -1,14 +1,18 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import { organizationWideAuthInfo } from "@/lib/mcp/auth-context.test-fixtures";
 import { toSafeAuthConnection } from "./managed-auth-state";
 import {
   assertNoSecrets,
   captureHandler,
   connection,
   kernelClientMock,
+  resetKernelClientFactory,
   unusedKernelClient,
 } from "./auth-connections.test-fixtures";
 
 describe("manage_auth_connections programmatic surface", () => {
+  afterEach(resetKernelClientFactory);
+
   test("keeps every legacy action and adds wait", () => {
     const { schema } = captureHandler();
     expect(schema?.action.safeParse("list").success).toBe(true);
@@ -40,6 +44,35 @@ describe("manage_auth_connections programmatic surface", () => {
       }).success,
     ).toBe(false);
     expect(schema?.sign_in_option_id).toBeUndefined();
+  });
+
+  test("passes the optional project selector through to the client", async () => {
+    const { handler, schema } = captureHandler();
+    let selectedProject: string | undefined;
+    kernelClientMock.factory = (_token, projectID) => {
+      selectedProject = projectID;
+      return {
+        auth: {
+          connections: {
+            list: async () => ({
+              getPaginatedItems: () => [],
+              has_more: false,
+              next_offset: null,
+            }),
+          },
+        },
+      };
+    };
+
+    expect(schema?.project_id).toBeDefined();
+    await handler(
+      { action: "list", project_id: "proj_123" },
+      { authInfo: { token: "test-token" } },
+    );
+    expect(selectedProject).toBe("proj_123");
+
+    await handler({ action: "list" }, { authInfo: organizationWideAuthInfo() });
+    expect(selectedProject).toBeUndefined();
   });
 
   test("forwards replay and browser telemetry settings on create and login", async () => {

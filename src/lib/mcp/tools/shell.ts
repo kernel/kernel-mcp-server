@@ -3,9 +3,16 @@ import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import { longOperationOptions } from "@/lib/mcp/request-options";
 import { throwToolError } from "@/lib/mcp/responses";
+import {
+  projectIDForOperation,
+  projectSelectionInputSchema,
+} from "@/lib/mcp/project-selection";
 
 const DEFAULT_TIMEOUT_SEC = 60;
-// Longest command we can wait out and still return its result in one request.
+// Longest command we can wait out and still return its result in one request: this deadline
+// plus the transport headroom has to finish inside a single serverless invocation, and 150s
+// leaves margin under that limit. Raising it past what one invocation outlasts reintroduces
+// the timeout the bound exists to prevent.
 const MAX_TIMEOUT_SEC = 150;
 
 export function registerShellTool(server: McpServer) {
@@ -14,6 +21,7 @@ export function registerShellTool(server: McpServer) {
     "exec_command",
     'Execute a command synchronously inside a browser VM. Returns stdout, stderr, and exit code. The command field is the executable; use args for its arguments. Common uses: read files (command: "cat", args: ["/var/log/supervisord.log"]), list dirs (command: "ls", args: ["/var/log"]), check DNS (command: "cat", args: ["/etc/resolv.conf"]), test connectivity (command: "curl", args: ["-I", "https://example.com"]).',
     {
+      ...projectSelectionInputSchema(),
       session_id: z.string().describe("Browser session ID."),
       command: z
         .string()
@@ -41,9 +49,15 @@ export function registerShellTool(server: McpServer) {
       idempotentHint: false,
       openWorldHint: true,
     },
-    async ({ session_id, command, args, cwd, timeout_sec, as_root }, extra) => {
+    async (
+      { session_id, command, args, cwd, timeout_sec, as_root, project_id },
+      extra,
+    ) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
+      const client = createKernelClient(
+        extra.authInfo.token,
+        projectIDForOperation(extra.authInfo, project_id),
+      );
 
       try {
         const result = await client.browsers.process.exec(

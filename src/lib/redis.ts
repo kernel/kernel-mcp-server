@@ -1,6 +1,11 @@
 import { createClient } from "redis";
 import { createHmac } from "crypto";
 import { mcpAppsMarkerKey } from "@/lib/mcp-apps-marker";
+import {
+  type OAuthAuthorizationContext,
+  parseAuthorizationContext,
+  serializeAuthorizationContext,
+} from "@/lib/oauth-context";
 
 const redisUrl = process.env.REDIS_URL;
 const redisTlsServerName = process.env.REDIS_TLS_SERVER_NAME;
@@ -108,43 +113,76 @@ function hashOpaqueToken(token: string): string {
   return createHmac("sha256", secretKey).update(token).digest("hex");
 }
 
-export async function setOrgIdForClientId({
+function authorizationRequestKey(
+  clientId: string,
+  codeChallenge: string,
+): string {
+  return `oauth-request:${hashOpaqueToken(`${clientId}:${codeChallenge}`)}`;
+}
+
+export async function setAuthorizationContextForRequest({
   clientId,
-  orgId,
+  codeChallenge,
+  authorizationContext,
   ttlSeconds,
 }: {
   clientId: string;
-  orgId: string;
+  codeChallenge: string;
+  authorizationContext: OAuthAuthorizationContext;
+  ttlSeconds: number;
+}): Promise<void> {
+  await ensureConnected();
+  await withReconnect(() =>
+    client.setEx(
+      authorizationRequestKey(clientId, codeChallenge),
+      ttlSeconds,
+      serializeAuthorizationContext(authorizationContext),
+    ),
+  );
+}
+
+export async function getAuthorizationContextForRequest({
+  clientId,
+  codeChallenge,
+}: {
+  clientId: string;
+  codeChallenge: string;
+}): Promise<OAuthAuthorizationContext | null> {
+  await ensureConnected();
+  const value = await withReconnect(() =>
+    client.get(authorizationRequestKey(clientId, codeChallenge)),
+  );
+  return value ? parseAuthorizationContext(value) : null;
+}
+
+export async function setAuthorizationContextForClientId({
+  clientId,
+  authorizationContext,
+  ttlSeconds,
+}: {
+  clientId: string;
+  authorizationContext: OAuthAuthorizationContext;
   ttlSeconds: number;
 }): Promise<void> {
   await ensureConnected();
   const key = `client:${clientId}`;
-  await withReconnect(() => client.setEx(key, ttlSeconds, orgId));
+  await withReconnect(() =>
+    client.setEx(
+      key,
+      ttlSeconds,
+      serializeAuthorizationContext(authorizationContext),
+    ),
+  );
 }
 
-export async function getOrgIdForClientId({
+export async function getAuthorizationContextForClientId({
   clientId,
 }: {
   clientId: string;
-}): Promise<string | null> {
+}): Promise<OAuthAuthorizationContext | null> {
   await ensureConnected();
-  const key = `client:${clientId}`;
-  return await withReconnect(() => client.get(key));
-}
-
-export async function setOrgIdForJwt({
-  jwt,
-  orgId,
-  ttlSeconds,
-}: {
-  jwt: string;
-  orgId: string;
-  ttlSeconds: number;
-}): Promise<void> {
-  await ensureConnected();
-  const hashedJwt = hashJwt(jwt);
-  const key = `jwt:${hashedJwt}`;
-  await withReconnect(() => client.setEx(key, ttlSeconds, orgId));
+  const value = await withReconnect(() => client.get(`client:${clientId}`));
+  return value ? parseAuthorizationContext(value) : null;
 }
 
 export { client as redisClient };
@@ -205,48 +243,66 @@ export async function hasMcpAppsClient({
   return value !== null;
 }
 
-export async function setOrgIdForRefreshToken({
-  refreshToken,
-  orgId,
-  ttlSeconds,
-}: {
-  refreshToken: string;
-  orgId: string;
-  ttlSeconds: number;
-}): Promise<void> {
-  await ensureConnected();
-  const hashed = hashOpaqueToken(refreshToken);
-  const key = `refresh:${hashed}`;
-  await withReconnect(() => client.setEx(key, ttlSeconds, orgId));
-}
-
-export async function getOrgIdForRefreshTokenSliding({
+export async function getAuthorizationContextForRefreshTokenSliding({
   refreshToken,
   ttlSeconds,
 }: {
   refreshToken: string;
   ttlSeconds: number;
-}): Promise<string | null> {
+}): Promise<OAuthAuthorizationContext | null> {
   await ensureConnected();
-  const hashed = hashOpaqueToken(refreshToken);
-  const key = `refresh:${hashed}`;
-  const orgId = await withReconnect(() => client.get(key));
-  if (orgId) {
-    // Refresh TTL to implement sliding expiration on active tokens
-    await withReconnect(() => client.expire(key, ttlSeconds));
-  }
-  return orgId;
+  const key = `refresh:${hashOpaqueToken(refreshToken)}`;
+  const value = await withReconnect(() =>
+    client.getEx(key, { type: "EX", value: ttlSeconds }),
+  );
+  return value ? parseAuthorizationContext(value) : null;
 }
 
-export async function deleteOrgIdForRefreshToken({
-  refreshToken,
+export async function persistOAuthTokenContexts({
+  jwt,
+  newRefreshToken,
+  oldRefreshToken,
+  authorizationContext,
+  jwtTtlSeconds,
+  refreshTtlSeconds,
+  consumedRequest,
 }: {
-  refreshToken: string;
+  jwt: string;
+  newRefreshToken: string;
+  oldRefreshToken?: string;
+  authorizationContext: OAuthAuthorizationContext;
+  jwtTtlSeconds: number;
+  refreshTtlSeconds: number;
+  consumedRequest?: { clientId: string; codeChallenge: string };
 }): Promise<void> {
   await ensureConnected();
-  const hashed = hashOpaqueToken(refreshToken);
-  const key = `refresh:${hashed}`;
-  await withReconnect(() => client.del(key));
+  const jwtKey = `jwt:${hashJwt(jwt)}`;
+  const newRefreshKey = `refresh:${hashOpaqueToken(newRefreshToken)}`;
+  const oldRefreshKey = oldRefreshToken
+    ? `refresh:${hashOpaqueToken(oldRefreshToken)}`
+    : undefined;
+  const value = serializeAuthorizationContext(authorizationContext);
+
+  await withReconnect(async () => {
+    const transaction = client
+      .multi()
+      .setEx(jwtKey, jwtTtlSeconds, value)
+      .setEx(newRefreshKey, refreshTtlSeconds, value);
+
+    if (oldRefreshKey && oldRefreshKey !== newRefreshKey) {
+      transaction.del(oldRefreshKey);
+    }
+    if (consumedRequest) {
+      transaction.del(
+        authorizationRequestKey(
+          consumedRequest.clientId,
+          consumedRequest.codeChallenge,
+        ),
+      );
+    }
+
+    await transaction.exec();
+  });
 }
 
 function isTransientSocketError(error: unknown): boolean {

@@ -2,17 +2,17 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { APIConnectionTimeoutError } from "@onkernel/sdk";
-import { afterEach, expect, mock, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 
+import { projectScopedExtra } from "@/lib/mcp/auth-context.test-fixtures";
+import {
+  kernelClientMock,
+  resetKernelClientFactory,
+} from "@/lib/mcp/kernel-client.test-fixtures";
 import { registerPlaywrightTool } from "@/lib/mcp/tools/playwright";
 import { registerShellTool } from "@/lib/mcp/tools/shell";
 
-// Registered here rather than shared, because two other test files mock this same module
-// and the freshest registration wins for whichever file is running.
-let client: unknown;
-mock.module("@/lib/mcp/kernel-client", () => ({
-  createKernelClient: () => client,
-}));
+const TRANSPORT_HEADROOM_MS = 30_000;
 
 type Handler = (params: any, extra: any) => Promise<any>;
 
@@ -34,34 +34,39 @@ function capture(register: (server: McpServer) => void) {
   return { handler: handler!, schema: schema! };
 }
 
-const extra = { authInfo: { token: "sk-test" } };
+function useClient(client: unknown) {
+  kernelClientMock.factory = () => client;
+}
 
-afterEach(() => {
-  client = undefined;
-});
+const extra = projectScopedExtra();
 
-test("execute_playwright_code outlasts the script budget and is never replayed", async () => {
+afterEach(resetKernelClientFactory);
+
+test("execute_playwright_code sends the budget it waits for, and is never replayed", async () => {
+  let body: any;
   let options: any;
-  client = {
+  useClient({
     browsers: {
       playwright: {
-        execute: async (_id: string, _body: unknown, opts: unknown) => {
+        execute: async (_id: string, params: unknown, opts: unknown) => {
+          body = params;
           options = opts;
           return { success: true, result: "ok" };
         },
       },
     },
-  };
+  });
 
   const { handler } = capture(registerPlaywrightTool);
   await handler({ code: "return 1", session_id: "ses_1" }, extra);
 
+  expect(body.timeout_sec).toBe(60);
   expect(options.maxRetries).toBe(0);
-  expect(options.timeout).toBeGreaterThan(60_000);
+  expect(options.timeout).toBe(60_000 + TRANSPORT_HEADROOM_MS);
 });
 
 test("a playwright transport timeout is classified rather than generic", async () => {
-  client = {
+  useClient({
     browsers: {
       playwright: {
         execute: async () => {
@@ -69,7 +74,7 @@ test("a playwright transport timeout is classified rather than generic", async (
         },
       },
     },
-  };
+  });
 
   const { handler } = capture(registerPlaywrightTool);
   const error = await handler(
@@ -86,7 +91,7 @@ test("a playwright transport timeout is classified rather than generic", async (
 test("exec_command waits out the command it asked for and is never replayed", async () => {
   let body: any;
   let options: any;
-  client = {
+  useClient({
     browsers: {
       process: {
         exec: async (_id: string, params: unknown, opts: unknown) => {
@@ -96,7 +101,7 @@ test("exec_command waits out the command it asked for and is never replayed", as
         },
       },
     },
-  };
+  });
 
   const { handler } = capture(registerShellTool);
   await handler(
@@ -106,12 +111,42 @@ test("exec_command waits out the command it asked for and is never replayed", as
 
   expect(body.timeout_sec).toBe(120);
   expect(options.maxRetries).toBe(0);
-  expect(options.timeout).toBeGreaterThan(120_000);
+  expect(options.timeout).toBe(120_000 + TRANSPORT_HEADROOM_MS);
 });
 
-test("exec_command sends a timeout the transport can honour", () => {
+test("an exec_command with no deadline still sends one the transport outlasts", async () => {
+  let body: any;
+  let options: any;
+  useClient({
+    browsers: {
+      process: {
+        exec: async (_id: string, params: unknown, opts: unknown) => {
+          body = params;
+          options = opts;
+          return { exit_code: 0, duration_ms: 1 };
+        },
+      },
+    },
+  });
+
+  const { handler, schema } = capture(registerShellTool);
+  await handler(
+    {
+      session_id: "ses_1",
+      command: "ls",
+      timeout_sec: schema.timeout_sec.parse(undefined),
+    },
+    extra,
+  );
+
+  expect(body.timeout_sec).toBe(60);
+  expect(options.timeout).toBe(60_000 + TRANSPORT_HEADROOM_MS);
+});
+
+test("exec_command accepts the longest deadline one request can wait out, and no more", () => {
   const { schema } = capture(registerShellTool);
 
   expect(schema.timeout_sec.parse(undefined)).toBe(60);
-  expect(schema.timeout_sec.safeParse(600).success).toBe(false);
+  expect(schema.timeout_sec.safeParse(150).success).toBe(true);
+  expect(schema.timeout_sec.safeParse(151).success).toBe(false);
 });

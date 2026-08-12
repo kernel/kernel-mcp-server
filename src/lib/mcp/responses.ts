@@ -67,8 +67,23 @@ export function errorResponse(text: string) {
   return { ...textResponse(text), isError: true as const };
 }
 
+function apiErrorCode(error: APIError) {
+  if (
+    error.error &&
+    typeof error.error === "object" &&
+    "code" in error.error &&
+    typeof error.error.code === "string"
+  ) {
+    return error.error.code;
+  }
+}
+
 function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : String(error);
+  if (!(error instanceof APIError)) return message;
+
+  const code = apiErrorCode(error);
+  return code ? `${message} [code: ${code}]` : message;
 }
 
 // Named after what the API said, so a stale session id (404) is distinguishable from an

@@ -25,13 +25,20 @@ function captureRegistration(mcpApps: boolean) {
   const legacyTools: string[] = [];
   const appTools: string[] = [];
   const resources: string[] = [];
+  const schemas = new Map<string, Record<string, unknown>>();
   const server = {
     prompt() {},
-    tool(name: string) {
+    resource() {},
+    tool(name: string, _description: string, inputSchema: object) {
       legacyTools.push(name);
+      schemas.set(name, inputSchema as Record<string, unknown>);
     },
-    registerTool(name: string) {
+    registerTool(
+      name: string,
+      config: { inputSchema?: Record<string, unknown> },
+    ) {
       appTools.push(name);
+      schemas.set(name, config.inputSchema ?? {});
       return { enable() {}, disable() {} };
     },
     registerResource(name: string) {
@@ -40,7 +47,7 @@ function captureRegistration(mcpApps: boolean) {
     },
   } as unknown as McpServer;
   registerMcpCapabilities(server, { mcpApps });
-  return { legacyTools, appTools, resources };
+  return { legacyTools, appTools, resources, schemas };
 }
 
 describe("MCP Apps additive registration", () => {
@@ -49,12 +56,18 @@ describe("MCP Apps additive registration", () => {
     process.env.KERNEL_MCP_DISABLED_TOOLSETS = NON_AUTH_TOOLSETS;
     try {
       const base = captureRegistration(false);
-      expect(base.legacyTools).toEqual(["manage_auth_connections"]);
+      expect(base.legacyTools).toEqual([
+        "get_connection_context",
+        "manage_auth_connections",
+      ]);
       expect(base.appTools).toEqual([]);
       expect(base.resources).toEqual([]);
 
       const withApps = captureRegistration(true);
-      expect(withApps.legacyTools).toEqual(["manage_auth_connections"]);
+      expect(withApps.legacyTools).toEqual([
+        "get_connection_context",
+        "manage_auth_connections",
+      ]);
       expect(withApps.appTools).toEqual([
         "open_auth_login",
         "begin_auth_login",
@@ -66,6 +79,42 @@ describe("MCP Apps additive registration", () => {
       } else {
         process.env.KERNEL_MCP_DISABLED_TOOLSETS = previous;
       }
+    }
+  });
+});
+
+describe("project selection registration", () => {
+  const projectScopedTools = [
+    "manage_profiles",
+    "manage_browsers",
+    "manage_browser_pools",
+    "browser_curl",
+    "manage_proxies",
+    "manage_extensions",
+    "manage_apps",
+    "computer_action",
+    "exec_command",
+    "execute_playwright_code",
+    "manage_replays",
+    "manage_auth_connections",
+    "manage_credentials",
+    "open_auth_login",
+    "begin_auth_login",
+  ];
+
+  test("advertises one stable project-aware tool contract", () => {
+    const registration = captureRegistration(true);
+
+    for (const name of projectScopedTools) {
+      expect(registration.schemas.get(name)).toHaveProperty("project_id");
+    }
+
+    for (const name of [
+      "get_connection_context",
+      "search_docs",
+      "manage_credential_providers",
+    ]) {
+      expect(registration.schemas.get(name)).not.toHaveProperty("project_id");
     }
   });
 });
