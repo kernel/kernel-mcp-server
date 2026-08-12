@@ -14,13 +14,16 @@ import { Row } from "@/components/row";
 import { LoadingState } from "@/components/spinner/loading-state";
 import { KernelWordmark } from "@/components/icons";
 import { buildSelectOrgRedirectUrl } from "./oauth-params";
+import {
+  primaryActionLabel,
+  type SelectionScope,
+  type SelectionStage,
+} from "./primary-action";
 
 interface OAuthProject {
   id: string;
   name: string;
 }
-
-type SelectionStage = "organization" | "scope";
 
 function SelectOrgContent(): React.ReactElement {
   const { isLoaded, setActive, userMemberships } = useOrganizationList({
@@ -277,6 +280,20 @@ function SelectOrgContent(): React.ReactElement {
   const selectedOrg = memberships.find(
     (membership) => membership.organization.id === selectedOrgId,
   )?.organization;
+  const selectedScopeKind: SelectionScope = !selectedScope
+    ? "none"
+    : selectedScope.startsWith("project:")
+      ? "project"
+      : "organization";
+  const primaryActionDisabled =
+    isSelecting ||
+    !selectedOrgId ||
+    (stage === "scope" && selectedScopeKind === "none");
+  const primaryAction = primaryActionLabel({
+    stage,
+    isPending: isSelecting,
+    scope: selectedScopeKind,
+  });
 
   return (
     <Col className="min-h-screen items-center justify-center">
@@ -293,7 +310,7 @@ function SelectOrgContent(): React.ReactElement {
           <KernelWordmark className="text-foreground" width={100} height={22} />
           <p className="text-muted-foreground text-sm">
             {stage === "organization"
-              ? "select an organization to authorize access."
+              ? "select an organization."
               : `choose access for ${selectedOrg?.name || "this organization"}.`}
           </p>
         </Col>
@@ -365,7 +382,7 @@ function SelectOrgContent(): React.ReactElement {
             <div className="bg-[#faf9f2] border-[0.5px] border-[#e1dccf]">
               <ScopeButton
                 label="entire organization"
-                detail="access every project and select projects per request"
+                detail="access all current and future projects"
                 selected={selectedScope === "organization"}
                 onClick={() => setSelectedScope("organization")}
               />
@@ -479,7 +496,7 @@ function SelectOrgContent(): React.ReactElement {
             <button
               onClick={() => setStage("organization")}
               disabled={isSelecting}
-              className="border-[0.5px] border-foreground py-3 px-4 text-sm disabled:opacity-50 cursor-pointer"
+              className="border-[0.5px] border-foreground py-3 px-4 text-sm disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
             >
               back
             </button>
@@ -488,20 +505,17 @@ function SelectOrgContent(): React.ReactElement {
             onClick={
               stage === "organization" ? handleOrgConfirm : handleAuthorize
             }
-            disabled={
-              isSelecting ||
-              !selectedOrgId ||
-              (stage === "scope" && !selectedScope)
-            }
-            className="flex-1 bg-foreground text-background py-3 px-4 font-[250] text-sm hover:underline disabled:opacity-50 cursor-pointer"
+            disabled={primaryActionDisabled}
+            aria-busy={isSelecting}
+            className={`flex-1 py-3 px-4 font-[250] text-sm ${
+              isSelecting
+                ? "bg-secondary text-secondary-foreground cursor-wait"
+                : primaryActionDisabled
+                  ? "bg-secondary text-secondary-foreground cursor-not-allowed"
+                  : "bg-primary text-primary-foreground hover:underline cursor-pointer"
+            }`}
           >
-            {isSelecting
-              ? stage === "organization"
-                ? "loading projects..."
-                : "authorizing..."
-              : stage === "organization"
-                ? "continue"
-                : "authorize"}
+            <span aria-live="polite">{primaryAction}</span>
           </button>
         </Row>
       </Col>
