@@ -199,6 +199,7 @@ function compactTelemetryEvent({ seq, event }: TelemetryEnvelope) {
 
 type BrowserTelemetryReadParams = {
   session_id: string;
+  project_id?: string;
   categories?: TelemetryEventsQuery["category"];
   limit?: number;
   offset?: number;
@@ -208,25 +209,73 @@ type BrowserTelemetryReadParams = {
   compact?: boolean;
 };
 
+const telemetryDurationUnitsInMilliseconds = {
+  ns: 1 / 1_000_000,
+  us: 1 / 1_000,
+  µs: 1 / 1_000,
+  μs: 1 / 1_000,
+  ms: 1,
+  s: 1_000,
+  m: 60_000,
+  h: 3_600_000,
+} as const;
+
+function resolveTelemetryTimeParam(value: string, now: Date) {
+  if (/^[+-]?0$/.test(value)) return now.toISOString();
+
+  const sign = value.startsWith("-") ? -1 : 1;
+  const duration = value.match(/^[+-]?(.*)$/)?.[1] ?? value;
+  const parts = duration.matchAll(
+    /((?:\d+(?:\.\d*)?|\.\d+))(ns|us|µs|μs|ms|s|m|h)/g,
+  );
+  let milliseconds = 0;
+  let parsedLength = 0;
+  for (const part of parts) {
+    if (part.index !== parsedLength) return value;
+    milliseconds +=
+      Number(part[1]) *
+      telemetryDurationUnitsInMilliseconds[
+        part[2] as keyof typeof telemetryDurationUnitsInMilliseconds
+      ];
+    parsedLength += part[0].length;
+  }
+  if (
+    parsedLength !== duration.length ||
+    parsedLength === 0 ||
+    !Number.isFinite(milliseconds)
+  ) {
+    return value;
+  }
+  const resolved = new Date(now.getTime() - sign * milliseconds);
+  return Number.isNaN(resolved.getTime()) ? value : resolved.toISOString();
+}
+
 async function readBrowserTelemetry(
   client: KernelClient,
   params: BrowserTelemetryReadParams,
 ) {
-  const query: TelemetryEventsQuery = { limit: params.limit ?? 100 };
+  // Pin the page to one absolute window so raw_replay cannot move as new
+  // telemetry arrives or relative time bounds age.
+  const now = new Date();
+  const query: TelemetryEventsQuery = {
+    limit: params.limit ?? 100,
+    until: params.until
+      ? resolveTelemetryTimeParam(params.until, now)
+      : now.toISOString(),
+    order: params.order ?? "asc",
+  };
   if (params.categories) query.category = params.categories;
-  if (params.offset !== undefined) query.offset = params.offset;
-  if (params.since !== undefined) query.since = params.since;
-  if (params.until !== undefined) query.until = params.until;
-  if (params.order !== undefined) query.order = params.order;
+  if (params.offset !== undefined) {
+    query.offset = params.offset;
+  } else if (params.since !== undefined) {
+    query.since = resolveTelemetryTimeParam(params.since, now);
+  }
 
   // Avoid the API's five-minute default. The archive can't predate the
-  // session, so the epoch reads the full session without a browser lookup;
-  // until-only reads already start at the stream head and desc reads anchor
-  // at the stream tail.
+  // session, so the epoch reads the full session without a browser lookup.
   if (
     query.offset === undefined &&
     query.since === undefined &&
-    query.until === undefined &&
     query.order !== "desc"
   ) {
     query.since = "1970-01-01T00:00:00Z";
@@ -266,6 +315,22 @@ async function readBrowserTelemetry(
         })
       : ascPagingNote;
 
+  const rawReplay =
+    params.compact === false
+      ? undefined
+      : {
+          action: "get_telemetry",
+          session_id: params.session_id,
+          ...(params.project_id && { project_id: params.project_id }),
+          ...(query.category && { categories: query.category }),
+          limit: query.limit,
+          ...(query.offset !== undefined && { offset: query.offset }),
+          ...(query.since && { since: query.since }),
+          ...(query.until && { until: query.until }),
+          order: query.order,
+          compact: false,
+        };
+
   // Single-line JSON rather than the pretty-printed house helpers: a page
   // carries up to 100 events and indentation would inflate the token cost.
   return textResponse(
@@ -273,6 +338,7 @@ async function readBrowserTelemetry(
       items,
       has_more: page.has_more,
       next_offset: page.next_offset,
+      ...(rawReplay && { raw_replay: rawReplay }),
       ...(note && { note }),
     }),
   );
@@ -533,7 +599,7 @@ export function registerBrowserCapabilities(
       compact: z
         .boolean()
         .describe(
-          "(get_telemetry) Defaults to true. Compact items flatten the event envelope, add an ISO time, and omit data fields named body, headers, post_data, or png plus any data field over 8 KiB; omitted_fields lists removals. To recover them, repeat the call with compact=false and the same categories, offset, since, until, order, and limit. Use the original page offset, not next_offset, which points to the following page. Raw events may be large, so narrow the categories, time window, and limit first.",
+          "(get_telemetry) Defaults to true. Compact items flatten the event envelope, add an ISO time, and omit data fields named body, headers, post_data, or png plus any data field over 8 KiB; omitted_fields lists removals. To recover them from the exact page, call manage_browsers with the returned raw_replay arguments. Raw events may be large, so narrow the categories, time window, and limit first.",
         )
         .optional(),
       telemetry_enabled: z
@@ -705,6 +771,7 @@ export function registerBrowserCapabilities(
             }
             return await readBrowserTelemetry(client, {
               session_id: params.session_id,
+              project_id: params.project_id,
               categories: params.categories,
               limit: params.limit,
               offset: params.offset,
