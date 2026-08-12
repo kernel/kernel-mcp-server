@@ -311,7 +311,7 @@ function SelectOrgContent(): React.ReactElement {
           <KernelWordmark className="text-foreground" width={100} height={22} />
           <p className="text-muted-foreground text-sm">
             {stage === "organization"
-              ? "select an organization to authorize access."
+              ? "select an organization."
               : `choose access for ${selectedOrg?.name || "this organization"}.`}
           </p>
         </Col>
@@ -383,7 +383,7 @@ function SelectOrgContent(): React.ReactElement {
             <div className="bg-[#faf9f2] border-[0.5px] border-[#e1dccf]">
               <ScopeButton
                 label="entire organization"
-                detail="access every project and select projects per request"
+                detail="access all current and future projects"
                 selected={selectedScope === "organization"}
                 onClick={() => setSelectedScope("organization")}
               />
