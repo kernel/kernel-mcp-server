@@ -7,6 +7,7 @@ import { registerBrowserPoolCapabilities } from "@/lib/mcp/tools/browser-pools";
 import { registerProfileCapabilities } from "@/lib/mcp/tools/profiles";
 import { registerProxyTools } from "@/lib/mcp/tools/proxies";
 
+// Add every newly documented durable tool here so CI includes its parameter table.
 const documentedTools = {
   manage_browser_pools: "reference/mcp-server/tools/manage-browser-pools.mdx",
   manage_profiles: "reference/mcp-server/tools/manage-profiles.mdx",
@@ -55,12 +56,18 @@ export function parityError(
 }
 
 async function listDurableToolParameters(): Promise<Map<string, Set<string>>> {
-  const server = new McpServer({ name: "schema-parity", version: "0.0.0" });
+  const server = new McpServer({
+    name: "top-level-parameter-name-parity",
+    version: "0.0.0",
+  });
   registerBrowserPoolCapabilities(server);
   registerProfileCapabilities(server);
   registerProxyTools(server);
 
-  const client = new Client({ name: "schema-parity", version: "0.0.0" });
+  const client = new Client({
+    name: "top-level-parameter-name-parity",
+    version: "0.0.0",
+  });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
   await Promise.all([
@@ -81,7 +88,9 @@ async function listDurableToolParameters(): Promise<Map<string, Set<string>>> {
   }
 }
 
-export async function checkDocSchemaParity(docsRoot: string): Promise<void> {
+export async function checkDocTopLevelParameterNameParity(
+  docsRoot: string,
+): Promise<void> {
   const schemas = await listDurableToolParameters();
   const errors: string[] = [];
 
@@ -108,7 +117,9 @@ export async function checkDocSchemaParity(docsRoot: string): Promise<void> {
   }
 
   if (errors.length > 0) {
-    throw new Error(`MCP documentation schema drift:\n${errors.join("\n")}`);
+    throw new Error(
+      `MCP documentation top-level parameter-name drift:\n${errors.join("\n")}`,
+    );
   }
 }
 
@@ -116,11 +127,11 @@ if (import.meta.main) {
   const docsRoot = process.argv[2];
   if (!docsRoot) {
     throw new Error(
-      "usage: bun scripts/check-doc-schema-parity.ts <docs-root>",
+      "usage: bun scripts/check-doc-top-level-parameter-name-parity.ts <docs-root>",
     );
   }
-  await checkDocSchemaParity(docsRoot);
+  await checkDocTopLevelParameterNameParity(docsRoot);
   console.log(
-    "MCP documentation parameter tables match the registered schemas.",
+    "MCP documentation top-level parameter names match the registered schemas.",
   );
 }

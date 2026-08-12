@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { parityError, parseParameterNames } from "./check-doc-schema-parity";
+import {
+  parityError,
+  parseParameterNames,
+} from "./check-doc-top-level-parameter-name-parity";
 
 describe("parseParameterNames", () => {
   test("reads individual and grouped parameter cells", () => {

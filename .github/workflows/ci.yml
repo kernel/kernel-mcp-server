@@ -30,6 +30,7 @@ jobs:
         run: bun test
 
       - name: Check out Kernel docs
+        # Track docs main deliberately so either repository can detect cross-repo drift.
         uses: actions/checkout@v4
         with:
           repository: kernel/docs
@@ -40,5 +41,5 @@ jobs:
             reference/mcp-server/tools/manage-proxies.mdx
           sparse-checkout-cone-mode: false
 
-      - name: Check MCP documentation schema parity
-        run: bun scripts/check-doc-schema-parity.ts "$GITHUB_WORKSPACE/kernel-docs"
+      - name: Check MCP documentation top-level parameter-name parity
+        run: bun scripts/check-doc-top-level-parameter-name-parity.ts "$GITHUB_WORKSPACE/kernel-docs"
