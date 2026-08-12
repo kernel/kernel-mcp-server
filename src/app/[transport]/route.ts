@@ -7,6 +7,7 @@ import { verifyToken } from "@clerk/nextjs/server";
 import { after, NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
 import {
+  captureMcpConnectionScopeFailure,
   flushMcpAnalytics,
   instrumentMcpAnalytics,
   isMcpAnalyticsEnabled,
@@ -14,6 +15,7 @@ import {
 import {
   connectionAnalyticsFromContext,
   resolveMcpConnectionContext,
+  type McpConnectionContextFailure,
 } from "@/lib/mcp/auth-context";
 import { mcpAppsAuthSubject } from "@/lib/mcp-apps-marker";
 import { requestUsesMcpApps } from "@/lib/mcp-apps-request";
@@ -59,6 +61,36 @@ function createAuthErrorResponse(
   );
 }
 
+// A credential the Kernel API rejects is the caller's problem, and a scope we
+// cannot resolve right now is worth retrying. Neither is a server fault, so
+// neither should reach the error handler as a thrown 500.
+export function connectionScopeFailureResponse(
+  failure: Exclude<McpConnectionContextFailure, { status: "invalid" }>,
+): Response {
+  if (failure.status === "rejected") {
+    return createAuthErrorResponse(
+      "invalid_token",
+      "The Kernel API rejected this credential",
+    );
+  }
+  return new Response(
+    JSON.stringify({
+      error: "temporarily_unavailable",
+      error_description: "Unable to resolve Kernel connection scope",
+    }),
+    {
+      status: 503,
+      headers: {
+        "Retry-After": "1",
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      },
+    },
+  );
+}
+
 // Handler variants keep per-connection capabilities out of tools/list unless
 // the authenticated connection can use them.
 const serverInfo = { serverInfo: { name, version } };
@@ -83,6 +115,7 @@ async function handleMcpRequestWithIdentity({
   authSubject,
   scopes,
   authInfoExtra,
+  credentialType,
   transportSessionId,
   connectionContextCacheIdentity,
   observeConnection,
@@ -92,11 +125,12 @@ async function handleMcpRequestWithIdentity({
   authSubject: string;
   scopes: string[];
   authInfoExtra: AuthInfoExtra;
+  credentialType: "api_key" | "oauth";
   transportSessionId: string | null;
   connectionContextCacheIdentity?: string;
   observeConnection: boolean;
 }) {
-  const [mcpApps, connectionContext] = await Promise.all([
+  const [mcpApps, connection] = await Promise.all([
     requestUsesMcpApps(req, {
       authSubject,
       transportSessionId,
@@ -108,9 +142,19 @@ async function handleMcpRequestWithIdentity({
       cacheIdentity: connectionContextCacheIdentity,
     }),
   ]);
-  if (!connectionContext) {
-    throw new Error("Unable to resolve Kernel connection scope");
+  if (connection.status !== "ok") {
+    captureMcpConnectionScopeFailure({
+      outcome: connection.status,
+      credentialType,
+      upstreamStatusCode:
+        connection.status === "rejected" ? connection.statusCode : undefined,
+    });
+    if (connection.status === "invalid") {
+      throw new Error("Unable to resolve Kernel connection scope");
+    }
+    return connectionScopeFailureResponse(connection);
   }
+  const connectionContext = connection.context;
   const connectionAnalytics =
     observeConnection && isMcpAnalyticsEnabled()
       ? connectionAnalyticsFromContext(connectionContext)
@@ -161,6 +205,7 @@ async function handleAuthenticatedRequest(
       authSubject: mcpAppsAuthSubject({ token }),
       scopes: ["apikey"],
       authInfoExtra: { userId: null, clerkToken: null },
+      credentialType: "api_key",
       transportSessionId,
       observeConnection,
     });
@@ -194,6 +239,7 @@ async function handleAuthenticatedRequest(
     authSubject,
     scopes: ["openid"],
     authInfoExtra: { userId, clerkToken: token },
+    credentialType: "oauth",
     transportSessionId,
     connectionContextCacheIdentity: transportSessionId
       ? `${authSubject}\0${transportSessionId}`

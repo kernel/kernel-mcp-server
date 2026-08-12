@@ -39,6 +39,18 @@ export type OAuthTokenExchangeAnalytics = {
 
 export const OAUTH_TOKEN_EXCHANGE_EVENT = "oauth_token_exchange";
 
+// Scope resolution runs before a request reaches the instrumented server, so a
+// connection that never gets a scope emits no $mcp_* event. This is the only
+// record of it.
+export type McpConnectionScopeFailureAnalytics = {
+  outcome: "rejected" | "unavailable" | "invalid";
+  credentialType: "api_key" | "oauth";
+  upstreamStatusCode?: number;
+};
+
+export const MCP_CONNECTION_SCOPE_FAILURE_EVENT =
+  "mcp_connection_scope_failure";
+
 if (!projectToken && process.env.NODE_ENV !== "production") {
   console.error(
     "POSTHOG_PROJECT_TOKEN variable required by PostHog is missing or un-configured, this causes events to be silently missed. This error stops appearing once POSTHOG_PROJECT_TOKEN is configured",
@@ -312,6 +324,32 @@ export function captureOAuthTokenExchange(
     });
   } catch (error) {
     console.error("Failed to capture OAuth token exchange analytics", error);
+  }
+}
+
+export function captureMcpConnectionScopeFailure(
+  failure: McpConnectionScopeFailureAnalytics,
+  client: PostHog | null = posthog,
+) {
+  if (!client) return;
+
+  const properties = {
+    connection_scope_outcome: failure.outcome,
+    connection_credential_type: failure.credentialType,
+    upstream_status_code: failure.upstreamStatusCode,
+  };
+
+  try {
+    client.capture({
+      distinctId: "mcp-connection-scope",
+      event: MCP_CONNECTION_SCOPE_FAILURE_EVENT,
+      properties: {
+        $process_person_profile: false,
+        ...properties,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to capture MCP connection scope analytics", error);
   }
 }
 
