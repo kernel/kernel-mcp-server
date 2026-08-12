@@ -6,7 +6,11 @@ import {
   buildBrowserUpdateConfig,
   type BrowserConfigResult,
 } from "@/lib/mcp/browser-config";
-import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
+import type { KernelClient } from "@/lib/mcp/kernel-client";
 import {
   registerJsonResourceCollection,
   registerJsonResourceTemplate,
@@ -201,6 +205,7 @@ type BrowserTelemetryReadParams = {
   since?: string;
   until?: string;
   order?: "asc" | "desc";
+  compact?: boolean;
 };
 
 async function readBrowserTelemetry(
@@ -233,7 +238,9 @@ async function readBrowserTelemetry(
   const fullSessionRead = unfilteredExceptSince && params.since === undefined;
 
   const page = await client.browsers.telemetry.events(params.session_id, query);
-  const items = page.getPaginatedItems().map(compactTelemetryEvent);
+  const pageItems = page.getPaginatedItems();
+  const items =
+    params.compact === false ? pageItems : pageItems.map(compactTelemetryEvent);
 
   // Counter-steer the pagination reflex: an unfiltered ascending read starts
   // at session creation, so an agent chasing a recent failure should flip to
@@ -318,7 +325,10 @@ function buildSshPortForwardingInfo(
   };
 }
 
-export function registerBrowserCapabilities(server: McpServer) {
+export function registerBrowserCapabilities(
+  server: McpServer,
+  dependencies: McpDependencies = defaultMcpDependencies,
+) {
   registerJsonResourceCollection(server, {
     name: "browsers",
     uriTemplate: "kernel://orgs/{organizationId}/projects/{projectId}/browsers",
@@ -344,7 +354,7 @@ export function registerBrowserCapabilities(server: McpServer) {
   // manage_browsers -- Manage browser sessions and read archived telemetry
   server.tool(
     "manage_browsers",
-    'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished.',
+    'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished. get_telemetry compacts events by default; set compact=false on a narrowly filtered page when raw headers, request data, response bodies, or other omitted fields are needed.',
     {
       ...projectSelectionInputSchema(),
       action: z
@@ -511,6 +521,12 @@ export function registerBrowserCapabilities(server: McpServer) {
           "(get_telemetry) Read direction. asc (default) reads oldest first from session start; desc reads newest first. Prefer desc when diagnosing a recent failure in a long session — it reaches the end without paging. Preserve it while paging.",
         )
         .optional(),
+      compact: z
+        .boolean()
+        .describe(
+          "(get_telemetry) Defaults to true. Compact items flatten the event envelope, add an ISO time, and omit data fields named body, headers, post_data, or png plus any data field over 8 KiB; omitted_fields lists removals. To recover them, repeat the call with compact=false and the same categories, offset, since, until, order, and limit. Use the original page offset, not next_offset, which points to the following page. Raw events may be large, so narrow the categories, time window, and limit first.",
+        )
+        .optional(),
       telemetry_enabled: z
         .boolean()
         .describe(
@@ -551,7 +567,7 @@ export function registerBrowserCapabilities(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(
+      const client = dependencies.createKernelClient(
         extra.authInfo.token,
         projectIDForOperation(extra.authInfo, params.project_id),
       );
@@ -686,6 +702,7 @@ export function registerBrowserCapabilities(server: McpServer) {
               since: params.since,
               until: params.until,
               order: params.order,
+              compact: params.compact,
             });
           }
           case "delete": {
