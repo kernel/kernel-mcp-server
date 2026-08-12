@@ -329,27 +329,36 @@ export function registerBrowserCapabilities(
   server: McpServer,
   dependencies: McpDependencies = defaultMcpDependencies,
 ) {
-  registerJsonResourceCollection(server, {
-    name: "browsers",
-    uriTemplate: "kernel://orgs/{organizationId}/projects/{projectId}/browsers",
-    emptyText: "No browsers found",
-    read: async (client) => {
-      const browsers = [];
-      for await (const browser of client.browsers.list()) {
-        browsers.push(browser);
-      }
-      return browsers;
+  registerJsonResourceCollection(
+    server,
+    {
+      name: "browsers",
+      uriTemplate:
+        "kernel://orgs/{organizationId}/projects/{projectId}/browsers",
+      emptyText: "No browsers found",
+      read: async (client) => {
+        const browsers = [];
+        for await (const browser of client.browsers.list()) {
+          browsers.push(browser);
+        }
+        return browsers;
+      },
     },
-  });
+    dependencies,
+  );
 
-  registerJsonResourceTemplate(server, {
-    name: "browser",
-    uriTemplate:
-      "kernel://orgs/{organizationId}/projects/{projectId}/browsers/{sessionId}",
-    variableName: "sessionId",
-    resourceLabel: "Browser session",
-    read: (client, sessionId) => client.browsers.retrieve(sessionId),
-  });
+  registerJsonResourceTemplate(
+    server,
+    {
+      name: "browser",
+      uriTemplate:
+        "kernel://orgs/{organizationId}/projects/{projectId}/browsers/{sessionId}",
+      variableName: "sessionId",
+      resourceLabel: "Browser session",
+      read: (client, sessionId) => client.browsers.retrieve(sessionId),
+    },
+    dependencies,
+  );
 
   // manage_browsers -- Manage browser sessions and read archived telemetry
   server.tool(
