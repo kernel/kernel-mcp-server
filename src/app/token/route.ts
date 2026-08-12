@@ -144,6 +144,23 @@ function normalizedGrantType(
     : "unknown";
 }
 
+async function oauthErrorCode(response: NextResponse): Promise<OAuthErrorCode> {
+  try {
+    const body = (await response.clone().json()) as { error?: unknown };
+    if (
+      body.error === "invalid_request" ||
+      body.error === "invalid_grant" ||
+      body.error === "unsupported_grant_type" ||
+      body.error === "server_error"
+    ) {
+      return body.error;
+    }
+  } catch {
+    // Fall back to the status without logging the response body.
+  }
+  return response.status >= 500 ? "server_error" : "invalid_grant";
+}
+
 export async function tokenRequest(
   request: NextRequest,
   dependencies: TokenDependencies = tokenDependencies,
@@ -225,7 +242,10 @@ export async function tokenRequest(
     refreshToken,
   });
   if (contextResult.error) {
-    return finish(contextResult.error, "invalid_grant");
+    return finish(
+      contextResult.error,
+      await oauthErrorCode(contextResult.error),
+    );
   }
   const authorizationContext = contextResult.authorizationContext;
   if (!authorizationContext) {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import type { TokenDependencies } from "./route";
 import {
   organizationAuthorizationContext,
@@ -31,6 +31,7 @@ function dependencies({
   member = true,
   clerkStatus = 200,
   membershipError,
+  contextError,
   clerkTokens = {
     access_token: "clerk-access",
     id_token: "header.payload.signature",
@@ -46,6 +47,14 @@ function dependencies({
   member?: boolean;
   clerkStatus?: number;
   membershipError?: Error;
+  contextError?: {
+    error:
+      | "invalid_request"
+      | "invalid_grant"
+      | "unsupported_grant_type"
+      | "server_error";
+    status: number;
+  };
   clerkTokens?: Record<string, unknown>;
 } = {}) {
   const calls = {
@@ -64,6 +73,15 @@ function dependencies({
     value: {
       resolveContext: async (value) => {
         calls.resolve.push(value);
+        if (contextError) {
+          return {
+            authorizationContext: null,
+            error: NextResponse.json(
+              { error: contextError.error },
+              { status: contextError.status },
+            ),
+          };
+        }
         return {
           authorizationContext,
           ...(value.grantType === "authorization_code"
@@ -229,6 +247,28 @@ describe("POST /token", () => {
       accessScope: "project",
       stage: "complete",
       outcome: "success",
+    });
+  });
+
+  test("records the OAuth error returned by context resolution", async () => {
+    const deps = dependencies({
+      contextError: { error: "server_error", status: 500 },
+    });
+    const response = await tokenRequest(
+      request({
+        grant_type: "refresh_token",
+        client_id: "client_1",
+        refresh_token: "refresh-old",
+      }),
+      deps.value,
+    );
+
+    expect(response.status).toBe(500);
+    expect(deps.calls.outcomes[0]).toMatchObject({
+      stage: "context_resolution",
+      outcome: "error",
+      errorCode: "server_error",
+      statusCode: 500,
     });
   });
 
