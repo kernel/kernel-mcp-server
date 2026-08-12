@@ -4,6 +4,7 @@ import type { AuthorizeDependencies } from "@/app/authorize/route";
 import type { RegisterDependencies } from "@/app/register/route";
 import type { TokenDependencies } from "@/app/token/route";
 import type { OAuthAuthorizationContext } from "@/lib/oauth-context";
+import { expandLocalhostUris, normalizeLocalhostUri } from "@/lib/auth-utils";
 
 process.env.KERNEL_CLI_PROD_CLIENT_ID ??= "cli_prod";
 process.env.KERNEL_CLI_STAGING_CLIENT_ID ??= "cli_staging";
@@ -61,7 +62,7 @@ export function createFixture(contract: OAuthClientConformanceContract) {
     createOAuthApplication: async (input) => {
       expect(input).toEqual({
         name: contract.clientName,
-        redirectUris: [contract.redirectUri],
+        redirectUris: expandLocalhostUris([contract.redirectUri]),
         scopes: contract.scope,
         public: true,
       });
@@ -109,7 +110,10 @@ export function createFixture(contract: OAuthClientConformanceContract) {
       const params = new URLSearchParams(init?.body as URLSearchParams);
       providerExchanges.push(params);
 
-      if (params.get("redirect_uri") !== contract.redirectUri) {
+      if (
+        params.get("redirect_uri") !==
+        normalizeLocalhostUri(contract.redirectUri)
+      ) {
         return Response.json({ error: "invalid_grant" }, { status: 400 });
       }
       if (params.get("client_secret")) {
