@@ -1,13 +1,29 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { createKernelClient } from "@/lib/mcp/kernel-client";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
+import { longOperationOptions } from "@/lib/mcp/request-options";
 import { throwToolError } from "@/lib/mcp/responses";
 import {
   projectIDForOperation,
   projectSelectionInputSchema,
 } from "@/lib/mcp/project-selection";
 
-export function registerShellTool(server: McpServer) {
+const DEFAULT_TIMEOUT_SEC = 60;
+// Longest command we can wait out and still return its result in one request: this deadline
+// plus the transport headroom has to finish inside a single serverless invocation, and 150s
+// leaves margin under that limit. Raising it past what one invocation outlasts reintroduces
+// the timeout the bound exists to prevent.
+const MAX_TIMEOUT_SEC = 150;
+
+export function registerShellTool(
+  server: McpServer,
+  options: McpDependencies = {
+    ...defaultMcpDependencies,
+  },
+) {
   // exec_command -- Execute shell commands inside a browser VM
   server.tool(
     "exec_command",
@@ -27,8 +43,11 @@ export function registerShellTool(server: McpServer) {
         .number()
         .int()
         .min(1)
-        .describe("Max execution time in seconds.")
-        .optional(),
+        .max(MAX_TIMEOUT_SEC)
+        .describe(
+          `Max execution time in seconds (1-${MAX_TIMEOUT_SEC}). The command is killed at the deadline. Defaults to ${DEFAULT_TIMEOUT_SEC}.`,
+        )
+        .default(DEFAULT_TIMEOUT_SEC),
       as_root: z.boolean().describe("Run with root privileges.").optional(),
     },
     {
@@ -43,19 +62,23 @@ export function registerShellTool(server: McpServer) {
       extra,
     ) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(
+      const client = options.createKernelClient(
         extra.authInfo.token,
         projectIDForOperation(extra.authInfo, project_id),
       );
 
       try {
-        const result = await client.browsers.process.exec(session_id, {
-          command,
-          ...(args && { args }),
-          ...(cwd && { cwd }),
-          ...(timeout_sec !== undefined && { timeout_sec }),
-          ...(as_root !== undefined && { as_root }),
-        });
+        const result = await client.browsers.process.exec(
+          session_id,
+          {
+            command,
+            ...(args && { args }),
+            ...(cwd && { cwd }),
+            timeout_sec,
+            ...(as_root !== undefined && { as_root }),
+          },
+          longOperationOptions(timeout_sec),
+        );
 
         const stdout = result.stdout_b64
           ? Buffer.from(result.stdout_b64, "base64").toString("utf-8")
