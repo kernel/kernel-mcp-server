@@ -1,10 +1,6 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test";
-import { APIConnectionError } from "@onkernel/sdk";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { McpConnectionScopeFailureAnalytics } from "@/lib/mcp/analytics";
-import {
-  kernelClientMock,
-  resetKernelClientFactory,
-} from "@/lib/mcp/kernel-client.test-fixtures";
+import { defaultMcpDependencies } from "@/lib/mcp/dependencies";
 
 process.env.CLERK_SECRET_KEY ??= "test-clerk-secret";
 
@@ -12,12 +8,6 @@ process.env.CLERK_SECRET_KEY ??= "test-clerk-secret";
 // it to flush analytics, which these tests observe directly instead.
 const nextServer = await import("next/server");
 mock.module("next/server", () => ({ ...nextServer, after: () => {} }));
-
-mock.module("@/lib/redis", () => ({
-  hasMcpAppsClient: async () => false,
-  markMcpAppsClient: async () => {},
-  clearMcpAppsClient: async () => {},
-}));
 
 // Scope resolution runs before the instrumented McpServer exists, so this
 // capture is the only record of it. Record the calls and delegate, so the
@@ -27,17 +17,18 @@ const analytics = await import("@/lib/mcp/analytics");
 mock.module("@/lib/mcp/analytics", () => ({
   ...analytics,
   captureMcpConnectionScopeFailure: (
-    failure: McpConnectionScopeFailureAnalytics,
+    ...args: Parameters<typeof analytics.captureMcpConnectionScopeFailure>
   ) => {
-    captured.push(failure);
-    return analytics.captureMcpConnectionScopeFailure(failure);
+    captured.push(args[0]);
+    return analytics.captureMcpConnectionScopeFailure(...args);
   },
 }));
 
+const originalCreateKernelClient = defaultMcpDependencies.createKernelClient;
 const { POST, connectionScopeFailureResponse } = await import("./route");
 
 function initializeRequest(token = "sk_opaque_key") {
-  return new Request("https://mcp.example.test/mcp", {
+  return new Request("https://mcp.example.test/sse", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -58,7 +49,7 @@ function initializeRequest(token = "sk_opaque_key") {
 }
 
 function failingAuthContext(error: unknown) {
-  kernelClientMock.factory = () =>
+  defaultMcpDependencies.createKernelClient = () =>
     ({
       auth: {
         context: {
@@ -71,8 +62,11 @@ function failingAuthContext(error: unknown) {
 }
 
 beforeEach(() => {
-  resetKernelClientFactory();
   captured.length = 0;
+});
+
+afterEach(() => {
+  defaultMcpDependencies.createKernelClient = originalCreateKernelClient;
 });
 
 describe("connection scope failures through the handler", () => {
@@ -107,8 +101,10 @@ describe("connection scope failures through the handler", () => {
     expect(captured[0]?.upstreamStatusCode).toBe(403);
   });
 
-  test("answers an unresolvable scope with a retryable 503", async () => {
-    failingAuthContext(new APIConnectionError({ message: "socket hang up" }));
+  test("answers an upstream outage with a retryable 503", async () => {
+    failingAuthContext(
+      Object.assign(new Error("unavailable"), { status: 502 }),
+    );
 
     const response = await POST(initializeRequest());
 
@@ -118,7 +114,7 @@ describe("connection scope failures through the handler", () => {
       {
         outcome: "unavailable",
         credentialType: "api_key",
-        upstreamStatusCode: undefined,
+        upstreamStatusCode: 502,
       },
     ]);
   });

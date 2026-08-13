@@ -67,11 +67,6 @@ function createAuthErrorResponse(
   });
 }
 
-// A credential the Kernel API rejects is the caller's problem, and a scope we
-// cannot resolve right now is worth retrying. Neither is a server fault, so
-// neither should reach the error handler as a thrown 500. Each rejection keeps
-// the upstream meaning: only 401 tells a client its credential is bad, so only
-// 401 may prompt it to discard one.
 export function connectionScopeFailureResponse(
   failure: Exclude<McpConnectionContextFailure, { status: "invalid" }>,
 ): Response {
@@ -92,7 +87,7 @@ export function connectionScopeFailureResponse(
           "project_not_found",
           "The Kernel project for this connection was not found or is inactive",
         );
-      default:
+      case 401:
         return createAuthErrorResponse(
           "invalid_token",
           "The Kernel API rejected this credential",

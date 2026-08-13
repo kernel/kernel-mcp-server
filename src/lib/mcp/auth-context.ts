@@ -63,11 +63,8 @@ type ResolveAuthContextOptions = {
   cacheIdentity?: string;
 };
 
-// Why the connection has no scope. "rejected" belongs to the caller's
-// credential, "unavailable" is retryable, and "invalid" means the Kernel API
-// answered with something we cannot normalize.
 export type McpConnectionContextFailure =
-  | { status: "rejected"; statusCode: number }
+  | { status: "rejected"; statusCode: 401 | 403 | 404 }
   | { status: "unavailable"; statusCode?: number }
   | { status: "invalid" };
 
@@ -83,8 +80,6 @@ type AuthContextResolution =
 // (authenticated but not entitled to this project) or 404 (project missing or
 // inactive). Any other 4xx means we sent a request it could not understand,
 // which is our bug rather than the caller's.
-const REJECTION_STATUSES = new Set([401, 403, 404]);
-
 function classifyAuthContextError(error: unknown): McpConnectionContextFailure {
   const status =
     error && typeof error === "object" && "status" in error
@@ -92,7 +87,7 @@ function classifyAuthContextError(error: unknown): McpConnectionContextFailure {
       : undefined;
 
   if (typeof status === "number") {
-    if (REJECTION_STATUSES.has(status)) {
+    if (status === 401 || status === 403 || status === 404) {
       return { status: "rejected", statusCode: status };
     }
     if (status === 408 || status === 429 || status >= 500) {

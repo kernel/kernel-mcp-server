@@ -312,7 +312,7 @@ describe("resolveMcpConnectionContext", () => {
   });
 
   test("keeps each answer the Kernel API gives about a credential distinct", async () => {
-    for (const status of [401, 403, 404]) {
+    for (const status of [401, 403, 404] as const) {
       expect(
         await resolveMcpConnectionContext({
           token: "credential",
