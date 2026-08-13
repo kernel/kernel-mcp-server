@@ -1,3 +1,4 @@
+import { APIConnectionError, APIUserAbortError } from "@onkernel/sdk";
 import type { AuthContext } from "@onkernel/sdk/resources/auth/context";
 import { createHash } from "crypto";
 import { z } from "zod";
@@ -62,17 +63,48 @@ type ResolveAuthContextOptions = {
   cacheIdentity?: string;
 };
 
-type AuthContextResolution =
-  | { context: AuthContext; transientFailure: false }
-  | { context: null; transientFailure: boolean };
+export type McpConnectionContextFailure =
+  | { status: "rejected"; statusCode: 401 | 403 | 404 }
+  | { status: "unavailable"; statusCode?: number }
+  | { status: "invalid" };
 
-function isTransientAuthContextError(error: unknown) {
+export type McpConnectionContextResult =
+  | { status: "ok"; context: McpConnectionContext }
+  | McpConnectionContextFailure;
+
+type AuthContextResolution =
+  | { context: AuthContext; failure: null }
+  | { context: null; failure: McpConnectionContextFailure };
+
+// The Kernel API answers about a credential with 401 (unauthenticated), 403
+// (authenticated but not entitled to this project) or 404 (project missing or
+// inactive). Any other 4xx means we sent a request it could not understand,
+// which is our bug rather than the caller's.
+function classifyAuthContextError(error: unknown): McpConnectionContextFailure {
   const status =
     error && typeof error === "object" && "status" in error
       ? (error as { status?: unknown }).status
       : undefined;
-  if (typeof status !== "number") return true;
-  return status === 408 || status === 429 || status >= 500;
+
+  if (typeof status === "number") {
+    if (status === 401 || status === 403 || status === 404) {
+      return { status: "rejected", statusCode: status };
+    }
+    if (status === 408 || status === 429 || status >= 500) {
+      return { status: "unavailable", statusCode: status };
+    }
+    return { status: "invalid" };
+  }
+
+  // Only a failure to reach the API is worth retrying. Anything else thrown
+  // without a status is a bug on our side and must keep surfacing as one.
+  if (
+    error instanceof APIConnectionError ||
+    error instanceof APIUserAbortError
+  ) {
+    return { status: "unavailable" };
+  }
+  return { status: "invalid" };
 }
 
 async function resolveMcpAuthContext({
@@ -86,19 +118,16 @@ async function resolveMcpAuthContext({
       .auth.context.retrieve({ signal });
     const parsed = authContextSchema.safeParse(context);
     if (parsed.success) {
-      return { context: parsed.data, transientFailure: false };
+      return { context: parsed.data, failure: null };
     }
     console.warn("Received invalid MCP auth context", parsed.error.issues);
-    return { context: null, transientFailure: false };
+    return { context: null, failure: { status: "invalid" } };
   } catch (error) {
     console.warn(
       "Failed to resolve MCP auth context",
       error instanceof Error ? error.message : error,
     );
-    return {
-      context: null,
-      transientFailure: isTransientAuthContextError(error),
-    };
+    return { context: null, failure: classifyAuthContextError(error) };
   }
 }
 
@@ -187,10 +216,10 @@ export async function resolveMcpConnectionContext({
   signal,
   dependencies,
   cacheIdentity,
-}: ResolveAuthContextOptions): Promise<McpConnectionContext | null> {
+}: ResolveAuthContextOptions): Promise<McpConnectionContextResult> {
   if (cacheIdentity) {
     const cached = readConnectionContextCache(cacheIdentity);
-    if (cached) return cached;
+    if (cached) return { status: "ok", context: cached };
   }
   const stale = cacheIdentity
     ? readConnectionContextCache(cacheIdentity, true)
@@ -202,10 +231,14 @@ export async function resolveMcpConnectionContext({
     dependencies,
   });
   if (!resolution.context) {
-    if (cacheIdentity && !resolution.transientFailure) {
+    const { failure } = resolution;
+    if (cacheIdentity && failure.status !== "unavailable") {
       connectionContextCache.delete(connectionContextCacheKey(cacheIdentity));
     }
-    return resolution.transientFailure ? stale : null;
+    if (failure.status === "unavailable" && stale) {
+      return { status: "ok", context: stale };
+    }
+    return failure;
   }
 
   const scope = connectionScopeFromAuthContext(resolution.context);
@@ -214,12 +247,12 @@ export async function resolveMcpConnectionContext({
     if (cacheIdentity) {
       connectionContextCache.delete(connectionContextCacheKey(cacheIdentity));
     }
-    return null;
+    return { status: "invalid" };
   }
 
   const context = { authContext: resolution.context, scope };
   if (cacheIdentity) writeConnectionContextCache(cacheIdentity, context);
-  return context;
+  return { status: "ok", context };
 }
 
 export function clearMcpConnectionContextCacheForTests() {

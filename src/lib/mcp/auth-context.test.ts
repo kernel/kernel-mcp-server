@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import {
+  APIConnectionError,
+  APIConnectionTimeoutError,
+  APIUserAbortError,
+} from "@onkernel/sdk";
 import type { KernelClient } from "@/lib/mcp/kernel-client";
 import {
   clearMcpConnectionContextCacheForTests,
@@ -6,6 +11,8 @@ import {
   connectionScopeFromAuthContext,
   expireMcpConnectionContextCacheForTests,
   resolveMcpConnectionContext,
+  type McpConnectionContext,
+  type McpConnectionContextResult,
 } from "@/lib/mcp/auth-context";
 
 function response({
@@ -49,22 +56,48 @@ function dependencies(body: unknown, calls?: string[]) {
   };
 }
 
+function expectResolved(
+  result: McpConnectionContextResult,
+): McpConnectionContext {
+  expect(result.status).toBe("ok");
+  if (result.status !== "ok") throw new Error("expected a resolved scope");
+  return result.context;
+}
+
+function rejection(status: number) {
+  return {
+    createKernelClient: () => {
+      throw Object.assign(new Error("rejected"), { status });
+    },
+  };
+}
+
+function throwing(error: unknown) {
+  return {
+    createKernelClient: (): KernelClient => {
+      throw error;
+    },
+  };
+}
+
 afterEach(clearMcpConnectionContextCacheForTests);
 
 describe("resolveMcpConnectionContext", () => {
   test("normalizes organization-wide API-key scope", async () => {
-    const context = await resolveMcpConnectionContext({
-      token: "sk_secret",
-      dependencies: dependencies(response()),
-    });
+    const context = expectResolved(
+      await resolveMcpConnectionContext({
+        token: "sk_secret",
+        dependencies: dependencies(response()),
+      }),
+    );
 
-    expect(context?.scope).toEqual({
+    expect(context.scope).toEqual({
       kind: "organization",
       organizationId: "org_123",
       projectId: null,
       source: "credential",
     });
-    const analytics = connectionAnalyticsFromContext(context!);
+    const analytics = connectionAnalyticsFromContext(context);
     expect(analytics).toEqual({
       authMethod: "api_key",
       credentialScope: "organization",
@@ -77,42 +110,46 @@ describe("resolveMcpConnectionContext", () => {
   });
 
   test("normalizes project-scoped API-key scope", async () => {
-    const context = await resolveMcpConnectionContext({
-      token: "sk_secret",
-      dependencies: dependencies(
-        response({
-          credentialProjectId: "project_123",
-          effectiveProjectId: "project_123",
-        }),
-      ),
-    });
+    const context = expectResolved(
+      await resolveMcpConnectionContext({
+        token: "sk_secret",
+        dependencies: dependencies(
+          response({
+            credentialProjectId: "project_123",
+            effectiveProjectId: "project_123",
+          }),
+        ),
+      }),
+    );
 
-    expect(context?.scope).toEqual({
+    expect(context.scope).toEqual({
       kind: "project",
       organizationId: "org_123",
       projectId: "project_123",
       source: "credential",
     });
-    expect(connectionAnalyticsFromContext(context!)?.credentialScope).toBe(
+    expect(connectionAnalyticsFromContext(context)?.credentialScope).toBe(
       "project",
     );
   });
 
   test("uses the canonical OAuth user principal for analytics", async () => {
-    const context = await resolveMcpConnectionContext({
-      token: "jwt.secret.value",
-      dependencies: dependencies(
-        response({
-          method: "jwt",
-          source: "oauth",
-          principalType: "user",
-          principalId: "user_kernel_123",
-        }),
-      ),
-    });
+    const context = expectResolved(
+      await resolveMcpConnectionContext({
+        token: "jwt.secret.value",
+        dependencies: dependencies(
+          response({
+            method: "jwt",
+            source: "oauth",
+            principalType: "user",
+            principalId: "user_kernel_123",
+          }),
+        ),
+      }),
+    );
 
-    expect(connectionAnalyticsFromContext(context!)?.authMethod).toBe("oauth");
-    expect(connectionAnalyticsFromContext(context!)?.userId).toBe(
+    expect(connectionAnalyticsFromContext(context)?.authMethod).toBe("oauth");
+    expect(connectionAnalyticsFromContext(context)?.userId).toBe(
       "user_kernel_123",
     );
   });
@@ -155,16 +192,20 @@ describe("resolveMcpConnectionContext", () => {
 
   test("reuses normalized scope across token refreshes in one session", async () => {
     const calls: string[] = [];
-    const first = await resolveMcpConnectionContext({
-      token: "old-token",
-      cacheIdentity: "user_123\0session_123",
-      dependencies: dependencies(response(), calls),
-    });
-    const refreshed = await resolveMcpConnectionContext({
-      token: "new-token",
-      cacheIdentity: "user_123\0session_123",
-      dependencies: dependencies(response(), calls),
-    });
+    const first = expectResolved(
+      await resolveMcpConnectionContext({
+        token: "old-token",
+        cacheIdentity: "user_123\0session_123",
+        dependencies: dependencies(response(), calls),
+      }),
+    );
+    const refreshed = expectResolved(
+      await resolveMcpConnectionContext({
+        token: "new-token",
+        cacheIdentity: "user_123\0session_123",
+        dependencies: dependencies(response(), calls),
+      }),
+    );
 
     expect(refreshed).toBe(first);
     expect(calls).toEqual(["old-token"]);
@@ -186,21 +227,23 @@ describe("resolveMcpConnectionContext", () => {
 
   test("retains resolved scope during a transient refresh failure", async () => {
     const cacheIdentity = "user_123\0session_123";
-    const first = await resolveMcpConnectionContext({
-      token: "old-token",
-      cacheIdentity,
-      dependencies: dependencies(response()),
-    });
+    const first = expectResolved(
+      await resolveMcpConnectionContext({
+        token: "old-token",
+        cacheIdentity,
+        dependencies: dependencies(response()),
+      }),
+    );
     expireMcpConnectionContextCacheForTests();
-    const refreshed = await resolveMcpConnectionContext({
-      token: "new-token",
-      cacheIdentity,
-      dependencies: {
-        createKernelClient: () => {
-          throw new Error("temporary outage");
-        },
-      },
-    });
+    const refreshed = expectResolved(
+      await resolveMcpConnectionContext({
+        token: "new-token",
+        cacheIdentity,
+        dependencies: throwing(
+          new APIConnectionError({ message: "temporary outage" }),
+        ),
+      }),
+    );
 
     expect(refreshed).toBe(first);
   });
@@ -216,14 +259,10 @@ describe("resolveMcpConnectionContext", () => {
     const rejected = await resolveMcpConnectionContext({
       token: "revoked-token",
       cacheIdentity,
-      dependencies: {
-        createKernelClient: () => {
-          throw Object.assign(new Error("revoked"), { status: 401 });
-        },
-      },
+      dependencies: rejection(401),
     });
 
-    expect(rejected).toBeNull();
+    expect(rejected).toEqual({ status: "rejected", statusCode: 401 });
   });
 
   test("invalidates cached scope after an inconsistent response", async () => {
@@ -247,32 +286,89 @@ describe("resolveMcpConnectionContext", () => {
     const transient = await resolveMcpConnectionContext({
       token: "newer-token",
       cacheIdentity,
-      dependencies: {
-        createKernelClient: () => {
-          throw new Error("temporary outage");
-        },
-      },
+      dependencies: throwing(
+        new APIConnectionError({ message: "temporary outage" }),
+      ),
     });
 
-    expect(inconsistent).toBeNull();
-    expect(transient).toBeNull();
+    expect(inconsistent).toEqual({ status: "invalid" });
+    expect(transient).toEqual({ status: "unavailable" });
   });
 
   test("fails closed when auth context is unavailable or malformed", async () => {
     const unavailable = await resolveMcpConnectionContext({
       token: "sk_secret",
-      dependencies: {
-        createKernelClient: () => {
-          throw new Error("API unavailable");
-        },
-      },
+      dependencies: throwing(
+        new APIConnectionError({ message: "API unavailable" }),
+      ),
     });
     const malformed = await resolveMcpConnectionContext({
       token: "sk_secret",
       dependencies: dependencies({ authentication: {} }),
     });
 
-    expect(unavailable).toBeNull();
-    expect(malformed).toBeNull();
+    expect(unavailable).toEqual({ status: "unavailable" });
+    expect(malformed).toEqual({ status: "invalid" });
+  });
+
+  test("keeps each answer the Kernel API gives about a credential distinct", async () => {
+    for (const status of [401, 403, 404] as const) {
+      expect(
+        await resolveMcpConnectionContext({
+          token: "credential",
+          dependencies: rejection(status),
+        }),
+      ).toEqual({ status: "rejected", statusCode: status });
+    }
+  });
+
+  test("treats retryable statuses as unavailable and keeps the upstream status", async () => {
+    for (const status of [408, 429, 500, 502, 503]) {
+      expect(
+        await resolveMcpConnectionContext({
+          token: "sk_secret",
+          dependencies: rejection(status),
+        }),
+      ).toEqual({ status: "unavailable", statusCode: status });
+    }
+  });
+
+  test("treats a request the API could not understand as our bug", async () => {
+    for (const status of [400, 409, 422]) {
+      expect(
+        await resolveMcpConnectionContext({
+          token: "sk_secret",
+          dependencies: rejection(status),
+        }),
+      ).toEqual({ status: "invalid" });
+    }
+  });
+
+  test("retries transport failures but surfaces unknown throws", async () => {
+    for (const error of [
+      new APIConnectionError({ message: "socket hang up" }),
+      new APIConnectionTimeoutError({ message: "timed out" }),
+      new APIUserAbortError({ message: "client went away" }),
+    ]) {
+      expect(
+        await resolveMcpConnectionContext({
+          token: "sk_secret",
+          dependencies: throwing(error),
+        }),
+      ).toEqual({ status: "unavailable" });
+    }
+
+    for (const error of [
+      new TypeError("cannot read properties of undefined"),
+      new Error("unexpected"),
+      "not even an error",
+    ]) {
+      expect(
+        await resolveMcpConnectionContext({
+          token: "sk_secret",
+          dependencies: throwing(error),
+        }),
+      ).toEqual({ status: "invalid" });
+    }
   });
 });
