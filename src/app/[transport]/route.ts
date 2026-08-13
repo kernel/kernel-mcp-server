@@ -7,6 +7,7 @@ import { verifyToken } from "@clerk/nextjs/server";
 import { after, NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
 import {
+  captureMcpConnectionScopeFailure,
   flushMcpAnalytics,
   instrumentMcpAnalytics,
   isMcpAnalyticsEnabled,
@@ -14,6 +15,7 @@ import {
 import {
   connectionAnalyticsFromContext,
   resolveMcpConnectionContext,
+  type McpConnectionContextFailure,
 } from "@/lib/mcp/auth-context";
 import { mcpAppsAuthSubject } from "@/lib/mcp-apps-marker";
 import { requestUsesMcpApps } from "@/lib/mcp-apps-request";
@@ -36,26 +38,67 @@ export async function OPTIONS(_req: NextRequest): Promise<Response> {
   });
 }
 
+const CORS_HEADERS = {
+  "Content-Type": "application/json",
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+};
+
+function errorResponse(
+  status: number,
+  error: string,
+  description: string,
+  headers: Record<string, string> = {},
+): Response {
+  return new Response(
+    JSON.stringify({ error, error_description: description }),
+    { status, headers: { ...CORS_HEADERS, ...headers } },
+  );
+}
+
 // Helper function to create authentication error response
 function createAuthErrorResponse(
   error: string = "invalid_token",
   description: string = "Missing or invalid access token",
 ): Response {
-  return new Response(
-    JSON.stringify({
-      error,
-      error_description: description,
-    }),
-    {
-      status: 401,
-      headers: {
-        "WWW-Authenticate": `Bearer realm="OAuth", error="${error}", error_description="${description}"`,
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-      },
-    },
+  return errorResponse(401, error, description, {
+    "WWW-Authenticate": `Bearer realm="OAuth", error="${error}", error_description="${description}"`,
+  });
+}
+
+export function connectionScopeFailureResponse(
+  failure: Exclude<McpConnectionContextFailure, { status: "invalid" }>,
+): Response {
+  if (failure.status === "rejected") {
+    switch (failure.statusCode) {
+      case 403:
+        return errorResponse(
+          403,
+          "insufficient_scope",
+          "This credential is not scoped to the requested Kernel project",
+          {
+            "WWW-Authenticate": `Bearer realm="OAuth", error="insufficient_scope"`,
+          },
+        );
+      case 404:
+        return errorResponse(
+          404,
+          "project_not_found",
+          "The Kernel project for this connection was not found or is inactive",
+        );
+      case 401:
+        return createAuthErrorResponse(
+          "invalid_token",
+          "The Kernel API rejected this credential",
+        );
+    }
+  }
+  return errorResponse(
+    503,
+    "temporarily_unavailable",
+    "Unable to resolve Kernel connection scope",
+    { "Retry-After": "1" },
   );
 }
 
@@ -83,6 +126,7 @@ async function handleMcpRequestWithIdentity({
   authSubject,
   scopes,
   authInfoExtra,
+  credentialType,
   transportSessionId,
   connectionContextCacheIdentity,
   observeConnection,
@@ -92,11 +136,12 @@ async function handleMcpRequestWithIdentity({
   authSubject: string;
   scopes: string[];
   authInfoExtra: AuthInfoExtra;
+  credentialType: "api_key" | "oauth";
   transportSessionId: string | null;
   connectionContextCacheIdentity?: string;
   observeConnection: boolean;
 }) {
-  const [mcpApps, connectionContext] = await Promise.all([
+  const [mcpApps, connection] = await Promise.all([
     requestUsesMcpApps(req, {
       authSubject,
       transportSessionId,
@@ -108,9 +153,19 @@ async function handleMcpRequestWithIdentity({
       cacheIdentity: connectionContextCacheIdentity,
     }),
   ]);
-  if (!connectionContext) {
-    throw new Error("Unable to resolve Kernel connection scope");
+  if (connection.status !== "ok") {
+    captureMcpConnectionScopeFailure({
+      outcome: connection.status,
+      credentialType,
+      upstreamStatusCode:
+        connection.status === "invalid" ? undefined : connection.statusCode,
+    });
+    if (connection.status === "invalid") {
+      throw new Error("Unable to resolve Kernel connection scope");
+    }
+    return connectionScopeFailureResponse(connection);
   }
+  const connectionContext = connection.context;
   const connectionAnalytics =
     observeConnection && isMcpAnalyticsEnabled()
       ? connectionAnalyticsFromContext(connectionContext)
@@ -161,6 +216,7 @@ async function handleAuthenticatedRequest(
       authSubject: mcpAppsAuthSubject({ token }),
       scopes: ["apikey"],
       authInfoExtra: { userId: null, clerkToken: null },
+      credentialType: "api_key",
       transportSessionId,
       observeConnection,
     });
@@ -194,6 +250,7 @@ async function handleAuthenticatedRequest(
     authSubject,
     scopes: ["openid"],
     authInfoExtra: { userId, clerkToken: token },
+    credentialType: "oauth",
     transportSessionId,
     connectionContextCacheIdentity: transportSessionId
       ? `${authSubject}\0${transportSessionId}`

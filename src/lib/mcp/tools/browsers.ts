@@ -6,7 +6,11 @@ import {
   buildBrowserUpdateConfig,
   type BrowserConfigResult,
 } from "@/lib/mcp/browser-config";
-import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
+import type { KernelClient } from "@/lib/mcp/kernel-client";
 import {
   registerJsonResourceCollection,
   registerJsonResourceTemplate,
@@ -195,18 +199,53 @@ function compactTelemetryEvent({ seq, event }: TelemetryEnvelope) {
 
 type BrowserTelemetryReadParams = {
   session_id: string;
+  project_id?: string;
   categories?: TelemetryEventsQuery["category"];
   limit?: number;
   offset?: number;
   since?: string;
   until?: string;
   order?: "asc" | "desc";
+  compact?: boolean;
 };
+
+const maxRawTelemetryEvents = 5;
+// Producers cap each archived record at 1,000,000 bytes. This leaves room for
+// the page envelope while ensuring one response cannot carry multiple max-size records.
+const maxRawTelemetryResponseBytes = 1024 * 1024;
+
+function rawTelemetryPageError(items: TelemetryEnvelope[]) {
+  for (const { event } of items) {
+    const data = "data" in event ? event.data : undefined;
+    if (data && typeof data === "object" && "png" in data) {
+      return "Raw screenshot PNGs are not available in JSON telemetry responses.";
+    }
+  }
+  return undefined;
+}
 
 async function readBrowserTelemetry(
   client: KernelClient,
   params: BrowserTelemetryReadParams,
 ) {
+  if (params.compact === false) {
+    if (params.limit === undefined || params.limit > maxRawTelemetryEvents) {
+      return errorResponse(
+        `Error: compact=false requires an explicit limit between 1 and ${maxRawTelemetryEvents}.`,
+      );
+    }
+    if (!params.categories) {
+      return errorResponse(
+        "Error: compact=false requires at least one explicit category.",
+      );
+    }
+    if (params.categories.includes("screenshot")) {
+      return errorResponse(
+        "Error: compact=false does not support the screenshot category because PNGs are not returned in JSON.",
+      );
+    }
+  }
+
   const query: TelemetryEventsQuery = { limit: params.limit ?? 100 };
   if (params.categories) query.category = params.categories;
   if (params.offset !== undefined) query.offset = params.offset;
@@ -233,7 +272,9 @@ async function readBrowserTelemetry(
   const fullSessionRead = unfilteredExceptSince && params.since === undefined;
 
   const page = await client.browsers.telemetry.events(params.session_id, query);
-  const items = page.getPaginatedItems().map(compactTelemetryEvent);
+  const pageItems = page.getPaginatedItems();
+  const items =
+    params.compact === false ? pageItems : pageItems.map(compactTelemetryEvent);
 
   // Counter-steer the pagination reflex: an unfiltered ascending read starts
   // at session creation, so an agent chasing a recent failure should flip to
@@ -259,16 +300,50 @@ async function readBrowserTelemetry(
         })
       : ascPagingNote;
 
+  const rawReplayBestEffort =
+    params.compact === false ||
+    !query.category ||
+    query.category.includes("screenshot")
+      ? undefined
+      : {
+          action: "get_telemetry",
+          session_id: params.session_id,
+          ...(params.project_id && { project_id: params.project_id }),
+          ...(query.category && { categories: query.category }),
+          limit: Math.min(query.limit ?? 100, maxRawTelemetryEvents),
+          ...(query.offset !== undefined && { offset: query.offset }),
+          ...(query.since && { since: query.since }),
+          ...(query.until && { until: query.until }),
+          ...(query.order && { order: query.order }),
+          compact: false,
+        };
+
+  const response = {
+    items,
+    has_more: page.has_more,
+    next_offset: page.next_offset,
+    ...(rawReplayBestEffort && {
+      raw_replay_best_effort: rawReplayBestEffort,
+    }),
+    ...(note && { note }),
+  };
+  if (params.compact === false) {
+    const rawError = rawTelemetryPageError(pageItems);
+    if (rawError) return errorResponse(`Error: ${rawError}`);
+  }
+
   // Single-line JSON rather than the pretty-printed house helpers: a page
   // carries up to 100 events and indentation would inflate the token cost.
-  return textResponse(
-    JSON.stringify({
-      items,
-      has_more: page.has_more,
-      next_offset: page.next_offset,
-      ...(note && { note }),
-    }),
-  );
+  const serializedResponse = JSON.stringify(response);
+  if (
+    params.compact === false &&
+    Buffer.byteLength(serializedResponse, "utf8") > maxRawTelemetryResponseBytes
+  ) {
+    return errorResponse(
+      `Error: raw telemetry response exceeds ${maxRawTelemetryResponseBytes} bytes. Reduce limit or narrow the category and time window.`,
+    );
+  }
+  return textResponse(serializedResponse);
 }
 
 function browserSessionNextActions(sessionId: string) {
@@ -318,33 +393,45 @@ function buildSshPortForwardingInfo(
   };
 }
 
-export function registerBrowserCapabilities(server: McpServer) {
-  registerJsonResourceCollection(server, {
-    name: "browsers",
-    uriTemplate: "kernel://orgs/{organizationId}/projects/{projectId}/browsers",
-    emptyText: "No browsers found",
-    read: async (client) => {
-      const browsers = [];
-      for await (const browser of client.browsers.list()) {
-        browsers.push(browser);
-      }
-      return browsers;
+export function registerBrowserCapabilities(
+  server: McpServer,
+  dependencies: McpDependencies = defaultMcpDependencies,
+) {
+  registerJsonResourceCollection(
+    server,
+    {
+      name: "browsers",
+      uriTemplate:
+        "kernel://orgs/{organizationId}/projects/{projectId}/browsers",
+      emptyText: "No browsers found",
+      read: async (client) => {
+        const browsers = [];
+        for await (const browser of client.browsers.list()) {
+          browsers.push(browser);
+        }
+        return browsers;
+      },
     },
-  });
+    dependencies,
+  );
 
-  registerJsonResourceTemplate(server, {
-    name: "browser",
-    uriTemplate:
-      "kernel://orgs/{organizationId}/projects/{projectId}/browsers/{sessionId}",
-    variableName: "sessionId",
-    resourceLabel: "Browser session",
-    read: (client, sessionId) => client.browsers.retrieve(sessionId),
-  });
+  registerJsonResourceTemplate(
+    server,
+    {
+      name: "browser",
+      uriTemplate:
+        "kernel://orgs/{organizationId}/projects/{projectId}/browsers/{sessionId}",
+      variableName: "sessionId",
+      resourceLabel: "Browser session",
+      read: (client, sessionId) => client.browsers.retrieve(sessionId),
+    },
+    dependencies,
+  );
 
   // manage_browsers -- Manage browser sessions and read archived telemetry
   server.tool(
     "manage_browsers",
-    'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished.',
+    'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
     {
       ...projectSelectionInputSchema(),
       action: z
@@ -511,6 +598,12 @@ export function registerBrowserCapabilities(server: McpServer) {
           "(get_telemetry) Read direction. asc (default) reads oldest first from session start; desc reads newest first. Prefer desc when diagnosing a recent failure in a long session — it reaches the end without paging. Preserve it while paging.",
         )
         .optional(),
+      compact: z
+        .boolean()
+        .describe(
+          "(get_telemetry) Defaults to true. Compact items flatten the event envelope, add an ISO time, and omit data fields named body, headers, post_data, or png plus any data field over 8 KiB; omitted_fields lists removals. An eligible category-filtered compact response includes raw_replay_best_effort arguments targeting the same page start, but late events or retention may change results between calls. Raw mode requires explicit categories and limit<=5, rejects screenshot PNGs, and caps the serialized response at 1 MiB.",
+        )
+        .optional(),
       telemetry_enabled: z
         .boolean()
         .describe(
@@ -551,7 +644,7 @@ export function registerBrowserCapabilities(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(
+      const client = dependencies.createKernelClient(
         extra.authInfo.token,
         projectIDForOperation(extra.authInfo, params.project_id),
       );
@@ -680,12 +773,14 @@ export function registerBrowserCapabilities(server: McpServer) {
             }
             return await readBrowserTelemetry(client, {
               session_id: params.session_id,
+              project_id: params.project_id,
               categories: params.categories,
               limit: params.limit,
               offset: params.offset,
               since: params.since,
               until: params.until,
               order: params.order,
+              compact: params.compact,
             });
           }
           case "delete": {

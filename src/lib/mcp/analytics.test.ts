@@ -6,9 +6,11 @@ import {
   PostHogMCPAnalyticsProperty,
 } from "@posthog/mcp";
 import {
+  captureMcpConnectionScopeFailure,
   captureOAuthTokenExchange,
   enrichMcpAnalyticsEvent,
   instrumentMcpAnalytics,
+  MCP_CONNECTION_SCOPE_FAILURE_EVENT,
   OAUTH_TOKEN_EXCHANGE_EVENT,
   sanitizeMcpAnalyticsEvent,
 } from "@/lib/mcp/analytics";
@@ -325,6 +327,46 @@ describe("captureOAuthTokenExchange", () => {
     expect(JSON.stringify(captured)).not.toContain("access_token");
     expect(JSON.stringify(captured)).not.toContain("refresh_token_hash");
     expect(JSON.stringify(captured)).not.toContain("code_verifier");
+  });
+});
+
+describe("captureMcpConnectionScopeFailure", () => {
+  test("records the outcome without the credential it was resolving", () => {
+    const captured: unknown[] = [];
+    const fakePosthog = {
+      capture: (event: unknown) => captured.push(event),
+    } as unknown as PostHog;
+
+    captureMcpConnectionScopeFailure(
+      {
+        outcome: "rejected",
+        credentialType: "api_key",
+        upstreamStatusCode: 403,
+      },
+      fakePosthog,
+    );
+
+    expect(captured).toEqual([
+      {
+        distinctId: "mcp-connection-scope",
+        event: MCP_CONNECTION_SCOPE_FAILURE_EVENT,
+        properties: {
+          $process_person_profile: false,
+          connection_scope_outcome: "rejected",
+          connection_credential_type: "api_key",
+          upstream_status_code: 403,
+        },
+      },
+    ]);
+  });
+
+  test("is a no-op without a configured client", () => {
+    expect(() =>
+      captureMcpConnectionScopeFailure(
+        { outcome: "unavailable", credentialType: "oauth" },
+        null,
+      ),
+    ).not.toThrow();
   });
 });
 
