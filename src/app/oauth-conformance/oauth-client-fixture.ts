@@ -249,6 +249,7 @@ export function createFixture(contract: OAuthClientConformanceContract) {
     );
     expect(providerUrl.searchParams.get("code_challenge")).toBe(CODE_CHALLENGE);
     expect(providerUrl.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(providerUrl.searchParams.get("org_id")).toBeNull();
     expect(providerUrl.searchParams.get("access_scope")).toBeNull();
     expect(providerUrl.searchParams.get("project_id")).toBeNull();
   }
