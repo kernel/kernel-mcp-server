@@ -398,6 +398,7 @@ We welcome contributions! Please see our contributing guidelines:
 - Add TypeScript types for new functions and components
 - Update documentation for any API changes
 - Ensure all tests pass before submitting
+- Run the required [OAuth conformance suite](docs/oauth-conformance.md) when changing discovery, registration, authorization, token exchange, refresh, or scope enforcement
 
 ## 📄 License
 
