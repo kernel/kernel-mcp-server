@@ -33,7 +33,7 @@ export function projectSelectionInputSchema(): {
 export function requestedProject(
   selection: ProjectSelection,
 ): string | undefined {
-  return selection.project ?? selection.project_id;
+  return selection.project || selection.project_id || undefined;
 }
 
 export function connectionContextFromAuthInfo(
@@ -64,7 +64,7 @@ export function projectForOperation(
       `project_id must match this connection's fixed project (${scope.projectId})`,
     );
   }
-  return selection.project ?? scope.projectId;
+  return selection.project || scope.projectId;
 }
 
 export function projectIDForOperation(

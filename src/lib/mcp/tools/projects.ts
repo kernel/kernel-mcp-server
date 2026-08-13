@@ -30,12 +30,14 @@ export function registerProjectCapabilities(server: McpServer) {
         .describe("Operation to perform."),
       project: z
         .string()
+        .min(1)
         .describe(
           "Project name or ID. Required for get, update, delete, get_limits, and update_limits.",
         )
         .optional(),
       project_id: z
         .string()
+        .min(1)
         .describe(
           "Deprecated: use `project` instead. Project ID. Required for get, update, delete, get_limits, and update_limits.",
         )

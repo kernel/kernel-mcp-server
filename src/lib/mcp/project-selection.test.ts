@@ -61,6 +61,9 @@ describe("requestedProject", () => {
       requestedProject({ project: "by-name", project_id: "proj_123" }),
     ).toBe("by-name");
     expect(requestedProject({})).toBeUndefined();
+    expect(requestedProject({ project: "", project_id: "proj_123" })).toBe(
+      "proj_123",
+    );
   });
 });
 
