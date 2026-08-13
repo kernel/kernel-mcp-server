@@ -22,7 +22,10 @@ import { errorResponse } from "@/lib/mcp/responses";
 import {
   projectForOperation,
   projectSelectionInputSchema,
+  type ProjectSelection,
 } from "@/lib/mcp/project-selection";
+
+type AuthLoginParams = AuthLoginInput & ProjectSelection;
 
 export { initializeDeclaresMcpApps };
 
@@ -90,14 +93,12 @@ function waitAction(
   };
 }
 
-function inputFromParams(params: AuthLoginInput): AuthLoginInput {
+function inputFromParams(params: AuthLoginParams): AuthLoginInput {
   return {
     mode: params.mode,
     ...(params.connection_id && { connection_id: params.connection_id }),
     ...(params.domain && { domain: params.domain }),
     ...(params.profile_name && { profile_name: params.profile_name }),
-    ...(params.project && { project: params.project }),
-    ...(params.project_id && { project_id: params.project_id }),
     ...(params.save_credentials !== undefined && {
       save_credentials: params.save_credentials,
     }),
@@ -157,10 +158,7 @@ export function registerAuthLoginApp(server: McpServer) {
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const project = projectForOperation(extra.authInfo, params);
-      const input = {
-        ...inputFromParams(params),
-        project,
-      };
+      const input = inputFromParams(params);
       const validationError = validateAuthLoginInput(input);
       if (validationError) return errorResponse(`Error: ${validationError}`);
       const client = createKernelClient(extra.authInfo.token, project);
@@ -185,7 +183,7 @@ export function registerAuthLoginApp(server: McpServer) {
                 hasLiveAuthFlow(reauthConnection) ? "event" : "after",
               ),
               25,
-              input.project,
+              project,
             )
           : {
               tool: "manage_auth_connections" as const,
@@ -194,7 +192,7 @@ export function registerAuthLoginApp(server: McpServer) {
                 domain_filter: input.domain!,
                 profile_name: input.profile_name!,
                 wait_seconds: 25,
-                ...(input.project && { project: input.project }),
+                ...(project && { project }),
               },
             };
         const waitArguments = nextAction.arguments;
@@ -257,10 +255,7 @@ export function registerAuthLoginApp(server: McpServer) {
       );
       if (gateError) return errorResponse(gateError);
       const project = projectForOperation(extra.authInfo, params);
-      const input = {
-        ...inputFromParams(params),
-        project,
-      };
+      const input = inputFromParams(params);
       const validationError = validateAuthLoginInput(input);
       if (validationError) return errorResponse(`Error: ${validationError}`);
       const client = createKernelClient(extra.authInfo.token, project);
@@ -295,7 +290,7 @@ export function registerAuthLoginApp(server: McpServer) {
                 result.connection.id,
                 result.flow_checkpoint,
                 5,
-                input.project,
+                project,
               ),
             }),
             // Execution is gated on the client's MCP Apps capability, so

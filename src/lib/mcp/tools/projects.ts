@@ -1,6 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { createKernelClient } from "@/lib/mcp/kernel-client";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
 import {
   errorResponse,
   jsonResponse,
@@ -8,10 +11,16 @@ import {
   textResponse,
   throwToolError,
 } from "@/lib/mcp/responses";
-import { requestedProject } from "@/lib/mcp/project-selection";
+import {
+  projectSelectionInputSchema,
+  requestedProject,
+} from "@/lib/mcp/project-selection";
 import { paginationParams } from "@/lib/mcp/schemas";
 
-export function registerProjectCapabilities(server: McpServer) {
+export function registerProjectCapabilities(
+  server: McpServer,
+  dependencies: McpDependencies = defaultMcpDependencies,
+) {
   // manage_projects -- Create, list, get, update, delete, and manage organization project limits
   server.tool(
     "manage_projects",
@@ -28,20 +37,12 @@ export function registerProjectCapabilities(server: McpServer) {
           "update_limits",
         ])
         .describe("Operation to perform."),
-      project: z
-        .string()
-        .min(1)
-        .describe(
+      ...projectSelectionInputSchema({
+        project:
           "Project name or ID. Required for get, update, delete, get_limits, and update_limits.",
-        )
-        .optional(),
-      project_id: z
-        .string()
-        .min(1)
-        .describe(
+        project_id:
           "Deprecated: use `project` instead. Project ID. Required for get, update, delete, get_limits, and update_limits.",
-        )
-        .optional(),
+      }),
       name: z.string().describe("(create, update) Project name.").optional(),
       status: z
         .enum(["active", "archived"])
@@ -88,7 +89,7 @@ export function registerProjectCapabilities(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
+      const client = dependencies.createKernelClient(extra.authInfo.token);
 
       try {
         switch (params.action) {

@@ -44,8 +44,6 @@ export interface AuthLoginInput {
   connection_id?: string;
   domain?: string;
   profile_name?: string;
-  project?: string;
-  project_id?: string;
   save_credentials?: boolean;
   record_session?: boolean;
   browser_telemetry?: ManagedAuthBrowserTelemetry;

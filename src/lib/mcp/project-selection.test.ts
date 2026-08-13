@@ -51,6 +51,16 @@ describe("project selection schema", () => {
     expect(schema.project_id.safeParse("proj_123").success).toBe(true);
     expect(schema.project_id.safeParse("").success).toBe(false);
   });
+
+  test("keeps non-empty validation when descriptions are overridden", () => {
+    const schema = projectSelectionInputSchema({
+      project: "Project name or ID.",
+      project_id: "Deprecated.",
+    });
+    expect(schema.project.safeParse("").success).toBe(false);
+    expect(schema.project_id.safeParse("").success).toBe(false);
+    expect(schema.project.safeParse("billing").success).toBe(true);
+  });
 });
 
 describe("requestedProject", () => {
@@ -96,25 +106,19 @@ describe("projectForOperation", () => {
     );
   });
 
-  test("passes a project name through on project-scoped connections", () => {
-    expect(
-      projectForOperation(authInfo(projectScope), { project: "fixed-name" }),
-    ).toBe("fixed-name");
-  });
-
-  test("rejects a project_id override on project-scoped connections", () => {
+  test("rejects a selector override on project-scoped connections", () => {
     expect(() =>
       projectForOperation(authInfo(projectScope), { project_id: "proj_other" }),
-    ).toThrow("project_id must match");
-  });
-
-  test("ignores a mismatched project_id when project is also set", () => {
-    expect(
+    ).toThrow("project must match");
+    expect(() =>
+      projectForOperation(authInfo(projectScope), { project: "fixed-name" }),
+    ).toThrow("project must match");
+    expect(() =>
       projectForOperation(authInfo(projectScope), {
         project: "fixed-name",
         project_id: "proj_other",
       }),
-    ).toBe("fixed-name");
+    ).toThrow("project must match");
   });
 });
 
@@ -134,7 +138,7 @@ describe("projectIDForOperation", () => {
   test("rejects an override on project-scoped connections", () => {
     expect(() =>
       projectIDForOperation(authInfo(projectScope), "proj_other"),
-    ).toThrow("project_id must match");
+    ).toThrow("project must match");
   });
 
   test("fails when canonical connection context is absent", () => {
