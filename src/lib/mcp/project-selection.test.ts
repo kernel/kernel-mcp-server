@@ -6,8 +6,10 @@ import type {
 } from "@/lib/mcp/auth-context";
 import {
   connectionContextFromAuthInfo,
+  projectForOperation,
   projectIDForOperation,
   projectSelectionInputSchema,
+  requestedProject,
 } from "@/lib/mcp/project-selection";
 
 function authInfo(scope: ConnectionScope): AuthInfo {
@@ -38,12 +40,78 @@ const projectScope: ConnectionScope = {
 };
 
 describe("project selection schema", () => {
-  test("always advertises an optional project_id", () => {
+  test("advertises project plus deprecated project_id", () => {
     const schema = projectSelectionInputSchema();
+    expect(schema).toHaveProperty("project");
     expect(schema).toHaveProperty("project_id");
+    expect(schema.project.safeParse(undefined).success).toBe(true);
+    expect(schema.project.safeParse("my-project").success).toBe(true);
+    expect(schema.project.safeParse("").success).toBe(false);
     expect(schema.project_id.safeParse(undefined).success).toBe(true);
     expect(schema.project_id.safeParse("proj_123").success).toBe(true);
     expect(schema.project_id.safeParse("").success).toBe(false);
+  });
+});
+
+describe("requestedProject", () => {
+  test("prefers project over project_id", () => {
+    expect(requestedProject({ project: "by-name" })).toBe("by-name");
+    expect(requestedProject({ project_id: "proj_123" })).toBe("proj_123");
+    expect(
+      requestedProject({ project: "by-name", project_id: "proj_123" }),
+    ).toBe("by-name");
+    expect(requestedProject({})).toBeUndefined();
+  });
+});
+
+describe("projectForOperation", () => {
+  test("preserves unscoped access for organization-wide connections", () => {
+    const info = authInfo(organizationScope);
+    expect(projectForOperation(info)).toBeUndefined();
+    expect(projectForOperation(info, { project: "my-project" })).toBe(
+      "my-project",
+    );
+    expect(projectForOperation(info, { project_id: "proj_123" })).toBe(
+      "proj_123",
+    );
+    expect(
+      projectForOperation(info, {
+        project: "my-project",
+        project_id: "proj_123",
+      }),
+    ).toBe("my-project");
+  });
+
+  test("uses the fixed project for project-scoped connections", () => {
+    const info = authInfo(projectScope);
+    expect(projectForOperation(info)).toBe("proj_fixed");
+    expect(projectForOperation(info, { project_id: "proj_fixed" })).toBe(
+      "proj_fixed",
+    );
+    expect(projectForOperation(info, { project: "proj_fixed" })).toBe(
+      "proj_fixed",
+    );
+  });
+
+  test("passes a project name through on project-scoped connections", () => {
+    expect(
+      projectForOperation(authInfo(projectScope), { project: "fixed-name" }),
+    ).toBe("fixed-name");
+  });
+
+  test("rejects a project_id override on project-scoped connections", () => {
+    expect(() =>
+      projectForOperation(authInfo(projectScope), { project_id: "proj_other" }),
+    ).toThrow("project_id must match");
+  });
+
+  test("ignores a mismatched project_id when project is also set", () => {
+    expect(
+      projectForOperation(authInfo(projectScope), {
+        project: "fixed-name",
+        project_id: "proj_other",
+      }),
+    ).toBe("fixed-name");
   });
 });
 

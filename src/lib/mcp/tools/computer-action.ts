@@ -8,7 +8,7 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import {
-  projectIDForOperation,
+  projectForOperation,
   projectSelectionInputSchema,
 } from "@/lib/mcp/project-selection";
 
@@ -272,11 +272,11 @@ export function registerComputerActionTool(server: McpServer) {
       idempotentHint: false,
       openWorldHint: true,
     },
-    async ({ session_id, actions, project_id }, extra) => {
+    async ({ session_id, actions, project, project_id }, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(
         extra.authInfo.token,
-        projectIDForOperation(extra.authInfo, project_id),
+        projectForOperation(extra.authInfo, { project, project_id }),
       );
 
       try {

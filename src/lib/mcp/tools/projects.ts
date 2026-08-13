@@ -8,6 +8,7 @@ import {
   textResponse,
   throwToolError,
 } from "@/lib/mcp/responses";
+import { requestedProject } from "@/lib/mcp/project-selection";
 import { paginationParams } from "@/lib/mcp/schemas";
 
 export function registerProjectCapabilities(server: McpServer) {
@@ -27,10 +28,16 @@ export function registerProjectCapabilities(server: McpServer) {
           "update_limits",
         ])
         .describe("Operation to perform."),
+      project: z
+        .string()
+        .describe(
+          "Project name or ID. Required for get, update, delete, get_limits, and update_limits.",
+        )
+        .optional(),
       project_id: z
         .string()
         .describe(
-          "Project ID. Required for get, update, delete, get_limits, and update_limits.",
+          "Deprecated: use `project` instead. Project ID. Required for get, update, delete, get_limits, and update_limits.",
         )
         .optional(),
       name: z.string().describe("(create, update) Project name.").optional(),
@@ -99,15 +106,21 @@ export function registerProjectCapabilities(server: McpServer) {
             return paginatedJsonResponse(page);
           }
           case "get": {
-            if (!params.project_id) {
-              return errorResponse("Error: project_id is required for get.");
+            const idOrName = requestedProject(params);
+            if (!idOrName) {
+              return errorResponse(
+                "Error: project or project_id is required for get.",
+              );
             }
-            const project = await client.projects.retrieve(params.project_id);
+            const project = await client.projects.retrieve(idOrName);
             return jsonResponse(project);
           }
           case "update": {
-            if (!params.project_id) {
-              return errorResponse("Error: project_id is required for update.");
+            const idOrName = requestedProject(params);
+            if (!idOrName) {
+              return errorResponse(
+                "Error: project or project_id is required for update.",
+              );
             }
             if (!params.name && !params.status) {
               return errorResponse(
@@ -119,33 +132,36 @@ export function registerProjectCapabilities(server: McpServer) {
             if (params.name) updateParams.name = params.name;
             if (params.status) updateParams.status = params.status;
             const project = await client.projects.update(
-              params.project_id,
+              idOrName,
               updateParams,
             );
             return jsonResponse(project);
           }
           case "delete": {
-            if (!params.project_id) {
-              return errorResponse("Error: project_id is required for delete.");
+            const idOrName = requestedProject(params);
+            if (!idOrName) {
+              return errorResponse(
+                "Error: project or project_id is required for delete.",
+              );
             }
-            await client.projects.delete(params.project_id);
+            await client.projects.delete(idOrName);
             return textResponse("Project deleted successfully");
           }
           case "get_limits": {
-            if (!params.project_id) {
+            const idOrName = requestedProject(params);
+            if (!idOrName) {
               return errorResponse(
-                "Error: project_id is required for get_limits.",
+                "Error: project or project_id is required for get_limits.",
               );
             }
-            const limits = await client.projects.limits.retrieve(
-              params.project_id,
-            );
+            const limits = await client.projects.limits.retrieve(idOrName);
             return jsonResponse(limits);
           }
           case "update_limits": {
-            if (!params.project_id) {
+            const idOrName = requestedProject(params);
+            if (!idOrName) {
               return errorResponse(
-                "Error: project_id is required for update_limits.",
+                "Error: project or project_id is required for update_limits.",
               );
             }
             const updateParams: Parameters<
@@ -168,7 +184,7 @@ export function registerProjectCapabilities(server: McpServer) {
               );
             }
             const limits = await client.projects.limits.update(
-              params.project_id,
+              idOrName,
               updateParams,
             );
             return jsonResponse(limits);

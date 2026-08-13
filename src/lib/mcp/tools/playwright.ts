@@ -5,7 +5,7 @@ import {
   type McpDependencies,
 } from "@/lib/mcp/dependencies";
 import {
-  projectIDForOperation,
+  projectForOperation,
   projectSelectionInputSchema,
 } from "@/lib/mcp/project-selection";
 import { longOperationOptions } from "@/lib/mcp/request-options";
@@ -45,11 +45,11 @@ export function registerPlaywrightTool(
       idempotentHint: false,
       openWorldHint: true,
     },
-    async ({ code, session_id, project_id }, extra) => {
+    async ({ code, session_id, project, project_id }, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = options.createKernelClient(
         extra.authInfo.token,
-        projectIDForOperation(extra.authInfo, project_id),
+        projectForOperation(extra.authInfo, { project, project_id }),
       );
 
       try {

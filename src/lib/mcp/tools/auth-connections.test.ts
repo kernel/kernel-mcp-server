@@ -64,12 +64,19 @@ describe("manage_auth_connections programmatic surface", () => {
       };
     };
 
+    expect(schema?.project).toBeDefined();
     expect(schema?.project_id).toBeDefined();
     await handler(
       { action: "list", project_id: "proj_123" },
       { authInfo: { token: "test-token" } },
     );
     expect(selectedProject).toBe("proj_123");
+
+    await handler(
+      { action: "list", project: "billing" },
+      { authInfo: { token: "test-token" } },
+    );
+    expect(selectedProject).toBe("billing");
 
     await handler({ action: "list" }, { authInfo: organizationWideAuthInfo() });
     expect(selectedProject).toBeUndefined();

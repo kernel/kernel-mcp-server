@@ -7,7 +7,7 @@ import {
 import { longOperationOptions } from "@/lib/mcp/request-options";
 import { throwToolError } from "@/lib/mcp/responses";
 import {
-  projectIDForOperation,
+  projectForOperation,
   projectSelectionInputSchema,
 } from "@/lib/mcp/project-selection";
 
@@ -58,13 +58,22 @@ export function registerShellTool(
       openWorldHint: true,
     },
     async (
-      { session_id, command, args, cwd, timeout_sec, as_root, project_id },
+      {
+        session_id,
+        command,
+        args,
+        cwd,
+        timeout_sec,
+        as_root,
+        project,
+        project_id,
+      },
       extra,
     ) => {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = options.createKernelClient(
         extra.authInfo.token,
-        projectIDForOperation(extra.authInfo, project_id),
+        projectForOperation(extra.authInfo, { project, project_id }),
       );
 
       try {

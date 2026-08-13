@@ -20,7 +20,7 @@ import {
 import { managedAuthBrowserTelemetrySchema } from "@/lib/mcp/tools/managed-auth-telemetry";
 import { errorResponse } from "@/lib/mcp/responses";
 import {
-  projectIDForOperation,
+  projectForOperation,
   projectSelectionInputSchema,
 } from "@/lib/mcp/project-selection";
 
@@ -76,7 +76,7 @@ function waitAction(
   connectionId: string,
   flowCheckpoint: string,
   waitSeconds: number,
-  projectID?: string,
+  project?: string,
 ) {
   return {
     tool: "manage_auth_connections" as const,
@@ -85,7 +85,7 @@ function waitAction(
       id: connectionId,
       flow_checkpoint: flowCheckpoint,
       wait_seconds: waitSeconds,
-      ...(projectID && { project_id: projectID }),
+      ...(project && { project }),
     },
   };
 }
@@ -96,6 +96,7 @@ function inputFromParams(params: AuthLoginInput): AuthLoginInput {
     ...(params.connection_id && { connection_id: params.connection_id }),
     ...(params.domain && { domain: params.domain }),
     ...(params.profile_name && { profile_name: params.profile_name }),
+    ...(params.project && { project: params.project }),
     ...(params.project_id && { project_id: params.project_id }),
     ...(params.save_credentials !== undefined && {
       save_credentials: params.save_credentials,
@@ -155,13 +156,14 @@ export function registerAuthLoginApp(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
+      const project = projectForOperation(extra.authInfo, params);
       const input = {
         ...inputFromParams(params),
-        project_id: projectIDForOperation(extra.authInfo, params.project_id),
+        project,
       };
       const validationError = validateAuthLoginInput(input);
       if (validationError) return errorResponse(`Error: ${validationError}`);
-      const client = createKernelClient(extra.authInfo.token, input.project_id);
+      const client = createKernelClient(extra.authInfo.token, project);
 
       try {
         const reauthConnection =
@@ -183,7 +185,7 @@ export function registerAuthLoginApp(server: McpServer) {
                 hasLiveAuthFlow(reauthConnection) ? "event" : "after",
               ),
               25,
-              input.project_id,
+              input.project,
             )
           : {
               tool: "manage_auth_connections" as const,
@@ -192,7 +194,7 @@ export function registerAuthLoginApp(server: McpServer) {
                 domain_filter: input.domain!,
                 profile_name: input.profile_name!,
                 wait_seconds: 25,
-                ...(input.project_id && { project_id: input.project_id }),
+                ...(input.project && { project: input.project }),
               },
             };
         const waitArguments = nextAction.arguments;
@@ -254,13 +256,14 @@ export function registerAuthLoginApp(server: McpServer) {
         MCP_APPS_GATE_DENIED_MESSAGE,
       );
       if (gateError) return errorResponse(gateError);
+      const project = projectForOperation(extra.authInfo, params);
       const input = {
         ...inputFromParams(params),
-        project_id: projectIDForOperation(extra.authInfo, params.project_id),
+        project,
       };
       const validationError = validateAuthLoginInput(input);
       if (validationError) return errorResponse(`Error: ${validationError}`);
-      const client = createKernelClient(extra.authInfo.token, input.project_id);
+      const client = createKernelClient(extra.authInfo.token, project);
 
       try {
         const result = await beginAuthLogin(client, input);
@@ -292,7 +295,7 @@ export function registerAuthLoginApp(server: McpServer) {
                 result.connection.id,
                 result.flow_checkpoint,
                 5,
-                input.project_id,
+                input.project,
               ),
             }),
             // Execution is gated on the client's MCP Apps capability, so

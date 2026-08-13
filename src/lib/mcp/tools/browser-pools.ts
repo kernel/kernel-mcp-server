@@ -20,7 +20,7 @@ import {
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 import {
-  projectIDForOperation,
+  projectForOperation,
   projectSelectionInputSchema,
 } from "@/lib/mcp/project-selection";
 
@@ -407,7 +407,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(
         extra.authInfo.token,
-        projectIDForOperation(extra.authInfo, params.project_id),
+        projectForOperation(extra.authInfo, params),
       );
 
       try {

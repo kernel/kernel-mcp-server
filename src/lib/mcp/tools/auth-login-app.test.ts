@@ -202,7 +202,7 @@ describe("managed-auth MCP App registration", () => {
           domain_filter: "example.com",
           profile_name: "work",
           wait_seconds: 25,
-          project_id: "proj_test",
+          project: "proj_test",
         },
       },
     });

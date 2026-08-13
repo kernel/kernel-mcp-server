@@ -6,10 +6,13 @@ describe("createKernelClient", () => {
     const previous = process.env.KERNEL_PROJECT;
     process.env.KERNEL_PROJECT = "proj_default";
     try {
-      expect(createKernelClient("test-key", "proj_explicit").projectID).toBe(
+      expect(createKernelClient("test-key", "proj_explicit").project).toBe(
         "proj_explicit",
       );
-      expect(createKernelClient("test-key").projectID).toBe("proj_default");
+      expect(createKernelClient("test-key", "proj_explicit").projectID).toBe(
+        null,
+      );
+      expect(createKernelClient("test-key").project).toBe("proj_default");
     } finally {
       if (previous === undefined) {
         delete process.env.KERNEL_PROJECT;

@@ -160,7 +160,9 @@ export function captureHandler() {
           ...extra,
           authInfo: extra.authInfo
             ? {
-                ...projectScopedAuthInfo(params.project_id ?? "proj_test"),
+                ...projectScopedAuthInfo(
+                  params.project ?? params.project_id ?? "proj_test",
+                ),
                 ...extra.authInfo,
               }
             : undefined,
