@@ -106,9 +106,29 @@ export function createFixture(contract: OAuthClientConformanceContract) {
         getRefreshContext: async ({ refreshToken }) =>
           refreshContexts.get(refreshToken) ?? null,
       }),
-    exchange: async (_input, init) => {
+    exchange: async (input, init) => {
+      expect(init?.body).toBeInstanceOf(URLSearchParams);
       const params = new URLSearchParams(init?.body as URLSearchParams);
       providerExchanges.push(params);
+
+      expect(input.toString()).toBe("https://clerk.example.test/oauth/token");
+      expect(init?.method).toBe("POST");
+      expect(new Headers(init?.headers).get("content-type")).toBe(
+        "application/x-www-form-urlencoded",
+      );
+      expect(params.get("client_id")).toBeTruthy();
+      expect(params.get("redirect_uri")).toBeTruthy();
+
+      if (params.get("grant_type") === "authorization_code") {
+        expect(params.get("code")).toBe("authorization-code");
+        expect(params.get("code_verifier")).toBe(CODE_VERIFIER);
+        expect(params.has("refresh_token")).toBe(false);
+      } else {
+        expect(params.get("grant_type")).toBe("refresh_token");
+        expect(params.get("refresh_token")).toBeTruthy();
+        expect(params.has("code")).toBe(false);
+        expect(params.has("code_verifier")).toBe(false);
+      }
 
       if (
         params.get("redirect_uri") !==
@@ -181,13 +201,18 @@ export function createFixture(contract: OAuthClientConformanceContract) {
       client_secret?: string;
       token_endpoint_auth_method: string;
       grant_types: string[];
+      response_types: string[];
       redirect_uris: string[];
+      scope: string;
     };
     expect(registration).toMatchObject({
       token_endpoint_auth_method: "none",
       grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
       redirect_uris: [contract.redirectUri],
+      scope: "openid",
     });
+    expect(registration.client_id.length).toBeGreaterThan(0);
     expect(registration.client_secret).toBeUndefined();
     return registration.client_id;
   }
