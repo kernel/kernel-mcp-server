@@ -14,13 +14,15 @@ mock.module("next/server", () => ({ ...nextServer, after: () => {} }));
 // module stays intact for anything else exercising it.
 const captured: McpConnectionScopeFailureAnalytics[] = [];
 const analytics = await import("@/lib/mcp/analytics");
+const captureMcpConnectionScopeFailure =
+  analytics.captureMcpConnectionScopeFailure;
 mock.module("@/lib/mcp/analytics", () => ({
   ...analytics,
   captureMcpConnectionScopeFailure: (
     ...args: Parameters<typeof analytics.captureMcpConnectionScopeFailure>
   ) => {
     captured.push(args[0]);
-    return analytics.captureMcpConnectionScopeFailure(...args);
+    return captureMcpConnectionScopeFailure(...args);
   },
 }));
 
