@@ -66,11 +66,14 @@ const posthog = projectToken
     })
   : null;
 
+export const MCP_USED_PROJECT_ID_PROPERTY = "$mcp_used_project_id";
+export const MCP_USED_PROJECT_PROPERTY = "$mcp_used_project";
+
 // Every property this integration sends. An allow-list rather than a deny-list so a
 // property the pinned SDK doesn't emit today — a renamed payload field, a new one —
 // can't start flowing on an upgrade. Deliberately absent: $mcp_parameters and
 // $mcp_response (call payloads), and $mcp_error_message (the text a failed tool
-// returned).
+// returned). $mcp_used_project_id / $mcp_used_project are presence flags only.
 const SENT_PROPERTIES = new Set<string>([
   "$groups",
   "$insert_id",
@@ -79,6 +82,8 @@ const SENT_PROPERTIES = new Set<string>([
   "$mcp_connection_scope",
   "$mcp_credential_scope",
   "$mcp_scope_source",
+  MCP_USED_PROJECT_ID_PROPERTY,
+  MCP_USED_PROJECT_PROPERTY,
   PostHogMCPAnalyticsProperty.ClientName,
   PostHogMCPAnalyticsProperty.ClientVersion,
   PostHogMCPAnalyticsProperty.DurationMs,
@@ -131,6 +136,39 @@ const INTENT_REDACTIONS: readonly [RegExp, string][] = [
     "[token]",
   ],
 ];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasNonEmptyParam(
+  args: Record<string, unknown> | undefined,
+  key: string,
+) {
+  if (!args || !Object.prototype.hasOwnProperty.call(args, key)) return false;
+  const value = args[key];
+  return value !== undefined && value !== "";
+}
+
+// $mcp_parameters is { request: { params: { arguments: { ...tool args } } } }.
+function toolCallArguments(
+  properties: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const parameters = properties[PostHogMCPAnalyticsProperty.Parameters];
+  if (!isRecord(parameters) || !isRecord(parameters.request)) return undefined;
+  const params = parameters.request.params;
+  if (!isRecord(params) || !isRecord(params.arguments)) return undefined;
+  return params.arguments;
+}
+
+function annotateProjectParamUsage(properties: Record<string, unknown>) {
+  const args = toolCallArguments(properties);
+  properties[MCP_USED_PROJECT_ID_PROPERTY] = hasNonEmptyParam(
+    args,
+    "project_id",
+  );
+  properties[MCP_USED_PROJECT_PROPERTY] = hasNonEmptyParam(args, "project");
+}
 
 function sanitizeIntent(intent: string) {
   const redacted = INTENT_REDACTIONS.reduce(
@@ -194,6 +232,9 @@ export const sanitizeMcpAnalyticsEvent: BeforeSendFn = (event) => {
   const properties = event.properties;
   if (!properties) return event;
   enrichMcpAnalyticsEvent(event);
+  if (event.event === PostHogMCPAnalyticsEvent.ToolCall) {
+    annotateProjectParamUsage(properties);
+  }
 
   for (const key of Object.keys(properties)) {
     if (!SENT_PROPERTIES.has(key)) delete properties[key];

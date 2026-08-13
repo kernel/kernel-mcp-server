@@ -11,6 +11,8 @@ import {
   enrichMcpAnalyticsEvent,
   instrumentMcpAnalytics,
   MCP_CONNECTION_SCOPE_FAILURE_EVENT,
+  MCP_USED_PROJECT_ID_PROPERTY,
+  MCP_USED_PROJECT_PROPERTY,
   OAUTH_TOKEN_EXCHANGE_EVENT,
   sanitizeMcpAnalyticsEvent,
 } from "@/lib/mcp/analytics";
@@ -284,6 +286,69 @@ describe("sanitizeMcpAnalyticsEvent", () => {
     event.event = PostHogMCPAnalyticsEvent.Exception;
 
     expect(await sanitizeMcpAnalyticsEvent(event)).toBeNull();
+  });
+
+  test("records which project selector was passed without the value", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.Parameters]: {
+        request: {
+          params: {
+            arguments: {
+              action: "list",
+              project_id: "proj_secret",
+              project: "billing",
+            },
+          },
+        },
+      },
+    });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    expect(result?.properties[MCP_USED_PROJECT_ID_PROPERTY]).toBe(true);
+    expect(result?.properties[MCP_USED_PROJECT_PROPERTY]).toBe(true);
+    expect(
+      result?.properties[PostHogMCPAnalyticsProperty.Parameters],
+    ).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain("proj_secret");
+    expect(JSON.stringify(result)).not.toContain("billing");
+  });
+
+  test("marks deprecated project_id usage when only that param is set", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.Parameters]: {
+        request: {
+          params: { arguments: { project_id: "proj_123" } },
+        },
+      },
+    });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    expect(result?.properties[MCP_USED_PROJECT_ID_PROPERTY]).toBe(true);
+    expect(result?.properties[MCP_USED_PROJECT_PROPERTY]).toBe(false);
+  });
+
+  test("marks project usage when only the new param is set", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.Parameters]: {
+        request: {
+          params: { arguments: { project: "my-project" } },
+        },
+      },
+    });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    expect(result?.properties[MCP_USED_PROJECT_ID_PROPERTY]).toBe(false);
+    expect(result?.properties[MCP_USED_PROJECT_PROPERTY]).toBe(true);
+  });
+
+  test("records false/false when a tool call omits both project selectors", async () => {
+    const result = await sanitizeMcpAnalyticsEvent(toolCallEvent());
+
+    expect(result?.properties[MCP_USED_PROJECT_ID_PROPERTY]).toBe(false);
+    expect(result?.properties[MCP_USED_PROJECT_PROPERTY]).toBe(false);
   });
 });
 

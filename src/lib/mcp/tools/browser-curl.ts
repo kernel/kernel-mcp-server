@@ -7,7 +7,7 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import {
-  projectIDForOperation,
+  projectForOperation,
   projectSelectionInputSchema,
 } from "@/lib/mcp/project-selection";
 
@@ -69,12 +69,13 @@ export function registerBrowserCurlTool(server: McpServer) {
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(
         extra.authInfo.token,
-        projectIDForOperation(extra.authInfo, params.project_id),
+        projectForOperation(extra.authInfo, params),
       );
 
       try {
         const {
           session_id,
+          project: _project,
           project_id: _projectID,
           ...curlParams
         } = params satisfies {

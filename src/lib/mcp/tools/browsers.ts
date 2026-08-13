@@ -24,7 +24,7 @@ import {
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 import {
-  projectIDForOperation,
+  projectForOperation,
   projectSelectionInputSchema,
 } from "@/lib/mcp/project-selection";
 import {
@@ -199,6 +199,7 @@ function compactTelemetryEvent({ seq, event }: TelemetryEnvelope) {
 
 type BrowserTelemetryReadParams = {
   session_id: string;
+  project?: string;
   project_id?: string;
   categories?: TelemetryEventsQuery["category"];
   limit?: number;
@@ -308,6 +309,7 @@ async function readBrowserTelemetry(
       : {
           action: "get_telemetry",
           session_id: params.session_id,
+          ...(params.project && { project: params.project }),
           ...(params.project_id && { project_id: params.project_id }),
           ...(query.category && { categories: query.category }),
           limit: Math.min(query.limit ?? 100, maxRawTelemetryEvents),
@@ -646,7 +648,7 @@ export function registerBrowserCapabilities(
       if (!extra.authInfo) throw new Error("Authentication required");
       const client = dependencies.createKernelClient(
         extra.authInfo.token,
-        projectIDForOperation(extra.authInfo, params.project_id),
+        projectForOperation(extra.authInfo, params),
       );
 
       try {
@@ -773,6 +775,7 @@ export function registerBrowserCapabilities(
             }
             return await readBrowserTelemetry(client, {
               session_id: params.session_id,
+              project: params.project,
               project_id: params.project_id,
               categories: params.categories,
               limit: params.limit,

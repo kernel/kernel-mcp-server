@@ -109,6 +109,7 @@ describe("manage_apps invocation contract", () => {
                 headless: false,
                 stealth: true,
                 timeout_seconds: 600,
+                region: "us-east",
               },
             ],
           };

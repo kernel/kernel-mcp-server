@@ -1,6 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { createKernelClient } from "@/lib/mcp/kernel-client";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
 import {
   errorResponse,
   jsonResponse,
@@ -8,9 +11,16 @@ import {
   textResponse,
   throwToolError,
 } from "@/lib/mcp/responses";
+import {
+  projectSelectionInputSchema,
+  requestedProject,
+} from "@/lib/mcp/project-selection";
 import { paginationParams } from "@/lib/mcp/schemas";
 
-export function registerProjectCapabilities(server: McpServer) {
+export function registerProjectCapabilities(
+  server: McpServer,
+  dependencies: McpDependencies = defaultMcpDependencies,
+) {
   // manage_projects -- Create, list, get, update, delete, and manage organization project limits
   server.tool(
     "manage_projects",
@@ -27,12 +37,12 @@ export function registerProjectCapabilities(server: McpServer) {
           "update_limits",
         ])
         .describe("Operation to perform."),
-      project_id: z
-        .string()
-        .describe(
-          "Project ID. Required for get, update, delete, get_limits, and update_limits.",
-        )
-        .optional(),
+      ...projectSelectionInputSchema({
+        project:
+          "Project name or ID. Required for get, update, delete, get_limits, and update_limits.",
+        project_id:
+          "Deprecated: use `project` instead. Project ID. Required for get, update, delete, get_limits, and update_limits.",
+      }),
       name: z.string().describe("(create, update) Project name.").optional(),
       status: z
         .enum(["active", "archived"])
@@ -79,7 +89,7 @@ export function registerProjectCapabilities(server: McpServer) {
     },
     async (params, extra) => {
       if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
+      const client = dependencies.createKernelClient(extra.authInfo.token);
 
       try {
         switch (params.action) {
@@ -99,15 +109,21 @@ export function registerProjectCapabilities(server: McpServer) {
             return paginatedJsonResponse(page);
           }
           case "get": {
-            if (!params.project_id) {
-              return errorResponse("Error: project_id is required for get.");
+            const idOrName = requestedProject(params);
+            if (!idOrName) {
+              return errorResponse(
+                "Error: project or project_id is required for get.",
+              );
             }
-            const project = await client.projects.retrieve(params.project_id);
+            const project = await client.projects.retrieve(idOrName);
             return jsonResponse(project);
           }
           case "update": {
-            if (!params.project_id) {
-              return errorResponse("Error: project_id is required for update.");
+            const idOrName = requestedProject(params);
+            if (!idOrName) {
+              return errorResponse(
+                "Error: project or project_id is required for update.",
+              );
             }
             if (!params.name && !params.status) {
               return errorResponse(
@@ -119,33 +135,36 @@ export function registerProjectCapabilities(server: McpServer) {
             if (params.name) updateParams.name = params.name;
             if (params.status) updateParams.status = params.status;
             const project = await client.projects.update(
-              params.project_id,
+              idOrName,
               updateParams,
             );
             return jsonResponse(project);
           }
           case "delete": {
-            if (!params.project_id) {
-              return errorResponse("Error: project_id is required for delete.");
+            const idOrName = requestedProject(params);
+            if (!idOrName) {
+              return errorResponse(
+                "Error: project or project_id is required for delete.",
+              );
             }
-            await client.projects.delete(params.project_id);
+            await client.projects.delete(idOrName);
             return textResponse("Project deleted successfully");
           }
           case "get_limits": {
-            if (!params.project_id) {
+            const idOrName = requestedProject(params);
+            if (!idOrName) {
               return errorResponse(
-                "Error: project_id is required for get_limits.",
+                "Error: project or project_id is required for get_limits.",
               );
             }
-            const limits = await client.projects.limits.retrieve(
-              params.project_id,
-            );
+            const limits = await client.projects.limits.retrieve(idOrName);
             return jsonResponse(limits);
           }
           case "update_limits": {
-            if (!params.project_id) {
+            const idOrName = requestedProject(params);
+            if (!idOrName) {
               return errorResponse(
-                "Error: project_id is required for update_limits.",
+                "Error: project or project_id is required for update_limits.",
               );
             }
             const updateParams: Parameters<
@@ -168,7 +187,7 @@ export function registerProjectCapabilities(server: McpServer) {
               );
             }
             const limits = await client.projects.limits.update(
-              params.project_id,
+              idOrName,
               updateParams,
             );
             return jsonResponse(limits);

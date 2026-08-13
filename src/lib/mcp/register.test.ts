@@ -106,14 +106,23 @@ describe("project selection registration", () => {
     const registration = captureRegistration(true);
 
     for (const name of projectScopedTools) {
+      expect(registration.schemas.get(name)).toHaveProperty("project");
       expect(registration.schemas.get(name)).toHaveProperty("project_id");
     }
+
+    expect(registration.schemas.get("manage_projects")).toHaveProperty(
+      "project",
+    );
+    expect(registration.schemas.get("manage_projects")).toHaveProperty(
+      "project_id",
+    );
 
     for (const name of [
       "get_connection_context",
       "search_docs",
       "manage_credential_providers",
     ]) {
+      expect(registration.schemas.get(name)).not.toHaveProperty("project");
       expect(registration.schemas.get(name)).not.toHaveProperty("project_id");
     }
   });
