@@ -472,6 +472,12 @@ export function registerBrowserCapabilities(
         .boolean()
         .describe("(create) Avoid bot detection. Recommended for scraping.")
         .optional(),
+      region: z
+        .enum(["us-east", "eu-west"])
+        .describe(
+          "(create) Geographic region for the browser session. Fixed once created; requires Start-Up or Enterprise plan, defaults to us-east. (list) Filter sessions by region.",
+        )
+        .optional(),
       timeout_seconds: z
         .number()
         .int()
@@ -660,6 +666,8 @@ export function registerBrowserCapabilities(
             if (params.gpu !== undefined) createParams.gpu = params.gpu;
             if (params.stealth !== undefined)
               createParams.stealth = params.stealth;
+            if (params.region !== undefined)
+              createParams.region = params.region;
             if (params.timeout_seconds !== undefined)
               createParams.timeout_seconds = params.timeout_seconds;
             if (params.kiosk_mode !== undefined)
@@ -743,6 +751,7 @@ export function registerBrowserCapabilities(
           case "list": {
             const page = await client.browsers.list({
               ...(params.status && { status: params.status }),
+              ...(params.region && { region: params.region }),
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });

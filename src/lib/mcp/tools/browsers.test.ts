@@ -342,6 +342,57 @@ describe("manage_browsers telemetry", () => {
   });
 });
 
+describe("manage_browsers region", () => {
+  test("passes region to create and list", async () => {
+    const createCalls: unknown[] = [];
+    const listCalls: unknown[] = [];
+    const kernelClient = {
+      browsers: {
+        create: async (params: unknown) => {
+          createCalls.push(params);
+          return { session_id: "brr_123" };
+        },
+        list: async (params: unknown) => {
+          listCalls.push(params);
+          return {
+            getPaginatedItems: () => [
+              { session_id: "brr_eu", cdp_ws_url: "ws://example.test" },
+            ],
+            has_more: false,
+            next_offset: null,
+          };
+        },
+      },
+    };
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      kernelClient,
+    );
+
+    try {
+      const created = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "create", region: "eu-west", stealth: true },
+        }),
+      );
+      expect(createCalls).toEqual([{ stealth: true, region: "eu-west" }]);
+      expect(created.browser.session_id).toBe("brr_123");
+
+      const listed = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "list", region: "eu-west" },
+        }),
+      );
+      expect(listCalls).toEqual([{ region: "eu-west" }]);
+      expect(listed.items).toEqual([{ session_id: "brr_eu" }]);
+    } finally {
+      await close();
+    }
+  });
+});
+
 describe("browser resources", () => {
   test("uses injected dependencies", async () => {
     const kernelClient = {
