@@ -81,10 +81,12 @@ export const MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY =
 export const MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY =
   "$mcp_client_supports_enterprise_auth";
 
+type McpClientElicitationMode = "none" | "form" | "url" | "form_and_url";
+
 export type McpClientCapabilityAnalytics = {
   [MCP_CLIENT_SUPPORTS_SAMPLING_PROPERTY]: boolean;
   [MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY]: boolean;
-  [MCP_CLIENT_ELICITATION_MODE_PROPERTY]: "none" | "form" | "form_and_url";
+  [MCP_CLIENT_ELICITATION_MODE_PROPERTY]: McpClientElicitationMode;
   [MCP_CLIENT_SUPPORTS_APPS_PROPERTY]: boolean;
   [MCP_CLIENT_SUPPORTS_TASKS_PROPERTY]: boolean;
   [MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY]: boolean;
@@ -213,15 +215,22 @@ export function clientCapabilityAnalyticsFromInitialize(
     ? capabilities.extensions
     : null;
 
+  const hasElicitationForm =
+    elicitation !== null &&
+    (hasOwn(elicitation, "form") || !hasOwn(elicitation, "url"));
+  const hasElicitationUrl = elicitation !== null && hasOwn(elicitation, "url");
+  let elicitationMode: McpClientElicitationMode = "none";
+  if (hasElicitationForm) {
+    elicitationMode = hasElicitationUrl ? "form_and_url" : "form";
+  } else if (hasElicitationUrl) {
+    elicitationMode = "url";
+  }
+
   const properties: McpClientCapabilityAnalytics = {
     [MCP_CLIENT_SUPPORTS_SAMPLING_PROPERTY]: sampling !== null,
     [MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY]:
       sampling !== null && hasOwn(sampling, "tools"),
-    [MCP_CLIENT_ELICITATION_MODE_PROPERTY]: elicitation
-      ? hasOwn(elicitation, "url")
-        ? "form_and_url"
-        : "form"
-      : "none",
+    [MCP_CLIENT_ELICITATION_MODE_PROPERTY]: elicitationMode,
     [MCP_CLIENT_SUPPORTS_APPS_PROPERTY]: false,
     [MCP_CLIENT_SUPPORTS_TASKS_PROPERTY]: hasOwn(capabilities, "tasks"),
     [MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY]: false,

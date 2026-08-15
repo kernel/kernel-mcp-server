@@ -81,13 +81,19 @@ describe("clientCapabilityAnalyticsFromInitialize", () => {
     expect(JSON.stringify(result)).not.toContain("do-not-capture");
   });
 
-  test("distinguishes URL elicitation and legacy core tasks", () => {
-    const result = clientCapabilityAnalyticsFromInitialize(
+  test("distinguishes URL-only, form-and-URL, and legacy task support", () => {
+    const urlOnly = clientCapabilityAnalyticsFromInitialize(
+      initialize({ elicitation: { url: {} } }),
+    );
+    const formAndUrl = clientCapabilityAnalyticsFromInitialize(
       initialize({ elicitation: { form: {}, url: {} }, tasks: {} }),
     );
 
-    expect(result?.[MCP_CLIENT_ELICITATION_MODE_PROPERTY]).toBe("form_and_url");
-    expect(result?.[MCP_CLIENT_SUPPORTS_TASKS_PROPERTY]).toBe(true);
+    expect(urlOnly?.[MCP_CLIENT_ELICITATION_MODE_PROPERTY]).toBe("url");
+    expect(formAndUrl?.[MCP_CLIENT_ELICITATION_MODE_PROPERTY]).toBe(
+      "form_and_url",
+    );
+    expect(formAndUrl?.[MCP_CLIENT_SUPPORTS_TASKS_PROPERTY]).toBe(true);
   });
 
   test("ignores non-initialize payloads", () => {
@@ -606,7 +612,7 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     expect(initialize.properties).toMatchObject({
       [MCP_CLIENT_SUPPORTS_SAMPLING_PROPERTY]: true,
       [MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY]: true,
-      [MCP_CLIENT_ELICITATION_MODE_PROPERTY]: "form_and_url",
+      [MCP_CLIENT_ELICITATION_MODE_PROPERTY]: "url",
       [MCP_CLIENT_SUPPORTS_APPS_PROPERTY]: true,
       [MCP_CLIENT_SUPPORTS_TASKS_PROPERTY]: false,
     });
