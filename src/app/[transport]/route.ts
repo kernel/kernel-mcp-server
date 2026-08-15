@@ -8,9 +8,11 @@ import { after, NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
 import {
   captureMcpConnectionScopeFailure,
+  clientCapabilityAnalyticsFromInitialize,
   flushMcpAnalytics,
   instrumentMcpAnalytics,
   isMcpAnalyticsEnabled,
+  type McpClientCapabilityAnalytics,
 } from "@/lib/mcp/analytics";
 import {
   connectionAnalyticsFromContext,
@@ -130,6 +132,7 @@ async function handleMcpRequestWithIdentity({
   transportSessionId,
   connectionContextCacheIdentity,
   observeConnection,
+  clientCapabilityAnalytics,
 }: {
   req: NextRequest;
   token: string;
@@ -140,6 +143,7 @@ async function handleMcpRequestWithIdentity({
   transportSessionId: string | null;
   connectionContextCacheIdentity?: string;
   observeConnection: boolean;
+  clientCapabilityAnalytics: McpClientCapabilityAnalytics | null;
 }) {
   const [mcpApps, connection] = await Promise.all([
     requestUsesMcpApps(req, {
@@ -180,6 +184,7 @@ async function handleMcpRequestWithIdentity({
         ...authInfoExtra,
         connectionContext,
         connectionAnalytics,
+        clientCapabilityAnalytics,
       },
     }),
     {
@@ -194,6 +199,7 @@ async function handleAuthenticatedRequest(
   req: NextRequest,
   transportSessionId: string | null = null,
   observeConnection = false,
+  clientCapabilityAnalytics: McpClientCapabilityAnalytics | null = null,
 ): Promise<Response> {
   const authHeader = req.headers.get("Authorization");
   const token = authHeader?.startsWith("Bearer ")
@@ -219,6 +225,7 @@ async function handleAuthenticatedRequest(
       credentialType: "api_key",
       transportSessionId,
       observeConnection,
+      clientCapabilityAnalytics,
     });
   }
 
@@ -256,6 +263,7 @@ async function handleAuthenticatedRequest(
       ? `${authSubject}\0${transportSessionId}`
       : undefined,
     observeConnection,
+    clientCapabilityAnalytics,
   });
 }
 
@@ -286,6 +294,9 @@ export async function POST(req: NextRequest): Promise<Response> {
   }
   const isInitialize = parsed?.method === "initialize";
   const initializeParams = isInitialize ? parsed?.params : undefined;
+  const clientCapabilityAnalytics = isInitialize
+    ? clientCapabilityAnalyticsFromInitialize(parsed)
+    : null;
   const isStreamableInitialize =
     new URL(req.url).pathname.endsWith("/mcp") && isInitialize;
   const session = isStreamableInitialize
@@ -310,6 +321,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     }),
     session?.id ?? null,
     isInitialize,
+    clientCapabilityAnalytics,
   );
 
   if (!session) return response;

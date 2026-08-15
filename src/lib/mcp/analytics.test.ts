@@ -8,8 +8,16 @@ import {
 import {
   captureMcpConnectionScopeFailure,
   captureOAuthTokenExchange,
+  clientCapabilityAnalyticsFromInitialize,
   enrichMcpAnalyticsEvent,
   instrumentMcpAnalytics,
+  MCP_CLIENT_ELICITATION_MODE_PROPERTY,
+  MCP_CLIENT_SUPPORTS_APPS_PROPERTY,
+  MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY,
+  MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY,
+  MCP_CLIENT_SUPPORTS_SAMPLING_PROPERTY,
+  MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY,
+  MCP_CLIENT_SUPPORTS_TASKS_PROPERTY,
   MCP_CONNECTION_SCOPE_FAILURE_EVENT,
   MCP_USED_PROJECT_ID_PROPERTY,
   MCP_USED_PROJECT_PROPERTY,
@@ -18,6 +26,79 @@ import {
 } from "@/lib/mcp/analytics";
 
 const privateContextProperty = "__mcp_connection_analytics_context";
+
+function initialize(capabilities: Record<string, unknown>) {
+  return {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-11-25",
+      capabilities,
+      clientInfo: { name: "test-client", version: "1.0.0" },
+    },
+  };
+}
+
+describe("clientCapabilityAnalyticsFromInitialize", () => {
+  test("records unsupported capabilities as explicit false values", () => {
+    expect(clientCapabilityAnalyticsFromInitialize(initialize({}))).toEqual({
+      [MCP_CLIENT_SUPPORTS_SAMPLING_PROPERTY]: false,
+      [MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY]: false,
+      [MCP_CLIENT_ELICITATION_MODE_PROPERTY]: "none",
+      [MCP_CLIENT_SUPPORTS_APPS_PROPERTY]: false,
+      [MCP_CLIENT_SUPPORTS_TASKS_PROPERTY]: false,
+      [MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY]: false,
+      [MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY]: false,
+    });
+  });
+
+  test("reduces standard capabilities and allowlisted extensions", () => {
+    const result = clientCapabilityAnalyticsFromInitialize(
+      initialize({
+        sampling: { tools: {} },
+        elicitation: {},
+        extensions: {
+          "io.modelcontextprotocol/ui": { mimeTypes: ["text/html"] },
+          "io.modelcontextprotocol/tasks": {},
+          "io.modelcontextprotocol/oauth-client-credentials": {},
+          "io.modelcontextprotocol/enterprise-managed-authorization": {},
+          "com.example/private-extension": { secret: "do-not-capture" },
+        },
+      }),
+    );
+
+    expect(result).toEqual({
+      [MCP_CLIENT_SUPPORTS_SAMPLING_PROPERTY]: true,
+      [MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY]: true,
+      [MCP_CLIENT_ELICITATION_MODE_PROPERTY]: "form",
+      [MCP_CLIENT_SUPPORTS_APPS_PROPERTY]: true,
+      [MCP_CLIENT_SUPPORTS_TASKS_PROPERTY]: true,
+      [MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY]: true,
+      [MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY]: true,
+    });
+    expect(JSON.stringify(result)).not.toContain("private-extension");
+    expect(JSON.stringify(result)).not.toContain("do-not-capture");
+  });
+
+  test("distinguishes URL elicitation and legacy core tasks", () => {
+    const result = clientCapabilityAnalyticsFromInitialize(
+      initialize({ elicitation: { form: {}, url: {} }, tasks: {} }),
+    );
+
+    expect(result?.[MCP_CLIENT_ELICITATION_MODE_PROPERTY]).toBe("form_and_url");
+    expect(result?.[MCP_CLIENT_SUPPORTS_TASKS_PROPERTY]).toBe(true);
+  });
+
+  test("ignores non-initialize payloads", () => {
+    expect(
+      clientCapabilityAnalyticsFromInitialize({
+        method: "tools/list",
+        params: { capabilities: { sampling: {} } },
+      }),
+    ).toBeNull();
+  });
+});
 
 function initializeEvent(
   sessionId: string,
@@ -459,12 +540,17 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     params: Record<string, unknown>,
   ) {
     const server = makeServer(captured);
+    const request = { jsonrpc: "2.0", id: 1, method, params };
     const extra = {
       authInfo: {
         token: "sk_test",
         clientId: "mcp-server",
         scopes: ["apikey"],
-        extra: { connectionContext: { scope: { organizationId: ORG } } },
+        extra: {
+          connectionContext: { scope: { organizationId: ORG } },
+          clientCapabilityAnalytics:
+            clientCapabilityAnalyticsFromInitialize(request),
+        },
       },
       signal: new AbortController().signal,
       requestInfo: { headers: {} },
@@ -479,7 +565,7 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     )._requestHandlers;
     const handler = handlers.get(method);
     if (!handler) throw new Error(`no handler registered for ${method}`);
-    await handler({ jsonrpc: "2.0", id: 1, method, params }, extra);
+    await handler(request, extra);
     // The SDK's event sink captures fire-and-forget; give it a tick to flush.
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
@@ -489,7 +575,11 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
 
     await simulateRequest(captured, "initialize", {
       protocolVersion: "2025-03-26",
-      capabilities: {},
+      capabilities: {
+        sampling: { tools: {} },
+        elicitation: { url: {} },
+        extensions: { "io.modelcontextprotocol/ui": {} },
+      },
       clientInfo: { name: "test-client", version: "0.0.0" },
     });
     await simulateRequest(captured, "tools/list", {});
@@ -512,6 +602,14 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       distinctId: string;
       properties: Record<string, unknown>;
     };
+
+    expect(initialize.properties).toMatchObject({
+      [MCP_CLIENT_SUPPORTS_SAMPLING_PROPERTY]: true,
+      [MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY]: true,
+      [MCP_CLIENT_ELICITATION_MODE_PROPERTY]: "form_and_url",
+      [MCP_CLIENT_SUPPORTS_APPS_PROPERTY]: true,
+      [MCP_CLIENT_SUPPORTS_TASKS_PROPERTY]: false,
+    });
 
     // Every captured event carries org attribution...
     for (const event of [initialize, toolsList, toolCall]) {
