@@ -306,6 +306,18 @@ describe("managed-auth MCP App registration", () => {
       }),
     ).toBe(true);
     expect(
+      initializeDeclaresMcpApps({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          capabilities: {
+            extensions: { "io.modelcontextprotocol/ui": null },
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(
       initializeDeclaresMcpApps([
         { jsonrpc: "2.0", method: "notifications/initialized" },
         {

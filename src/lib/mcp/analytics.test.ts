@@ -81,6 +81,32 @@ describe("clientCapabilityAnalyticsFromInitialize", () => {
     expect(JSON.stringify(result)).not.toContain("do-not-capture");
   });
 
+  test("rejects malformed capability and extension declarations", () => {
+    const result = clientCapabilityAnalyticsFromInitialize(
+      initialize({
+        sampling: { tools: null },
+        elicitation: { url: null },
+        tasks: false,
+        extensions: {
+          "io.modelcontextprotocol/ui": null,
+          "io.modelcontextprotocol/tasks": false,
+          "io.modelcontextprotocol/oauth-client-credentials": "enabled",
+          "io.modelcontextprotocol/enterprise-managed-authorization": [],
+        },
+      }),
+    );
+
+    expect(result).toEqual({
+      [MCP_CLIENT_SUPPORTS_SAMPLING_PROPERTY]: true,
+      [MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY]: false,
+      [MCP_CLIENT_ELICITATION_MODE_PROPERTY]: "none",
+      [MCP_CLIENT_SUPPORTS_APPS_PROPERTY]: false,
+      [MCP_CLIENT_SUPPORTS_TASKS_PROPERTY]: false,
+      [MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY]: false,
+      [MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY]: false,
+    });
+  });
+
   test("distinguishes URL-only, form-and-URL, and legacy task support", () => {
     const urlOnly = clientCapabilityAnalyticsFromInitialize(
       initialize({ elicitation: { url: {} } }),
@@ -552,11 +578,7 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
         token: "sk_test",
         clientId: "mcp-server",
         scopes: ["apikey"],
-        extra: {
-          connectionContext: { scope: { organizationId: ORG } },
-          clientCapabilityAnalytics:
-            clientCapabilityAnalyticsFromInitialize(request),
-        },
+        extra: { connectionContext: { scope: { organizationId: ORG } } },
       },
       signal: new AbortController().signal,
       requestInfo: { headers: {} },

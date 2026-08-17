@@ -12,6 +12,16 @@ import type {
   McpConnectionAnalyticsContext,
   McpConnectionContext,
 } from "@/lib/mcp/auth-context";
+import {
+  clientDeclaresExtension,
+  clientElicitationModes,
+  initializeClientCapabilities,
+  isRecord,
+  MCP_APPS_EXTENSION,
+  MCP_ENTERPRISE_MANAGED_AUTHORIZATION_EXTENSION,
+  MCP_OAUTH_CLIENT_CREDENTIALS_EXTENSION,
+  MCP_TASKS_EXTENSION,
+} from "@/lib/mcp/client-capabilities";
 
 const projectToken = process.env.POSTHOG_PROJECT_TOKEN;
 
@@ -83,7 +93,7 @@ export const MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY =
 
 type McpClientElicitationMode = "none" | "form" | "url" | "form_and_url";
 
-export type McpClientCapabilityAnalytics = {
+type McpClientCapabilityAnalytics = {
   [MCP_CLIENT_SUPPORTS_SAMPLING_PROPERTY]: boolean;
   [MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY]: boolean;
   [MCP_CLIENT_ELICITATION_MODE_PROPERTY]: McpClientElicitationMode;
@@ -96,11 +106,11 @@ export type McpClientCapabilityAnalytics = {
 // Official extensions listed at https://modelcontextprotocol.io/extensions.
 // Keep this explicit: arbitrary extension identifiers and settings must not enter analytics.
 const CLIENT_EXTENSION_PROPERTIES = {
-  "io.modelcontextprotocol/ui": MCP_CLIENT_SUPPORTS_APPS_PROPERTY,
-  "io.modelcontextprotocol/tasks": MCP_CLIENT_SUPPORTS_TASKS_PROPERTY,
-  "io.modelcontextprotocol/oauth-client-credentials":
+  [MCP_APPS_EXTENSION]: MCP_CLIENT_SUPPORTS_APPS_PROPERTY,
+  [MCP_TASKS_EXTENSION]: MCP_CLIENT_SUPPORTS_TASKS_PROPERTY,
+  [MCP_OAUTH_CLIENT_CREDENTIALS_EXTENSION]:
     MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY,
-  "io.modelcontextprotocol/enterprise-managed-authorization":
+  [MCP_ENTERPRISE_MANAGED_AUTHORIZATION_EXTENSION]:
     MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY,
 } as const;
 
@@ -179,60 +189,35 @@ const INTENT_REDACTIONS: readonly [RegExp, string][] = [
   ],
 ];
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function hasOwn(record: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
-}
-
 /**
  * Reduces the client-controlled initialize capability map to bounded analytics.
- * Presence is the signal: MCP uses empty objects to declare baseline support.
+ * MCP capability declarations count only when their settings are objects.
  */
 export function clientCapabilityAnalyticsFromInitialize(
   body: unknown,
 ): McpClientCapabilityAnalytics | null {
-  if (
-    !isRecord(body) ||
-    body.method !== "initialize" ||
-    !isRecord(body.params)
-  ) {
-    return null;
-  }
+  const capabilities = initializeClientCapabilities(body);
+  if (!capabilities) return null;
 
-  const capabilities = isRecord(body.params.capabilities)
-    ? body.params.capabilities
-    : {};
   const sampling = isRecord(capabilities.sampling)
     ? capabilities.sampling
     : null;
-  const elicitation = isRecord(capabilities.elicitation)
-    ? capabilities.elicitation
-    : null;
-  const extensions = isRecord(capabilities.extensions)
-    ? capabilities.extensions
-    : null;
-
-  const hasElicitationForm =
-    elicitation !== null &&
-    (hasOwn(elicitation, "form") || !hasOwn(elicitation, "url"));
-  const hasElicitationUrl = elicitation !== null && hasOwn(elicitation, "url");
+  const { supportsFormMode, supportsUrlMode } =
+    clientElicitationModes(capabilities);
   let elicitationMode: McpClientElicitationMode = "none";
-  if (hasElicitationForm) {
-    elicitationMode = hasElicitationUrl ? "form_and_url" : "form";
-  } else if (hasElicitationUrl) {
+  if (supportsFormMode) {
+    elicitationMode = supportsUrlMode ? "form_and_url" : "form";
+  } else if (supportsUrlMode) {
     elicitationMode = "url";
   }
 
   const properties: McpClientCapabilityAnalytics = {
     [MCP_CLIENT_SUPPORTS_SAMPLING_PROPERTY]: sampling !== null,
     [MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY]:
-      sampling !== null && hasOwn(sampling, "tools"),
+      sampling !== null && isRecord(sampling.tools),
     [MCP_CLIENT_ELICITATION_MODE_PROPERTY]: elicitationMode,
     [MCP_CLIENT_SUPPORTS_APPS_PROPERTY]: false,
-    [MCP_CLIENT_SUPPORTS_TASKS_PROPERTY]: hasOwn(capabilities, "tasks"),
+    [MCP_CLIENT_SUPPORTS_TASKS_PROPERTY]: isRecord(capabilities.tasks),
     [MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY]: false,
     [MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY]: false,
   };
@@ -240,8 +225,9 @@ export function clientCapabilityAnalyticsFromInitialize(
   for (const [extension, property] of Object.entries(
     CLIENT_EXTENSION_PROPERTIES,
   )) {
-    if (extensions && hasOwn(extensions, extension))
+    if (clientDeclaresExtension(capabilities, extension)) {
       properties[property] = true;
+    }
   }
 
   return properties;
@@ -381,15 +367,6 @@ function connectionAnalyticsContext(extra: unknown) {
     | { connectionAnalytics?: McpConnectionAnalyticsContext }
     | undefined;
   return authExtra?.connectionAnalytics;
-}
-
-function clientCapabilityAnalyticsContext(extra: unknown) {
-  const authInfo = (extra as { authInfo?: { extra?: unknown } } | undefined)
-    ?.authInfo;
-  const authExtra = authInfo?.extra as
-    | { clientCapabilityAnalytics?: McpClientCapabilityAnalytics }
-    | undefined;
-  return authExtra?.clientCapabilityAnalytics;
 }
 
 // The route resolves the Kernel connection context at auth time and attaches it to
@@ -550,7 +527,7 @@ export function instrumentMcpAnalytics(
       if (request.method === "initialize") {
         const context = connectionAnalyticsContext(extra);
         if (context) properties[ANALYTICS_CONTEXT_PROPERTY] = context;
-        const capabilities = clientCapabilityAnalyticsContext(extra);
+        const capabilities = clientCapabilityAnalyticsFromInitialize(request);
         if (capabilities) Object.assign(properties, capabilities);
       }
       return Object.keys(properties).length > 0 ? properties : null;
