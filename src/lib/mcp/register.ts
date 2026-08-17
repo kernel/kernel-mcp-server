@@ -8,6 +8,7 @@ import { registerAPIKeyCapabilities } from "@/lib/mcp/tools/api-keys";
 import { registerAppCapabilities } from "@/lib/mcp/tools/apps";
 import { registerAuthConnectionTools } from "@/lib/mcp/tools/auth-connections";
 import { registerAuthLoginApp } from "@/lib/mcp/tools/auth-login-app";
+import { registerBrowserFileTools } from "@/lib/mcp/tools/browser-files";
 import { registerBrowserPoolCapabilities } from "@/lib/mcp/tools/browser-pools";
 import { registerBrowserCurlTool } from "@/lib/mcp/tools/browser-curl";
 import { registerBrowserCapabilities } from "@/lib/mcp/tools/browsers";
@@ -42,6 +43,7 @@ const mcpToolRegistrations = [
   ["api_keys", registerAPIKeyCapabilities],
   ["browser_pools", registerBrowserPoolCapabilities],
   ["browser_curl", registerBrowserCurlTool],
+  ["browser_files", registerBrowserFileTools],
   ["proxies", registerProxyTools],
   ["extensions", registerExtensionTools],
   ["apps", registerAppCapabilities],
@@ -65,6 +67,8 @@ const standaloneToolsetAliases: Partial<Record<string, McpToolset>> = {
   execute_playwright_code: "playwright",
   exec_command: "shell",
   browser_utilities: "browser_curl",
+  browser_fs: "browser_files",
+  manage_browser_files: "browser_files",
   open_auth_login: "auth_connections",
 };
 

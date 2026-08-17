@@ -10,6 +10,7 @@ const NON_AUTH_TOOLSETS = [
   "api_keys",
   "browser_pools",
   "browser_curl",
+  "browser_files",
   "proxies",
   "extensions",
   "apps",
