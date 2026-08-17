@@ -1,10 +1,13 @@
 import { decodeSessionId, MCP_SESSION_HEADER } from "@posthog/mcp";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  clientDeclaresExtension,
+  initializeClientCapabilities,
+  MCP_APPS_EXTENSION,
+} from "@/lib/mcp/client-capabilities";
 import { hasMcpAppsClient } from "@/lib/redis";
 
-// MCP Apps (SEP-1865) extension identifier. Clients that render MCP Apps
-// declare it in their initialize capabilities.
-export const MCP_APPS_EXTENSION = "io.modelcontextprotocol/ui";
+export { MCP_APPS_EXTENSION };
 
 // Sliding TTL for the Redis capability marker. Long enough that an active App
 // never loses it mid-flow; refreshed on every gated call.
@@ -16,15 +19,8 @@ const MCP_APPS_MARKER_TTL_SECONDS = 24 * 60 * 60;
  * invoke an app-only tool in the same HTTP request.
  */
 export function initializeDeclaresMcpApps(body: unknown): boolean {
-  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
-  const request = body as {
-    method?: unknown;
-    params?: { capabilities?: { extensions?: Record<string, unknown> } };
-  };
-  return (
-    request.method === "initialize" &&
-    Boolean(request.params?.capabilities?.extensions?.[MCP_APPS_EXTENSION])
-  );
+  const capabilities = initializeClientCapabilities(body);
+  return clientDeclaresExtension(capabilities, MCP_APPS_EXTENSION);
 }
 
 /**
@@ -51,10 +47,8 @@ export async function clientSupportsMcpApps(
   authSubject: string,
   transportSessionId: string | null,
 ): Promise<boolean> {
-  const capabilities = server.server.getClientCapabilities() as
-    | { extensions?: Record<string, unknown> }
-    | undefined;
-  if (capabilities?.extensions?.[MCP_APPS_EXTENSION]) return true;
+  const capabilities = server.server.getClientCapabilities();
+  if (clientDeclaresExtension(capabilities, MCP_APPS_EXTENSION)) return true;
   if (!transportSessionId) return false;
   try {
     return await hasMcpAppsClient({

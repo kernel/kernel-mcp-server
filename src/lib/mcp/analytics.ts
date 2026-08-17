@@ -12,6 +12,16 @@ import type {
   McpConnectionAnalyticsContext,
   McpConnectionContext,
 } from "@/lib/mcp/auth-context";
+import {
+  clientDeclaresExtension,
+  clientElicitationModes,
+  initializeClientCapabilities,
+  isRecord,
+  MCP_APPS_EXTENSION,
+  MCP_ENTERPRISE_MANAGED_AUTHORIZATION_EXTENSION,
+  MCP_OAUTH_CLIENT_CREDENTIALS_EXTENSION,
+  MCP_TASKS_EXTENSION,
+} from "@/lib/mcp/client-capabilities";
 
 const projectToken = process.env.POSTHOG_PROJECT_TOKEN;
 
@@ -68,6 +78,41 @@ const posthog = projectToken
 
 export const MCP_USED_PROJECT_ID_PROPERTY = "$mcp_used_project_id";
 export const MCP_USED_PROJECT_PROPERTY = "$mcp_used_project";
+export const MCP_CLIENT_SUPPORTS_SAMPLING_PROPERTY =
+  "$mcp_client_supports_sampling";
+export const MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY =
+  "$mcp_client_supports_sampling_tools";
+export const MCP_CLIENT_ELICITATION_MODE_PROPERTY =
+  "$mcp_client_elicitation_mode";
+export const MCP_CLIENT_SUPPORTS_APPS_PROPERTY = "$mcp_client_supports_apps";
+export const MCP_CLIENT_SUPPORTS_TASKS_PROPERTY = "$mcp_client_supports_tasks";
+export const MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY =
+  "$mcp_client_supports_oauth_client_credentials";
+export const MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY =
+  "$mcp_client_supports_enterprise_auth";
+
+type McpClientElicitationMode = "none" | "form" | "url" | "form_and_url";
+
+type McpClientCapabilityAnalytics = {
+  [MCP_CLIENT_SUPPORTS_SAMPLING_PROPERTY]: boolean;
+  [MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY]: boolean;
+  [MCP_CLIENT_ELICITATION_MODE_PROPERTY]: McpClientElicitationMode;
+  [MCP_CLIENT_SUPPORTS_APPS_PROPERTY]: boolean;
+  [MCP_CLIENT_SUPPORTS_TASKS_PROPERTY]: boolean;
+  [MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY]: boolean;
+  [MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY]: boolean;
+};
+
+// Official extensions listed at https://modelcontextprotocol.io/extensions.
+// Keep this explicit: arbitrary extension identifiers and settings must not enter analytics.
+const CLIENT_EXTENSION_PROPERTIES = {
+  [MCP_APPS_EXTENSION]: MCP_CLIENT_SUPPORTS_APPS_PROPERTY,
+  [MCP_TASKS_EXTENSION]: MCP_CLIENT_SUPPORTS_TASKS_PROPERTY,
+  [MCP_OAUTH_CLIENT_CREDENTIALS_EXTENSION]:
+    MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY,
+  [MCP_ENTERPRISE_MANAGED_AUTHORIZATION_EXTENSION]:
+    MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY,
+} as const;
 
 // Every property this integration sends. An allow-list rather than a deny-list so a
 // property the pinned SDK doesn't emit today — a renamed payload field, a new one —
@@ -84,6 +129,13 @@ const SENT_PROPERTIES = new Set<string>([
   "$mcp_scope_source",
   MCP_USED_PROJECT_ID_PROPERTY,
   MCP_USED_PROJECT_PROPERTY,
+  MCP_CLIENT_SUPPORTS_SAMPLING_PROPERTY,
+  MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY,
+  MCP_CLIENT_ELICITATION_MODE_PROPERTY,
+  MCP_CLIENT_SUPPORTS_APPS_PROPERTY,
+  MCP_CLIENT_SUPPORTS_TASKS_PROPERTY,
+  MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY,
+  MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY,
   PostHogMCPAnalyticsProperty.ClientName,
   PostHogMCPAnalyticsProperty.ClientVersion,
   PostHogMCPAnalyticsProperty.DurationMs,
@@ -137,8 +189,48 @@ const INTENT_REDACTIONS: readonly [RegExp, string][] = [
   ],
 ];
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
+/**
+ * Reduces the client-controlled initialize capability map to bounded analytics.
+ * MCP capability declarations count only when their settings are objects.
+ */
+export function clientCapabilityAnalyticsFromInitialize(
+  body: unknown,
+): McpClientCapabilityAnalytics | null {
+  const capabilities = initializeClientCapabilities(body);
+  if (!capabilities) return null;
+
+  const sampling = isRecord(capabilities.sampling)
+    ? capabilities.sampling
+    : null;
+  const { supportsFormMode, supportsUrlMode } =
+    clientElicitationModes(capabilities);
+  let elicitationMode: McpClientElicitationMode = "none";
+  if (supportsFormMode) {
+    elicitationMode = supportsUrlMode ? "form_and_url" : "form";
+  } else if (supportsUrlMode) {
+    elicitationMode = "url";
+  }
+
+  const properties: McpClientCapabilityAnalytics = {
+    [MCP_CLIENT_SUPPORTS_SAMPLING_PROPERTY]: sampling !== null,
+    [MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY]:
+      sampling !== null && isRecord(sampling.tools),
+    [MCP_CLIENT_ELICITATION_MODE_PROPERTY]: elicitationMode,
+    [MCP_CLIENT_SUPPORTS_APPS_PROPERTY]: false,
+    [MCP_CLIENT_SUPPORTS_TASKS_PROPERTY]: isRecord(capabilities.tasks),
+    [MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY]: false,
+    [MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY]: false,
+  };
+
+  for (const [extension, property] of Object.entries(
+    CLIENT_EXTENSION_PROPERTIES,
+  )) {
+    if (clientDeclaresExtension(capabilities, extension)) {
+      properties[property] = true;
+    }
+  }
+
+  return properties;
 }
 
 function hasNonEmptyParam(
@@ -435,6 +527,8 @@ export function instrumentMcpAnalytics(
       if (request.method === "initialize") {
         const context = connectionAnalyticsContext(extra);
         if (context) properties[ANALYTICS_CONTEXT_PROPERTY] = context;
+        const capabilities = clientCapabilityAnalyticsFromInitialize(request);
+        if (capabilities) Object.assign(properties, capabilities);
       }
       return Object.keys(properties).length > 0 ? properties : null;
     },
