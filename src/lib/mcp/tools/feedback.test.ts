@@ -24,6 +24,7 @@ describe("submit_feedback", () => {
       );
       expect(tool?.title).toBe("submit KERNEL feedback");
       expect(tool?.inputSchema.required).toEqual([
+        "context",
         "summary",
         "feedback_type",
         "sentiment",
@@ -32,6 +33,8 @@ describe("submit_feedback", () => {
       const result = await client.callTool({
         name: KERNEL_FEEDBACK_TOOL_NAME,
         arguments: {
+          context:
+            "Reporting that browser creation timeout responses did not explain when callers should retry.",
           summary: "Browser creation needs clearer timeout guidance",
           feedback_type: "product",
           sentiment: "mixed",
@@ -81,6 +84,8 @@ describe("submit_feedback", () => {
       const result = await client.callTool({
         name: KERNEL_FEEDBACK_TOOL_NAME,
         arguments: {
+          context:
+            "Reporting that the MCP response directly supported the user's task without additional parsing.",
           summary: "The MCP response was easy to use",
           feedback_type: "mcp",
           sentiment: "positive",

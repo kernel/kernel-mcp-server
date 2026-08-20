@@ -1,10 +1,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { MCP_INTENT_ARGUMENT_DESCRIPTION } from "@/lib/mcp/analytics-context";
 import { jsonResponse } from "@/lib/mcp/responses";
 
 export const KERNEL_FEEDBACK_TOOL_NAME = "submit_feedback";
 
 const feedbackFields = {
+  context: z.string().describe(MCP_INTENT_ARGUMENT_DESCRIPTION),
   summary: z
     .string()
     .trim()
@@ -99,7 +101,10 @@ const feedbackFields = {
     ),
 };
 
-export type KernelFeedback = z.infer<z.ZodObject<typeof feedbackFields>>;
+export type KernelFeedback = Omit<
+  z.infer<z.ZodObject<typeof feedbackFields>>,
+  "context"
+>;
 export type KernelFeedbackCapture = (
   feedback: KernelFeedback,
   extra: unknown,
@@ -129,7 +134,7 @@ export function registerFeedbackTool(
         openWorldHint: false,
       },
     },
-    async (feedback, extra) => {
+    async ({ context: _context, ...feedback }, extra) => {
       try {
         await capture(feedback, extra);
       } catch {

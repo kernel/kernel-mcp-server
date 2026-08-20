@@ -6,6 +6,7 @@ import {
   MCP_SESSION_HEADER,
   PostHogMCPAnalyticsEvent,
   PostHogMCPAnalyticsProperty,
+  type McpAnalytics,
 } from "@posthog/mcp";
 import {
   captureMcpConnectionScopeFailure,
@@ -555,13 +556,15 @@ describe("captureMcpConnectionScopeFailure", () => {
 });
 
 describe("captureMcpFeedback", () => {
-  test("records feedback with authenticated organization attribution", () => {
+  test("routes redacted feedback through contextual MCP analytics", async () => {
     const captured: unknown[] = [];
-    const fakePosthog = {
-      capture: (event: unknown) => captured.push(event),
-    } as unknown as PostHog;
+    const analytics = {
+      capture: async (event: unknown) => {
+        captured.push(event);
+      },
+    } as McpAnalytics;
 
-    captureMcpFeedback(
+    await captureMcpFeedback(
       {
         summary: "Browser timeout guidance was unclear",
         feedback_type: "product",
@@ -577,29 +580,19 @@ describe("captureMcpFeedback", () => {
       {
         authInfo: {
           extra: {
-            userId: "user_analytics",
             connectionContext: {
               scope: { organizationId: "org_analytics" },
             },
           },
         },
-        requestInfo: {
-          headers: {
-            [MCP_SESSION_HEADER]: encodeSessionId({
-              sessionId: "ses_feedback",
-            }),
-          },
-        },
       },
-      fakePosthog,
+      analytics,
     );
 
     expect(captured).toEqual([
       {
-        distinctId: "ses_feedback",
         event: MCP_FEEDBACK_SUBMITTED_EVENT,
         properties: {
-          $process_person_profile: false,
           $groups: { organization: "org_analytics" },
           feedback_summary: "Browser timeout guidance was unclear",
           feedback_type: "product",
@@ -617,43 +610,37 @@ describe("captureMcpFeedback", () => {
       },
     ]);
   });
-
-  test("does not collapse submissions without transport context", () => {
-    const captured: Array<{ distinctId: string }> = [];
-    const fakePosthog = {
-      capture: (event: { distinctId: string }) => captured.push(event),
-    } as unknown as PostHog;
-    const feedback = {
-      summary: "The docs search result was useful",
-      feedback_type: "docs" as const,
-      sentiment: "positive" as const,
-    };
-
-    captureMcpFeedback(feedback, {}, fakePosthog);
-    captureMcpFeedback(feedback, {}, fakePosthog);
-
-    expect(captured[0].distinctId).toStartWith("ses_");
-    expect(captured[1].distinctId).toStartWith("ses_");
-    expect(captured[0].distinctId).not.toBe(captured[1].distinctId);
-  });
 });
 
 describe("instrumentMcpAnalytics (SDK integration)", () => {
   const ORG = "org_integration";
 
-  test("keeps the feedback tool available when analytics is disabled", async () => {
-    const { client, close } = await connectTestMcp(
+  test("keeps the feedback tool schema stable when analytics is disabled", async () => {
+    const disabled = await connectTestMcp(
       (server) => instrumentMcpAnalytics(server, null),
+      {},
+    );
+    const enabled = await connectTestMcp(
+      (server) =>
+        instrumentMcpAnalytics(server, {
+          capture: () => undefined,
+        } as unknown as PostHog),
       {},
     );
 
     try {
-      const tools = await client.listTools();
-      expect(tools.tools.map(({ name }) => name)).toContain(
-        KERNEL_FEEDBACK_TOOL_NAME,
+      const disabledTool = (await disabled.client.listTools()).tools.find(
+        ({ name }) => name === KERNEL_FEEDBACK_TOOL_NAME,
       );
+      const enabledTool = (await enabled.client.listTools()).tools.find(
+        ({ name }) => name === KERNEL_FEEDBACK_TOOL_NAME,
+      );
+      expect(disabledTool).toBeDefined();
+      expect(disabledTool?.inputSchema).toEqual(enabledTool?.inputSchema);
+      expect(disabledTool?.inputSchema.required).toContain("context");
     } finally {
-      await close();
+      await disabled.close();
+      await enabled.close();
     }
   });
 
@@ -687,7 +674,16 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
         extra: { connectionContext: { scope: { organizationId: ORG } } },
       },
       signal: new AbortController().signal,
-      requestInfo: { headers: {} },
+      requestInfo: {
+        headers: {
+          [MCP_SESSION_HEADER]: encodeSessionId({
+            sessionId: "ses_integration",
+            clientName: "test-client",
+            clientVersion: "0.0.0",
+            protocolVersion: "2025-03-26",
+          }),
+        },
+      },
     };
     const handlers = (
       server.server as unknown as {
@@ -761,6 +757,51 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
 
     // identify stays unwired, so no $identify event is ever published.
     expect(byEvent.has("$identify")).toBe(false);
+  });
+
+  test("captures feedback with the surrounding MCP session metadata", async () => {
+    const captured: { event?: string }[] = [];
+
+    await simulateRequest(captured, "tools/call", {
+      name: KERNEL_FEEDBACK_TOOL_NAME,
+      arguments: {
+        context:
+          "Reporting that browser timeout guidance did not explain when the caller should retry.",
+        summary: "Browser timeout guidance was unclear",
+        feedback_type: "product",
+        sentiment: "mixed",
+        product_area: "browsers",
+      },
+    });
+
+    const feedback = captured.find(
+      ({ event }) => event === MCP_FEEDBACK_SUBMITTED_EVENT,
+    ) as { distinctId: string; properties: Record<string, unknown> };
+    const toolCall = captured.find(
+      ({ event }) => event === "$mcp_tool_call",
+    ) as {
+      distinctId: string;
+      properties: Record<string, unknown>;
+    };
+
+    expect(feedback.distinctId).toBe("ses_integration");
+    expect(feedback.distinctId).toBe(toolCall.distinctId);
+    expect(feedback.properties).toMatchObject({
+      $groups: { organization: ORG },
+      [PostHogMCPAnalyticsProperty.SessionId]: "ses_integration",
+      [PostHogMCPAnalyticsProperty.ClientName]: "test-client",
+      [PostHogMCPAnalyticsProperty.ClientVersion]: "0.0.0",
+      [PostHogMCPAnalyticsProperty.ProtocolVersion]: "2025-03-26",
+      [PostHogMCPAnalyticsProperty.ServerName]: "test",
+      [PostHogMCPAnalyticsProperty.ServerVersion]: "0.0.0",
+      feedback_summary: "Browser timeout guidance was unclear",
+      feedback_type: "product",
+      feedback_sentiment: "mixed",
+      feedback_product_area: "browsers",
+    });
+    expect(toolCall.properties[PostHogMCPAnalyticsProperty.Intent]).toBe(
+      "Reporting that browser timeout guidance did not explain when the caller should retry.",
+    );
   });
 
   test("stays anonymous when no connection context is attached", async () => {

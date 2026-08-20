@@ -1,13 +1,10 @@
 import {
-  decodeSessionId,
-  deriveSessionIdFromMCPSession,
   getMoreToolsResult,
   instrument,
-  MCP_SESSION_HEADER,
-  newSessionId,
   PostHogMCPAnalyticsEvent,
   PostHogMCPAnalyticsProperty,
   type BeforeSendFn,
+  type McpAnalytics,
 } from "@posthog/mcp";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { PostHog } from "posthog-node";
@@ -16,6 +13,7 @@ import type {
   McpConnectionAnalyticsContext,
   McpConnectionContext,
 } from "@/lib/mcp/auth-context";
+import { MCP_INTENT_ARGUMENT_DESCRIPTION } from "@/lib/mcp/analytics-context";
 import {
   type KernelFeedback,
   registerFeedbackTool,
@@ -162,14 +160,18 @@ const SENT_PROPERTIES = new Set<string>([
   PostHogMCPAnalyticsProperty.ToolCategory,
   PostHogMCPAnalyticsProperty.ToolDescription,
   PostHogMCPAnalyticsProperty.ToolName,
+  "feedback_summary",
+  "feedback_type",
+  "feedback_sentiment",
+  "feedback_product_area",
+  "feedback_category",
+  "feedback_task_completed",
+  "feedback_tools_used",
+  "feedback_friction_points",
+  "feedback_suggested_improvement",
+  "feedback_user_request",
+  "feedback_details",
 ]);
-
-const INTENT_ARGUMENT_DESCRIPTION =
-  "Why this tool is being called and how it fits the user's overall goal, in 15-25 words, " +
-  "third person. Used for product analytics. Never restate argument values, and never " +
-  "include credentials, tokens, URLs, file contents, or personal data. Example: " +
-  '"Inspecting a running browser session to diagnose a checkout automation that stopped ' +
-  'responding partway through the flow."';
 
 // Intent is the only free-form text this captures, and an agent writes it. Long enough for
 // the 15-25 words asked for, short enough that a client ignoring the instruction can't
@@ -389,25 +391,20 @@ function connectionOrgId(extra: unknown) {
   return authExtra?.connectionContext?.scope.organizationId;
 }
 
-function connectionSessionId(extra: unknown) {
-  const requestExtra = extra as
-    | { requestInfo?: { headers?: unknown }; sessionId?: unknown }
-    | undefined;
-  const headers = requestExtra?.requestInfo?.headers;
-  if (headers && typeof headers === "object") {
-    const record = headers as Record<string, unknown>;
-    const key = Object.keys(record).find(
-      (candidate) => candidate.toLowerCase() === MCP_SESSION_HEADER,
-    );
-    const value = key ? record[key] : undefined;
-    const token = Array.isArray(value) ? value[0] : value;
-    const decoded = decodeSessionId(token);
-    if (decoded) return decoded.sessionId;
-  }
-
-  return typeof requestExtra?.sessionId === "string" && requestExtra.sessionId
-    ? deriveSessionIdFromMCPSession(requestExtra.sessionId)
-    : newSessionId();
+export function captureMcpCustomEvent(
+  analytics: McpAnalytics,
+  extra: unknown,
+  event: string,
+  properties: Record<string, unknown>,
+) {
+  const organizationId = connectionOrgId(extra);
+  return analytics.capture({
+    event,
+    properties: {
+      ...properties,
+      ...(organizationId && { $groups: { organization: organizationId } }),
+    },
+  });
 }
 
 export function enrichMcpAnalyticsEvent(event: {
@@ -518,40 +515,30 @@ export function captureMcpConnectionScopeFailure(
 export function captureMcpFeedback(
   feedback: KernelFeedback,
   extra: unknown,
-  client: PostHog | null = posthog,
+  analytics: McpAnalytics,
 ) {
-  if (!client) return;
-
-  const organizationId = connectionOrgId(extra);
-
-  client.capture({
-    distinctId: connectionSessionId(extra),
-    event: MCP_FEEDBACK_SUBMITTED_EVENT,
-    properties: {
-      $process_person_profile: false,
-      ...(organizationId && { $groups: { organization: organizationId } }),
-      feedback_summary: redactAnalyticsText(feedback.summary),
-      feedback_type: feedback.feedback_type,
-      feedback_sentiment: feedback.sentiment,
-      feedback_product_area: feedback.product_area
-        ? redactAnalyticsText(feedback.product_area)
-        : undefined,
-      feedback_category: feedback.category,
-      feedback_task_completed: feedback.task_completed,
-      feedback_tools_used: feedback.tools_used?.map(redactAnalyticsText),
-      feedback_friction_points: feedback.friction_points
-        ? redactAnalyticsText(feedback.friction_points)
-        : undefined,
-      feedback_suggested_improvement: feedback.suggested_improvement
-        ? redactAnalyticsText(feedback.suggested_improvement)
-        : undefined,
-      feedback_user_request: feedback.user_request
-        ? redactAnalyticsText(feedback.user_request)
-        : undefined,
-      feedback_details: feedback.details
-        ? redactAnalyticsText(feedback.details)
-        : undefined,
-    },
+  return captureMcpCustomEvent(analytics, extra, MCP_FEEDBACK_SUBMITTED_EVENT, {
+    feedback_summary: redactAnalyticsText(feedback.summary),
+    feedback_type: feedback.feedback_type,
+    feedback_sentiment: feedback.sentiment,
+    feedback_product_area: feedback.product_area
+      ? redactAnalyticsText(feedback.product_area)
+      : undefined,
+    feedback_category: feedback.category,
+    feedback_task_completed: feedback.task_completed,
+    feedback_tools_used: feedback.tools_used?.map(redactAnalyticsText),
+    feedback_friction_points: feedback.friction_points
+      ? redactAnalyticsText(feedback.friction_points)
+      : undefined,
+    feedback_suggested_improvement: feedback.suggested_improvement
+      ? redactAnalyticsText(feedback.suggested_improvement)
+      : undefined,
+    feedback_user_request: feedback.user_request
+      ? redactAnalyticsText(feedback.user_request)
+      : undefined,
+    feedback_details: feedback.details
+      ? redactAnalyticsText(feedback.details)
+      : undefined,
   });
 }
 
@@ -563,14 +550,12 @@ export function instrumentMcpAnalytics(
   server: McpServer,
   client: PostHog | null = posthog,
 ) {
-  const captureFeedback = (feedback: KernelFeedback, extra: unknown) =>
-    captureMcpFeedback(feedback, extra, client);
   if (!client) {
-    registerFeedbackTool(server, captureFeedback);
+    registerFeedbackTool(server, () => undefined);
     return;
   }
 
-  instrument(server, client, {
+  const analytics = instrument(server, client, {
     // Records a `$mcp_missing_capability` event, carrying the reported gap as $mcp_intent,
     // when an agent calls the tool registered by registerMissingCapabilityTool.
     reportMissing: true,
@@ -579,7 +564,7 @@ export function instrumentMcpAnalytics(
     // with why it is making the call. Recorded as $mcp_intent. The description replaces
     // the SDK default: it repeats per tool in every tools/list response, so it stays
     // short, and it names the arguments agents must not copy into it.
-    context: { description: INTENT_ARGUMENT_DESCRIPTION },
+    context: { description: MCP_INTENT_ARGUMENT_DESCRIPTION },
     // A failed tool call otherwise fans out into a second `$exception` event whose
     // `$exception_list` is built from the text the tool returned.
     enableExceptionAutocapture: false,
@@ -619,7 +604,9 @@ export function instrumentMcpAnalytics(
   });
 
   registerMissingCapabilityTool(server);
-  registerFeedbackTool(server, captureFeedback);
+  registerFeedbackTool(server, (feedback, extra) =>
+    captureMcpFeedback(feedback, extra, analytics),
+  );
 }
 
 /**
