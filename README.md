@@ -255,7 +255,7 @@ Many other MCP-capable tools accept:
 
 Configure these values wherever the tool expects MCP server settings.
 
-## Tools (18 model-facing, plus 1 app-only helper)
+## Tools (19 model-facing, plus 1 app-only helper)
 
 Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Standalone tools handle high-frequency and interactive workflows.
 
@@ -288,6 +288,7 @@ Call `get_connection_context` before deciding whether to create or select a proj
 - `execute_playwright_code` - Execute Playwright/TypeScript code against an existing browser session. Does not create or delete browsers - use `manage_browsers` for session lifecycle.
 - `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
 - `search_docs` - Search Kernel platform documentation and guides.
+- `submit_feedback` - send product, mcp, or documentation feedback directly to the KERNEL team without interrupting the current task.
 - `open_auth_login` - Open a secure interactive Managed Auth MCP App after user consent. Registered only for clients that declare MCP Apps support; credentials and MFA never enter MCP/model traffic.
 
 ## Resources

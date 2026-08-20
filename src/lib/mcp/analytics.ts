@@ -13,6 +13,10 @@ import type {
   McpConnectionContext,
 } from "@/lib/mcp/auth-context";
 import {
+  type KernelFeedback,
+  registerFeedbackTool,
+} from "@/lib/mcp/tools/feedback";
+import {
   clientDeclaresExtension,
   clientElicitationModes,
   initializeClientCapabilities,
@@ -60,6 +64,7 @@ export type McpConnectionScopeFailureAnalytics = {
 
 export const MCP_CONNECTION_SCOPE_FAILURE_EVENT =
   "mcp_connection_scope_failure";
+export const MCP_FEEDBACK_SUBMITTED_EVENT = "mcp_feedback_submitted";
 
 if (!projectToken && process.env.NODE_ENV !== "production") {
   console.error(
@@ -262,13 +267,16 @@ function annotateProjectParamUsage(properties: Record<string, unknown>) {
   properties[MCP_USED_PROJECT_PROPERTY] = hasNonEmptyParam(args, "project");
 }
 
-function sanitizeIntent(intent: string) {
-  const redacted = INTENT_REDACTIONS.reduce(
-    (text, [pattern, replacement]) => text.replace(pattern, replacement),
-    intent.trim(),
+function redactAnalyticsText(text: string) {
+  return INTENT_REDACTIONS.reduce(
+    (redacted, [pattern, replacement]) =>
+      redacted.replace(pattern, replacement),
+    text.trim(),
   );
+}
 
-  return redacted.slice(0, INTENT_MAX_LENGTH);
+function sanitizeIntent(intent: string) {
+  return redactAnalyticsText(intent).slice(0, INTENT_MAX_LENGTH);
 }
 
 // Must stay the SDK's default name: reportMissing advertises a tool under this name and
@@ -355,11 +363,7 @@ export const sanitizeMcpAnalyticsEvent: BeforeSendFn = (event) => {
   return event;
 };
 
-/**
- * Captures every tool call, tools/list, and initialize handled by the server as a
- * `$mcp_*` PostHog event, and advertises the tool agents use to report a capability the
- * server doesn't have. No-op when POSTHOG_PROJECT_TOKEN is unset.
- */
+/** Extracts the analytics identity resolved during MCP authentication. */
 function connectionAnalyticsContext(extra: unknown) {
   const authInfo = (extra as { authInfo?: { extra?: unknown } } | undefined)
     ?.authInfo;
@@ -379,6 +383,15 @@ function connectionOrgId(extra: unknown) {
     | { connectionContext?: McpConnectionContext | null }
     | undefined;
   return authExtra?.connectionContext?.scope.organizationId;
+}
+
+function connectionUserId(extra: unknown) {
+  const authInfo = (extra as { authInfo?: { extra?: unknown } } | undefined)
+    ?.authInfo;
+  const authExtra = authInfo?.extra as { userId?: unknown } | undefined;
+  return typeof authExtra?.userId === "string" && authExtra.userId
+    ? authExtra.userId
+    : undefined;
 }
 
 export function enrichMcpAnalyticsEvent(event: {
@@ -486,11 +499,61 @@ export function captureMcpConnectionScopeFailure(
   }
 }
 
+export function captureMcpFeedback(
+  feedback: KernelFeedback,
+  extra: unknown,
+  client: PostHog | null = posthog,
+) {
+  if (!client) return;
+
+  const organizationId = connectionOrgId(extra);
+  const userId = connectionUserId(extra);
+
+  client.capture({
+    distinctId: userId ?? "mcp-feedback",
+    event: MCP_FEEDBACK_SUBMITTED_EVENT,
+    properties: {
+      $process_person_profile: false,
+      ...(organizationId && { $groups: { organization: organizationId } }),
+      feedback_summary: redactAnalyticsText(feedback.summary),
+      feedback_type: feedback.feedback_type,
+      feedback_sentiment: feedback.sentiment,
+      feedback_product_area: feedback.product_area
+        ? redactAnalyticsText(feedback.product_area)
+        : undefined,
+      feedback_category: feedback.category,
+      feedback_task_completed: feedback.task_completed,
+      feedback_tools_used: feedback.tools_used?.map(redactAnalyticsText),
+      feedback_friction_points: feedback.friction_points
+        ? redactAnalyticsText(feedback.friction_points)
+        : undefined,
+      feedback_suggested_improvement: feedback.suggested_improvement
+        ? redactAnalyticsText(feedback.suggested_improvement)
+        : undefined,
+      feedback_user_request: feedback.user_request
+        ? redactAnalyticsText(feedback.user_request)
+        : undefined,
+      feedback_details: feedback.details
+        ? redactAnalyticsText(feedback.details)
+        : undefined,
+    },
+  });
+}
+
+/**
+ * Captures MCP protocol analytics and registers the analytics-backed reporting tools.
+ * Feedback remains available when analytics is disabled so the tool contract is stable.
+ */
 export function instrumentMcpAnalytics(
   server: McpServer,
   client: PostHog | null = posthog,
 ) {
-  if (!client) return;
+  const captureFeedback = (feedback: KernelFeedback, extra: unknown) =>
+    captureMcpFeedback(feedback, extra, client);
+  if (!client) {
+    registerFeedbackTool(server, captureFeedback);
+    return;
+  }
 
   instrument(server, client, {
     // Records a `$mcp_missing_capability` event, carrying the reported gap as $mcp_intent,
@@ -541,6 +604,7 @@ export function instrumentMcpAnalytics(
   });
 
   registerMissingCapabilityTool(server);
+  registerFeedbackTool(server, captureFeedback);
 }
 
 /**
