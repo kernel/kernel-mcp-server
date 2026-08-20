@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { PostHog } from "posthog-node";
 import {
+  encodeSessionId,
+  MCP_SESSION_HEADER,
   PostHogMCPAnalyticsEvent,
   PostHogMCPAnalyticsProperty,
 } from "@posthog/mcp";
@@ -581,13 +583,20 @@ describe("captureMcpFeedback", () => {
             },
           },
         },
+        requestInfo: {
+          headers: {
+            [MCP_SESSION_HEADER]: encodeSessionId({
+              sessionId: "ses_feedback",
+            }),
+          },
+        },
       },
       fakePosthog,
     );
 
     expect(captured).toEqual([
       {
-        distinctId: "user_analytics",
+        distinctId: "ses_feedback",
         event: MCP_FEEDBACK_SUBMITTED_EVENT,
         properties: {
           $process_person_profile: false,
@@ -607,6 +616,25 @@ describe("captureMcpFeedback", () => {
         },
       },
     ]);
+  });
+
+  test("does not collapse submissions without transport context", () => {
+    const captured: Array<{ distinctId: string }> = [];
+    const fakePosthog = {
+      capture: (event: { distinctId: string }) => captured.push(event),
+    } as unknown as PostHog;
+    const feedback = {
+      summary: "The docs search result was useful",
+      feedback_type: "docs" as const,
+      sentiment: "positive" as const,
+    };
+
+    captureMcpFeedback(feedback, {}, fakePosthog);
+    captureMcpFeedback(feedback, {}, fakePosthog);
+
+    expect(captured[0].distinctId).toStartWith("ses_");
+    expect(captured[1].distinctId).toStartWith("ses_");
+    expect(captured[0].distinctId).not.toBe(captured[1].distinctId);
   });
 });
 

@@ -1,6 +1,10 @@
 import {
+  decodeSessionId,
+  deriveSessionIdFromMCPSession,
   getMoreToolsResult,
   instrument,
+  MCP_SESSION_HEADER,
+  newSessionId,
   PostHogMCPAnalyticsEvent,
   PostHogMCPAnalyticsProperty,
   type BeforeSendFn,
@@ -385,13 +389,25 @@ function connectionOrgId(extra: unknown) {
   return authExtra?.connectionContext?.scope.organizationId;
 }
 
-function connectionUserId(extra: unknown) {
-  const authInfo = (extra as { authInfo?: { extra?: unknown } } | undefined)
-    ?.authInfo;
-  const authExtra = authInfo?.extra as { userId?: unknown } | undefined;
-  return typeof authExtra?.userId === "string" && authExtra.userId
-    ? authExtra.userId
-    : undefined;
+function connectionSessionId(extra: unknown) {
+  const requestExtra = extra as
+    | { requestInfo?: { headers?: unknown }; sessionId?: unknown }
+    | undefined;
+  const headers = requestExtra?.requestInfo?.headers;
+  if (headers && typeof headers === "object") {
+    const record = headers as Record<string, unknown>;
+    const key = Object.keys(record).find(
+      (candidate) => candidate.toLowerCase() === MCP_SESSION_HEADER,
+    );
+    const value = key ? record[key] : undefined;
+    const token = Array.isArray(value) ? value[0] : value;
+    const decoded = decodeSessionId(token);
+    if (decoded) return decoded.sessionId;
+  }
+
+  return typeof requestExtra?.sessionId === "string" && requestExtra.sessionId
+    ? deriveSessionIdFromMCPSession(requestExtra.sessionId)
+    : newSessionId();
 }
 
 export function enrichMcpAnalyticsEvent(event: {
@@ -507,10 +523,9 @@ export function captureMcpFeedback(
   if (!client) return;
 
   const organizationId = connectionOrgId(extra);
-  const userId = connectionUserId(extra);
 
   client.capture({
-    distinctId: userId ?? "mcp-feedback",
+    distinctId: connectionSessionId(extra),
     event: MCP_FEEDBACK_SUBMITTED_EVENT,
     properties: {
       $process_person_profile: false,
