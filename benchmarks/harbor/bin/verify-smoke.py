@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import ast
 import json
 import os
 from pathlib import Path
@@ -24,15 +25,26 @@ def read_json(path: Path) -> dict[str, Any] | None:
 
 def _decode_tool_result_content(content: Any) -> Any:
     value = content
-    for _ in range(4):
+    for _ in range(6):
         if isinstance(value, str):
             try:
                 value = json.loads(value)
             except json.JSONDecodeError:
-                return value
+                try:
+                    value = ast.literal_eval(value)
+                except (SyntaxError, ValueError):
+                    return value
             continue
         if isinstance(value, dict) and value.get("type") == "text":
             value = value.get("text")
+            continue
+        if (
+            isinstance(value, list)
+            and len(value) == 1
+            and isinstance(value[0], dict)
+            and value[0].get("type") == "text"
+        ):
+            value = value[0].get("text")
             continue
         return value
     return value
@@ -119,13 +131,14 @@ def validate_trajectory(
             continue
         result = results[0]
         decoded = _decode_tool_result_content(result.get("content"))
-        if _contains_error(decoded) or _contains_error(result.get("extra")):
+        if _contains_error(decoded) or _contains_error(result):
             error_observations.append(call_id)
             continue
         if call.get("function_name") == "mcp__kernel__get_connection_context":
             scope = decoded.get("connection_scope") if isinstance(decoded, dict) else None
             context_scope_valid = context_scope_valid and (
-                isinstance(scope, dict)
+                bool(expected_project_id)
+                and isinstance(scope, dict)
                 and scope.get("kind") == "project"
                 and scope.get("project_id") == expected_project_id
             )

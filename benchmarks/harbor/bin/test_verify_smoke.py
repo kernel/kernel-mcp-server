@@ -28,6 +28,16 @@ class VerifySmokeTest(unittest.TestCase):
         self.assertTrue(proof["context_scope_valid"])
         self.assertTrue(proof["manage_browsers_arguments_valid"])
 
+    def test_accepts_codex_serialized_observations(self) -> None:
+        proof = verify_smoke.validate_trajectory(
+            load_fixture("trajectory-codex-observation.json"), "project-123"
+        )
+
+        self.assertTrue(proof["native_calls_present"])
+        self.assertTrue(proof["observations_valid"])
+        self.assertTrue(proof["context_scope_valid"])
+        self.assertTrue(proof["manage_browsers_arguments_valid"])
+
     def test_rejects_missing_observation(self) -> None:
         proof = verify_smoke.validate_trajectory(
             load_fixture("trajectory-missing-observation.json"), "project-123"
