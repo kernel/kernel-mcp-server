@@ -551,7 +551,7 @@ export function instrumentMcpAnalytics(
   client: PostHog | null = posthog,
 ) {
   if (!client) {
-    registerFeedbackTool(server, () => undefined);
+    registerFeedbackTool(server);
     return;
   }
 

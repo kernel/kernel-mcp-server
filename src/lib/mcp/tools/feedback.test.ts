@@ -23,6 +23,7 @@ describe("submit_feedback", () => {
         ({ name }) => name === KERNEL_FEEDBACK_TOOL_NAME,
       );
       expect(tool?.title).toBe("submit KERNEL feedback");
+      expect(tool?.annotations?.readOnlyHint).toBe(false);
       expect(tool?.inputSchema.required).toEqual([
         "context",
         "summary",
@@ -48,7 +49,8 @@ describe("submit_feedback", () => {
       });
 
       expect(toolResultJSON(result)).toMatchObject({
-        received: true,
+        recorded: true,
+        status: "recorded",
         summary: "Browser creation needs clearer timeout guidance",
         feedback_type: "product",
         sentiment: "mixed",
@@ -93,8 +95,39 @@ describe("submit_feedback", () => {
       });
 
       expect(toolResultJSON(result)).toMatchObject({
-        received: true,
+        recorded: false,
+        status: "failed",
         summary: "The MCP response was easy to use",
+        message: expect.stringContaining("was not recorded"),
+      });
+    } finally {
+      await close();
+    }
+  });
+
+  test("reports when feedback analytics are unavailable", async () => {
+    const { client, close } = await connectTestMcp(
+      (server) => registerFeedbackTool(server),
+      {},
+    );
+
+    try {
+      const result = await client.callTool({
+        name: KERNEL_FEEDBACK_TOOL_NAME,
+        arguments: {
+          context:
+            "Reporting product feedback while analytics delivery is unavailable for this server instance.",
+          summary: "Browser feedback could not be delivered",
+          feedback_type: "product",
+          sentiment: "negative",
+        },
+      });
+
+      expect(toolResultJSON(result)).toMatchObject({
+        recorded: false,
+        status: "unavailable",
+        summary: "Browser feedback could not be delivered",
+        message: expect.stringContaining("was not recorded"),
       });
     } finally {
       await close();

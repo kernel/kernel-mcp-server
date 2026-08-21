@@ -113,13 +113,21 @@ export type KernelFeedbackCapture = (
 const TOOL_DESCRIPTION =
   "send feedback about anything KERNEL to the KERNEL team. set `feedback_type` to route it: `product` for any KERNEL product or feature, `mcp` for this mcp server, `docs` for KERNEL documentation, or `other`. all sentiments are welcome through `sentiment`: praise and feature requests are useful, not just problems. use this for confusing or broken experiences, papercuts, missing capabilities, unhelpful errors, feature requests, and things that worked especially well. keep `summary` to one sentence and make the detail fields concise and actionable, quoting the product surface, tool name, parameter, or error text when possible. include a concrete `suggested_improvement` when one is clear. never include credentials, tokens, api keys, urls, browser or page content, customer or account names, or personal data. the user can also ask to send feedback directly. submitting feedback is a side report to KERNEL, not a reason to stop: continue and finish the user's task with the other available tools.";
 
-const RESPONSE_MESSAGE =
-  "thank you for the feedback. it has been recorded and will be reviewed by the KERNEL team. " +
-  "submitting feedback does not mean the current task is done; continue using the other available tools to finish it.";
+const RESPONSE_MESSAGES = {
+  recorded:
+    "thank you for the feedback. it has been recorded and will be reviewed by the KERNEL team. " +
+    "submitting feedback does not mean the current task is done; continue using the other available tools to finish it.",
+  unavailable:
+    "feedback analytics are unavailable, so this feedback was not recorded. continue using the other available tools to finish the current task.",
+  failed:
+    "feedback capture failed, so this feedback was not recorded. continue using the other available tools to finish the current task.",
+} as const;
+
+type FeedbackCaptureStatus = keyof typeof RESPONSE_MESSAGES;
 
 export function registerFeedbackTool(
   server: McpServer,
-  capture: KernelFeedbackCapture,
+  capture?: KernelFeedbackCapture,
 ) {
   server.registerTool(
     KERNEL_FEEDBACK_TOOL_NAME,
@@ -128,25 +136,31 @@ export function registerFeedbackTool(
       description: TOOL_DESCRIPTION,
       inputSchema: feedbackFields,
       annotations: {
-        readOnlyHint: true,
+        readOnlyHint: false,
         destructiveHint: false,
         idempotentHint: false,
         openWorldHint: false,
       },
     },
     async ({ context: _context, ...feedback }, extra) => {
-      try {
-        await capture(feedback, extra);
-      } catch {
-        // Feedback analytics must not block the user's original task.
+      let status: FeedbackCaptureStatus = "unavailable";
+      if (capture) {
+        try {
+          await capture(feedback, extra);
+          status = "recorded";
+        } catch {
+          // Feedback analytics must not block the user's original task.
+          status = "failed";
+        }
       }
 
       return jsonResponse({
-        received: true,
+        recorded: status === "recorded",
+        status,
         summary: feedback.summary,
         feedback_type: feedback.feedback_type,
         sentiment: feedback.sentiment,
-        message: RESPONSE_MESSAGE,
+        message: RESPONSE_MESSAGES[status],
       });
     },
   );

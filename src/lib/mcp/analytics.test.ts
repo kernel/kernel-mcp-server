@@ -29,7 +29,7 @@ import {
   OAUTH_TOKEN_EXCHANGE_EVENT,
   sanitizeMcpAnalyticsEvent,
 } from "@/lib/mcp/analytics";
-import { connectTestMcp } from "@/lib/mcp/mcp-test-fixtures";
+import { connectTestMcp, toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
 import { KERNEL_FEEDBACK_TOOL_NAME } from "@/lib/mcp/tools/feedback";
 
 const privateContextProperty = "__mcp_connection_analytics_context";
@@ -638,6 +638,21 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       expect(disabledTool).toBeDefined();
       expect(disabledTool?.inputSchema).toEqual(enabledTool?.inputSchema);
       expect(disabledTool?.inputSchema.required).toContain("context");
+
+      const result = await disabled.client.callTool({
+        name: KERNEL_FEEDBACK_TOOL_NAME,
+        arguments: {
+          context:
+            "Reporting product feedback while analytics delivery is unavailable for this server instance.",
+          summary: "Feedback analytics are unavailable",
+          feedback_type: "mcp",
+          sentiment: "negative",
+        },
+      });
+      expect(toolResultJSON(result)).toMatchObject({
+        recorded: false,
+        status: "unavailable",
+      });
     } finally {
       await disabled.close();
       await enabled.close();
