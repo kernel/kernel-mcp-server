@@ -1,0 +1,8 @@
+.git
+.github
+.next
+node_modules
+coverage
+.env*
+*.log
+benchmarks/harbor/.image.env
