@@ -46,13 +46,16 @@ case "$agent" in
 esac
 
 if [[ -n "${HARBOR_BIN:-}" ]]; then
-  harbor_bin=$HARBOR_BIN
-elif command -v harbor >/dev/null 2>&1; then
-  harbor_bin=$(command -v harbor)
-elif [[ -x "$repo_root/../harbor-hypeman/.venv/bin/harbor" ]]; then
-  harbor_bin="$repo_root/../harbor-hypeman/.venv/bin/harbor"
+  harbor_command=("$HARBOR_BIN")
+elif command -v uvx >/dev/null 2>&1; then
+  harbor_command=(
+    uvx
+    --from "harbor==0.21.0"
+    --with "harbor-hypeman==0.1.1"
+    harbor
+  )
 else
-  echo "Harbor CLI not found; set HARBOR_BIN" >&2
+  echo "uvx not found; install uv or set HARBOR_BIN" >&2
   exit 1
 fi
 
@@ -81,7 +84,7 @@ chmod 0600 "$runtime_env"
 
 mkdir -p "$jobs_dir"
 timeout --signal=INT --kill-after=30s "${HARBOR_BENCHMARK_TIMEOUT:-10m}" \
-  "$harbor_bin" run \
+  "${harbor_command[@]}" run \
   --path "$runtime_task" \
   --agent "$agent" \
   --model "$model" \
