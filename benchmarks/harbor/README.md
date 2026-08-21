@@ -9,7 +9,7 @@ This directory runs stock Harbor agents against a locally built `kernel-mcp-serv
 - Hypeman CLI and credentials
 - `KERNEL_MCP_BENCHMARK_API_KEY` scoped to an isolated evaluation project
 - `KERNEL_MCP_BENCHMARK_PROJECT_ID`
-- `ANTHROPIC_API_KEY` for Claude Code
+- `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` for Claude Code
 - `OPENAI_API_KEY` for Codex
 
 ## Build the image
@@ -18,7 +18,7 @@ This directory runs stock Harbor agents against a locally built `kernel-mcp-serv
 ./benchmarks/harbor/build-image.sh
 ```
 
-The build uses the current Git SHA, installs dependencies with Bun, runs the production Next.js build, and writes the resulting image reference to the ignored `.image.env` file. Hypeman can report a failed build before the converted image becomes visible; the script performs a bounded 60-second ready-image check for that case.
+The build uses the current Git SHA, installs dependencies with Bun, runs the production Next.js build, and writes the resulting image reference to the ignored `.image.env` file. Hypeman can report a failed build before the converted image becomes visible; the script performs a bounded 5-minute ready-image check for that case.
 
 ## Run the smoke task
 
@@ -32,10 +32,10 @@ Defaults:
 
 | Agent       | Version | Model             |
 | ----------- | ------: | ----------------- |
-| Claude Code | 2.1.110 | `claude-sonnet-5` |
+| Claude Code | 2.1.238 | `claude-sonnet-5` |
 | Codex       | 0.120.0 | `gpt-5.6-terra`   |
 
-Override models with `CLAUDE_BENCHMARK_MODEL` or `CODEX_BENCHMARK_MODEL`. Runs have a 10-minute wall-clock limit; change it with `HARBOR_BENCHMARK_TIMEOUT`.
+Override models with `CLAUDE_BENCHMARK_MODEL` or `CODEX_BENCHMARK_MODEL`, or test a specific Claude Code release with `CLAUDE_BENCHMARK_VERSION`. Runs have a 10-minute wall-clock limit; change it with `HARBOR_BENCHMARK_TIMEOUT`.
 
 The output defaults to `/tmp/kernel-mcp-harbor-jobs/<job-name>`. Each successful trial contains:
 

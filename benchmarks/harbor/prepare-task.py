@@ -16,6 +16,7 @@ def main() -> int:
     output = args.output.resolve()
     image = os.environ["KERNEL_MCP_BENCHMARK_IMAGE"]
     source_sha = os.environ["KERNEL_MCP_SOURCE_SHA"]
+    project_id = os.environ["KERNEL_MCP_BENCHMARK_PROJECT_ID"]
 
     if output.exists():
         shutil.rmtree(output)
@@ -25,6 +26,7 @@ def main() -> int:
     config = config_path.read_text()
     config = config.replace("${KERNEL_MCP_BENCHMARK_IMAGE}", image)
     config = config.replace("${KERNEL_MCP_SOURCE_SHA}", source_sha)
+    config = config.replace("${KERNEL_MCP_BENCHMARK_PROJECT_ID}", project_id)
     config_path.write_text(config)
 
     wrapper = Path(__file__).parent / "bin" / "kernel-mcp-local"
