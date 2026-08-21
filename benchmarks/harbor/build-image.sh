@@ -15,29 +15,29 @@ set +e
 hypeman build \
   --file benchmarks/harbor/image/Dockerfile \
   --cpus 4 \
-  --memory 8GB \
-  --timeout 30m \
+  --memory 8192 \
+  --timeout 1800 \
   . 2>&1 | tee "$build_log"
 build_status=${PIPESTATUS[0]}
 set -e
 
-build_id=$(sed -n 's/^Build ID: //p' "$build_log" | tail -1)
+build_id=$(sed -n -E 's/^Build (ID|started): //p' "$build_log" | tail -1)
 if [[ -z "$build_id" ]]; then
   echo "Hypeman did not return a build ID" >&2
   exit 1
 fi
 
-image_ref="builds/$build_id"
+image_ref="docker.io/builds/$build_id:latest"
 if ((build_status != 0)); then
-  echo "Build record failed; checking for a delayed ready image for up to 60 seconds" >&2
+  echo "Build record failed; checking for a delayed ready image for up to 5 minutes" >&2
   image_ready=false
-  for _ in $(seq 1 12); do
+  for _ in $(seq 1 30); do
     if hypeman --format json image list | python3 -c '
 import json
 import sys
 
 image_ref = sys.argv[1]
-expected = {image_ref, f"docker.io/{image_ref}:latest"}
+expected = {image_ref, image_ref.removeprefix("docker.io/")}
 images = json.load(sys.stdin)
 raise SystemExit(
     0
@@ -49,7 +49,7 @@ raise SystemExit(
       image_ready=true
       break
     fi
-    sleep 5
+    sleep 10
   done
   if [[ "$image_ready" != true ]]; then
     exit "$build_status"
