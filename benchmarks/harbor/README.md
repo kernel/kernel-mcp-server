@@ -41,9 +41,8 @@ The output defaults to `/tmp/kernel-mcp-harbor-jobs/<job-name>`. Each successful
 
 - `steps/run/agent/trajectory.json` in ATIF format
 - native agent logs and session data
-- `steps/run/artifacts/logs/kernel-mcp/requests.jsonl` with MCP latency and status
 - server stdout and stderr
 - source SHA and Hypeman identity in `run-manifest.json`
 - numeric Harbor rewards plus detailed `smoke-result.json`
 
-The verifier requires native trajectory calls to `get_connection_context` and `manage_browsers`; direct HTTP or custom MCP-client workarounds do not pass.
+The verifier proves local-server use from Harbor's ATIF trajectory: it requires native `mcp__kernel__get_connection_context` and `mcp__kernel__manage_browsers` calls, paired non-error observations, the expected project scope, and the required read-only browser-list arguments. Direct HTTP or custom MCP-client workarounds do not pass.

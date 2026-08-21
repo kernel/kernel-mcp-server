@@ -44,7 +44,7 @@ timeout_sec = 300.0
 timeout_sec = 60.0
 
 [steps.healthcheck]
-command = "test -s /logs/kernel-mcp/ready && curl -sS -o /dev/null http://127.0.0.1:3002/mcp && curl -sS -o /dev/null http://127.0.0.1:3003/mcp"
+command = "test -s /logs/kernel-mcp/ready && curl -sS -o /dev/null http://127.0.0.1:3002/mcp"
 interval_sec = 2.0
 timeout_sec = 5.0
 start_period_sec = 1.0
