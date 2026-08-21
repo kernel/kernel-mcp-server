@@ -2,11 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { PostHog } from "posthog-node";
 import {
+  encodeSessionId,
+  MCP_SESSION_HEADER,
   PostHogMCPAnalyticsEvent,
   PostHogMCPAnalyticsProperty,
+  type McpAnalytics,
 } from "@posthog/mcp";
 import {
   captureMcpConnectionScopeFailure,
+  captureMcpFeedback,
   captureOAuthTokenExchange,
   clientCapabilityAnalyticsFromInitialize,
   enrichMcpAnalyticsEvent,
@@ -19,11 +23,14 @@ import {
   MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY,
   MCP_CLIENT_SUPPORTS_TASKS_PROPERTY,
   MCP_CONNECTION_SCOPE_FAILURE_EVENT,
+  MCP_FEEDBACK_SUBMITTED_EVENT,
   MCP_USED_PROJECT_ID_PROPERTY,
   MCP_USED_PROJECT_PROPERTY,
   OAUTH_TOKEN_EXCHANGE_EVENT,
   sanitizeMcpAnalyticsEvent,
 } from "@/lib/mcp/analytics";
+import { connectTestMcp, toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
+import { KERNEL_FEEDBACK_TOOL_NAME } from "@/lib/mcp/tools/feedback";
 
 const privateContextProperty = "__mcp_connection_analytics_context";
 
@@ -548,8 +555,109 @@ describe("captureMcpConnectionScopeFailure", () => {
   });
 });
 
+describe("captureMcpFeedback", () => {
+  test("routes redacted feedback through contextual MCP analytics", async () => {
+    const captured: unknown[] = [];
+    const analytics = {
+      capture: async (event: unknown) => {
+        captured.push(event);
+      },
+    } as McpAnalytics;
+
+    await captureMcpFeedback(
+      {
+        summary: "Browser timeout guidance was unclear",
+        feedback_type: "product",
+        sentiment: "mixed",
+        product_area: "browsers",
+        task_completed: true,
+        tools_used: ["manage_browsers"],
+        friction_points: "- The response did not say when to retry.",
+        suggested_improvement: "Include a retry interval in the response.",
+        details:
+          "The error linked to https://example.com/support for user@example.com.",
+      },
+      {
+        authInfo: {
+          extra: {
+            connectionContext: {
+              scope: { organizationId: "org_analytics" },
+            },
+          },
+        },
+      },
+      analytics,
+    );
+
+    expect(captured).toEqual([
+      {
+        event: MCP_FEEDBACK_SUBMITTED_EVENT,
+        properties: {
+          $groups: { organization: "org_analytics" },
+          feedback_summary: "Browser timeout guidance was unclear",
+          feedback_type: "product",
+          feedback_sentiment: "mixed",
+          feedback_product_area: "browsers",
+          feedback_category: undefined,
+          feedback_task_completed: true,
+          feedback_tools_used: ["manage_browsers"],
+          feedback_friction_points: "- The response did not say when to retry.",
+          feedback_suggested_improvement:
+            "Include a retry interval in the response.",
+          feedback_user_request: undefined,
+          feedback_details: "The error linked to [url] for [email]",
+        },
+      },
+    ]);
+  });
+});
+
 describe("instrumentMcpAnalytics (SDK integration)", () => {
   const ORG = "org_integration";
+
+  test("keeps the feedback tool schema stable when analytics is disabled", async () => {
+    const disabled = await connectTestMcp(
+      (server) => instrumentMcpAnalytics(server, null),
+      {},
+    );
+    const enabled = await connectTestMcp(
+      (server) =>
+        instrumentMcpAnalytics(server, {
+          capture: () => undefined,
+        } as unknown as PostHog),
+      {},
+    );
+
+    try {
+      const disabledTool = (await disabled.client.listTools()).tools.find(
+        ({ name }) => name === KERNEL_FEEDBACK_TOOL_NAME,
+      );
+      const enabledTool = (await enabled.client.listTools()).tools.find(
+        ({ name }) => name === KERNEL_FEEDBACK_TOOL_NAME,
+      );
+      expect(disabledTool).toBeDefined();
+      expect(disabledTool?.inputSchema).toEqual(enabledTool?.inputSchema);
+      expect(disabledTool?.inputSchema.required).toContain("context");
+
+      const result = await disabled.client.callTool({
+        name: KERNEL_FEEDBACK_TOOL_NAME,
+        arguments: {
+          context:
+            "Reporting product feedback while analytics delivery is unavailable for this server instance.",
+          summary: "Feedback analytics are unavailable",
+          feedback_type: "mcp",
+          sentiment: "negative",
+        },
+      });
+      expect(toolResultJSON(result)).toMatchObject({
+        recorded: false,
+        status: "unavailable",
+      });
+    } finally {
+      await disabled.close();
+      await enabled.close();
+    }
+  });
 
   // mcp-handler builds a fresh McpServer per HTTP request, so each simulated request
   // gets its own instrumented server and the SDK's per-session identity cache starts
@@ -581,7 +689,16 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
         extra: { connectionContext: { scope: { organizationId: ORG } } },
       },
       signal: new AbortController().signal,
-      requestInfo: { headers: {} },
+      requestInfo: {
+        headers: {
+          [MCP_SESSION_HEADER]: encodeSessionId({
+            sessionId: "ses_integration",
+            clientName: "test-client",
+            clientVersion: "0.0.0",
+            protocolVersion: "2025-03-26",
+          }),
+        },
+      },
     };
     const handlers = (
       server.server as unknown as {
@@ -655,6 +772,51 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
 
     // identify stays unwired, so no $identify event is ever published.
     expect(byEvent.has("$identify")).toBe(false);
+  });
+
+  test("captures feedback with the surrounding MCP session metadata", async () => {
+    const captured: { event?: string }[] = [];
+
+    await simulateRequest(captured, "tools/call", {
+      name: KERNEL_FEEDBACK_TOOL_NAME,
+      arguments: {
+        context:
+          "Reporting that browser timeout guidance did not explain when the caller should retry.",
+        summary: "Browser timeout guidance was unclear",
+        feedback_type: "product",
+        sentiment: "mixed",
+        product_area: "browsers",
+      },
+    });
+
+    const feedback = captured.find(
+      ({ event }) => event === MCP_FEEDBACK_SUBMITTED_EVENT,
+    ) as { distinctId: string; properties: Record<string, unknown> };
+    const toolCall = captured.find(
+      ({ event }) => event === "$mcp_tool_call",
+    ) as {
+      distinctId: string;
+      properties: Record<string, unknown>;
+    };
+
+    expect(feedback.distinctId).toBe("ses_integration");
+    expect(feedback.distinctId).toBe(toolCall.distinctId);
+    expect(feedback.properties).toMatchObject({
+      $groups: { organization: ORG },
+      [PostHogMCPAnalyticsProperty.SessionId]: "ses_integration",
+      [PostHogMCPAnalyticsProperty.ClientName]: "test-client",
+      [PostHogMCPAnalyticsProperty.ClientVersion]: "0.0.0",
+      [PostHogMCPAnalyticsProperty.ProtocolVersion]: "2025-03-26",
+      [PostHogMCPAnalyticsProperty.ServerName]: "test",
+      [PostHogMCPAnalyticsProperty.ServerVersion]: "0.0.0",
+      feedback_summary: "Browser timeout guidance was unclear",
+      feedback_type: "product",
+      feedback_sentiment: "mixed",
+      feedback_product_area: "browsers",
+    });
+    expect(toolCall.properties[PostHogMCPAnalyticsProperty.Intent]).toBe(
+      "Reporting that browser timeout guidance did not explain when the caller should retry.",
+    );
   });
 
   test("stays anonymous when no connection context is attached", async () => {

@@ -4,6 +4,7 @@ import {
   PostHogMCPAnalyticsEvent,
   PostHogMCPAnalyticsProperty,
   type BeforeSendFn,
+  type McpAnalytics,
 } from "@posthog/mcp";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { PostHog } from "posthog-node";
@@ -12,6 +13,11 @@ import type {
   McpConnectionAnalyticsContext,
   McpConnectionContext,
 } from "@/lib/mcp/auth-context";
+import { MCP_INTENT_ARGUMENT_DESCRIPTION } from "@/lib/mcp/analytics-context";
+import {
+  type KernelFeedback,
+  registerFeedbackTool,
+} from "@/lib/mcp/tools/feedback";
 import {
   clientDeclaresExtension,
   clientElicitationModes,
@@ -60,6 +66,7 @@ export type McpConnectionScopeFailureAnalytics = {
 
 export const MCP_CONNECTION_SCOPE_FAILURE_EVENT =
   "mcp_connection_scope_failure";
+export const MCP_FEEDBACK_SUBMITTED_EVENT = "mcp_feedback_submitted";
 
 if (!projectToken && process.env.NODE_ENV !== "production") {
   console.error(
@@ -153,14 +160,18 @@ const SENT_PROPERTIES = new Set<string>([
   PostHogMCPAnalyticsProperty.ToolCategory,
   PostHogMCPAnalyticsProperty.ToolDescription,
   PostHogMCPAnalyticsProperty.ToolName,
+  "feedback_summary",
+  "feedback_type",
+  "feedback_sentiment",
+  "feedback_product_area",
+  "feedback_category",
+  "feedback_task_completed",
+  "feedback_tools_used",
+  "feedback_friction_points",
+  "feedback_suggested_improvement",
+  "feedback_user_request",
+  "feedback_details",
 ]);
-
-const INTENT_ARGUMENT_DESCRIPTION =
-  "Why this tool is being called and how it fits the user's overall goal, in 15-25 words, " +
-  "third person. Used for product analytics. Never restate argument values, and never " +
-  "include credentials, tokens, URLs, file contents, or personal data. Example: " +
-  '"Inspecting a running browser session to diagnose a checkout automation that stopped ' +
-  'responding partway through the flow."';
 
 // Intent is the only free-form text this captures, and an agent writes it. Long enough for
 // the 15-25 words asked for, short enough that a client ignoring the instruction can't
@@ -262,13 +273,16 @@ function annotateProjectParamUsage(properties: Record<string, unknown>) {
   properties[MCP_USED_PROJECT_PROPERTY] = hasNonEmptyParam(args, "project");
 }
 
-function sanitizeIntent(intent: string) {
-  const redacted = INTENT_REDACTIONS.reduce(
-    (text, [pattern, replacement]) => text.replace(pattern, replacement),
-    intent.trim(),
+function redactAnalyticsText(text: string) {
+  return INTENT_REDACTIONS.reduce(
+    (redacted, [pattern, replacement]) =>
+      redacted.replace(pattern, replacement),
+    text.trim(),
   );
+}
 
-  return redacted.slice(0, INTENT_MAX_LENGTH);
+function sanitizeIntent(intent: string) {
+  return redactAnalyticsText(intent).slice(0, INTENT_MAX_LENGTH);
 }
 
 // Must stay the SDK's default name: reportMissing advertises a tool under this name and
@@ -355,11 +369,7 @@ export const sanitizeMcpAnalyticsEvent: BeforeSendFn = (event) => {
   return event;
 };
 
-/**
- * Captures every tool call, tools/list, and initialize handled by the server as a
- * `$mcp_*` PostHog event, and advertises the tool agents use to report a capability the
- * server doesn't have. No-op when POSTHOG_PROJECT_TOKEN is unset.
- */
+/** Extracts the analytics identity resolved during MCP authentication. */
 function connectionAnalyticsContext(extra: unknown) {
   const authInfo = (extra as { authInfo?: { extra?: unknown } } | undefined)
     ?.authInfo;
@@ -379,6 +389,22 @@ function connectionOrgId(extra: unknown) {
     | { connectionContext?: McpConnectionContext | null }
     | undefined;
   return authExtra?.connectionContext?.scope.organizationId;
+}
+
+export function captureMcpCustomEvent(
+  analytics: McpAnalytics,
+  extra: unknown,
+  event: string,
+  properties: Record<string, unknown>,
+) {
+  const organizationId = connectionOrgId(extra);
+  return analytics.capture({
+    event,
+    properties: {
+      ...properties,
+      ...(organizationId && { $groups: { organization: organizationId } }),
+    },
+  });
 }
 
 export function enrichMcpAnalyticsEvent(event: {
@@ -486,13 +512,50 @@ export function captureMcpConnectionScopeFailure(
   }
 }
 
+export function captureMcpFeedback(
+  feedback: KernelFeedback,
+  extra: unknown,
+  analytics: McpAnalytics,
+) {
+  return captureMcpCustomEvent(analytics, extra, MCP_FEEDBACK_SUBMITTED_EVENT, {
+    feedback_summary: redactAnalyticsText(feedback.summary),
+    feedback_type: feedback.feedback_type,
+    feedback_sentiment: feedback.sentiment,
+    feedback_product_area: feedback.product_area
+      ? redactAnalyticsText(feedback.product_area)
+      : undefined,
+    feedback_category: feedback.category,
+    feedback_task_completed: feedback.task_completed,
+    feedback_tools_used: feedback.tools_used?.map(redactAnalyticsText),
+    feedback_friction_points: feedback.friction_points
+      ? redactAnalyticsText(feedback.friction_points)
+      : undefined,
+    feedback_suggested_improvement: feedback.suggested_improvement
+      ? redactAnalyticsText(feedback.suggested_improvement)
+      : undefined,
+    feedback_user_request: feedback.user_request
+      ? redactAnalyticsText(feedback.user_request)
+      : undefined,
+    feedback_details: feedback.details
+      ? redactAnalyticsText(feedback.details)
+      : undefined,
+  });
+}
+
+/**
+ * Captures MCP protocol analytics and registers the analytics-backed reporting tools.
+ * Feedback remains available when analytics is disabled so the tool contract is stable.
+ */
 export function instrumentMcpAnalytics(
   server: McpServer,
   client: PostHog | null = posthog,
 ) {
-  if (!client) return;
+  if (!client) {
+    registerFeedbackTool(server);
+    return;
+  }
 
-  instrument(server, client, {
+  const analytics = instrument(server, client, {
     // Records a `$mcp_missing_capability` event, carrying the reported gap as $mcp_intent,
     // when an agent calls the tool registered by registerMissingCapabilityTool.
     reportMissing: true,
@@ -501,7 +564,7 @@ export function instrumentMcpAnalytics(
     // with why it is making the call. Recorded as $mcp_intent. The description replaces
     // the SDK default: it repeats per tool in every tools/list response, so it stays
     // short, and it names the arguments agents must not copy into it.
-    context: { description: INTENT_ARGUMENT_DESCRIPTION },
+    context: { description: MCP_INTENT_ARGUMENT_DESCRIPTION },
     // A failed tool call otherwise fans out into a second `$exception` event whose
     // `$exception_list` is built from the text the tool returned.
     enableExceptionAutocapture: false,
@@ -541,6 +604,9 @@ export function instrumentMcpAnalytics(
   });
 
   registerMissingCapabilityTool(server);
+  registerFeedbackTool(server, (feedback, extra) =>
+    captureMcpFeedback(feedback, extra, analytics),
+  );
 }
 
 /**
