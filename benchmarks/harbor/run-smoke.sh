@@ -27,12 +27,12 @@ set +a
 case "$agent" in
   claude-code)
     : "${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is required}"
-    model=${CLAUDE_BENCHMARK_MODEL:-claude-sonnet-4-5-20250929}
+    model=${CLAUDE_BENCHMARK_MODEL:-claude-sonnet-5}
     version=2.1.110
     ;;
   codex)
     : "${OPENAI_API_KEY:?OPENAI_API_KEY is required}"
-    model=${CODEX_BENCHMARK_MODEL:-gpt-5.3-codex}
+    model=${CODEX_BENCHMARK_MODEL:-gpt-5.6-terra}
     version=0.120.0
     ;;
 esac

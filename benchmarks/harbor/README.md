@@ -30,10 +30,10 @@ export KERNEL_MCP_BENCHMARK_PROJECT_ID=project_id
 
 Defaults:
 
-| Agent       | Version | Model                        |
-| ----------- | ------: | ---------------------------- |
-| Claude Code | 2.1.110 | `claude-sonnet-4-5-20250929` |
-| Codex       | 0.120.0 | `gpt-5.3-codex`              |
+| Agent       | Version | Model             |
+| ----------- | ------: | ----------------- |
+| Claude Code | 2.1.110 | `claude-sonnet-5` |
+| Codex       | 0.120.0 | `gpt-5.6-terra`   |
 
 Override models with `CLAUDE_BENCHMARK_MODEL` or `CODEX_BENCHMARK_MODEL`. Runs have a 10-minute wall-clock limit; change it with `HARBOR_BENCHMARK_TIMEOUT`.
 
