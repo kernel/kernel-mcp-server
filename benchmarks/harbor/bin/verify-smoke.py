@@ -8,6 +8,10 @@ from typing import Any
 
 LOGS_DIR = Path(os.environ.get("HARBOR_LOGS_DIR", "/logs"))
 VERIFIER_DIR = LOGS_DIR / "verifier"
+REQUIRED_TOOLS = {
+    "mcp__kernel__get_connection_context",
+    "mcp__kernel__manage_browsers",
+}
 
 
 def read_json(path: Path) -> dict[str, Any] | None:
@@ -18,107 +22,179 @@ def read_json(path: Path) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def read_requests(path: Path) -> list[dict[str, Any]]:
-    requests = []
-    try:
-        lines = path.read_text().splitlines()
-    except OSError:
-        return requests
-    for line in lines:
-        try:
-            value = json.loads(line)
-        except json.JSONDecodeError:
+def _decode_tool_result_content(content: Any) -> Any:
+    value = content
+    for _ in range(4):
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                return value
             continue
-        if isinstance(value, dict):
-            requests.append(value)
-    return requests
+        if isinstance(value, dict) and value.get("type") == "text":
+            value = value.get("text")
+            continue
+        return value
+    return value
 
 
-def successful_call(requests: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
-    return next(
-        (
-            request
-            for request in requests
-            if request.get("jsonrpc_method") == "tools/call"
-            and request.get("tool_name") == name
-            and request.get("success") is True
-        ),
-        None,
-    )
+def _contains_error(value: Any) -> bool:
+    if isinstance(value, dict):
+        if value.get("is_error") is True or value.get("isError") is True:
+            return True
+        if "error" in value and value["error"] not in (None, False, ""):
+            return True
+        return any(_contains_error(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_error(item) for item in value)
+    if isinstance(value, str):
+        text = value.lstrip().lower()
+        return text.startswith(("[error]", "error:", "error in "))
+    return False
 
 
-def trajectory_tool_names(trajectory: dict[str, Any] | None) -> list[str]:
-    names = []
-    for step in (trajectory or {}).get("steps") or []:
+def _observation_result_map(trajectory: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    results: dict[str, list[dict[str, Any]]] = {}
+    for step in trajectory.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        observation = step.get("observation")
+        if not isinstance(observation, dict):
+            continue
+        for result in observation.get("results") or []:
+            if not isinstance(result, dict):
+                continue
+            source_call_id = result.get("source_call_id")
+            if isinstance(source_call_id, str):
+                results.setdefault(source_call_id, []).append(result)
+    return results
+
+
+def _native_tool_calls(trajectory: dict[str, Any]) -> list[dict[str, Any]]:
+    calls = []
+    for step in trajectory.get("steps") or []:
         if not isinstance(step, dict):
             continue
         for call in step.get("tool_calls") or []:
-            if isinstance(call, dict) and isinstance(call.get("function_name"), str):
-                names.append(call["function_name"])
-    return names
+            if not isinstance(call, dict):
+                continue
+            if call.get("function_name") in REQUIRED_TOOLS:
+                calls.append(call)
+    return calls
+
+
+def _manage_browsers_arguments_valid(call: dict[str, Any]) -> bool:
+    arguments = call.get("arguments")
+    return (
+        isinstance(arguments, dict)
+        and arguments.get("action") == "list"
+        and arguments.get("status") == "active"
+        and arguments.get("limit") == 1
+    )
+
+
+def validate_trajectory(
+    trajectory: dict[str, Any] | None, expected_project_id: str
+) -> dict[str, Any]:
+    calls = _native_tool_calls(trajectory or {})
+    calls_by_name = {
+        name: [call for call in calls if call.get("function_name") == name]
+        for name in REQUIRED_TOOLS
+    }
+    result_map = _observation_result_map(trajectory or {})
+    missing_observations = []
+    duplicate_observations = []
+    error_observations = []
+    context_scope_valid = True
+    browser_arguments_valid = True
+
+    for call in calls:
+        call_id = call.get("tool_call_id")
+        results = result_map.get(call_id, []) if isinstance(call_id, str) else []
+        if len(results) == 0:
+            missing_observations.append(call_id)
+            continue
+        if len(results) != 1:
+            duplicate_observations.append(call_id)
+            continue
+        result = results[0]
+        decoded = _decode_tool_result_content(result.get("content"))
+        if _contains_error(decoded) or _contains_error(result.get("extra")):
+            error_observations.append(call_id)
+            continue
+        if call.get("function_name") == "mcp__kernel__get_connection_context":
+            scope = decoded.get("connection_scope") if isinstance(decoded, dict) else None
+            context_scope_valid = context_scope_valid and (
+                isinstance(scope, dict)
+                and scope.get("kind") == "project"
+                and scope.get("project_id") == expected_project_id
+            )
+        elif call.get("function_name") == "mcp__kernel__manage_browsers":
+            browser_arguments_valid = (
+                browser_arguments_valid and _manage_browsers_arguments_valid(call)
+            )
+
+    native_calls_present = all(calls_by_name[name] for name in REQUIRED_TOOLS)
+    observations_valid = bool(calls) and not (
+        missing_observations or duplicate_observations or error_observations
+    )
+    return {
+        "native_calls_present": native_calls_present,
+        "observations_valid": observations_valid,
+        "context_scope_valid": context_scope_valid
+        and bool(calls_by_name["mcp__kernel__get_connection_context"]),
+        "manage_browsers_arguments_valid": browser_arguments_valid
+        and bool(calls_by_name["mcp__kernel__manage_browsers"]),
+        "missing_observations": missing_observations,
+        "duplicate_observations": duplicate_observations,
+        "error_observations": error_observations,
+        "tool_calls": [
+            {
+                "tool_call_id": call.get("tool_call_id"),
+                "name": call.get("function_name"),
+                "arguments": call.get("arguments"),
+            }
+            for call in calls
+        ],
+    }
 
 
 def main() -> int:
     VERIFIER_DIR.mkdir(parents=True, exist_ok=True)
-    requests = read_requests(LOGS_DIR / "kernel-mcp/requests.jsonl")
     report = read_json(LOGS_DIR / "artifacts/agent-report.json")
     trajectory = read_json(LOGS_DIR / "agent/trajectory.json")
     manifest = read_json(LOGS_DIR / "kernel-mcp/run-manifest.json")
-
-    context_call = successful_call(requests, "get_connection_context")
-    browsers_call = successful_call(requests, "manage_browsers")
     expected_project_id = os.environ.get("KERNEL_MCP_EXPECTED_PROJECT_ID", "")
-    report_matches = bool(
-        report
-        and report.get("get_connection_context_succeeded") is True
-        and report.get("manage_browsers_list_succeeded") is True
-        and report.get("connection_scope_kind") == "project"
-        and report.get("project_id") == expected_project_id
-    )
+    atif = validate_trajectory(trajectory, expected_project_id)
     source_sha_matches = bool(
         manifest
         and manifest.get("kernel_mcp_server_sha")
         == os.environ.get("KERNEL_MCP_SOURCE_SHA")
     )
-    trajectory_names = trajectory_tool_names(trajectory)
-    trajectory_has_calls = any(
-        name.endswith("get_connection_context") for name in trajectory_names
-    ) and any(name.endswith("manage_browsers") for name in trajectory_names)
     hypeman_identity_present = bool(
         manifest and manifest.get("hypeman_instance_name")
     )
 
     checks = {
-        "get_connection_context": context_call is not None,
-        "manage_browsers_list": browsers_call is not None,
-        "agent_report": report_matches,
+        "native_mcp_calls": atif["native_calls_present"],
+        "tool_observations": atif["observations_valid"],
+        "context_scope": atif["context_scope_valid"],
+        "manage_browsers_arguments": atif["manage_browsers_arguments_valid"],
         "source_sha": source_sha_matches,
         "hypeman_identity": hypeman_identity_present,
-        "trajectory": trajectory_has_calls,
         "server_stdout": (LOGS_DIR / "kernel-mcp/server.stdout.log").is_file(),
         "server_stderr": (LOGS_DIR / "kernel-mcp/server.stderr.log").is_file(),
     }
     reward = 1.0 if all(checks.values()) else 0.0
-    tool_calls = [
-        {
-            "name": call["tool_name"],
-            "success": call["success"],
-            "duration_ms": call["duration_ms"],
-            "http_status": call["http_status"],
-        }
-        for call in (context_call, browsers_call)
-        if call is not None
-    ]
     result = {
         "reward": reward,
         "checks": checks,
-        "tool_calls": tool_calls,
+        "atif": atif,
         "agent_report": report,
         "trajectory": {
             "present": trajectory is not None,
             "schema_version": (trajectory or {}).get("schema_version"),
             "agent": (trajectory or {}).get("agent"),
-            "tool_names": trajectory_names,
         },
         "run_manifest": manifest,
     }
@@ -126,15 +202,7 @@ def main() -> int:
     (VERIFIER_DIR / "reward.txt").write_text(str(reward))
     (VERIFIER_DIR / "reward.json").write_text(
         json.dumps(
-            {
-                "reward": reward,
-                "get_connection_context": float(context_call is not None),
-                "manage_browsers_list": float(browsers_call is not None),
-                "agent_report": float(report_matches),
-                "source_sha": float(source_sha_matches),
-                "hypeman_identity": float(hypeman_identity_present),
-                "trajectory": float(trajectory_has_calls),
-            },
+            {"reward": reward, **{name: float(value) for name, value in checks.items()}},
             indent=2,
         )
     )
