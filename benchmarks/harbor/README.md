@@ -4,13 +4,21 @@ This directory runs stock Harbor agents against a locally built `kernel-mcp-serv
 
 ## Requirements
 
-- Harbor 0.21.0 with `harbor_hypeman:HypemanEnvironment`
-- `harbor-hypeman` with existing Hypeman image-reference support
-- Hypeman CLI and credentials
+- Harbor 0.21.0
+- `harbor-hypeman` 0.1.1
+- [uv](https://docs.astral.sh/uv/) and Hypeman CLI credentials
 - `KERNEL_MCP_BENCHMARK_API_KEY` scoped to an isolated evaluation project
 - `KERNEL_MCP_BENCHMARK_PROJECT_ID`
 - `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` for Claude Code
 - `OPENAI_API_KEY` for Codex
+
+`run-smoke.sh` launches the pinned Harbor packages through `uvx`. To install the same versions as a persistent tool instead:
+
+```bash
+uv tool install 'harbor==0.21.0' --with 'harbor-hypeman==0.1.1'
+```
+
+Set `HARBOR_BIN` only when intentionally testing a different Harbor installation.
 
 ## Build the image
 
