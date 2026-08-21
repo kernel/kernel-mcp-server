@@ -1,0 +1,84 @@
+#!/bin/bash
+set -euo pipefail
+
+usage() {
+  echo "usage: $0 <claude-code|codex> [job-name] [jobs-dir]" >&2
+  exit 2
+}
+
+agent=${1:-}
+[[ "$agent" == "claude-code" || "$agent" == "codex" ]] || usage
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+benchmark_dir="$repo_root/benchmarks/harbor"
+image_env="$benchmark_dir/.image.env"
+[[ -f "$image_env" ]] || {
+  echo "Missing $image_env; run benchmarks/harbor/build-image.sh first" >&2
+  exit 1
+}
+
+set -a
+source "$image_env"
+set +a
+
+: "${KERNEL_MCP_BENCHMARK_API_KEY:?KERNEL_MCP_BENCHMARK_API_KEY is required}"
+: "${KERNEL_MCP_BENCHMARK_PROJECT_ID:?KERNEL_MCP_BENCHMARK_PROJECT_ID is required}"
+
+case "$agent" in
+  claude-code)
+    : "${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is required}"
+    model=${CLAUDE_BENCHMARK_MODEL:-claude-sonnet-4-5-20250929}
+    version=2.1.110
+    ;;
+  codex)
+    : "${OPENAI_API_KEY:?OPENAI_API_KEY is required}"
+    model=${CODEX_BENCHMARK_MODEL:-gpt-5.3-codex}
+    version=0.120.0
+    ;;
+esac
+
+if [[ -n "${HARBOR_BIN:-}" ]]; then
+  harbor_bin=$HARBOR_BIN
+elif command -v harbor >/dev/null 2>&1; then
+  harbor_bin=$(command -v harbor)
+elif [[ -x "$repo_root/../harbor-hypeman/.venv/bin/harbor" ]]; then
+  harbor_bin="$repo_root/../harbor-hypeman/.venv/bin/harbor"
+else
+  echo "Harbor CLI not found; set HARBOR_BIN" >&2
+  exit 1
+fi
+
+job_name=${2:-${agent}-smoke-$(date -u +%Y%m%dT%H%M%SZ)}
+jobs_dir=${3:-${HARBOR_JOBS_DIR:-/tmp/kernel-mcp-harbor-jobs}}
+runtime_task=$(mktemp -d)
+runtime_env=$(mktemp)
+trap 'rm -rf "$runtime_task"; rm -f "$runtime_env"' EXIT
+
+export KERNEL_MCP_BENCHMARK_IMAGE KERNEL_MCP_SOURCE_SHA
+python3 "$benchmark_dir/prepare-task.py" "$runtime_task"
+
+cat >"$runtime_env" <<EOF
+KERNEL_MCP_BENCHMARK_IMAGE=$KERNEL_MCP_BENCHMARK_IMAGE
+KERNEL_MCP_SOURCE_SHA=$KERNEL_MCP_SOURCE_SHA
+KERNEL_MCP_BENCHMARK_API_KEY=$KERNEL_MCP_BENCHMARK_API_KEY
+KERNEL_MCP_BENCHMARK_PROJECT_ID=$KERNEL_MCP_BENCHMARK_PROJECT_ID
+KERNEL_API_BASE_URL=${KERNEL_API_BASE_URL:-https://api.onkernel.com}
+EOF
+chmod 0600 "$runtime_env"
+
+mkdir -p "$jobs_dir"
+timeout --signal=INT --kill-after=30s "${HARBOR_BENCHMARK_TIMEOUT:-10m}" \
+  "$harbor_bin" run \
+  --path "$runtime_task" \
+  --agent "$agent" \
+  --model "$model" \
+  --agent-kwarg "version=$version" \
+  --mcp-config "$benchmark_dir/mcp/kernel.json" \
+  --env harbor_hypeman:HypemanEnvironment \
+  --env-file "$runtime_env" \
+  --job-name "$job_name" \
+  --jobs-dir "$jobs_dir" \
+  --n-concurrent 1 \
+  --max-retries 0 \
+  --delete \
+  --yes
