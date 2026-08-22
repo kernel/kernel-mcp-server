@@ -156,6 +156,30 @@ class VerifyControlTest(unittest.TestCase):
         ):
             self.assertTrue(result[key], key)
 
+    def test_accepts_missing_terminal_observation_after_interception(self) -> None:
+        trajectory = self.trajectory()
+        trajectory["steps"][0]["tool_calls"].append(
+            {
+                "tool_call_id": "computer-final",
+                "function_name": "mcp__kernel__computer_action",
+                "arguments": {
+                    "session_id": "session-123",
+                    "actions": [{"type": "click_mouse", "x": 10, "y": 10}],
+                },
+            }
+        )
+        result = verify.validate_control(
+            trajectory,
+            expected_session_id="session-123",
+            expected_project_id="project-123",
+            allowed_missing_observation_ids={"computer-final"},
+        )
+        self.assertTrue(result["observations_valid"])
+        self.assertEqual(
+            result["expected_interrupted_observations"], ["computer-final"]
+        )
+        self.assertEqual(result["unexpected_missing_observations"], [])
+
     def test_rejects_another_session(self) -> None:
         result = verify.validate_control(
             self.trajectory("session-other"),
