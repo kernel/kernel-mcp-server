@@ -43,6 +43,7 @@ def _add_environment(task_toml: str, *, image: str, server_sha: str, clawbench_s
                     f"KERNEL_MCP_ENABLED_TOOLSETS = {json.dumps(ENABLED_TOOLSETS)}",
                     'KERNEL_MCP_EXPECTED_PROJECT_ID = "${KERNEL_MCP_BENCHMARK_PROJECT_ID}"',
                     'KERNEL_API_BASE_URL = "${KERNEL_API_BASE_URL:-}"',
+                    'REDIS_URL = "redis://127.0.0.1:6379"',
                 ]
             )
             inserted_env = True
@@ -99,8 +100,8 @@ def _patch_verifier(test_script: str) -> str:
     return test_script.replace(
         verify_marker,
         verify_marker
-        + "mkdir -p /data/kernel-mcp\n"
-        + "cp -a /logs/kernel-mcp/. /data/kernel-mcp/\n"
+        + "mkdir -p /logs/verifier/kernel-mcp\n"
+        + "cp -a /logs/kernel-mcp/. /logs/verifier/kernel-mcp/\n"
         + "/app/src/runtime-server/.venv/bin/python "
         + "/app/src/harbor/verify-kernel-mcp-control.py\n",
         1,
@@ -108,10 +109,15 @@ def _patch_verifier(test_script: str) -> str:
 
 
 def _patch_instruction(instruction: str) -> str:
+    instruction = instruction.replace(
+        "Use only Playwright MCP browser tools plus reading files",
+        "Use only Kernel MCP browser-control tools plus reading files",
+    )
     return instruction.rstrip() + """
 
 ---
 Kernel MCP benchmark arm:
+- Wait for the `kernel` MCP server to finish initializing before starting. In Claude Code, call `WaitForMcpServers` if it is still pending; do not conclude that the tools are unavailable while it initializes.
 - Call `get_connection_context` once before taking any browser action.
 - Read `./my-info/kernel_browser.json` and use its existing `session_id` for every `execute_playwright_code` or `computer_action` call.
 - Do not create, list, update, or delete browsers. Browser lifecycle tools are intentionally unavailable.

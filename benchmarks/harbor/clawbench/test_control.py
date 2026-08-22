@@ -29,7 +29,9 @@ class PrepareControlTest(unittest.TestCase):
             step = task / "steps" / "run"
             (step / "workdir").mkdir(parents=True)
             (step / "tests").mkdir()
-            (step / "instruction.md").write_text("Complete the browser task.\n")
+            (step / "instruction.md").write_text(
+                "Use only Playwright MCP browser tools plus reading files under ./my-info/.\n"
+            )
             (environment / "harbor").mkdir(parents=True)
             (environment / "Dockerfile").write_text("FROM python:3.11-slim\n")
             (task / "task.toml").write_text(
@@ -75,15 +77,18 @@ args = ["-y", "@playwright/mcp@0.0.79"]
                 'KERNEL_MCP_ENABLED_TOOLSETS = "playwright computer"', task_toml
             )
             self.assertNotIn("KERNEL_MCP_DISABLED_TOOLSETS", task_toml)
+            self.assertIn('REDIS_URL = "redis://127.0.0.1:6379"', task_toml)
 
             setup = (step / "workdir" / "setup.sh").read_text()
             self.assertIn("install_clawbench_runtime", setup)
             self.assertIn("start-kernel-mcp-server", setup)
             test_script = (step / "tests" / "test.sh").read_text()
             self.assertIn("verify-kernel-mcp-control.py", test_script)
-            self.assertIn("/data/kernel-mcp", test_script)
+            self.assertIn("/logs/verifier/kernel-mcp", test_script)
             instruction = (step / "instruction.md").read_text()
+            self.assertIn("WaitForMcpServers", instruction)
             self.assertIn("existing `session_id`", instruction)
+            self.assertIn("Use only Kernel MCP browser-control tools", instruction)
             self.assertIn("PurelyMail-backed credentials", instruction)
             self.assertIn("Do not use Kernel managed auth", instruction)
             self.assertTrue((environment / "harbor" / "verify-kernel-mcp-control.py").is_file())
