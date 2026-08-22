@@ -45,8 +45,18 @@ import platform
 from datetime import datetime, timezone
 from pathlib import Path
 
+browser_path = Path("/my-info/kernel_browser.json")
+try:
+    browser = json.loads(browser_path.read_text())
+except (OSError, json.JSONDecodeError):
+    browser = {}
+
 manifest = {
     "kernel_mcp_server_sha": Path("/opt/kernel-mcp-server/SOURCE_SHA").read_text().strip(),
+    "clawbench_source_sha": os.environ.get("CLAWBENCH_SOURCE_SHA", ""),
+    "browser_session_id": browser.get("session_id"),
+    "enabled_toolsets": os.environ.get("KERNEL_MCP_ENABLED_TOOLSETS", ""),
+    "disabled_toolsets": os.environ.get("KERNEL_MCP_DISABLED_TOOLSETS", ""),
     "image": os.environ.get("KERNEL_MCP_BENCHMARK_IMAGE", ""),
     "hypeman_instance_name": os.environ.get("HYPEMAN_INSTANCE_NAME", ""),
     "sandbox_hostname": platform.node(),
