@@ -77,6 +77,8 @@ args = ["-y", "@playwright/mcp@0.0.79"]
                 'KERNEL_MCP_ENABLED_TOOLSETS = "playwright computer"', task_toml
             )
             self.assertNotIn("KERNEL_MCP_DISABLED_TOOLSETS", task_toml)
+            self.assertIn('API_BASE_URL = "${KERNEL_API_BASE_URL:-}"', task_toml)
+            self.assertNotIn("KERNEL_API_BASE_URL =", task_toml)
             self.assertIn('REDIS_URL = "redis://127.0.0.1:6379"', task_toml)
 
             setup = (step / "workdir" / "setup.sh").read_text()
