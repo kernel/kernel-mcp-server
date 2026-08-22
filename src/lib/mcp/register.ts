@@ -90,6 +90,33 @@ function normalizeMcpToolset(value: string): McpToolset | undefined {
   return undefined;
 }
 
+function enabledMcpToolsetsFromEnv() {
+  const raw = process.env.KERNEL_MCP_ENABLED_TOOLSETS;
+  if (!raw?.trim()) return undefined;
+
+  const enabled = new Set<McpToolset>();
+  const unknown: string[] = [];
+  for (const value of raw.split(/[,\s]+/)) {
+    const token = value.trim().toLowerCase();
+    if (!token || token === "none") continue;
+    if (token === "all") return new Set<McpToolset>(mcpToolsets);
+
+    const toolset = normalizeMcpToolset(token);
+    if (toolset) {
+      enabled.add(toolset);
+    } else {
+      unknown.push(value);
+    }
+  }
+
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown KERNEL_MCP_ENABLED_TOOLSETS value(s): ${unknown.join(", ")}. Supported toolsets: ${mcpToolsets.join(", ")}.`,
+    );
+  }
+  return enabled;
+}
+
 function disabledMcpToolsetsFromEnv() {
   const raw = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
   if (!raw?.trim()) return new Set<McpToolset>();
@@ -126,10 +153,14 @@ function disabledMcpToolsetsFromEnv() {
 }
 
 function toolsetEnabled(
+  enabledToolsets: Set<McpToolset> | undefined,
   disabledToolsets: Set<McpToolset>,
   toolset: McpToolset,
 ) {
-  return !disabledToolsets.has(toolset);
+  return (
+    (enabledToolsets === undefined || enabledToolsets.has(toolset)) &&
+    !disabledToolsets.has(toolset)
+  );
 }
 
 export function registerMcpCapabilities(
@@ -139,6 +170,7 @@ export function registerMcpCapabilities(
     dependencies = defaultMcpDependencies,
   }: McpRegistrationOptions = {},
 ) {
+  const enabledToolsets = enabledMcpToolsetsFromEnv();
   const disabledToolsets = disabledMcpToolsetsFromEnv();
 
   registerKernelPrompts(server);
@@ -147,7 +179,7 @@ export function registerMcpCapabilities(
   registerConnectionContextTool(server);
 
   for (const [toolset, registerToolset] of mcpToolRegistrations) {
-    if (toolsetEnabled(disabledToolsets, toolset)) {
+    if (toolsetEnabled(enabledToolsets, disabledToolsets, toolset)) {
       registerToolset(server, dependencies);
     }
   }
@@ -155,7 +187,10 @@ export function registerMcpCapabilities(
   // Managed Auth remains fully programmatic for every client. MCP Apps support
   // adds one interactive launcher (plus its app-only implementation tools and
   // resource) without replacing or narrowing manage_auth_connections.
-  if (mcpApps && toolsetEnabled(disabledToolsets, "auth_connections")) {
+  if (
+    mcpApps &&
+    toolsetEnabled(enabledToolsets, disabledToolsets, "auth_connections")
+  ) {
     registerAuthLoginApp(server);
   }
 }

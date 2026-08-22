@@ -12,6 +12,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && npm install --global bun@1.3.3
 
+COPY --from=ghcr.io/astral-sh/uv:0.11.6 /uv /usr/local/bin/uv
+
 WORKDIR /opt/kernel-mcp-server
 
 COPY package.json bun.lock ./

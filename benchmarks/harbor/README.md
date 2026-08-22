@@ -54,3 +54,23 @@ The output defaults to `/tmp/kernel-mcp-harbor-jobs/<job-name>`. Each successful
 - numeric Harbor rewards plus detailed `smoke-result.json`
 
 The verifier proves local-server use from Harbor's ATIF trajectory: it requires native `mcp__kernel__get_connection_context` and `mcp__kernel__manage_browsers` calls, paired non-error observations, the expected project scope, and the required read-only browser-list arguments. Direct HTTP or custom MCP-client workarounds do not pass.
+
+## Run the ClawBench Kernel MCP arm
+
+The ClawBench arm starts from the Kernel-backed Harbor task produced by `clawbench-harbor-adapt`, replaces Playwright MCP with the local source-pinned Kernel MCP server, and keeps ClawBench attached to the same pre-created browser.
+
+```bash
+export CLAWBENCH_REPO=../ClawBench
+./benchmarks/harbor/clawbench/run-control.sh claude-code \
+  v2-1134-chapter-finder-redcross
+```
+
+The ClawBench checkout must contain commit `6efb04e`, from `kernel/ClawBench` PR #1. The generated task:
+
+- exposes `get_connection_context`, `execute_playwright_code`, and `computer_action`
+- disables browser lifecycle and managed-auth toolsets
+- instructs the agent to read `./my-info/kernel_browser.json` and use that session ID
+- instructs account tasks to use the supplied PurelyMail credentials instead of managed auth
+- verifies ATIF observations, project scope, exact session reuse, ClawBench interception, replay finalization, and browser deletion
+
+Outputs use the normal Harbor job directory and add `kernel-mcp-control-result.json`, Kernel MCP logs, source manifests, and same-session metrics to the ClawBench verifier artifacts.

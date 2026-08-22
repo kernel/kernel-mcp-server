@@ -83,6 +83,37 @@ describe("MCP Apps additive registration", () => {
   });
 });
 
+describe("MCP toolset allowlist", () => {
+  test("keeps connection context and only the selected browser controls", () => {
+    const previousEnabled = process.env.KERNEL_MCP_ENABLED_TOOLSETS;
+    const previousDisabled = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+    process.env.KERNEL_MCP_ENABLED_TOOLSETS =
+      "execute_playwright_code computer_action";
+    delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+    try {
+      const registration = captureRegistration(false);
+      expect(registration.legacyTools).toEqual([
+        "get_connection_context",
+        "computer_action",
+        "execute_playwright_code",
+      ]);
+      expect(registration.appTools).toEqual([]);
+      expect(registration.resources).toEqual([]);
+    } finally {
+      if (previousEnabled === undefined) {
+        delete process.env.KERNEL_MCP_ENABLED_TOOLSETS;
+      } else {
+        process.env.KERNEL_MCP_ENABLED_TOOLSETS = previousEnabled;
+      }
+      if (previousDisabled === undefined) {
+        delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+      } else {
+        process.env.KERNEL_MCP_DISABLED_TOOLSETS = previousDisabled;
+      }
+    }
+  });
+});
+
 describe("project selection registration", () => {
   const projectScopedTools = [
     "manage_profiles",
