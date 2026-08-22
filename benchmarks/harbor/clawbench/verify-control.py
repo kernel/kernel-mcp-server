@@ -102,6 +102,7 @@ def validate_control(
     *,
     expected_session_id: str,
     expected_project_id: str,
+    allowed_missing_observation_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     trajectory = trajectory or {}
     calls = _calls(trajectory)
@@ -154,10 +155,14 @@ def validate_control(
         elif call.get("function_name") in BROWSER_TOOLS:
             successful_browser_calls += 1
 
+    allowed_missing = allowed_missing_observation_ids or set()
+    unexpected_missing_observations = [
+        call_id for call_id in missing_observations if call_id not in allowed_missing
+    ]
     observations_valid = (
         successful_context_calls > 0
         and successful_browser_calls > 0
-        and not (missing_observations or duplicate_observations)
+        and not (unexpected_missing_observations or duplicate_observations)
     )
     direct_http_patterns = re.compile(
         r"\bfetch\s*\(|\bXMLHttpRequest\b|\b(?:page|context)\.request\b|\brequest\.(?:get|post|put|patch|delete)\s*\(",
@@ -180,6 +185,10 @@ def validate_control(
         "no_forbidden_kernel_tools": not forbidden_calls,
         "no_direct_http_automation": not direct_http_calls,
         "missing_observations": missing_observations,
+        "expected_interrupted_observations": [
+            call_id for call_id in missing_observations if call_id in allowed_missing
+        ],
+        "unexpected_missing_observations": unexpected_missing_observations,
         "duplicate_observations": duplicate_observations,
         "error_observations": error_observations,
         "direct_http_calls": [call.get("tool_call_id") for call in direct_http_calls],
@@ -201,15 +210,33 @@ def main() -> int:
     lifecycle = read_json(Path("/data/kernel-browser-lifecycle.json"))
     manifest = read_json(LOGS_DIR / "kernel-mcp" / "run-manifest.json")
     clawbench_result = read_json(VERIFIER_DIR / "clawbench-result.json")
+    interception = read_json(Path("/data/interception.json"))
+    agent_stop = read_json(Path("/data/agent-stop.json"))
     reward_path = VERIFIER_DIR / "reward.json"
     reward_metrics = read_json(reward_path) or {}
 
     session_id = str((browser or {}).get("session_id") or "")
     expected_project_id = os.environ.get("KERNEL_MCP_EXPECTED_PROJECT_ID", "")
+    all_calls = _calls(trajectory or {})
+    browser_calls = [call for call in all_calls if call.get("function_name") in BROWSER_TOOLS]
+    terminal_call_id = browser_calls[-1].get("tool_call_id") if browser_calls else None
+    stop_detected_at = (agent_stop or {}).get("stop_detected_at")
+    intercepted_at = (interception or {}).get("intercepted_at")
+    stopped_after_interception = bool(
+        isinstance(stop_detected_at, (int, float))
+        and isinstance(intercepted_at, (int, float))
+        and 0 <= stop_detected_at - intercepted_at <= 5
+    )
+    allowed_missing = (
+        {terminal_call_id}
+        if stopped_after_interception and isinstance(terminal_call_id, str)
+        else set()
+    )
     atif = validate_control(
         trajectory,
         expected_session_id=session_id,
         expected_project_id=expected_project_id,
+        allowed_missing_observation_ids=allowed_missing,
     )
     checks = {
         "kernel_mcp_context": atif["context_called"],
@@ -242,6 +269,7 @@ def main() -> int:
             reward_metrics.get("intercepted") == 1
             or (clawbench_result or {}).get("intercepted") is True
         ),
+        "agent_stopped_after_interception": stopped_after_interception,
     }
     infra_ok = all(value for name, value in checks.items() if name != "clawbench_intercepted")
     checks["infra_ok"] = infra_ok
@@ -256,6 +284,11 @@ def main() -> int:
         "run_manifest": manifest,
         "browser_lifecycle": lifecycle,
         "clawbench_result": clawbench_result,
+        "interception": interception,
+        "agent_stop": agent_stop,
+        "stop_latency_seconds": (
+            stop_detected_at - intercepted_at if stopped_after_interception else None
+        ),
     }
     (VERIFIER_DIR / "kernel-mcp-control-result.json").write_text(json.dumps(result, indent=2))
     return 0
