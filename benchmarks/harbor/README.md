@@ -65,7 +65,7 @@ export CLAWBENCH_REPO=../ClawBench
   v2-1134-chapter-finder-redcross
 ```
 
-The ClawBench checkout must contain commit `bf6d1ff`, from `kernel/ClawBench` PR #1. The generated task:
+The ClawBench checkout must contain commit `4f39b26`, from `kernel/ClawBench` PR #1. The generated task:
 
 - exposes `get_connection_context`, `execute_playwright_code`, and `computer_action`
 - disables browser lifecycle and managed-auth toolsets
