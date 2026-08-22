@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -121,7 +122,13 @@ def validate_control(
     duplicate_observations: list[Any] = []
     error_observations: list[Any] = []
     context_scope_valid = bool(expected_project_id)
-    same_session = bool(expected_session_id and browser_calls)
+    same_session = bool(expected_session_id and browser_calls) and all(
+        isinstance(call.get("arguments"), dict)
+        and call["arguments"].get("session_id") == expected_session_id
+        for call in browser_calls
+    )
+    successful_context_calls = 0
+    successful_browser_calls = 0
 
     for call in context_calls + browser_calls:
         call_id = call.get("tool_call_id")
@@ -143,16 +150,26 @@ def validate_control(
                 and scope.get("kind") == "project"
                 and scope.get("project_id") == expected_project_id
             )
+            successful_context_calls += 1
         elif call.get("function_name") in BROWSER_TOOLS:
-            arguments = call.get("arguments")
-            same_session = same_session and (
-                isinstance(arguments, dict)
-                and arguments.get("session_id") == expected_session_id
-            )
+            successful_browser_calls += 1
 
-    observations_valid = bool(context_calls and browser_calls) and not (
-        missing_observations or duplicate_observations or error_observations
+    observations_valid = (
+        successful_context_calls > 0
+        and successful_browser_calls > 0
+        and not (missing_observations or duplicate_observations)
     )
+    direct_http_patterns = re.compile(
+        r"\bfetch\s*\(|\bXMLHttpRequest\b|\b(?:page|context)\.request\b|\brequest\.(?:get|post|put|patch|delete)\s*\(",
+        re.IGNORECASE,
+    )
+    direct_http_calls = [
+        call
+        for call in browser_calls
+        if call.get("function_name") == "mcp__kernel__execute_playwright_code"
+        and isinstance(call.get("arguments"), dict)
+        and direct_http_patterns.search(str(call["arguments"].get("code", "")))
+    ]
     return {
         "context_called": bool(context_calls),
         "browser_control_called": bool(browser_calls),
@@ -161,9 +178,11 @@ def validate_control(
         "same_session": same_session,
         "no_playwright_mcp": not playwright_calls,
         "no_forbidden_kernel_tools": not forbidden_calls,
+        "no_direct_http_automation": not direct_http_calls,
         "missing_observations": missing_observations,
         "duplicate_observations": duplicate_observations,
         "error_observations": error_observations,
+        "direct_http_calls": [call.get("tool_call_id") for call in direct_http_calls],
         "kernel_tool_calls": [
             {
                 "tool_call_id": call.get("tool_call_id"),
@@ -200,6 +219,7 @@ def main() -> int:
         "kernel_mcp_same_session": atif["same_session"],
         "no_playwright_mcp": atif["no_playwright_mcp"],
         "no_forbidden_kernel_tools": atif["no_forbidden_kernel_tools"],
+        "no_direct_http_automation": atif["no_direct_http_automation"],
         "kernel_mcp_source_sha": bool(
             manifest
             and manifest.get("kernel_mcp_server_sha") == os.environ.get("KERNEL_MCP_SOURCE_SHA")
