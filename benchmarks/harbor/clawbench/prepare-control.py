@@ -42,7 +42,7 @@ def _add_environment(task_toml: str, *, image: str, server_sha: str, clawbench_s
                     f"CLAWBENCH_SOURCE_SHA = {json.dumps(clawbench_sha)}",
                     f"KERNEL_MCP_ENABLED_TOOLSETS = {json.dumps(ENABLED_TOOLSETS)}",
                     'KERNEL_MCP_EXPECTED_PROJECT_ID = "${KERNEL_MCP_BENCHMARK_PROJECT_ID}"',
-                    'KERNEL_API_BASE_URL = "${KERNEL_API_BASE_URL:-}"',
+                    'API_BASE_URL = "${KERNEL_API_BASE_URL:-}"',
                     'REDIS_URL = "redis://127.0.0.1:6379"',
                 ]
             )
