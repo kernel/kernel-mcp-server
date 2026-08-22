@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+key_file=/run/kernel-mcp-benchmark/api-key
+if [ -z "${KERNEL_API_KEY:-}" ] && [ -r "$key_file" ]; then
+  KERNEL_API_KEY=$(cat "$key_file")
+  export KERNEL_API_KEY
+fi
+: "${KERNEL_API_KEY:?KERNEL_API_KEY is required}"
+
+exec mcp-remote \
+  http://127.0.0.1:3002/mcp \
+  --header "Authorization: Bearer ${KERNEL_API_KEY}"

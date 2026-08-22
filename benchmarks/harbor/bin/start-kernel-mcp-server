@@ -1,0 +1,71 @@
+#!/bin/bash
+set -euo pipefail
+
+: "${KERNEL_API_KEY:?KERNEL_API_KEY is required}"
+
+log_dir=/logs/kernel-mcp
+key_dir=/run/kernel-mcp-benchmark
+mkdir -p "$log_dir" /logs/artifacts "$key_dir"
+chmod 0777 "$log_dir" /logs/artifacts
+chmod 0700 "$key_dir"
+printf '%s' "$KERNEL_API_KEY" >"$key_dir/api-key"
+chmod 0600 "$key_dir/api-key"
+
+redis-server --daemonize yes --bind 127.0.0.1 --port 6379 \
+  --logfile "$log_dir/redis.log" --dir /tmp
+
+export CLERK_SECRET_KEY=${CLERK_SECRET_KEY:-sk_test_kernel_mcp_benchmark_local_only}
+export NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:-pk_test_YmVuY2htYXJrLmNsZXJrLmFjY291bnRzLmRldiQ}
+
+cd /opt/kernel-mcp-server
+nohup ./node_modules/.bin/next start -p 3002 \
+  >"$log_dir/server.stdout.log" \
+  2>"$log_dir/server.stderr.log" &
+echo $! >"$log_dir/server.pid"
+
+for _ in $(seq 1 90); do
+  if curl -fsS -X POST http://127.0.0.1:3002/mcp \
+    -H "Authorization: Bearer ${KERNEL_API_KEY}" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
+    --data '{"jsonrpc":"2.0","id":"benchmark-healthcheck","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"harbor-healthcheck","version":"1.0.0"}}}' \
+    >"$log_dir/initialize-response.txt"; then
+    break
+  fi
+  sleep 1
+done
+
+if [ ! -s "$log_dir/initialize-response.txt" ]; then
+  echo "Kernel MCP server did not become ready" >&2
+  tail -100 "$log_dir/server.stderr.log" >&2 || true
+  exit 1
+fi
+
+python3 - <<'PY'
+import json
+import os
+import platform
+from datetime import datetime, timezone
+from pathlib import Path
+
+browser_path = Path("/my-info/kernel_browser.json")
+try:
+    browser = json.loads(browser_path.read_text())
+except (OSError, json.JSONDecodeError):
+    browser = {}
+
+manifest = {
+    "kernel_mcp_server_sha": Path("/opt/kernel-mcp-server/SOURCE_SHA").read_text().strip(),
+    "clawbench_source_sha": os.environ.get("CLAWBENCH_SOURCE_SHA", ""),
+    "browser_session_id": browser.get("session_id"),
+    "enabled_toolsets": os.environ.get("KERNEL_MCP_ENABLED_TOOLSETS", ""),
+    "disabled_toolsets": os.environ.get("KERNEL_MCP_DISABLED_TOOLSETS", ""),
+    "image": os.environ.get("KERNEL_MCP_BENCHMARK_IMAGE", ""),
+    "hypeman_instance_name": os.environ.get("HYPEMAN_INSTANCE_NAME", ""),
+    "sandbox_hostname": platform.node(),
+    "started_at": datetime.now(timezone.utc).isoformat(),
+}
+Path("/logs/kernel-mcp/run-manifest.json").write_text(json.dumps(manifest, indent=2))
+PY
+
+printf 'ready\n' >"$log_dir/ready"
