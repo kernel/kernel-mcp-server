@@ -271,7 +271,11 @@ def main() -> int:
         ),
         "agent_stopped_after_interception": stopped_after_interception,
     }
-    infra_ok = all(value for name, value in checks.items() if name != "clawbench_intercepted")
+    infra_ok = all(
+        value
+        for name, value in checks.items()
+        if name not in {"clawbench_intercepted", "agent_stopped_after_interception"}
+    )
     checks["infra_ok"] = infra_ok
 
     reward_metrics.update({name: float(value) for name, value in checks.items()})
