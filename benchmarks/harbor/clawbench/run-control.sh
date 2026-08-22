@@ -73,7 +73,7 @@ uv --directory "$clawbench_repo" run clawbench-harbor-adapt \
   --output-dir "$dataset" \
   --task-ids "$task_id" \
   --browser-runtime kernel \
-  --browser-runtime-options '{"stealth": false}' \
+  --browser-runtime-options '{"stealth": true}' \
   --overwrite
 
 task_dir=$(find "$dataset" -mindepth 1 -maxdepth 1 -type d | head -1)
