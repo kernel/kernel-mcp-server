@@ -91,6 +91,7 @@ args = ["-y", "@playwright/mcp@0.0.79"]
             self.assertIn("Use only Kernel MCP browser-control tools", instruction)
             self.assertIn("PurelyMail-backed credentials", instruction)
             self.assertIn("Do not use Kernel managed auth", instruction)
+            self.assertIn("Do not call `fetch`", instruction)
             self.assertTrue((environment / "harbor" / "verify-kernel-mcp-control.py").is_file())
 
 
@@ -149,6 +150,7 @@ class VerifyControlTest(unittest.TestCase):
             "same_session",
             "no_playwright_mcp",
             "no_forbidden_kernel_tools",
+            "no_direct_http_automation",
         ):
             self.assertTrue(result[key], key)
 
@@ -159,6 +161,18 @@ class VerifyControlTest(unittest.TestCase):
             expected_project_id="project-123",
         )
         self.assertFalse(result["same_session"])
+
+    def test_rejects_direct_http_inside_playwright_code(self) -> None:
+        trajectory = self.trajectory()
+        trajectory["steps"][0]["tool_calls"][1]["arguments"]["code"] = (
+            "return await page.evaluate(() => fetch('/api'))"
+        )
+        result = verify.validate_control(
+            trajectory,
+            expected_session_id="session-123",
+            expected_project_id="project-123",
+        )
+        self.assertFalse(result["no_direct_http_automation"])
 
     def test_rejects_playwright_mcp_and_lifecycle_tools(self) -> None:
         trajectory = self.trajectory()
