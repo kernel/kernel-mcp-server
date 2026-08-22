@@ -8,6 +8,6 @@ if [ -z "${KERNEL_API_KEY:-}" ] && [ -r "$key_file" ]; then
 fi
 : "${KERNEL_API_KEY:?KERNEL_API_KEY is required}"
 
-exec npx -y mcp-remote@0.1.38 \
+exec mcp-remote \
   http://127.0.0.1:3002/mcp \
   --header "Authorization: Bearer ${KERNEL_API_KEY}"

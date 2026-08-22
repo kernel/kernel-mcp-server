@@ -10,7 +10,7 @@ RUN apt-get update \
         python3 \
         redis-server \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install --global bun@1.3.3
+    && npm install --global bun@1.3.3 mcp-remote@0.1.38
 
 COPY --from=ghcr.io/astral-sh/uv:0.11.6 /uv /usr/local/bin/uv
 
