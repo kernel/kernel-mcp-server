@@ -31,7 +31,7 @@ export function registerPlaywrightTool(
       code: z
         .string()
         .describe(
-          "Playwright/TypeScript code with `page`, `context`, and `browser` objects in scope; the value you `return` is sent back. Example: `await page.goto('https://example.com'); return await page.title();` Return only what you need — prefer a targeted selector (e.g. `await page.locator('h1').innerText()`) or a region-scoped snapshot (e.g. `await page.locator('main').ariaSnapshot()`) rather than dumping the whole page.",
+          "Playwright/TypeScript code with `page`, `context`, and `browser` objects in scope; the value you `return` is sent back. Every invocation should return useful page state. After navigation or interaction, return a condensed accessibility snapshot of the relevant region, e.g. `await page.goto('https://example.com'); return await page.locator('main').ariaSnapshot();` or `await page.getByRole('button', { name: 'Submit' }).click(); return await page.locator('main').ariaSnapshot();`. For targeted reads, return a compact value or object. Do not dump the full DOM or body text.",
         ),
       session_id: z
         .string()
