@@ -63,6 +63,7 @@ kernel mcp install --target <target>
 | Windsurf       | `kernel mcp install --target windsurf`    |
 | Zed            | `kernel mcp install --target zed`         |
 | Goose          | `kernel mcp install --target goose`       |
+| fx             | `kernel mcp install --target fx`          |
 
 The CLI automatically locates your tool's config file and adds the Kernel MCP server configuration.
 
@@ -141,7 +142,13 @@ opencode mcp auth kernel
 
 ### fx
 
-Add Kernel to the `mcp` map in `~/.fx/mcp.json`:
+Configure Kernel with the Kernel CLI:
+
+```bash
+kernel mcp install --target fx
+```
+
+Or add Kernel to the `mcp` map in `~/.fx/mcp.json` manually:
 
 ```json
 {
@@ -155,10 +162,15 @@ Add Kernel to the `mcp` map in `~/.fx/mcp.json`:
 }
 ```
 
-In an interactive fx session, reload the configuration and authenticate with Kernel:
+Start fx, or reload the configuration in an existing session:
 
 ```text
 /mcp reload
+```
+
+Then authenticate with Kernel:
+
+```text
 /mcp auth kernel --open
 ```
 
