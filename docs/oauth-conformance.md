@@ -18,7 +18,7 @@ Sources:
 - [Create a connector API](https://vercel.com/docs/rest-api/connect/create-a-connector)
 - [`connectAuthProvider` implementation](https://github.com/vercel/vercel/blob/17d9ebaf8e9b335d550dea1a243743a74edc772e/packages/connect/src/mcp/connect-auth-provider.ts)
 
-The fixture uses a public client (`token_endpoint_auth_method=none`), authorization code plus refresh grants, `openid`, and S256 PKCE. Kernel preserves `state` exactly through its authorization redirect; Vercel Connect owns mismatch detection when handling its callback.
+The fixture uses a public client (`token_endpoint_auth_method=none`), authorization code plus refresh grants, the `mcp` resource scope, RFC 8707 resource binding, and S256 PKCE. Kernel restores the client's exact `state` after the upstream identity callback and returns its public issuer as required by RFC 9207.
 
 ## Covered behavior
 

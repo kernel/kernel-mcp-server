@@ -6,6 +6,10 @@ import {
   parseAuthorizationContext,
   serializeAuthorizationContext,
 } from "@/lib/oauth-context";
+import {
+  openOAuthProviderToken,
+  sealOAuthProviderToken,
+} from "@/lib/oauth-tokens";
 
 const redisUrl = process.env.REDIS_URL;
 const redisTlsServerName = process.env.REDIS_TLS_SERVER_NAME;
@@ -120,24 +124,93 @@ function authorizationRequestKey(
   return `oauth-request:${hashOpaqueToken(`${clientId}:${codeChallenge}`)}`;
 }
 
+function authorizationRequestResourceKey(
+  clientId: string,
+  codeChallenge: string,
+): string {
+  return `oauth-request-resource:${hashOpaqueToken(`${clientId}:${codeChallenge}`)}`;
+}
+
+function oauthClientRegistrationKey(clientId: string): string {
+  return `oauth-client:${hashOpaqueToken(clientId)}`;
+}
+
+function oauthAccessTokenKey(accessToken: string): string {
+  return `oauth-access:${hashOpaqueToken(accessToken)}`;
+}
+
+function oauthProviderRefreshTokenKey(refreshToken: string): string {
+  return `oauth-provider-refresh:${hashOpaqueToken(refreshToken)}`;
+}
+
+export async function setOAuthClientRedirectUris({
+  clientId,
+  redirectUris,
+}: {
+  clientId: string;
+  redirectUris: string[];
+}): Promise<void> {
+  await ensureConnected();
+  await withReconnect(() =>
+    client.set(
+      oauthClientRegistrationKey(clientId),
+      JSON.stringify({ redirect_uris: redirectUris }),
+    ),
+  );
+}
+
+export async function getOAuthClientRedirectUris(
+  clientId: string,
+): Promise<string[] | null> {
+  await ensureConnected();
+  const value = await withReconnect(() =>
+    client.get(oauthClientRegistrationKey(clientId)),
+  );
+  if (!value) return null;
+
+  try {
+    const parsed = JSON.parse(value) as { redirect_uris?: unknown };
+    if (
+      !Array.isArray(parsed.redirect_uris) ||
+      !parsed.redirect_uris.every((uri) => typeof uri === "string")
+    ) {
+      throw new Error("Invalid OAuth client registration");
+    }
+    return parsed.redirect_uris;
+  } catch (error) {
+    console.error("Invalid OAuth client registration in Redis", { error });
+    throw error;
+  }
+}
+
 export async function setAuthorizationContextForRequest({
   clientId,
   codeChallenge,
   authorizationContext,
+  resource,
   ttlSeconds,
 }: {
   clientId: string;
   codeChallenge: string;
   authorizationContext: OAuthAuthorizationContext;
+  resource: string;
   ttlSeconds: number;
 }): Promise<void> {
   await ensureConnected();
   await withReconnect(() =>
-    client.setEx(
-      authorizationRequestKey(clientId, codeChallenge),
-      ttlSeconds,
-      serializeAuthorizationContext(authorizationContext),
-    ),
+    client
+      .multi()
+      .setEx(
+        authorizationRequestKey(clientId, codeChallenge),
+        ttlSeconds,
+        serializeAuthorizationContext(authorizationContext),
+      )
+      .setEx(
+        authorizationRequestResourceKey(clientId, codeChallenge),
+        ttlSeconds,
+        resource,
+      )
+      .exec(),
   );
 }
 
@@ -153,6 +226,19 @@ export async function getAuthorizationContextForRequest({
     client.get(authorizationRequestKey(clientId, codeChallenge)),
   );
   return value ? parseAuthorizationContext(value) : null;
+}
+
+export async function getAuthorizationResourceForRequest({
+  clientId,
+  codeChallenge,
+}: {
+  clientId: string;
+  codeChallenge: string;
+}): Promise<string | null> {
+  await ensureConnected();
+  return await withReconnect(() =>
+    client.get(authorizationRequestResourceKey(clientId, codeChallenge)),
+  );
 }
 
 export async function setAuthorizationContextForClientId({
@@ -258,47 +344,107 @@ export async function getAuthorizationContextForRefreshTokenSliding({
   return value ? parseAuthorizationContext(value) : null;
 }
 
+export interface OAuthAccessTokenSession {
+  providerJwt: string;
+  resource: string;
+}
+
+export async function getOAuthAccessTokenSession(
+  accessToken: string,
+): Promise<OAuthAccessTokenSession | null> {
+  await ensureConnected();
+  const value = await withReconnect(() =>
+    client.get(oauthAccessTokenKey(accessToken)),
+  );
+  if (!value) return null;
+  const parsed = JSON.parse(
+    openOAuthProviderToken(value),
+  ) as Partial<OAuthAccessTokenSession>;
+  if (!parsed.providerJwt || !parsed.resource) {
+    throw new Error("Invalid OAuth access token session");
+  }
+  return { providerJwt: parsed.providerJwt, resource: parsed.resource };
+}
+
+export async function getOAuthProviderRefreshToken(
+  refreshToken: string,
+): Promise<string | null> {
+  await ensureConnected();
+  const value = await withReconnect(() =>
+    client.get(oauthProviderRefreshTokenKey(refreshToken)),
+  );
+  return value ? openOAuthProviderToken(value) : null;
+}
+
 export async function persistOAuthTokenContexts({
-  jwt,
-  newRefreshToken,
-  oldRefreshToken,
+  providerJwt,
+  publicAccessToken,
+  providerRefreshToken,
+  publicRefreshToken,
+  oldPublicRefreshToken,
   authorizationContext,
-  jwtTtlSeconds,
+  resource,
+  accessTokenTtlSeconds,
   refreshTtlSeconds,
   consumedRequest,
 }: {
-  jwt: string;
-  newRefreshToken: string;
-  oldRefreshToken?: string;
+  providerJwt: string;
+  publicAccessToken: string;
+  providerRefreshToken: string;
+  publicRefreshToken: string;
+  oldPublicRefreshToken?: string;
   authorizationContext: OAuthAuthorizationContext;
-  jwtTtlSeconds: number;
+  resource: string;
+  accessTokenTtlSeconds: number;
   refreshTtlSeconds: number;
   consumedRequest?: { clientId: string; codeChallenge: string };
 }): Promise<void> {
   await ensureConnected();
-  const jwtKey = `jwt:${hashJwt(jwt)}`;
-  const newRefreshKey = `refresh:${hashOpaqueToken(newRefreshToken)}`;
-  const oldRefreshKey = oldRefreshToken
-    ? `refresh:${hashOpaqueToken(oldRefreshToken)}`
+  const jwtKey = `jwt:${hashJwt(providerJwt)}`;
+  const accessKey = oauthAccessTokenKey(publicAccessToken);
+  const newRefreshKey = `refresh:${hashOpaqueToken(publicRefreshToken)}`;
+  const providerRefreshKey = oauthProviderRefreshTokenKey(publicRefreshToken);
+  const oldRefreshKey = oldPublicRefreshToken
+    ? `refresh:${hashOpaqueToken(oldPublicRefreshToken)}`
+    : undefined;
+  const oldProviderRefreshKey = oldPublicRefreshToken
+    ? oauthProviderRefreshTokenKey(oldPublicRefreshToken)
     : undefined;
   const value = serializeAuthorizationContext(authorizationContext);
 
   await withReconnect(async () => {
     const transaction = client
       .multi()
-      .setEx(jwtKey, jwtTtlSeconds, value)
-      .setEx(newRefreshKey, refreshTtlSeconds, value);
+      .setEx(jwtKey, accessTokenTtlSeconds, value)
+      .setEx(
+        accessKey,
+        accessTokenTtlSeconds,
+        sealOAuthProviderToken(JSON.stringify({ providerJwt, resource })),
+      )
+      .setEx(newRefreshKey, refreshTtlSeconds, value)
+      .setEx(
+        providerRefreshKey,
+        refreshTtlSeconds,
+        sealOAuthProviderToken(providerRefreshToken),
+      );
 
     if (oldRefreshKey && oldRefreshKey !== newRefreshKey) {
       transaction.del(oldRefreshKey);
     }
+    if (oldProviderRefreshKey && oldProviderRefreshKey !== providerRefreshKey) {
+      transaction.del(oldProviderRefreshKey);
+    }
     if (consumedRequest) {
-      transaction.del(
+      transaction.del([
         authorizationRequestKey(
           consumedRequest.clientId,
           consumedRequest.codeChallenge,
         ),
-      );
+        authorizationRequestResourceKey(
+          consumedRequest.clientId,
+          consumedRequest.codeChallenge,
+        ),
+      ]);
     }
 
     await transaction.exec();

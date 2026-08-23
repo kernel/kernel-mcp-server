@@ -9,6 +9,6 @@ defineOAuthClientConformance({
   tokenEndpointAuthMethod: "none",
   grantTypes: ["authorization_code", "refresh_token"],
   responseTypes: ["code"],
-  scope: "openid",
+  scope: "mcp",
   codeChallengeMethod: "S256",
 });

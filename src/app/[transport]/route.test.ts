@@ -29,11 +29,11 @@ mock.module("@/lib/mcp/analytics", () => ({
 const originalCreateKernelClient = defaultMcpDependencies.createKernelClient;
 const { POST, connectionScopeFailureResponse } = await import("./route");
 
-function initializeRequest(token = "sk_opaque_key") {
+function initializeRequest(token: string | null = "sk_opaque_key") {
   return new Request("https://mcp.example.test/sse", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
     },
@@ -72,6 +72,15 @@ afterEach(() => {
 });
 
 describe("connection scope failures through the handler", () => {
+  test("advertises protected-resource metadata in the initial challenge", async () => {
+    const response = await POST(initializeRequest(null));
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get("WWW-Authenticate")).toContain(
+      'resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource/mcp"',
+    );
+  });
+
   test("answers a refused credential with 401 rather than a server error", async () => {
     failingAuthContext(Object.assign(new Error("revoked"), { status: 401 }));
 

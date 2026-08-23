@@ -3,6 +3,7 @@ import {
   getAuthorizationContextForClientId,
   getAuthorizationContextForRefreshTokenSliding,
   getAuthorizationContextForRequest,
+  getAuthorizationResourceForRequest,
 } from "./redis";
 import { isLegacyNonPkceClient, REFRESH_TOKEN_ORG_TTL_SECONDS } from "./const";
 import {
@@ -31,12 +32,14 @@ function createErrorResponse(
 
 export interface AuthorizationContextDependencies {
   getRequestContext: typeof getAuthorizationContextForRequest;
+  getRequestResource: typeof getAuthorizationResourceForRequest;
   getClientContext: typeof getAuthorizationContextForClientId;
   getRefreshContext: typeof getAuthorizationContextForRefreshTokenSliding;
 }
 
 const authorizationContextDependencies: AuthorizationContextDependencies = {
   getRequestContext: getAuthorizationContextForRequest,
+  getRequestResource: getAuthorizationResourceForRequest,
   getClientContext: getAuthorizationContextForClientId,
   getRefreshContext: getAuthorizationContextForRefreshTokenSliding,
 };
@@ -44,6 +47,7 @@ const authorizationContextDependencies: AuthorizationContextDependencies = {
 export interface ResolvedAuthorizationContext {
   authorizationContext: OAuthAuthorizationContext | null;
   requestCodeChallenge?: string;
+  requestResource?: string;
   error?: NextResponse;
 }
 
@@ -65,14 +69,15 @@ export async function resolveAuthorizationContext(
     if (codeVerifier) {
       const codeChallenge = deriveS256CodeChallenge(codeVerifier);
       try {
-        const authorizationContext = await dependencies.getRequestContext({
-          clientId,
-          codeChallenge,
-        });
+        const [authorizationContext, requestResource] = await Promise.all([
+          dependencies.getRequestContext({ clientId, codeChallenge }),
+          dependencies.getRequestResource({ clientId, codeChallenge }),
+        ]);
         if (authorizationContext) {
           return {
             authorizationContext,
             requestCodeChallenge: codeChallenge,
+            ...(requestResource ? { requestResource } : {}),
           };
         }
         return {

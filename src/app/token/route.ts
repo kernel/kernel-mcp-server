@@ -1,6 +1,10 @@
 import { clerkClient, verifyToken } from "@clerk/nextjs/server";
 import { after, NextRequest, NextResponse } from "next/server";
-import { persistOAuthTokenContexts } from "@/lib/redis";
+import {
+  getOAuthClientRedirectUris,
+  getOAuthProviderRefreshToken,
+  persistOAuthTokenContexts,
+} from "@/lib/redis";
 import { resolveAuthorizationContext } from "@/lib/org-utils";
 import { REFRESH_TOKEN_ORG_TTL_SECONDS } from "@/lib/const";
 import { normalizeLocalhostUri } from "@/lib/auth-utils";
@@ -9,11 +13,24 @@ import {
   flushMcpAnalytics,
   type OAuthTokenExchangeAnalytics,
 } from "@/lib/mcp/analytics";
+import { oauthProxyCallbackUrl } from "@/lib/oauth-proxy";
+import { resolveOAuthResource } from "@/lib/oauth-resource";
+import {
+  isKernelOAuthRefreshToken,
+  issueKernelOAuthTokens,
+} from "@/lib/oauth-tokens";
+import {
+  CLERK_OAUTH_SCOPE,
+  validatePublicOAuthScope,
+} from "@/lib/oauth-scopes";
+import { isMcpAuthorizationServer } from "@/lib/oauth-server";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Cache-Control": "no-store",
+  Pragma: "no-cache",
 };
 
 interface ClerkTokenResponse {
@@ -111,6 +128,12 @@ export interface TokenDependencies {
     options: { secretKey?: string },
   ) => Promise<{ sub?: string }>;
   hasMembership: typeof hasOrganizationMembership;
+  getRedirectUris: (input: {
+    clientId: string;
+    issuer: string;
+  }) => Promise<string[] | null>;
+  getProviderRefreshToken: typeof getOAuthProviderRefreshToken;
+  issueTokens: typeof issueKernelOAuthTokens;
   persistContexts: typeof persistOAuthTokenContexts;
   recordExchange?: (exchange: OAuthTokenExchangeAnalytics) => void;
 }
@@ -120,6 +143,9 @@ const tokenDependencies: TokenDependencies = {
   resolveContext: resolveAuthorizationContext,
   verify: verifyToken,
   hasMembership: hasOrganizationMembership,
+  getRedirectUris: async ({ clientId }) => getOAuthClientRedirectUris(clientId),
+  getProviderRefreshToken: getOAuthProviderRefreshToken,
+  issueTokens: issueKernelOAuthTokens,
   persistContexts: persistOAuthTokenContexts,
   recordExchange: captureOAuthTokenExchange,
 };
@@ -166,6 +192,9 @@ export async function tokenRequest(
   dependencies: TokenDependencies = tokenDependencies,
 ): Promise<NextResponse> {
   const startedAt = Date.now();
+  const mcpAuthorizationServer = isMcpAuthorizationServer(
+    request.nextUrl.origin,
+  );
   let grantTypeForAnalytics: OAuthTokenExchangeAnalytics["grantType"] =
     "unknown";
   let clientTypeForAnalytics: OAuthTokenExchangeAnalytics["clientType"] =
@@ -233,7 +262,61 @@ export async function tokenRequest(
     return fail("invalid_request", "Missing required parameter: client_id");
   }
 
+  const requestedScope = body.get("scope")?.toString();
+  if (mcpAuthorizationServer) {
+    try {
+      validatePublicOAuthScope(requestedScope);
+    } catch {
+      return fail("invalid_request", "Unsupported OAuth scope");
+    }
+    if (requestedScope) params.set("scope", CLERK_OAUTH_SCOPE);
+  }
+
   const refreshToken = body.get("refresh_token")?.toString();
+  let resource = request.nextUrl.origin;
+  if (mcpAuthorizationServer) {
+    try {
+      resource = resolveOAuthResource({
+        requestedResource: body.get("resource")?.toString(),
+        issuer: request.nextUrl.origin,
+      });
+    } catch (error) {
+      return fail(
+        "invalid_request",
+        error instanceof Error ? error.message : "Invalid OAuth resource",
+      );
+    }
+  }
+
+  let registeredRedirectUris: string[] | null = null;
+  if (mcpAuthorizationServer && grantType === "authorization_code") {
+    try {
+      registeredRedirectUris = await dependencies.getRedirectUris({
+        clientId,
+        issuer: request.nextUrl.origin,
+      });
+    } catch (error) {
+      console.error("[token] failed to load OAuth client registration", {
+        error,
+      });
+      return fail("server_error", "Failed to validate OAuth client", 500);
+    }
+  }
+  if (registeredRedirectUris) {
+    const redirectUri = body.get("redirect_uri")?.toString();
+    if (
+      !redirectUri ||
+      (!registeredRedirectUris.includes(redirectUri) &&
+        !registeredRedirectUris.includes(normalizeLocalhostUri(redirectUri)))
+    ) {
+      return fail(
+        "invalid_request",
+        "redirect_uri is not registered for this client",
+      );
+    }
+    params.set("redirect_uri", oauthProxyCallbackUrl(request.nextUrl.origin));
+  }
+
   stage = "context_resolution";
   const contextResult = await dependencies.resolveContext({
     grantType,
@@ -255,6 +338,16 @@ export async function tokenRequest(
     );
   }
   accessScopeForAnalytics = authorizationContext.access_scope;
+  if (
+    mcpAuthorizationServer &&
+    contextResult.requestResource &&
+    contextResult.requestResource !== resource
+  ) {
+    return fail(
+      "invalid_grant",
+      "Token resource does not match the authorization request",
+    );
+  }
 
   let persistedAuthorizationContext = authorizationContext;
 
@@ -272,6 +365,20 @@ export async function tokenRequest(
       : undefined;
 
   try {
+    if (
+      mcpAuthorizationServer &&
+      grantType === "refresh_token" &&
+      refreshToken &&
+      isKernelOAuthRefreshToken(refreshToken)
+    ) {
+      const providerRefreshToken =
+        await dependencies.getProviderRefreshToken(refreshToken);
+      if (!providerRefreshToken) {
+        return fail("invalid_grant", "Refresh token is invalid or expired");
+      }
+      params.set("refresh_token", providerRefreshToken);
+    }
+
     stage = "membership_validation";
     if (
       refreshContextUserId &&
@@ -362,8 +469,8 @@ export async function tokenRequest(
     }
 
     stage = "provider_response_validation";
-    const issuedRefreshToken = clerkTokens.refresh_token;
-    if (!issuedRefreshToken) {
+    const issuedProviderRefreshToken = clerkTokens.refresh_token;
+    if (!issuedProviderRefreshToken) {
       return fail(
         "invalid_grant",
         grantType === "refresh_token"
@@ -371,7 +478,7 @@ export async function tokenRequest(
           : "OAuth provider did not return a refresh token",
       );
     }
-    const finalJwt = clerkTokens.id_token;
+    const providerJwt = clerkTokens.id_token;
     if (grantType === "refresh_token" && !refreshToken) {
       return fail("invalid_grant", "Missing required parameter: refresh_token");
     }
@@ -382,15 +489,24 @@ export async function tokenRequest(
       );
     }
 
+    const issuedTokens = mcpAuthorizationServer
+      ? dependencies.issueTokens()
+      : {
+          accessToken: providerJwt,
+          refreshToken: issuedProviderRefreshToken,
+        };
     stage = "persistence";
     await dependencies.persistContexts({
-      jwt: finalJwt,
-      newRefreshToken: issuedRefreshToken,
+      providerJwt,
+      publicAccessToken: issuedTokens.accessToken,
+      providerRefreshToken: issuedProviderRefreshToken,
+      publicRefreshToken: issuedTokens.refreshToken,
       ...(grantType === "refresh_token" && refreshToken
-        ? { oldRefreshToken: refreshToken }
+        ? { oldPublicRefreshToken: refreshToken }
         : {}),
       authorizationContext: persistedAuthorizationContext,
-      jwtTtlSeconds: clerkTokens.expires_in,
+      resource,
+      accessTokenTtlSeconds: clerkTokens.expires_in,
       refreshTtlSeconds: REFRESH_TOKEN_ORG_TTL_SECONDS,
       ...(contextResult.requestCodeChallenge
         ? {
@@ -406,8 +522,10 @@ export async function tokenRequest(
     return finish(
       NextResponse.json(
         {
-          ...clerkTokens,
-          access_token: finalJwt,
+          ...(mcpAuthorizationServer ? {} : clerkTokens),
+          access_token: issuedTokens.accessToken,
+          refresh_token: issuedTokens.refreshToken,
+          token_type: "Bearer",
           expires_in: clerkTokens.expires_in,
           org_id: authorizationContext.clerk_org_id,
           access_scope: authorizationContext.access_scope,

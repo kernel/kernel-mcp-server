@@ -15,14 +15,20 @@ function request(query: string) {
   return new NextRequest(`https://auth.example.test/authorize?${query}`);
 }
 
+function cliRequest(query: string) {
+  return new NextRequest(`https://auth.onkernel.com/authorize?${query}`);
+}
+
 function dependencies({
   userId = "user_1",
   orgId = "org_1",
   projectError,
+  redirectUris = null,
 }: {
   userId?: string | null;
   orgId?: string | null;
   projectError?: Error;
+  redirectUris?: string[] | null;
 } = {}) {
   const requestContexts: Parameters<
     AuthorizeDependencies["setRequestContext"]
@@ -47,6 +53,7 @@ function dependencies({
       setClientContext: async (value) => {
         clientContexts.push(value);
       },
+      getRedirectUris: async () => redirectUris,
       requireProject: async (value) => {
         projects.push(value);
         if (projectError) throw projectError;
@@ -61,7 +68,7 @@ describe("GET /authorize", () => {
     const deps = dependencies();
     const response = await authorizeRequest(
       request(
-        "client_id=client_1&state=opaque&resource=https%3A%2F%2Fmcp.example.test%2Fmcp&code_challenge=challenge&code_challenge_method=S256",
+        "client_id=client_1&state=opaque&resource=https%3A%2F%2Fauth.example.test%2Fmcp&code_challenge=challenge&code_challenge_method=S256",
       ),
       deps.value,
     );
@@ -71,7 +78,7 @@ describe("GET /authorize", () => {
     expect(location.pathname).toBe("/select-org");
     expect(location.searchParams.get("state")).toBe("opaque");
     expect(location.searchParams.get("resource")).toBe(
-      "https://mcp.example.test/mcp",
+      "https://auth.example.test/mcp",
     );
   });
 
@@ -89,6 +96,7 @@ describe("GET /authorize", () => {
     expect(deps.requestContexts[0]).toMatchObject({
       clientId: "client_1",
       codeChallenge: "challenge",
+      resource: "https://auth.example.test",
       authorizationContext: {
         version: 1,
         clerk_user_id: "user_1",
@@ -102,6 +110,60 @@ describe("GET /authorize", () => {
     expect(location.searchParams.get("access_scope")).toBeNull();
     expect(location.searchParams.get("project_id")).toBeNull();
     expect(location.searchParams.get("state")).toBe("opaque");
+  });
+
+  test("keeps the existing CLI authorization alias on Clerk tokens", async () => {
+    const deps = dependencies({
+      redirectUris: ["http://localhost:9999/callback"],
+    });
+    const response = await authorizeRequest(
+      cliRequest(
+        "client_id=cli_prod&org_id=org_1&access_scope=organization&scope=openid%20email&state=opaque&redirect_uri=http%3A%2F%2Flocalhost%3A9999%2Fcallback&code_challenge=challenge&code_challenge_method=S256",
+      ),
+      deps.value,
+    );
+
+    expect(response.status).toBe(307);
+    const location = new URL(response.headers.get("location")!);
+    expect(location.searchParams.get("redirect_uri")).toBe(
+      "http://localhost:9999/callback",
+    );
+    expect(location.searchParams.get("scope")).toBe("openid email");
+    expect(location.searchParams.get("state")).not.toBe("opaque");
+  });
+
+  test("routes newly registered clients through the issuer callback", async () => {
+    const redirectUri = "http://localhost:58432/callback";
+    const deps = dependencies({ redirectUris: [redirectUri] });
+    const response = await authorizeRequest(
+      request(
+        `client_id=client_1&org_id=org_1&access_scope=organization&state=opaque&redirect_uri=${encodeURIComponent(redirectUri)}&code_challenge=challenge&code_challenge_method=S256`,
+      ),
+      deps.value,
+    );
+
+    const location = new URL(response.headers.get("location")!);
+    expect(location.host).toBe("clerk.example.test");
+    expect(location.searchParams.get("redirect_uri")).toBe(
+      "https://auth.example.test/oauth/callback",
+    );
+    expect(location.searchParams.get("state")).not.toBe("opaque");
+  });
+
+  test("rejects an unregistered redirect before forwarding to Clerk", async () => {
+    const deps = dependencies({
+      redirectUris: ["http://localhost:58432/callback"],
+    });
+    const response = await authorizeRequest(
+      request(
+        "client_id=client_1&org_id=org_1&access_scope=organization&redirect_uri=http%3A%2F%2Flocalhost%3A9999%2Fcallback&code_challenge=challenge&code_challenge_method=S256",
+      ),
+      deps.value,
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "invalid_request" });
+    expect(deps.requestContexts).toHaveLength(0);
   });
 
   test("validates and stores project scope", async () => {

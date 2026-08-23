@@ -15,6 +15,9 @@ describe("POST /register", () => {
     const createCalls: Parameters<
       RegisterDependencies["createOAuthApplication"]
     >[0][] = [];
+    const storedRegistrations: Parameters<
+      RegisterDependencies["storeRedirectUris"]
+    >[0][] = [];
     const response = await registerRequest(
       request({
         client_name: "Test Client",
@@ -22,7 +25,7 @@ describe("POST /register", () => {
         token_endpoint_auth_method: "none",
         grant_types: ["authorization_code", "refresh_token"],
         response_types: ["code"],
-        scope: "openid",
+        scope: "mcp",
       }),
       {
         createOAuthApplication: async (value) => {
@@ -33,19 +36,32 @@ describe("POST /register", () => {
             clientSecret: null,
           };
         },
+        storeRedirectUris: async (value) => {
+          storedRegistrations.push(value);
+        },
       },
     );
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(201);
     expect(createCalls).toEqual([
       {
         name: "Test Client",
         redirectUris: [
           "http://localhost:58432/callback",
           "http://127.0.0.1:58432/callback",
+          "https://auth.example.test/oauth/callback",
         ],
         scopes: "openid",
         public: true,
+      },
+    ]);
+    expect(storedRegistrations).toEqual([
+      {
+        clientId: "client_1",
+        redirectUris: [
+          "http://localhost:58432/callback",
+          "http://127.0.0.1:58432/callback",
+        ],
       },
     ]);
     expect(await response.json()).toMatchObject({
@@ -53,6 +69,7 @@ describe("POST /register", () => {
       redirect_uris: ["http://localhost:58432/callback"],
       token_endpoint_auth_method: "none",
       grant_types: ["authorization_code", "refresh_token"],
+      scope: "mcp",
     });
   });
 
@@ -62,6 +79,9 @@ describe("POST /register", () => {
       createOAuthApplication: async () => {
         called = true;
         return { id: "unexpected", clientId: "unexpected" };
+      },
+      storeRedirectUris: async () => {
+        called = true;
       },
     };
 
@@ -76,6 +96,15 @@ describe("POST /register", () => {
       deps,
     );
     expect(insecureRedirect.status).toBe(400);
+
+    const unsupportedScope = await registerRequest(
+      request({
+        redirect_uris: ["https://client.example/callback"],
+        scope: "profile",
+      }),
+      deps,
+    );
+    expect(unsupportedScope.status).toBe(400);
     expect(called).toBe(false);
   });
 });

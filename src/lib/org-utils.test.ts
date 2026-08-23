@@ -14,6 +14,7 @@ process.env.OAUTH_LEGACY_NON_PKCE_CLIENT_IDS = "legacy_client";
 const { resolveAuthorizationContext } = await import("./org-utils");
 
 let requestContext: OAuthAuthorizationContext | null = null;
+let requestResource: string | null = null;
 let clientContext: OAuthAuthorizationContext | null = null;
 let refreshContext: OAuthAuthorizationContext | null = null;
 let requestLookup: { clientId: string; codeChallenge: string } | null = null;
@@ -23,6 +24,7 @@ const dependencies: AuthorizationContextDependencies = {
     requestLookup = value;
     return requestContext;
   },
+  getRequestResource: async () => requestResource,
   getClientContext: async () => clientContext,
   getRefreshContext: async () => refreshContext,
 };
@@ -35,6 +37,7 @@ function resolveContext(
 
 beforeEach(() => {
   requestContext = null;
+  requestResource = null;
   clientContext = null;
   refreshContext = null;
   requestLookup = null;
@@ -42,6 +45,7 @@ beforeEach(() => {
 
 describe("resolveAuthorizationContext", () => {
   test("uses the PKCE-bound request context", async () => {
+    requestResource = "https://mcp.example.test/mcp";
     requestContext = projectAuthorizationContext({
       clerkUserId: "user_1",
       clerkOrgId: "org_1",
@@ -62,6 +66,7 @@ describe("resolveAuthorizationContext", () => {
     expect(result.requestCodeChallenge).toBe(
       "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
     );
+    expect(result.requestResource).toBe("https://mcp.example.test/mcp");
   });
 
   test("refresh uses only the refresh-token mapping", async () => {

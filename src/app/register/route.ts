@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { clerkClient } from "@clerk/nextjs/server";
 import { expandLocalhostUris } from "@/lib/auth-utils";
+import { setOAuthClientRedirectUris } from "@/lib/redis";
+import { oauthProxyCallbackUrl } from "@/lib/oauth-proxy";
+import {
+  CLERK_OAUTH_SCOPE,
+  MCP_OAUTH_SCOPE,
+  validatePublicOAuthScope,
+} from "@/lib/oauth-scopes";
+import { isMcpAuthorizationServer } from "@/lib/oauth-server";
 
-// Custom registration endpoint needed because Clerk doesn't support custom scopes
-// We only want "openid" scope instead of Clerk's default email/profile scopes
+// Kernel owns the public MCP scope while Clerk receives only the internal
+// identity scope needed for login and consent.
 export async function OPTIONS(): Promise<NextResponse> {
   return new NextResponse(null, {
     status: 204,
@@ -28,6 +36,10 @@ export interface RegisterDependencies {
     clientId: string;
     clientSecret?: string | null;
   }>;
+  storeRedirectUris: (input: {
+    clientId: string;
+    redirectUris: string[];
+  }) => Promise<void>;
 }
 
 const registerDependencies: RegisterDependencies = {
@@ -35,6 +47,7 @@ const registerDependencies: RegisterDependencies = {
     const clerk = await clerkClient();
     return clerk.oauthApplications.create(input);
   },
+  storeRedirectUris: setOAuthClientRedirectUris,
 };
 
 export async function registerRequest(
@@ -62,6 +75,9 @@ export async function registerRequest(
     );
   }
 
+  const mcpAuthorizationServer = isMcpAuthorizationServer(
+    request.nextUrl.origin,
+  );
   const {
     redirect_uris,
     client_name,
@@ -73,8 +89,25 @@ export async function registerRequest(
     token_endpoint_auth_method = "none", // Default to PKCE for public clients
     grant_types = ["authorization_code"],
     response_types = ["code"],
-    scope = "openid",
+    scope = mcpAuthorizationServer ? MCP_OAUTH_SCOPE : CLERK_OAUTH_SCOPE,
   } = body;
+
+  let publicScope: string;
+  try {
+    publicScope = mcpAuthorizationServer
+      ? validatePublicOAuthScope(scope)
+      : typeof scope === "string" && scope.trim()
+        ? scope.trim()
+        : CLERK_OAUTH_SCOPE;
+  } catch {
+    return NextResponse.json(
+      {
+        error: "invalid_scope",
+        error_description: "Unsupported OAuth scope",
+      },
+      { status: 400 },
+    );
+  }
 
   // Validate required parameters
   if (
@@ -136,13 +169,23 @@ export async function registerRequest(
     // This is needed because Vercel normalizes 127.0.0.1 to localhost in query params
     const expandedRedirectUris = expandLocalhostUris(redirect_uris);
 
-    // Register the OAuth application with Clerk
     const oauthApp = await dependencies.createOAuthApplication({
       name: client_name || "MCP Client",
-      redirectUris: expandedRedirectUris,
-      scopes: scope ? scope : "openid",
+      redirectUris: mcpAuthorizationServer
+        ? [
+            ...expandedRedirectUris,
+            oauthProxyCallbackUrl(request.nextUrl.origin),
+          ]
+        : expandedRedirectUris,
+      scopes: mcpAuthorizationServer ? CLERK_OAUTH_SCOPE : publicScope,
       public: true,
     });
+    if (mcpAuthorizationServer) {
+      await dependencies.storeRedirectUris({
+        clientId: oauthApp.clientId,
+        redirectUris: expandedRedirectUris,
+      });
+    }
 
     // Create response in OAuth Dynamic Client Registration format
     const now = Math.floor(Date.now() / 1000);
@@ -160,7 +203,7 @@ export async function registerRequest(
       token_endpoint_auth_method,
       grant_types,
       response_types,
-      scope,
+      scope: publicScope,
       client_id_issued_at: now,
       client_secret_expires_at: 0, // Public clients don't expire
       registration_access_token: oauthApp.id, // Use OAuth app ID as registration token
@@ -168,6 +211,7 @@ export async function registerRequest(
     };
 
     return NextResponse.json(registrationResponse, {
+      status: 201,
       headers: {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "POST, OPTIONS",

@@ -3,9 +3,7 @@ import {
   createMcpHandler,
   experimental_withMcpAuth as withMcpAuth,
 } from "mcp-handler";
-import { verifyToken } from "@clerk/nextjs/server";
 import { after, NextRequest } from "next/server";
-import { isValidJwtFormat } from "@/lib/auth-utils";
 import {
   captureMcpConnectionScopeFailure,
   flushMcpAnalytics,
@@ -24,6 +22,8 @@ import {
   verifyMcpTransportSession,
 } from "@/lib/mcp-transport-session";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
+import { MCP_OAUTH_SCOPE } from "@/lib/oauth-scopes";
+import { resolvePresentedCredential } from "@/lib/mcp/oauth-credential";
 import { name, version } from "../../../server.json";
 
 export async function OPTIONS(_req: NextRequest): Promise<Response> {
@@ -61,9 +61,13 @@ function errorResponse(
 function createAuthErrorResponse(
   error: string = "invalid_token",
   description: string = "Missing or invalid access token",
+  resourceMetadata?: string,
 ): Response {
+  const metadata = resourceMetadata
+    ? `, resource_metadata="${resourceMetadata}"`
+    : "";
   return errorResponse(401, error, description, {
-    "WWW-Authenticate": `Bearer realm="OAuth", error="${error}", error_description="${description}"`,
+    "WWW-Authenticate": `Bearer realm="OAuth"${metadata}, scope="${MCP_OAUTH_SCOPE}", error="${error}", error_description="${description}"`,
   });
 }
 
@@ -195,6 +199,7 @@ async function handleAuthenticatedRequest(
   transportSessionId: string | null = null,
   observeConnection = false,
 ): Promise<Response> {
+  const resourceMetadata = `${req.nextUrl.origin}/.well-known/oauth-protected-resource/mcp`;
   const authHeader = req.headers.get("Authorization");
   const token = authHeader?.startsWith("Bearer ")
     ? authHeader.substring(7).trim()
@@ -203,17 +208,34 @@ async function handleAuthenticatedRequest(
     return createAuthErrorResponse(
       "invalid_token",
       "Missing or invalid access token",
+      resourceMetadata,
     );
   }
 
-  if (!isValidJwtFormat(token)) {
+  const credential = await resolvePresentedCredential(token, req.url);
+  if (credential.kind === "invalid") {
+    return createAuthErrorResponse(
+      "invalid_token",
+      credential.description,
+      resourceMetadata,
+    );
+  }
+  if (credential.kind === "unavailable") {
+    return errorResponse(
+      503,
+      "temporarily_unavailable",
+      "Unable to validate access token",
+      { "Retry-After": "1" },
+    );
+  }
+  if (credential.kind === "api_key") {
     // Opaque API keys are authenticated by the Kernel API rather than Clerk.
     // Do not cache their context: /auth/context must revalidate the credential
     // on every request so revoked keys cannot keep using a cached scope.
     return await handleMcpRequestWithIdentity({
       req,
-      token,
-      authSubject: mcpAppsAuthSubject({ token }),
+      token: credential.token,
+      authSubject: mcpAppsAuthSubject({ token: credential.token }),
       scopes: ["apikey"],
       authInfoExtra: { userId: null, clerkToken: null },
       credentialType: "api_key",
@@ -222,34 +244,21 @@ async function handleAuthenticatedRequest(
     });
   }
 
-  let userId: string;
-  try {
-    const payload = await verifyToken(token, {
-      secretKey: process.env.CLERK_SECRET_KEY,
-    });
-    if (!payload.sub) {
-      return createAuthErrorResponse(
-        "invalid_token",
-        "Invalid token: No user ID found in token payload",
-      );
-    }
-    userId = payload.sub;
-  } catch (authError) {
-    return createAuthErrorResponse(
-      "invalid_token",
-      `Invalid token: ${authError instanceof Error ? authError.message : "Authentication failed"}`,
-    );
-  }
-
-  // Capability state is keyed only after Clerk verifies the JWT, and uses
-  // the verified user plus this signed MCP transport session.
-  const authSubject = mcpAppsAuthSubject({ token, userId });
+  // The client-facing Kernel token identifies capability state. Only the
+  // internal provider credential is sent to the Kernel API.
+  const authSubject = mcpAppsAuthSubject({
+    token: credential.clientToken,
+    userId: credential.userId,
+  });
   return await handleMcpRequestWithIdentity({
     req,
-    token,
+    token: credential.providerToken,
     authSubject,
-    scopes: ["openid"],
-    authInfoExtra: { userId, clerkToken: token },
+    scopes: [MCP_OAUTH_SCOPE],
+    authInfoExtra: {
+      userId: credential.userId,
+      clerkToken: credential.providerToken,
+    },
     credentialType: "oauth",
     transportSessionId,
     connectionContextCacheIdentity: transportSessionId

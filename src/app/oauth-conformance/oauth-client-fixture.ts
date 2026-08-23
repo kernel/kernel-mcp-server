@@ -5,6 +5,7 @@ import type { RegisterDependencies } from "@/app/register/route";
 import type { TokenDependencies } from "@/app/token/route";
 import type { OAuthAuthorizationContext } from "@/lib/oauth-context";
 import { expandLocalhostUris, normalizeLocalhostUri } from "@/lib/auth-utils";
+import { oauthProxyCallbackUrl } from "@/lib/oauth-proxy";
 
 process.env.KERNEL_CLI_PROD_CLIENT_ID ??= "cli_prod";
 process.env.KERNEL_CLI_STAGING_CLIENT_ID ??= "cli_staging";
@@ -15,6 +16,7 @@ process.env.CLERK_SECRET_KEY ??= "clerk-secret";
 const { authorizeRequest } = await import("@/app/authorize/route");
 const { registerRequest } = await import("@/app/register/route");
 const { tokenRequest } = await import("@/app/token/route");
+const { GET: oauthCallback } = await import("@/app/oauth/callback/route");
 const { deriveS256CodeChallenge } = await import("@/lib/oauth-context");
 const { resolveAuthorizationContext } = await import("@/lib/org-utils");
 
@@ -25,7 +27,7 @@ export interface OAuthClientConformanceContract {
   tokenEndpointAuthMethod: "none";
   grantTypes: readonly ["authorization_code", "refresh_token"];
   responseTypes: readonly ["code"];
-  scope: "openid";
+  scope: "mcp";
   codeChallengeMethod: "S256";
 }
 
@@ -52,18 +54,24 @@ export function formRequest(
 
 export function createFixture(contract: OAuthClientConformanceContract) {
   const requestContexts = new Map<string, OAuthAuthorizationContext>();
+  const requestResources = new Map<string, string>();
   const refreshContexts = new Map<string, OAuthAuthorizationContext>();
   const refreshClientIds = new Map<string, string>();
+  const providerRefreshTokens = new Map<string, string>();
   const providerExchanges: URLSearchParams[] = [];
   const persisted: Parameters<TokenDependencies["persistContexts"]>[0][] = [];
+  const clientRedirectUris = new Map<string, string[]>();
   let tokenSequence = 0;
 
   const registerDependencies: RegisterDependencies = {
     createOAuthApplication: async (input) => {
       expect(input).toEqual({
         name: contract.clientName,
-        redirectUris: expandLocalhostUris([contract.redirectUri]),
-        scopes: contract.scope,
+        redirectUris: [
+          ...expandLocalhostUris([contract.redirectUri]),
+          "https://auth.example.test/oauth/callback",
+        ],
+        scopes: "openid",
         public: true,
       });
       return {
@@ -71,6 +79,9 @@ export function createFixture(contract: OAuthClientConformanceContract) {
         clientId: "conformance_client",
         clientSecret: null,
       };
+    },
+    storeRedirectUris: async ({ clientId, redirectUris }) => {
+      clientRedirectUris.set(clientId, redirectUris);
     },
   };
 
@@ -84,12 +95,17 @@ export function createFixture(contract: OAuthClientConformanceContract) {
       clientId,
       codeChallenge,
       authorizationContext,
+      resource,
     }) => {
-      requestContexts.set(`${clientId}:${codeChallenge}`, authorizationContext);
+      const key = `${clientId}:${codeChallenge}`;
+      requestContexts.set(key, authorizationContext);
+      requestResources.set(key, resource);
     },
     setClientContext: async () => {
       throw new Error(`${contract.name} must not use non-PKCE authorization`);
     },
+    getRedirectUris: async ({ clientId }) =>
+      clientRedirectUris.get(clientId) ?? null,
     requireProject: async ({ projectId }) => ({
       id: projectId,
       name: "mason",
@@ -102,6 +118,8 @@ export function createFixture(contract: OAuthClientConformanceContract) {
       resolveAuthorizationContext(input, {
         getRequestContext: async ({ clientId, codeChallenge }) =>
           requestContexts.get(`${clientId}:${codeChallenge}`) ?? null,
+        getRequestResource: async ({ clientId, codeChallenge }) =>
+          requestResources.get(`${clientId}:${codeChallenge}`) ?? null,
         getClientContext: async () => null,
         getRefreshContext: async ({ refreshToken }) =>
           refreshContexts.get(refreshToken) ?? null,
@@ -130,10 +148,11 @@ export function createFixture(contract: OAuthClientConformanceContract) {
         expect(params.has("code_verifier")).toBe(false);
       }
 
-      if (
-        params.get("redirect_uri") !==
-        normalizeLocalhostUri(contract.redirectUri)
-      ) {
+      const expectedRedirectUri =
+        params.get("grant_type") === "authorization_code"
+          ? oauthProxyCallbackUrl("https://auth.example.test")
+          : normalizeLocalhostUri(contract.redirectUri);
+      if (params.get("redirect_uri") !== expectedRedirectUri) {
         return Response.json({ error: "invalid_grant" }, { status: 400 });
       }
       if (params.get("client_secret")) {
@@ -150,7 +169,7 @@ export function createFixture(contract: OAuthClientConformanceContract) {
       tokenSequence += 1;
       return Response.json({
         access_token: `provider-access-${tokenSequence}`,
-        id_token: `kernel-jwt-${tokenSequence}`,
+        id_token: `provider-jwt-${tokenSequence}`,
         refresh_token: `refresh-${tokenSequence}`,
         expires_in: 3600,
         token_type: "Bearer",
@@ -158,23 +177,39 @@ export function createFixture(contract: OAuthClientConformanceContract) {
     },
     verify: async () => ({ sub: "user_1" }),
     hasMembership: async () => true,
+    getRedirectUris: async ({ clientId }) =>
+      clientRedirectUris.get(clientId) ?? null,
+    getProviderRefreshToken: async (refreshToken) =>
+      providerRefreshTokens.get(refreshToken) ?? null,
+    issueTokens: () => ({
+      accessToken: `kmcp_at_${tokenSequence}`,
+      refreshToken: `kmcp_rt_${tokenSequence}`,
+    }),
     persistContexts: async (value) => {
       persisted.push(value);
-      refreshContexts.set(value.newRefreshToken, value.authorizationContext);
+      refreshContexts.set(value.publicRefreshToken, value.authorizationContext);
+      providerRefreshTokens.set(
+        value.publicRefreshToken,
+        value.providerRefreshToken,
+      );
       const clientId =
         value.consumedRequest?.clientId ??
-        (value.oldRefreshToken
-          ? refreshClientIds.get(value.oldRefreshToken)
+        (value.oldPublicRefreshToken
+          ? refreshClientIds.get(value.oldPublicRefreshToken)
           : undefined);
-      if (clientId) refreshClientIds.set(value.newRefreshToken, clientId);
-      if (value.oldRefreshToken) {
-        refreshContexts.delete(value.oldRefreshToken);
-        refreshClientIds.delete(value.oldRefreshToken);
+      if (clientId) {
+        refreshClientIds.set(value.providerRefreshToken, clientId);
+        refreshClientIds.set(value.publicRefreshToken, clientId);
+      }
+      if (value.oldPublicRefreshToken) {
+        refreshContexts.delete(value.oldPublicRefreshToken);
+        providerRefreshTokens.delete(value.oldPublicRefreshToken);
+        refreshClientIds.delete(value.oldPublicRefreshToken);
       }
       if (value.consumedRequest) {
-        requestContexts.delete(
-          `${value.consumedRequest.clientId}:${value.consumedRequest.codeChallenge}`,
-        );
+        const requestKey = `${value.consumedRequest.clientId}:${value.consumedRequest.codeChallenge}`;
+        requestContexts.delete(requestKey);
+        requestResources.delete(requestKey);
       }
     },
   };
@@ -195,7 +230,7 @@ export function createFixture(contract: OAuthClientConformanceContract) {
       }),
       registerDependencies,
     );
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(201);
     const registration = (await response.json()) as {
       client_id: string;
       client_secret?: string;
@@ -210,7 +245,7 @@ export function createFixture(contract: OAuthClientConformanceContract) {
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
       redirect_uris: [contract.redirectUri],
-      scope: "openid",
+      scope: "mcp",
     });
     expect(registration.client_id.length).toBeGreaterThan(0);
     expect(registration.client_secret).toBeUndefined();
@@ -233,6 +268,7 @@ export function createFixture(contract: OAuthClientConformanceContract) {
       state,
       code_challenge: CODE_CHALLENGE,
       code_challenge_method: contract.codeChallengeMethod,
+      resource: "https://auth.example.test",
       org_id: "org_1",
       access_scope: accessScope,
       ...(accessScope === "project" ? { project_id: "project_1" } : {}),
@@ -243,15 +279,40 @@ export function createFixture(contract: OAuthClientConformanceContract) {
     );
     expect(response.status).toBe(307);
     const providerUrl = new URL(response.headers.get("location")!);
-    expect(providerUrl.searchParams.get("state")).toBe(state);
+    expect(providerUrl.searchParams.get("state")).not.toBe(state);
     expect(providerUrl.searchParams.get("redirect_uri")).toBe(
-      contract.redirectUri,
+      "https://auth.example.test/oauth/callback",
     );
     expect(providerUrl.searchParams.get("code_challenge")).toBe(CODE_CHALLENGE);
     expect(providerUrl.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(providerUrl.searchParams.get("scope")).toBe("openid");
     expect(providerUrl.searchParams.get("org_id")).toBeNull();
     expect(providerUrl.searchParams.get("access_scope")).toBeNull();
     expect(providerUrl.searchParams.get("project_id")).toBeNull();
+    expect(providerUrl.searchParams.get("resource")).toBe(
+      "https://auth.example.test",
+    );
+
+    const callbackParams = new URLSearchParams({
+      code: "authorization-code",
+      state: providerUrl.searchParams.get("state")!,
+      iss: "https://clerk.example.test",
+    });
+    const callbackResponse = await oauthCallback(
+      new NextRequest(
+        `https://auth.example.test/oauth/callback?${callbackParams}`,
+      ),
+    );
+    expect(callbackResponse.status).toBe(302);
+    const clientCallback = new URL(callbackResponse.headers.get("location")!);
+    expect(clientCallback.origin + clientCallback.pathname).toBe(
+      contract.redirectUri,
+    );
+    expect(clientCallback.searchParams.get("code")).toBe("authorization-code");
+    expect(clientCallback.searchParams.get("state")).toBe(state);
+    expect(clientCallback.searchParams.get("iss")).toBe(
+      "https://auth.example.test",
+    );
   }
 
   async function exchangeCode(clientId: string): Promise<TokenSet> {
@@ -262,6 +323,7 @@ export function createFixture(contract: OAuthClientConformanceContract) {
         code: "authorization-code",
         code_verifier: CODE_VERIFIER,
         redirect_uri: contract.redirectUri,
+        resource: "https://auth.example.test",
       }),
       tokenDependencies,
     );
@@ -272,6 +334,7 @@ export function createFixture(contract: OAuthClientConformanceContract) {
 
   return {
     requestContexts,
+    requestResources,
     refreshContexts,
     refreshClientIds,
     providerExchanges,

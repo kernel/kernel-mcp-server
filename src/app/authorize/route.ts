@@ -14,6 +14,17 @@ import {
   OAuthProjectsError,
   requireActiveOAuthProject,
 } from "@/lib/oauth-projects";
+import {
+  encodeOAuthProxyState,
+  oauthProxyCallbackUrl,
+} from "@/lib/oauth-proxy";
+import { resolveOAuthClientRedirectUris } from "@/lib/oauth-clients";
+import { resolveOAuthResource } from "@/lib/oauth-resource";
+import {
+  CLERK_OAUTH_SCOPE,
+  validatePublicOAuthScope,
+} from "@/lib/oauth-scopes";
+import { isMcpAuthorizationServer } from "@/lib/oauth-server";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -85,6 +96,7 @@ export interface AuthorizeDependencies {
     clientId: string;
     codeChallenge: string;
     authorizationContext: OAuthAuthorizationContext;
+    resource: string;
     ttlSeconds: number;
   }) => Promise<void>;
   setClientContext: (input: {
@@ -92,6 +104,10 @@ export interface AuthorizeDependencies {
     authorizationContext: OAuthAuthorizationContext;
     ttlSeconds: number;
   }) => Promise<void>;
+  getRedirectUris: (input: {
+    clientId: string;
+    issuer: string;
+  }) => Promise<string[] | null>;
   requireProject: typeof requireActiveOAuthProject;
 }
 
@@ -99,6 +115,7 @@ const authorizeDependencies: AuthorizeDependencies = {
   getAuth: async () => auth(),
   setRequestContext: setAuthorizationContextForRequest,
   setClientContext: setAuthorizationContextForClientId,
+  getRedirectUris: resolveOAuthClientRedirectUris,
   requireProject: requireActiveOAuthProject,
 };
 
@@ -107,6 +124,9 @@ export async function authorizeRequest(
   dependencies: AuthorizeDependencies = authorizeDependencies,
 ): Promise<NextResponse> {
   const searchParams = request.nextUrl.searchParams;
+  const mcpAuthorizationServer = isMcpAuthorizationServer(
+    request.nextUrl.origin,
+  );
   const clientId = searchParams.get("client_id");
   const selectedOrgId = searchParams.get("org_id");
   const originalState = searchParams.get("state");
@@ -114,6 +134,29 @@ export async function authorizeRequest(
   const projectId = searchParams.get("project_id");
   const codeChallenge = searchParams.get("code_challenge");
   const codeChallengeMethod = searchParams.get("code_challenge_method");
+
+  if (mcpAuthorizationServer) {
+    try {
+      validatePublicOAuthScope(searchParams.get("scope"));
+    } catch {
+      return errorResponse("invalid_scope", "Unsupported OAuth scope");
+    }
+  }
+
+  let resource = request.nextUrl.origin;
+  if (mcpAuthorizationServer) {
+    try {
+      resource = resolveOAuthResource({
+        requestedResource: searchParams.get("resource"),
+        issuer: request.nextUrl.origin,
+      });
+    } catch (error) {
+      return errorResponse(
+        "invalid_target",
+        error instanceof Error ? error.message : "Invalid OAuth resource",
+      );
+    }
+  }
 
   if (!clientId) {
     return errorResponse(
@@ -155,6 +198,35 @@ export async function authorizeRequest(
     return errorResponse(
       "invalid_request",
       "OAuth clients require PKCE with S256",
+    );
+  }
+
+  let registeredRedirectUris: string[] | null = null;
+  if (mcpAuthorizationServer) {
+    try {
+      registeredRedirectUris = await dependencies.getRedirectUris({
+        clientId,
+        issuer: request.nextUrl.origin,
+      });
+    } catch (error) {
+      console.error("[authorize] failed to load OAuth client registration", {
+        error,
+      });
+      return errorResponse(
+        "server_error",
+        "Failed to validate OAuth client",
+        500,
+      );
+    }
+  }
+  const clientRedirectUri = searchParams.get("redirect_uri");
+  if (
+    registeredRedirectUris &&
+    (!clientRedirectUri || !registeredRedirectUris.includes(clientRedirectUri))
+  ) {
+    return errorResponse(
+      "invalid_request",
+      "redirect_uri is not registered for this client",
     );
   }
 
@@ -212,6 +284,7 @@ export async function authorizeRequest(
         clientId,
         codeChallenge,
         authorizationContext,
+        resource,
         ttlSeconds: 60 * 60,
       });
     } else {
@@ -249,7 +322,23 @@ export async function authorizeRequest(
       clerkAuthUrl.searchParams.set(key, value);
     }
   });
+  if (registeredRedirectUris && clientRedirectUri) {
+    state = encodeOAuthProxyState({
+      redirectUri: clientRedirectUri,
+      clientState: state,
+    });
+    clerkAuthUrl.searchParams.set(
+      "redirect_uri",
+      oauthProxyCallbackUrl(request.nextUrl.origin),
+    );
+  }
   if (state) clerkAuthUrl.searchParams.set("state", state);
+  if (mcpAuthorizationServer) {
+    clerkAuthUrl.searchParams.set("scope", CLERK_OAUTH_SCOPE);
+  }
+  if (mcpAuthorizationServer && searchParams.has("resource")) {
+    clerkAuthUrl.searchParams.set("resource", resource);
+  }
 
   return NextResponse.redirect(clerkAuthUrl);
 }

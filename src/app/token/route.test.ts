@@ -14,8 +14,11 @@ process.env.CLERK_SECRET_KEY ??= "clerk-secret";
 
 const { tokenRequest } = await import("./route");
 
-function request(values: Record<string, string>) {
-  return new NextRequest("https://auth.example.test/token", {
+function request(
+  values: Record<string, string>,
+  origin = "https://auth.example.test",
+) {
+  return new NextRequest(`${origin}/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams(values),
@@ -32,6 +35,9 @@ function dependencies({
   clerkStatus = 200,
   membershipError,
   contextError,
+  redirectUris = null,
+  providerRefreshToken = "provider-refresh-old",
+  requestResource,
   clerkTokens = {
     access_token: "clerk-access",
     id_token: "header.payload.signature",
@@ -55,6 +61,9 @@ function dependencies({
       | "server_error";
     status: number;
   };
+  redirectUris?: string[] | null;
+  providerRefreshToken?: string | null;
+  requestResource?: string;
   clerkTokens?: Record<string, unknown>;
 } = {}) {
   const calls = {
@@ -63,6 +72,7 @@ function dependencies({
     verifications: [] as string[],
     memberships: [] as Array<{ clerkUserId: string; clerkOrgId: string }>,
     persisted: [] as Parameters<TokenDependencies["persistContexts"]>[0][],
+    providerRefreshes: [] as string[],
     outcomes: [] as Parameters<
       NonNullable<TokenDependencies["recordExchange"]>
     >[0][],
@@ -85,7 +95,10 @@ function dependencies({
         return {
           authorizationContext,
           ...(value.grantType === "authorization_code"
-            ? { requestCodeChallenge: "derived-challenge" }
+            ? {
+                requestCodeChallenge: "derived-challenge",
+                ...(requestResource ? { requestResource } : {}),
+              }
             : {}),
         };
       },
@@ -104,6 +117,15 @@ function dependencies({
         if (membershipError) throw membershipError;
         return member;
       },
+      getRedirectUris: async () => redirectUris,
+      getProviderRefreshToken: async (token) => {
+        calls.providerRefreshes.push(token);
+        return providerRefreshToken;
+      },
+      issueTokens: () => ({
+        accessToken: "kmcp_at_test",
+        refreshToken: "kmcp_rt_test",
+      }),
       persistContexts: async (value) => {
         calls.persisted.push(value);
       },
@@ -123,6 +145,7 @@ describe("POST /token", () => {
         client_id: "client_1",
         code: "code_1",
         code_verifier: "verifier_1",
+        scope: "mcp",
         org_id: "forged-org",
         access_scope: "project",
         project_id: "forged-project",
@@ -132,16 +155,28 @@ describe("POST /token", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
-      access_token: "header.payload.signature",
-      refresh_token: "refresh-new",
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(response.headers.get("Pragma")).toBe("no-cache");
+    const responseBody = await response.json();
+    expect(responseBody).toMatchObject({
+      access_token: "kmcp_at_test",
+      refresh_token: "kmcp_rt_test",
       org_id: "org_1",
       access_scope: "organization",
     });
+    expect(responseBody).not.toHaveProperty("id_token");
+    expect(JSON.stringify(responseBody)).not.toContain("clerk-access");
+    expect(JSON.stringify(responseBody)).not.toContain(
+      "header.payload.signature",
+    );
+    expect(JSON.stringify(responseBody)).not.toContain("refresh-new");
     expect(deps.calls.persisted).toEqual([
       expect.objectContaining({
-        jwt: "header.payload.signature",
-        newRefreshToken: "refresh-new",
+        providerJwt: "header.payload.signature",
+        publicAccessToken: "kmcp_at_test",
+        providerRefreshToken: "refresh-new",
+        publicRefreshToken: "kmcp_rt_test",
+        resource: "https://auth.example.test",
         authorizationContext: expect.objectContaining({
           access_scope: "organization",
         }),
@@ -154,7 +189,8 @@ describe("POST /token", () => {
     expect(deps.calls.exchanges[0].has("org_id")).toBe(false);
     expect(deps.calls.exchanges[0].has("project_id")).toBe(false);
     expect(deps.calls.exchanges[0].has("access_scope")).toBe(false);
-    expect(deps.calls.persisted[0]).not.toHaveProperty("oldRefreshToken");
+    expect(deps.calls.exchanges[0].get("scope")).toBe("openid");
+    expect(deps.calls.persisted[0]).not.toHaveProperty("oldPublicRefreshToken");
     expect(deps.calls.outcomes).toEqual([
       expect.objectContaining({
         grantType: "authorization_code",
@@ -165,6 +201,98 @@ describe("POST /token", () => {
         statusCode: 200,
       }),
     ]);
+  });
+
+  test("keeps the CLI auth alias on Clerk-issued credentials", async () => {
+    const deps = dependencies();
+    const response = await tokenRequest(
+      request(
+        {
+          grant_type: "authorization_code",
+          client_id: "cli_prod",
+          code: "code_1",
+          code_verifier: "verifier_1",
+          scope: "openid email",
+          redirect_uri: "http://localhost:9999/callback",
+        },
+        "https://auth.onkernel.com",
+      ),
+      deps.value,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      access_token: "header.payload.signature",
+      refresh_token: "refresh-new",
+      id_token: "header.payload.signature",
+    });
+    expect(deps.calls.exchanges[0].get("scope")).toBe("openid email");
+    expect(deps.calls.exchanges[0].get("redirect_uri")).toBe(
+      "http://localhost:9999/callback",
+    );
+    expect(deps.calls.persisted[0]).toMatchObject({
+      publicAccessToken: "header.payload.signature",
+      publicRefreshToken: "refresh-new",
+    });
+  });
+
+  test("rejects a token request for a different MCP resource", async () => {
+    const deps = dependencies({
+      requestResource: "https://auth.example.test/mcp",
+    });
+    const response = await tokenRequest(
+      request({
+        grant_type: "authorization_code",
+        client_id: "client_1",
+        code: "code_1",
+        code_verifier: "verifier_1",
+        resource: "https://auth.example.test",
+      }),
+      deps.value,
+    );
+
+    expect(response.status).toBe(400);
+    expect(deps.calls.exchanges).toHaveLength(0);
+    expect(deps.calls.persisted).toHaveLength(0);
+  });
+
+  test("exchanges proxied codes with the provider callback URI", async () => {
+    const redirectUri = "http://localhost:58432/callback";
+    const deps = dependencies({ redirectUris: [redirectUri] });
+    const response = await tokenRequest(
+      request({
+        grant_type: "authorization_code",
+        client_id: "client_1",
+        code: "code_1",
+        code_verifier: "verifier_1",
+        redirect_uri: redirectUri,
+      }),
+      deps.value,
+    );
+
+    expect(response.status).toBe(200);
+    expect(deps.calls.exchanges[0].get("redirect_uri")).toBe(
+      "https://auth.example.test/oauth/callback",
+    );
+  });
+
+  test("rejects an unregistered redirect before exchanging a proxied code", async () => {
+    const deps = dependencies({
+      redirectUris: ["http://localhost:58432/callback"],
+    });
+    const response = await tokenRequest(
+      request({
+        grant_type: "authorization_code",
+        client_id: "client_1",
+        code: "code_1",
+        code_verifier: "verifier_1",
+        redirect_uri: "http://localhost:9999/callback",
+      }),
+      deps.value,
+    );
+
+    expect(response.status).toBe(400);
+    expect(deps.calls.exchanges).toHaveLength(0);
   });
 
   test("returns the server-bound project scope", async () => {
@@ -227,8 +355,9 @@ describe("POST /token", () => {
     });
     expect(deps.calls.persisted).toEqual([
       expect.objectContaining({
-        oldRefreshToken: "refresh-old",
-        newRefreshToken: "refresh-new",
+        oldPublicRefreshToken: "refresh-old",
+        providerRefreshToken: "refresh-new",
+        publicRefreshToken: "kmcp_rt_test",
         authorizationContext: expect.objectContaining({
           access_scope: "project",
           project_id: "proj_1",
@@ -248,6 +377,45 @@ describe("POST /token", () => {
       stage: "complete",
       outcome: "success",
     });
+  });
+
+  test("keeps provider refresh credentials behind the Kernel boundary", async () => {
+    const deps = dependencies();
+    const response = await tokenRequest(
+      request({
+        grant_type: "refresh_token",
+        client_id: "client_1",
+        refresh_token: "kmcp_rt_old",
+        resource: "https://auth.example.test/",
+      }),
+      deps.value,
+    );
+
+    expect(response.status).toBe(200);
+    expect(deps.calls.providerRefreshes).toEqual(["kmcp_rt_old"]);
+    expect(deps.calls.exchanges[0].get("refresh_token")).toBe(
+      "provider-refresh-old",
+    );
+    expect(await response.json()).toMatchObject({
+      access_token: "kmcp_at_test",
+      refresh_token: "kmcp_rt_test",
+    });
+  });
+
+  test("rejects an expired Kernel refresh token before provider exchange", async () => {
+    const deps = dependencies({ providerRefreshToken: null });
+    const response = await tokenRequest(
+      request({
+        grant_type: "refresh_token",
+        client_id: "client_1",
+        refresh_token: "kmcp_rt_expired",
+      }),
+      deps.value,
+    );
+
+    expect(response.status).toBe(400);
+    expect(deps.calls.exchanges).toHaveLength(0);
+    expect(deps.calls.persisted).toHaveLength(0);
   });
 
   test("records the OAuth error returned by context resolution", async () => {

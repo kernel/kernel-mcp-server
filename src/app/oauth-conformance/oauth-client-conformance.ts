@@ -10,6 +10,9 @@ import {
 const { GET: authorizationServerMetadata } = await import(
   "@/app/.well-known/oauth-authorization-server/route"
 );
+const { GET: protectedResourceMetadata } = await import(
+  "@/app/.well-known/oauth-protected-resource/mcp/route"
+);
 const { tokenRequest } = await import("@/app/token/route");
 
 export function defineOAuthClientConformance(
@@ -29,12 +32,41 @@ export function defineOAuthClientConformance(
         authorization_endpoint: "https://auth.example.test/authorize",
         token_endpoint: "https://auth.example.test/token",
         registration_endpoint: "https://auth.example.test/register",
-        scopes_supported: ["openid"],
+        scopes_supported: ["mcp"],
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
         code_challenge_methods_supported: ["S256"],
+        authorization_response_iss_parameter_supported: true,
         token_endpoint_auth_methods_supported: expect.arrayContaining(["none"]),
       });
+
+      const resourceResponse = await protectedResourceMetadata(
+        new NextRequest(
+          "https://auth.example.test/.well-known/oauth-protected-resource/mcp",
+        ),
+      );
+      expect(resourceResponse.status).toBe(200);
+      expect(await resourceResponse.json()).toEqual({
+        resource: "https://auth.example.test",
+        authorization_servers: ["https://auth.example.test"],
+        bearer_methods_supported: ["header"],
+        scopes_supported: ["mcp"],
+      });
+
+      const cliMetadataResponse = await authorizationServerMetadata(
+        new NextRequest(
+          "https://auth.onkernel.com/.well-known/oauth-authorization-server",
+        ),
+      );
+      const cliMetadata = await cliMetadataResponse.json();
+      expect(cliMetadata).toMatchObject({
+        issuer: "https://auth.onkernel.com",
+        scopes_supported: ["openid"],
+        jwks_uri: "https://clerk.example.test/.well-known/jwks.json",
+      });
+      expect(cliMetadata).not.toHaveProperty(
+        "authorization_response_iss_parameter_supported",
+      );
     });
 
     for (const accessScope of ["organization", "project"] as const) {
@@ -60,6 +92,7 @@ export function defineOAuthClientConformance(
             client_id: clientId,
             refresh_token: initial.refreshToken,
             redirect_uri: contract.redirectUri,
+            resource: "https://auth.example.test",
             access_scope:
               accessScope === "project" ? "organization" : "project",
             project_id: "attempted-scope-escalation",
@@ -160,7 +193,7 @@ export function defineOAuthClientConformance(
       );
       expect(redirectResponse.status).toBe(400);
       expect(await redirectResponse.json()).toMatchObject({
-        error: "invalid_grant",
+        error: "invalid_request",
       });
       expect(redirectFixture.persisted).toHaveLength(0);
 

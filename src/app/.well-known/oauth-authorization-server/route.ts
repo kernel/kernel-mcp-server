@@ -1,4 +1,6 @@
 import { NextRequest } from "next/server";
+import { CLERK_OAUTH_SCOPE, MCP_OAUTH_SCOPE } from "@/lib/oauth-scopes";
+import { isMcpAuthorizationServer } from "@/lib/oauth-server";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -11,27 +13,33 @@ export async function OPTIONS(): Promise<Response> {
 }
 
 export async function GET(request: NextRequest): Promise<Response> {
+  const baseUrl = `${request.nextUrl.protocol}//${request.nextUrl.host}`;
+  const mcpAuthorizationServer = isMcpAuthorizationServer(baseUrl);
   const clerkDomain = process.env.NEXT_PUBLIC_CLERK_DOMAIN;
-
-  if (!clerkDomain) {
+  if (!mcpAuthorizationServer && !clerkDomain) {
     return Response.json(
       { error: "server_error", error_description: "Clerk domain not found" },
       { status: 500 },
     );
   }
 
-  const baseUrl = `${request.nextUrl.protocol}//${request.nextUrl.host}`;
-
   const metadata = {
     issuer: baseUrl,
     authorization_endpoint: `${baseUrl}/authorize`,
     token_endpoint: `${baseUrl}/token`,
     registration_endpoint: `${baseUrl}/register`,
-    jwks_uri: `https://${clerkDomain}/.well-known/jwks.json`,
-    scopes_supported: ["openid"],
+    ...(mcpAuthorizationServer
+      ? {}
+      : { jwks_uri: `https://${clerkDomain}/.well-known/jwks.json` }),
+    scopes_supported: [
+      mcpAuthorizationServer ? MCP_OAUTH_SCOPE : CLERK_OAUTH_SCOPE,
+    ],
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code", "refresh_token"],
     code_challenge_methods_supported: ["S256"],
+    ...(mcpAuthorizationServer
+      ? { authorization_response_iss_parameter_supported: true }
+      : {}),
     token_endpoint_auth_methods_supported: [
       "none",
       "client_secret_post",
