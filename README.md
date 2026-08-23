@@ -13,7 +13,7 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that p
 
 ## What is this?
 
-The Kernel MCP Server bridges AI assistants (like Claude, Cursor, or other MCP-compatible tools) with the Kernel platform, enabling them to:
+The Kernel MCP Server bridges AI assistants (like Claude, Cursor, fx, or other MCP-compatible tools) with the Kernel platform, enabling them to:
 
 - 🚀 Deploy and manage Kernel apps in the cloud
 - 🌐 Launch and control headless Chromium sessions for web automation
@@ -138,6 +138,31 @@ opencode mcp auth kernel
 opencode mcp logout kernel
 opencode mcp auth kernel
 ```
+
+### fx
+
+Add Kernel to the `mcp` map in `~/.fx/mcp.json`:
+
+```json
+{
+  "mcp": {
+    "kernel": {
+      "type": "http",
+      "url": "https://mcp.onkernel.com/mcp",
+      "oauth": {}
+    }
+  }
+}
+```
+
+In an interactive fx session, reload the configuration and authenticate with Kernel:
+
+```text
+/mcp reload
+/mcp auth kernel --open
+```
+
+Authorize access in the browser window that opens. Run `/mcp list` to verify that Kernel is connected.
 
 ### Goose
 
