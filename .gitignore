@@ -111,8 +111,6 @@ mcp-key.pem
 
 # Harbor benchmark runtime data
 benchmarks/harbor/.image.env
-benchmarks/harbor/.run.env
-benchmarks/harbor/jobs/
 benchmarks/harbor/image/source-sha
 
 # TypeScript incremental build cache

@@ -28,7 +28,6 @@ RUN KERNEL_CLI_PROD_CLIENT_ID=kernel-mcp-benchmark \
     bun run build \
     && install -m 0755 benchmarks/harbor/bin/start-kernel-mcp-server /usr/local/bin/start-kernel-mcp-server \
     && install -m 0755 benchmarks/harbor/bin/kernel-mcp-local /usr/local/bin/kernel-mcp-local \
-    && install -m 0755 benchmarks/harbor/bin/verify-smoke.py /usr/local/bin/verify-kernel-mcp-smoke \
     && install -m 0644 benchmarks/harbor/image/source-sha /opt/kernel-mcp-server/SOURCE_SHA
 
 ENV NEXT_TELEMETRY_DISABLED=1
