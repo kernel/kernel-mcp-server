@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 <claude-code|codex> [task-id] [job-name] [jobs-dir]" >&2
+  echo "usage: $0 <claude-code|codex> [task-id|all] [job-name] [jobs-dir]" >&2
   exit 2
 }
 
@@ -14,7 +14,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 benchmark_dir="$repo_root/benchmarks/harbor"
 image_env="$benchmark_dir/.image.env"
 clawbench_repo=${CLAWBENCH_REPO:-$repo_root/../ClawBench}
-clawbench_ref=${CLAWBENCH_REF:-6cf9dc5c4d5b0ee9ae7d17bb8984691cdfad1796}
+clawbench_ref=${CLAWBENCH_REF:-df6743fd8abcd09cb7636ef8c310dd4db016162c}
 
 [[ -f "$image_env" ]] || {
   echo "Missing $image_env; run benchmarks/harbor/build-image.sh first" >&2
@@ -59,7 +59,7 @@ case "$agent" in
     ;;
   codex)
     : "${OPENAI_API_KEY:?OPENAI_API_KEY is required}"
-    model=${CODEX_BENCHMARK_MODEL:-gpt-5.6-terra}
+    model=${CODEX_BENCHMARK_MODEL:-gpt-5.6-luna}
     version=${CODEX_BENCHMARK_VERSION:-0.120.0}
     ;;
 esac
@@ -69,23 +69,29 @@ runtime_env=$(mktemp)
 trap 'rm -rf "$runtime_root"; rm -f "$runtime_env"' EXIT
 
 dataset="$runtime_root/dataset"
-uv --directory "$clawbench_repo" run clawbench-harbor-adapt \
-  --output-dir "$dataset" \
-  --task-ids "$task_id" \
-  --browser-runtime kernel \
-  --browser-runtime-options '{"stealth": true}' \
+adapt_args=(
+  --output-dir "$dataset"
+  --browser-runtime kernel
+  --browser-runtime-options '{"stealth": true}'
   --overwrite
+)
+if [[ "$task_id" != "all" ]]; then
+  adapt_args+=(--task-ids "$task_id")
+fi
+uv --directory "$clawbench_repo" run clawbench-harbor-adapt "${adapt_args[@]}"
 
-task_dir=$(find "$dataset" -mindepth 1 -maxdepth 1 -type d | head -1)
-[[ -n "$task_dir" ]] || {
-  echo "ClawBench did not generate task $task_id" >&2
+mapfile -t task_dirs < <(find "$dataset" -mindepth 1 -maxdepth 1 -type d | sort)
+((${#task_dirs[@]} > 0)) || {
+  echo "ClawBench did not generate tasks for $task_id" >&2
   exit 1
 }
 
-python3 "$benchmark_dir/clawbench/prepare-control.py" "$task_dir" \
-  --image "$KERNEL_MCP_BENCHMARK_IMAGE" \
-  --server-sha "$KERNEL_MCP_SOURCE_SHA" \
-  --clawbench-sha "$clawbench_ref"
+for task_dir in "${task_dirs[@]}"; do
+  python3 "$benchmark_dir/clawbench/prepare-control.py" "$task_dir" \
+    --image "$KERNEL_MCP_BENCHMARK_IMAGE" \
+    --server-sha "$KERNEL_MCP_SOURCE_SHA" \
+    --clawbench-sha "$clawbench_ref"
+done
 
 export KERNEL_API_KEY=$KERNEL_MCP_BENCHMARK_API_KEY
 export KERNEL_BASE_URL=${KERNEL_BASE_URL:-https://api.onkernel.com}
@@ -126,7 +132,7 @@ timeout --signal=INT --kill-after=30s "${HARBOR_BENCHMARK_TIMEOUT:-40m}" \
   --env-file "$runtime_env" \
   --job-name "$job_name" \
   --jobs-dir "$jobs_dir" \
-  --n-concurrent 1 \
+  --n-concurrent "${HARBOR_N_CONCURRENT:-1}" \
   --max-retries 0 \
   --delete \
   --yes

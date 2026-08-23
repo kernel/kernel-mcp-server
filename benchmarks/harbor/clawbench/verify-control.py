@@ -11,11 +11,9 @@ from typing import Any
 LOGS_DIR = Path(os.environ.get("HARBOR_LOGS_DIR", "/logs"))
 VERIFIER_DIR = LOGS_DIR / "verifier"
 CONTEXT_TOOL = "mcp__kernel__get_connection_context"
-BROWSER_TOOLS = {
-    "mcp__kernel__execute_playwright_code",
-    "mcp__kernel__computer_action",
-}
+BROWSER_TOOLS = {"mcp__kernel__execute_playwright_code"}
 FORBIDDEN_KERNEL_TOOLS = {
+    "mcp__kernel__computer_action",
     "mcp__kernel__manage_browsers",
     "mcp__kernel__manage_auth_connections",
     "mcp__kernel__open_auth_login",
@@ -257,7 +255,7 @@ def main() -> int:
         "kernel_mcp_toolset_allowlist": bool(
             manifest
             and set(str(manifest.get("enabled_toolsets", "")).split())
-            == {"playwright", "computer"}
+            == {"playwright"}
         ),
         "hypeman_identity": bool(manifest and manifest.get("hypeman_instance_name")),
         "browser_deleted": bool(

@@ -6,7 +6,7 @@ import json
 import shutil
 from pathlib import Path
 
-ENABLED_TOOLSETS = "playwright computer"
+ENABLED_TOOLSETS = "playwright"
 
 
 def _drop_mcp_servers(task_toml: str) -> str:
@@ -119,9 +119,9 @@ def _patch_instruction(instruction: str) -> str:
 Kernel MCP benchmark arm:
 - Wait for the `kernel` MCP server to finish initializing before starting. In Claude Code, call `WaitForMcpServers` if it is still pending; do not conclude that the tools are unavailable while it initializes.
 - Call `get_connection_context` once before taking any browser action.
-- Read `./my-info/kernel_browser.json` and use its existing `session_id` for every `execute_playwright_code` or `computer_action` call.
-- Do not create, list, update, or delete browsers. Browser lifecycle tools are intentionally unavailable.
-- Use Kernel MCP for all browser interaction. Do not use Playwright MCP or a direct CDP client.
+- Read `./my-info/kernel_browser.json` and use its existing `session_id` for every `execute_playwright_code` call.
+- Do not create, list, update, or delete browsers. Browser lifecycle tools and `computer_action` are intentionally unavailable.
+- Use Kernel MCP `execute_playwright_code` for all browser interaction. Do not use Playwright MCP or a direct CDP client.
 - Interact through visible page navigation and DOM/UI actions. Do not call `fetch`, `XMLHttpRequest`, Playwright request APIs, or other direct HTTP clients inside `execute_playwright_code`.
 - Use the PurelyMail-backed credentials already provided under `./my-info/` when the task requires an account.
 - Do not use Kernel managed auth, create an auth connection, or start a hosted login flow.

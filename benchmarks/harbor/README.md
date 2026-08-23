@@ -6,7 +6,7 @@ This directory runs stock Harbor agents (Claude Code, Codex) against a locally b
 
 - Harbor 0.21.0 with `harbor-hypeman` 0.1.1 (launched through `uvx`)
 - [uv](https://docs.astral.sh/uv/) and Hypeman CLI credentials
-- A ClawBench checkout containing commit `6cf9dc5` (`kernel/ClawBench` PR #1)
+- A ClawBench checkout containing commit `df6743f` (`kernel/ClawBench` PR #1)
 - `KERNEL_MCP_BENCHMARK_API_KEY` scoped to an isolated evaluation project
 - `KERNEL_MCP_BENCHMARK_PROJECT_ID`
 - `PURELY_MAIL_API_KEY` and `PURELY_MAIL_DOMAIN` for account-task credentials
@@ -34,14 +34,20 @@ Defaults:
 | Agent       | Version | Model             |
 | ----------- | ------: | ----------------- |
 | Claude Code | 2.1.238 | `claude-sonnet-5` |
-| Codex       | 0.120.0 | `gpt-5.6-terra`   |
+| Codex       | 0.120.0 | `gpt-5.6-luna`    |
 
 Override models with `CLAUDE_BENCHMARK_MODEL` or `CODEX_BENCHMARK_MODEL`. Runs have a 40-minute wall-clock limit; change it with `HARBOR_BENCHMARK_TIMEOUT`.
 
-`run-control.sh` adapts one ClawBench task with `clawbench-harbor-adapt`, converts it with `clawbench/prepare-control.py`, and runs it under Harbor. The generated task:
+Pass `all` instead of a task ID to run the complete suite, and set `HARBOR_N_CONCURRENT` to control parallelism:
 
-- exposes `get_connection_context`, `execute_playwright_code`, and `computer_action`
-- disables browser lifecycle and managed-auth toolsets
+```bash
+HARBOR_N_CONCURRENT=10 ./benchmarks/harbor/clawbench/run-control.sh codex all
+```
+
+`run-control.sh` adapts the selected ClawBench tasks with `clawbench-harbor-adapt`, converts them with `clawbench/prepare-control.py`, and runs them under Harbor. Each generated task:
+
+- exposes `get_connection_context` and `execute_playwright_code`
+- disables coordinate-based computer actions, browser lifecycle, and managed-auth toolsets
 - instructs the agent to read `./my-info/kernel_browser.json` and use that session ID
 - instructs account tasks to use the supplied PurelyMail credentials instead of managed auth
 - verifies ATIF observations, project scope, exact session reuse, ClawBench interception, replay finalization, and browser deletion

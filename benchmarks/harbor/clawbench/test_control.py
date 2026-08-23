@@ -73,9 +73,7 @@ args = ["-y", "@playwright/mcp@0.0.79"]
             self.assertIn('name = "kernel"', task_toml)
             self.assertIn('command = "/usr/local/bin/kernel-mcp-local"', task_toml)
             self.assertNotIn("@playwright/mcp", task_toml)
-            self.assertIn(
-                'KERNEL_MCP_ENABLED_TOOLSETS = "playwright computer"', task_toml
-            )
+            self.assertIn('KERNEL_MCP_ENABLED_TOOLSETS = "playwright"', task_toml)
             self.assertNotIn("KERNEL_MCP_DISABLED_TOOLSETS", task_toml)
             self.assertIn('API_BASE_URL = "${KERNEL_API_BASE_URL:-}"', task_toml)
             self.assertNotIn("KERNEL_API_BASE_URL =", task_toml)
@@ -90,7 +88,7 @@ args = ["-y", "@playwright/mcp@0.0.79"]
             instruction = (step / "instruction.md").read_text()
             self.assertIn("WaitForMcpServers", instruction)
             self.assertIn("existing `session_id`", instruction)
-            self.assertIn("Use only Kernel MCP browser-control tools", instruction)
+            self.assertIn("Use Kernel MCP `execute_playwright_code`", instruction)
             self.assertIn("PurelyMail-backed credentials", instruction)
             self.assertIn("Do not use Kernel managed auth", instruction)
             self.assertIn("Do not call `fetch`", instruction)
@@ -160,11 +158,11 @@ class VerifyControlTest(unittest.TestCase):
         trajectory = self.trajectory()
         trajectory["steps"][0]["tool_calls"].append(
             {
-                "tool_call_id": "computer-final",
-                "function_name": "mcp__kernel__computer_action",
+                "tool_call_id": "playwright-final",
+                "function_name": "mcp__kernel__execute_playwright_code",
                 "arguments": {
                     "session_id": "session-123",
-                    "actions": [{"type": "click_mouse", "x": 10, "y": 10}],
+                    "code": "await page.getByRole('button').click()",
                 },
             }
         )
@@ -172,11 +170,11 @@ class VerifyControlTest(unittest.TestCase):
             trajectory,
             expected_session_id="session-123",
             expected_project_id="project-123",
-            allowed_missing_observation_ids={"computer-final"},
+            allowed_missing_observation_ids={"playwright-final"},
         )
         self.assertTrue(result["observations_valid"])
         self.assertEqual(
-            result["expected_interrupted_observations"], ["computer-final"]
+            result["expected_interrupted_observations"], ["playwright-final"]
         )
         self.assertEqual(result["unexpected_missing_observations"], [])
 
@@ -213,6 +211,11 @@ class VerifyControlTest(unittest.TestCase):
                     "tool_call_id": "browser-list",
                     "function_name": "mcp__kernel__manage_browsers",
                     "arguments": {"action": "list"},
+                },
+                {
+                    "tool_call_id": "computer-action",
+                    "function_name": "mcp__kernel__computer_action",
+                    "arguments": {"session_id": "session-123", "actions": []},
                 },
             ]
         )
