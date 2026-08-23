@@ -13,7 +13,7 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that p
 
 ## What is this?
 
-The Kernel MCP Server bridges AI assistants (like Claude, Cursor, or other MCP-compatible tools) with the Kernel platform, enabling them to:
+The Kernel MCP Server bridges AI assistants (like Claude, Cursor, fx, or other MCP-compatible tools) with the Kernel platform, enabling them to:
 
 - 🚀 Deploy and manage Kernel apps in the cloud
 - 🌐 Launch and control headless Chromium sessions for web automation
@@ -63,6 +63,7 @@ kernel mcp install --target <target>
 | Windsurf       | `kernel mcp install --target windsurf`    |
 | Zed            | `kernel mcp install --target zed`         |
 | Goose          | `kernel mcp install --target goose`       |
+| fx             | `kernel mcp install --target fx`          |
 
 The CLI automatically locates your tool's config file and adds the Kernel MCP server configuration.
 
@@ -138,6 +139,42 @@ opencode mcp auth kernel
 opencode mcp logout kernel
 opencode mcp auth kernel
 ```
+
+### fx
+
+Configure Kernel with the Kernel CLI:
+
+```bash
+kernel mcp install --target fx
+```
+
+Or add Kernel to the `mcp` map in `~/.fx/mcp.json` manually:
+
+```json
+{
+  "mcp": {
+    "kernel": {
+      "type": "http",
+      "url": "https://mcp.onkernel.com/mcp",
+      "oauth": {}
+    }
+  }
+}
+```
+
+Start fx, or reload the configuration in an existing session:
+
+```text
+/mcp reload
+```
+
+Then authenticate with Kernel:
+
+```text
+/mcp auth kernel --open
+```
+
+Authorize access in the browser window that opens. Run `/mcp list` to verify that Kernel is connected.
 
 ### Goose
 
