@@ -5,7 +5,7 @@
       "command": "bun scripts/record-oauth-redis-contract.ts",
       "enforcement": "CI regenerates this file and fails when it differs from what is committed.",
       "redis": "Isolated disposable Redis; database 15 is flushed between scenarios.",
-      "ttl_note": "ttl_seconds is read back from Redis immediately after each step; Redis rounds to the nearest second, so treat an off-by-one as timing noise."
+      "ttl_note": "ttl_seconds is read back from Redis and snapped to the nearest pinned TTL (3600 or 2592000) within a 5s tolerance; anything outside tolerance fails the run."
     },
     "key_derivations": {
       "jwt:<hmac>": "HMAC-SHA256(CLERK_SECRET_KEY, access token), hex digest",
@@ -81,7 +81,7 @@
       "authorization_code_org_scoped_pkce: PKCE authorization for an organization-wide scope: authorize stores the oauth-request context, the code exchange consumes it and persists jwt/refresh mappings.",
       "authorization_code_project_scoped_pkce: Same as above but the selected scope is a single project, so the persisted context carries project_id.",
       "refresh_token_rotation_sliding_ttl: An initial org-scoped grant is followed by a refresh_token grant: the old refresh mapping is deleted, the rotated one is written with a fresh sliding TTL.",
-      "legacy_non_pkce_client: A allowlisted legacy client without PKCE: authorize stores the context under the literal client:<client_id> key, which its exchanges read.",
+      "legacy_non_pkce_client: An allowlisted legacy client without PKCE: authorize stores the context under the literal client:<client_id> key, which its exchanges read.",
       "refresh_backfills_clerk_user_id_from_id_token: A pre-existing context without clerk_user_id (stored by older versions) is refreshed: the id_token subject is backfilled into the newly written contexts."
     ]
   },
@@ -191,7 +191,7 @@
     },
     {
       "name": "legacy_non_pkce_client",
-      "description": "A allowlisted legacy client without PKCE: authorize stores the context under the literal client:<client_id> key, which its exchanges read.",
+      "description": "An allowlisted legacy client without PKCE: authorize stores the context under the literal client:<client_id> key, which its exchanges read.",
       "snapshots": [
         {
           "after": "after_authorize",

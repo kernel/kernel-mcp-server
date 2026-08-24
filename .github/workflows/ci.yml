@@ -42,7 +42,8 @@ jobs:
       - name: OAuth Redis recordings are up to date
         run: |
           bun scripts/record-oauth-redis-contract.ts
-          git diff --exit-code -- fixtures/oauth-redis-recordings.json \
-            || (echo "fixtures/oauth-redis-recordings.json differs from what the OAuth code now writes." \
-                echo "Re-run: bun scripts/record-oauth-redis-contract.ts, review the diff, and commit it." \
-                exit 1)
+          git diff --exit-code -- fixtures/oauth-redis-recordings.json || {
+            echo "fixtures/oauth-redis-recordings.json differs from what the OAuth code now writes."
+            echo "Re-run: bun scripts/record-oauth-redis-contract.ts, review the diff, and commit it."
+            exit 1
+          }

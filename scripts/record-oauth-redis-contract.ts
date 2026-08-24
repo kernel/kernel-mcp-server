@@ -111,6 +111,23 @@ interface Snapshot {
   keys: { key: string; value: string; ttl_seconds: number }[];
 }
 
+// Every TTL this code writes is one of the pinned constants. Reading the
+// TTL back can land a second low depending on timing, so snap values within
+// tolerance to their constant and treat anything else as a contract change.
+const PINNED_TTL_SECONDS = [EXPIRES_IN_SECONDS, REFRESH_TOKEN_ORG_TTL_SECONDS];
+
+function pinnedTtl(seconds: number): number {
+  const pinned = PINNED_TTL_SECONDS.find(
+    (value) => Math.abs(value - seconds) <= 5,
+  );
+  if (!pinned) {
+    throw new Error(
+      `Redis TTL ${seconds}s matches no pinned TTL (${PINNED_TTL_SECONDS.join("s, ")}s)`,
+    );
+  }
+  return pinned;
+}
+
 async function snapshot(after: string): Promise<Snapshot> {
   const keys = (await redisClient.keys("*")).sort();
   return {
@@ -119,7 +136,7 @@ async function snapshot(after: string): Promise<Snapshot> {
       keys.map(async (key) => ({
         key,
         value: (await redisClient.get(key))!,
-        ttl_seconds: await redisClient.ttl(key),
+        ttl_seconds: pinnedTtl(await redisClient.ttl(key)),
       })),
     ),
   };
@@ -179,7 +196,7 @@ async function authorize(query: Record<string, string>): Promise<void> {
   const response = await authorizeRequest(request, authorizeDependencies());
   if (response.status !== 307) {
     throw new Error(
-      `authorize redirected to ${response.status}: ${await response.text()}`,
+      `authorize returned ${response.status}, expected 307 redirect: ${await response.text()}`,
     );
   }
 }
@@ -284,7 +301,7 @@ const scenarios: Scenario[] = [
   {
     name: "legacy_non_pkce_client",
     description:
-      "A allowlisted legacy client without PKCE: authorize stores the context under the literal client:<client_id> key, which its exchanges read.",
+      "An allowlisted legacy client without PKCE: authorize stores the context under the literal client:<client_id> key, which its exchanges read.",
     run: async () => {
       await authorize({
         client_id: LEGACY_CLIENT_ID,
@@ -353,7 +370,7 @@ async function main(): Promise<void> {
         redis:
           "Isolated disposable Redis; database 15 is flushed between scenarios.",
         ttl_note:
-          "ttl_seconds is read back from Redis immediately after each step; Redis rounds to the nearest second, so treat an off-by-one as timing noise.",
+          "ttl_seconds is read back from Redis and snapped to the nearest pinned TTL (3600 or 2592000) within a 5s tolerance; anything outside tolerance fails the run.",
       },
       key_derivations: {
         "jwt:<hmac>": "HMAC-SHA256(CLERK_SECRET_KEY, access token), hex digest",
