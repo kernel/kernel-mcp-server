@@ -1,4 +1,9 @@
 #!/bin/bash
+# Run one ClawBench task or the full suite through the local Kernel MCP build.
+#
+# The script asks ClawBench to generate ordinary Harbor tasks, rewrites those
+# tasks with prepare-task.py, then lets Harbor create one isolated Hypeman
+# environment per trial and install the selected stock agent inside it.
 set -euo pipefail
 
 usage() {
@@ -39,7 +44,6 @@ source "$image_env"
 set +a
 
 : "${KERNEL_MCP_BENCHMARK_API_KEY:?KERNEL_MCP_BENCHMARK_API_KEY is required}"
-: "${KERNEL_MCP_BENCHMARK_PROJECT_ID:?KERNEL_MCP_BENCHMARK_PROJECT_ID is required}"
 : "${PURELY_MAIL_API_KEY:?PURELY_MAIL_API_KEY is required}"
 : "${PURELY_MAIL_DOMAIN:?PURELY_MAIL_DOMAIN is required}"
 
@@ -87,7 +91,7 @@ mapfile -t task_dirs < <(find "$dataset" -mindepth 1 -maxdepth 1 -type d | sort)
 }
 
 for task_dir in "${task_dirs[@]}"; do
-  python3 "$benchmark_dir/clawbench/prepare-control.py" "$task_dir" \
+  python3 "$benchmark_dir/clawbench/prepare-task.py" "$task_dir" \
     --image "$KERNEL_MCP_BENCHMARK_IMAGE" \
     --server-sha "$KERNEL_MCP_SOURCE_SHA" \
     --clawbench-sha "$clawbench_ref"
@@ -96,13 +100,11 @@ done
 export KERNEL_API_KEY=$KERNEL_MCP_BENCHMARK_API_KEY
 export KERNEL_BASE_URL=${KERNEL_BASE_URL:-https://api.onkernel.com}
 export KERNEL_API_BASE_URL=${KERNEL_API_BASE_URL:-$KERNEL_BASE_URL}
-export KERNEL_MCP_BENCHMARK_PROJECT_ID
 
 cat >"$runtime_env" <<EOF
 KERNEL_API_KEY=$KERNEL_API_KEY
 KERNEL_BASE_URL=$KERNEL_BASE_URL
 KERNEL_API_BASE_URL=$KERNEL_API_BASE_URL
-KERNEL_MCP_BENCHMARK_PROJECT_ID=$KERNEL_MCP_BENCHMARK_PROJECT_ID
 PURELY_MAIL_API_KEY=$PURELY_MAIL_API_KEY
 PURELY_MAIL_DOMAIN=$PURELY_MAIL_DOMAIN
 CLAWBENCH_JUDGE_BASE_URL=${CLAWBENCH_JUDGE_BASE_URL:-}

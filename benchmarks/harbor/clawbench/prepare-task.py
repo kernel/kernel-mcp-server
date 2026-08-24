@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+"""Turn a ClawBench Harbor task into the Kernel MCP benchmark arm.
+
+ClawBench generates a complete Harbor task that normally gives the agent
+Playwright MCP. This script keeps ClawBench's instruction, evaluator, browser,
+and cleanup lifecycle, but swaps the agent-facing MCP server for the local
+source build and starts that server during task setup.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -24,7 +32,9 @@ def _drop_mcp_servers(task_toml: str) -> str:
     return "\n".join(output).rstrip() + "\n"
 
 
-def _add_environment(task_toml: str, *, image: str, server_sha: str, clawbench_sha: str) -> str:
+def _add_environment(
+    task_toml: str, *, image: str, server_sha: str, clawbench_sha: str
+) -> str:
     lines = task_toml.splitlines()
     output: list[str] = []
     inserted_image = False
@@ -41,7 +51,6 @@ def _add_environment(task_toml: str, *, image: str, server_sha: str, clawbench_s
                     f"KERNEL_MCP_SOURCE_SHA = {json.dumps(server_sha)}",
                     f"CLAWBENCH_SOURCE_SHA = {json.dumps(clawbench_sha)}",
                     f"KERNEL_MCP_ENABLED_TOOLSETS = {json.dumps(ENABLED_TOOLSETS)}",
-                    'KERNEL_MCP_EXPECTED_PROJECT_ID = "${KERNEL_MCP_BENCHMARK_PROJECT_ID}"',
                     'API_BASE_URL = "${KERNEL_API_BASE_URL:-}"',
                     'REDIS_URL = "redis://127.0.0.1:6379"',
                 ]
@@ -94,7 +103,9 @@ install_clawbench_runtime
 
 
 def _patch_verifier(test_script: str) -> str:
-    verify_marker = "/app/src/runtime-server/.venv/bin/python /app/src/harbor/verify.py\n"
+    verify_marker = (
+        "/app/src/runtime-server/.venv/bin/python /app/src/harbor/verify.py\n"
+    )
     if verify_marker not in test_script:
         raise ValueError("generated verifier script is missing ClawBench verification")
     return test_script.replace(
@@ -103,7 +114,7 @@ def _patch_verifier(test_script: str) -> str:
         + "mkdir -p /logs/verifier/kernel-mcp\n"
         + "cp -a /logs/kernel-mcp/. /logs/verifier/kernel-mcp/\n"
         + "/app/src/runtime-server/.venv/bin/python "
-        + "/app/src/harbor/verify-kernel-mcp-control.py\n",
+        + "/app/src/harbor/verify-kernel-mcp-task.py\n",
         1,
     )
 
@@ -113,12 +124,13 @@ def _patch_instruction(instruction: str) -> str:
         "Use only Playwright MCP browser tools plus reading files",
         "Use only Kernel MCP browser-control tools plus reading files",
     )
-    return instruction.rstrip() + """
+    return (
+        instruction.rstrip()
+        + """
 
 ---
 Kernel MCP benchmark arm:
 - Wait for the `kernel` MCP server to finish initializing before starting. In Claude Code, call `WaitForMcpServers` if it is still pending; do not conclude that the tools are unavailable while it initializes.
-- Call `get_connection_context` once before taking any browser action.
 - Read `./my-info/kernel_browser.json` and use its existing `session_id` for every `execute_playwright_code` call.
 - Do not create, list, update, or delete browsers. Browser lifecycle tools and `computer_action` are intentionally unavailable.
 - Use Kernel MCP `execute_playwright_code` for all browser interaction. Do not use Playwright MCP or a direct CDP client.
@@ -127,9 +139,12 @@ Kernel MCP benchmark arm:
 - Do not use Kernel managed auth, create an auth connection, or start a hosted login flow.
 - Complete and submit the task through the existing browser, then stop.
 """
+    )
 
 
-def transform_task(task_dir: Path, *, image: str, server_sha: str, clawbench_sha: str) -> None:
+def transform_task(
+    task_dir: Path, *, image: str, server_sha: str, clawbench_sha: str
+) -> None:
     dockerfile = task_dir / "environment" / "Dockerfile"
     dockerfile.unlink(missing_ok=True)
 
@@ -156,14 +171,16 @@ def transform_task(task_dir: Path, *, image: str, server_sha: str, clawbench_sha
     instruction_path = step_dir / "instruction.md"
     instruction_path.write_text(_patch_instruction(instruction_path.read_text()))
 
-    verifier_source = Path(__file__).with_name("verify-control.py")
-    verifier_target = task_dir / "environment" / "harbor" / "verify-kernel-mcp-control.py"
+    verifier_source = Path(__file__).with_name("verify-task.py")
+    verifier_target = task_dir / "environment" / "harbor" / "verify-kernel-mcp-task.py"
     shutil.copy2(verifier_source, verifier_target)
     verifier_target.chmod(0o755)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Convert a Kernel-backed ClawBench Harbor task to the Kernel MCP arm")
+    parser = argparse.ArgumentParser(
+        description="Replace a generated ClawBench task's Playwright MCP server with the local Kernel MCP build"
+    )
     parser.add_argument("task_dir", type=Path)
     parser.add_argument("--image", required=True)
     parser.add_argument("--server-sha", required=True)

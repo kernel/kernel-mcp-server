@@ -1,4 +1,9 @@
 #!/bin/sh
+# Harbor launches MCP servers as stdio subprocesses of the benchmark agent.
+# This wrapper turns that stdio connection into an authenticated connection to
+# the kernel-mcp-server HTTP endpoint running locally in the same Hypeman task.
+# The setup script writes the project-scoped key to /run so it never appears in
+# the generated agent configuration.
 set -eu
 
 key_file=/run/kernel-mcp-benchmark/api-key

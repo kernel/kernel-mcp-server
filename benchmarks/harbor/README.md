@@ -1,55 +1,66 @@
-# Harbor ClawBench benchmark
+# Benchmark Kernel MCP with ClawBench
 
-This directory runs stock Harbor agents (Claude Code, Codex) against a locally built `kernel-mcp-server` on a ClawBench task in a single Hypeman sandbox. The task starts from the Kernel-backed ClawBench Harbor adaptation, replaces Playwright MCP with the local source-pinned Kernel MCP server, and keeps ClawBench attached to the same pre-created browser.
+[ClawBench](https://github.com/TIGER-AI-Lab/ClawBench) is a suite of browser tasks. Each task describes work to complete on a real website and an evaluator that watches for the network request representing completion. ClawBench then judges the submitted request parameters.
+
+[Harbor](https://github.com/laude-institute/harbor) runs those tasks as reproducible agent trials. For each trial, Harbor creates an isolated environment, installs a stock agent such as Codex or Claude Code, gives it the task's MCP tools and instruction, runs the verifier, and writes the reward and ATIF trajectory to a job directory.
+
+This benchmark uses `harbor_hypeman:HypemanEnvironment` as Harbor's execution backend. Hypeman starts one environment from this repository's benchmark image for every trial. Everything for that trial runs inside the same environment:
+
+1. ClawBench creates one stealth Kernel browser and attaches its request evaluator.
+2. The task setup starts Redis and the locally built `kernel-mcp-server` on port 3002.
+3. Harbor starts the stock agent with a stdio MCP command that connects to that local server.
+4. The agent controls ClawBench's existing browser through `execute_playwright_code`; it cannot create browsers or use managed auth.
+5. ClawBench scores the intercepted request, downloads the replay, and deletes the browser.
+
+The image records the current Git SHA, and the generated task records the ClawBench SHA and browser session ID. The additional `kernel_mcp_valid` result confirms that the agent called the local server with the browser ClawBench created. Task reward still comes directly from ClawBench.
 
 ## Requirements
 
-- Harbor 0.21.0 with `harbor-hypeman` 0.1.1 (launched through `uvx`)
-- [uv](https://docs.astral.sh/uv/) and Hypeman CLI credentials
-- A ClawBench checkout containing commit `df6743f` (`kernel/ClawBench` PR #1)
+- `uv`, Harbor 0.21.0, and `harbor-hypeman` 0.1.1
+- Hypeman CLI credentials
+- a ClawBench checkout containing `df6743f` from `kernel/ClawBench` PR #1
 - `KERNEL_MCP_BENCHMARK_API_KEY` scoped to an isolated evaluation project
-- `KERNEL_MCP_BENCHMARK_PROJECT_ID`
-- `PURELY_MAIL_API_KEY` and `PURELY_MAIL_DOMAIN` for account-task credentials
-- `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` for Claude Code
-- `OPENAI_API_KEY` for Codex
+- `PURELY_MAIL_API_KEY` and `PURELY_MAIL_DOMAIN` for ClawBench account tasks
+- `OPENAI_API_KEY` for Codex, or Anthropic credentials for Claude Code
+- the ClawBench judge variables when using a hosted judge: `CLAWBENCH_JUDGE_BASE_URL`, `CLAWBENCH_JUDGE_API_KEY`, `CLAWBENCH_JUDGE_MODEL`, and `CLAWBENCH_JUDGE_API_TYPE`
 
-## Build the image
+## Build the trial image
+
+From the `kernel-mcp-server` checkout:
 
 ```bash
 ./benchmarks/harbor/build-image.sh
 ```
 
-The build uses the current Git SHA, installs dependencies with Bun, runs the production Next.js build, and writes the resulting image reference to the ignored `.image.env` file. Hypeman can report a failed build before the converted image becomes visible; the script performs a bounded 5-minute ready-image check for that case.
+This builds the current checkout with Bun and writes the image reference and Git SHA to the ignored `benchmarks/harbor/.image.env` file.
 
-## Run the ClawBench Kernel MCP arm
+## Run one task
 
 ```bash
 export CLAWBENCH_REPO=../ClawBench
-./benchmarks/harbor/clawbench/run-control.sh claude-code \
+./benchmarks/harbor/clawbench/run.sh codex \
   v2-1134-chapter-finder-redcross
 ```
 
-Defaults:
-
-| Agent       | Version | Model             |
-| ----------- | ------: | ----------------- |
-| Claude Code | 2.1.238 | `claude-sonnet-5` |
-| Codex       | 0.120.0 | `gpt-5.6-luna`    |
-
-Override models with `CLAUDE_BENCHMARK_MODEL` or `CODEX_BENCHMARK_MODEL`. Single-task runs have a 40-minute wall-clock limit; full-suite runs default to 6 hours. Change either with `HARBOR_BENCHMARK_TIMEOUT`.
-
-Pass `all` instead of a task ID to run the complete suite, and set `HARBOR_N_CONCURRENT` to control parallelism:
+## Run the full suite
 
 ```bash
-HARBOR_N_CONCURRENT=10 ./benchmarks/harbor/clawbench/run-control.sh codex all
+export CLAWBENCH_REPO=../ClawBench
+HARBOR_N_CONCURRENT=10 \
+  ./benchmarks/harbor/clawbench/run.sh codex all
 ```
 
-`run-control.sh` adapts the selected ClawBench tasks with `clawbench-harbor-adapt`, converts them with `clawbench/prepare-control.py`, and runs them under Harbor. Each generated task:
+Codex defaults to version `0.120.0` with `gpt-5.6-luna`. Claude Code defaults to version `2.1.238` with `claude-sonnet-5`. Override these with `CODEX_BENCHMARK_MODEL`, `CODEX_BENCHMARK_VERSION`, `CLAUDE_BENCHMARK_MODEL`, or `CLAUDE_BENCHMARK_VERSION`.
 
-- exposes `get_connection_context` and `execute_playwright_code`
-- disables coordinate-based computer actions, browser lifecycle, and managed-auth toolsets
-- instructs the agent to read `./my-info/kernel_browser.json` and use that session ID
-- instructs account tasks to use the supplied PurelyMail credentials instead of managed auth
-- verifies ATIF observations, project scope, exact session reuse, ClawBench interception, replay finalization, and browser deletion
+Single-task runs have a 40-minute wall-clock limit. Full-suite runs default to six hours. Set `HARBOR_BENCHMARK_TIMEOUT` to override either limit. Set `HARBOR_JOBS_DIR` to choose where Harbor writes results.
 
-Outputs use the normal Harbor job directory and add `kernel-mcp-control-result.json`, Kernel MCP logs, source manifests, and same-session metrics to the ClawBench verifier artifacts.
+## Results
+
+Harbor writes its normal job directory, including:
+
+- `trajectory.json`: the agent's ATIF messages and tool calls
+- `reward.json`: ClawBench's reward plus the `kernel_mcp_valid` diagnostic
+- `clawbench-result.json`: evaluator details
+- `kernel-mcp-result.json`: local-source and same-browser wiring details
+- `recording.mp4`: the finalized Kernel replay
+- `kernel-mcp/`: local server logs and the source/session manifest
