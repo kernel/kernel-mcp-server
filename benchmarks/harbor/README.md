@@ -4,7 +4,7 @@
 
 [Harbor](https://github.com/laude-institute/harbor) runs those tasks as reproducible agent trials. For each trial, Harbor creates an isolated environment, installs a stock agent such as Codex or Claude Code, gives it the task's MCP tools and instruction, runs the verifier, and writes the reward and ATIF trajectory to a job directory.
 
-This benchmark uses `harbor_hypeman:HypemanEnvironment` as Harbor's execution backend. Hypeman starts one environment from this repository's benchmark image for every trial. Everything for that trial runs inside the same environment:
+This benchmark uses `harbor_hypeman:HypemanEnvironment` as Harbor's execution backend. For every trial, Harbor asks Hypeman to start an isolated VM from this repository's benchmark image. Everything for that trial runs inside that VM:
 
 1. ClawBench creates one stealth Kernel browser and attaches its request evaluator.
 2. The task setup starts Redis and the locally built `kernel-mcp-server` on port 3002.
