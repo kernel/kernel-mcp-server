@@ -122,7 +122,13 @@ job_name=${3:-kernel-mcp-${agent}-${task_id}-$(date -u +%Y%m%dT%H%M%SZ)}
 jobs_dir=${4:-${HARBOR_JOBS_DIR:-/tmp/kernel-mcp-clawbench-jobs}}
 mkdir -p "$jobs_dir"
 
-timeout --signal=INT --kill-after=30s "${HARBOR_BENCHMARK_TIMEOUT:-40m}" \
+if [[ "$task_id" == "all" ]]; then
+  default_timeout=6h
+else
+  default_timeout=40m
+fi
+
+timeout --signal=INT --kill-after=30s "${HARBOR_BENCHMARK_TIMEOUT:-$default_timeout}" \
   uvx --from "harbor==0.21.0" --with "harbor-hypeman==0.1.1" harbor run \
   --path "$dataset" \
   --agent "$agent" \

@@ -36,7 +36,7 @@ Defaults:
 | Claude Code | 2.1.238 | `claude-sonnet-5` |
 | Codex       | 0.120.0 | `gpt-5.6-luna`    |
 
-Override models with `CLAUDE_BENCHMARK_MODEL` or `CODEX_BENCHMARK_MODEL`. Runs have a 40-minute wall-clock limit; change it with `HARBOR_BENCHMARK_TIMEOUT`.
+Override models with `CLAUDE_BENCHMARK_MODEL` or `CODEX_BENCHMARK_MODEL`. Single-task runs have a 40-minute wall-clock limit; full-suite runs default to 6 hours. Change either with `HARBOR_BENCHMARK_TIMEOUT`.
 
 Pass `all` instead of a task ID to run the complete suite, and set `HARBOR_N_CONCURRENT` to control parallelism:
 
