@@ -8,17 +8,28 @@
 //   bun scripts/record-oauth-redis-contract.ts
 //
 // Requires a disposable Redis: every key in the selected database is
-// flushed between scenarios. Point it at an isolated instance with
-// OAUTH_RECORDING_REDIS_URL (default redis://127.0.0.1:6379/15).
+// flushed between scenarios. Non-loopback hosts are refused unless
+// OAUTH_RECORDING_ALLOW_REMOTE_REDIS=1. Point it at an isolated instance
+// with OAUTH_RECORDING_REDIS_URL (default redis://127.0.0.1:6379/15).
 
 // Hard-assign every environment input the OAuth code reads instead of
 // inheriting ambient values: recordings must be reproducible, and an
 // inherited REDIS_URL could point the flushes below at real data.
 const recordingRedisUrl =
   process.env.OAUTH_RECORDING_REDIS_URL ?? "redis://127.0.0.1:6379/15";
-if (!new URL(recordingRedisUrl).pathname.endsWith("/15")) {
+const parsedRecordingRedisUrl = new URL(recordingRedisUrl);
+if (!parsedRecordingRedisUrl.pathname.endsWith("/15")) {
   throw new Error(
     "OAUTH_RECORDING_REDIS_URL must select database 15: this script flushes it between scenarios",
+  );
+}
+const loopbackHosts = ["127.0.0.1", "::1", "localhost"];
+if (
+  !loopbackHosts.includes(parsedRecordingRedisUrl.hostname) &&
+  process.env.OAUTH_RECORDING_ALLOW_REMOTE_REDIS !== "1"
+) {
+  throw new Error(
+    "OAUTH_RECORDING_REDIS_URL must be loopback; export OAUTH_RECORDING_ALLOW_REMOTE_REDIS=1 to target a remote instance you know is disposable",
   );
 }
 process.env.REDIS_URL = recordingRedisUrl;
@@ -32,12 +43,16 @@ process.env.OAUTH_LEGACY_NON_PKCE_CLIENT_IDS = "rec_legacy_client";
 import type { NextResponse } from "next/server";
 import type { TokenDependencies } from "@/app/token/route";
 import type { AuthorizeDependencies } from "@/app/authorize/route";
+import type { OAuthAuthorizationContext } from "@/lib/oauth-context";
 
 const { NextRequest } = await import("next/server");
 const { tokenRequest } = await import("@/app/token/route");
 const { authorizeRequest } = await import("@/app/authorize/route");
-const { deriveS256CodeChallenge, organizationAuthorizationContext } =
-  await import("@/lib/oauth-context");
+const {
+  deriveS256CodeChallenge,
+  organizationAuthorizationContext,
+  serializeAuthorizationContext,
+} = await import("@/lib/oauth-context");
 const { resolveAuthorizationContext } = await import("@/lib/org-utils");
 const { REFRESH_TOKEN_ORG_TTL_SECONDS } = await import("@/lib/const");
 const {
@@ -111,21 +126,48 @@ interface Snapshot {
   keys: { key: string; value: string; ttl_seconds: number }[];
 }
 
-// Every TTL this code writes is one of the pinned constants. Reading the
-// TTL back can land a second low depending on timing, so snap values within
-// tolerance to their constant and treat anything else as a contract change.
-const PINNED_TTL_SECONDS = [EXPIRES_IN_SECONDS, REFRESH_TOKEN_ORG_TTL_SECONDS];
+interface CapturedWrite {
+  value: string;
+  ttlSeconds: number;
+}
 
-function pinnedTtl(seconds: number): number {
-  const pinned = PINNED_TTL_SECONDS.find(
-    (value) => Math.abs(value - seconds) <= 5,
-  );
-  if (!pinned) {
-    throw new Error(
-      `Redis TTL ${seconds}s matches no pinned TTL (${PINNED_TTL_SECONDS.join("s, ")}s)`,
-    );
-  }
-  return pinned;
+// TTLs are captured where production code hands them to the real writers,
+// so the fixture records exactly what was requested. The live Redis TTL is
+// read back only as a sanity check that expiration was applied.
+let capturedWrites: CapturedWrite[] = [];
+
+const TTL_SANITY_TOLERANCE_SECONDS = 10;
+
+function captureWrite(
+  authorizationContext: OAuthAuthorizationContext,
+  ttlSeconds: number,
+): void {
+  capturedWrites.push({
+    value: serializeAuthorizationContext(authorizationContext),
+    ttlSeconds,
+  });
+}
+
+async function recordingPersist(
+  args: Parameters<typeof persistOAuthTokenContexts>[0],
+): Promise<void> {
+  captureWrite(args.authorizationContext, args.jwtTtlSeconds);
+  captureWrite(args.authorizationContext, args.refreshTtlSeconds);
+  return persistOAuthTokenContexts(args);
+}
+
+async function recordingSetRequestContext(
+  input: Parameters<AuthorizeDependencies["setRequestContext"]>[0],
+): Promise<void> {
+  captureWrite(input.authorizationContext, input.ttlSeconds);
+  return setAuthorizationContextForRequest(input);
+}
+
+async function recordingSetClientContext(
+  input: Parameters<AuthorizeDependencies["setClientContext"]>[0],
+): Promise<void> {
+  captureWrite(input.authorizationContext, input.ttlSeconds);
+  return setAuthorizationContextForClientId(input);
 }
 
 async function snapshot(after: string): Promise<Snapshot> {
@@ -133,11 +175,22 @@ async function snapshot(after: string): Promise<Snapshot> {
   return {
     after,
     keys: await Promise.all(
-      keys.map(async (key) => ({
-        key,
-        value: (await redisClient.get(key))!,
-        ttl_seconds: pinnedTtl(await redisClient.ttl(key)),
-      })),
+      keys.map(async (key) => {
+        const value = (await redisClient.get(key))!;
+        const liveTtl = await redisClient.ttl(key);
+        const write = capturedWrites.find(
+          (candidate) =>
+            candidate.value === value &&
+            Math.abs(candidate.ttlSeconds - liveTtl) <=
+              TTL_SANITY_TOLERANCE_SECONDS,
+        );
+        if (!write) {
+          throw new Error(
+            `no captured write explains ${key} (Redis TTL ${liveTtl}s)`,
+          );
+        }
+        return { key, value, ttl_seconds: write.ttlSeconds };
+      }),
     ),
   };
 }
@@ -148,7 +201,7 @@ function tokenDependencies(clerkTokens: ClerkTokens): TokenDependencies {
     resolveContext: resolveAuthorizationContext,
     verify: async () => ({ sub: USER_ID }),
     hasMembership: async () => true,
-    persistContexts: persistOAuthTokenContexts,
+    persistContexts: recordingPersist,
   };
 }
 
@@ -159,8 +212,8 @@ function authorizeDependencies(): AuthorizeDependencies {
       orgId: ORG_ID,
       getToken: async () => CLERK_SESSION_TOKEN,
     }),
-    setRequestContext: setAuthorizationContextForRequest,
-    setClientContext: setAuthorizationContextForClientId,
+    setRequestContext: recordingSetRequestContext,
+    setClientContext: recordingSetClientContext,
     requireProject: async () => ({
       id: PROJECT_ID,
       name: "recording project",
@@ -320,7 +373,7 @@ const scenarios: Scenario[] = [
     description:
       "A pre-existing context without clerk_user_id (stored by older versions) is refreshed: the id_token subject is backfilled into the newly written contexts.",
     run: async () => {
-      await persistOAuthTokenContexts({
+      await recordingPersist({
         jwt: "rec-id-token-seed-v1",
         newRefreshToken: "rec-refresh-seed-v1",
         authorizationContext: organizationAuthorizationContext({
@@ -349,6 +402,7 @@ async function main(): Promise<void> {
   let keyCount = 0;
   for (const scenario of scenarios) {
     await redisClient.flushDb();
+    capturedWrites = [];
     const snapshots = await scenario.run();
     keyCount += snapshots.at(-1)!.keys.length;
     recordedScenarios.push({
@@ -357,7 +411,6 @@ async function main(): Promise<void> {
       snapshots,
     });
   }
-  await redisClient.flushDb();
 
   const recording = {
     meta: {
@@ -368,9 +421,9 @@ async function main(): Promise<void> {
         enforcement:
           "CI regenerates this file and fails when it differs from what is committed.",
         redis:
-          "Isolated disposable Redis; database 15 is flushed between scenarios.",
+          "Isolated disposable Redis; must be loopback unless OAUTH_RECORDING_ALLOW_REMOTE_REDIS=1. Database 15 is flushed between scenarios.",
         ttl_note:
-          "ttl_seconds is read back from Redis and snapped to the nearest pinned TTL (3600 or 2592000) within a 5s tolerance; anything outside tolerance fails the run.",
+          "ttl_seconds is the exact ttlSeconds argument the OAuth code passed to the Redis writers, captured at the dependency seam. The live Redis TTL is only sanity-checked against it (within 10s) to confirm expiration was applied.",
       },
       key_derivations: {
         "jwt:<hmac>": "HMAC-SHA256(CLERK_SECRET_KEY, access token), hex digest",
@@ -433,5 +486,12 @@ async function main(): Promise<void> {
   );
 }
 
-await main();
-await redisClient.disconnect();
+try {
+  await main();
+} finally {
+  try {
+    if (redisClient.isReady) await redisClient.flushDb();
+  } finally {
+    if (redisClient.isOpen) await redisClient.disconnect();
+  }
+}
