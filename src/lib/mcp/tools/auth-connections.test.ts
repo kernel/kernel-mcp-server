@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { organizationWideAuthInfo } from "@/lib/mcp/auth-context.test-fixtures";
+import { connectTestMcp } from "@/lib/mcp/mcp-test-fixtures";
+import { registerAuthConnectionTools } from "./auth-connections";
 import { toSafeAuthConnection } from "./managed-auth-state";
 import {
   assertNoSecrets,
@@ -44,6 +46,25 @@ describe("manage_auth_connections programmatic surface", () => {
       }).success,
     ).toBe(false);
     expect(schema?.sign_in_option_id).toBeUndefined();
+  });
+
+  test("publishes browser telemetry categories without JSON Schema references", async () => {
+    const { client, close } = await connectTestMcp(
+      registerAuthConnectionTools,
+      unusedKernelClient,
+    );
+
+    try {
+      const tool = (await client.listTools()).tools.find(
+        ({ name }) => name === "manage_auth_connections",
+      );
+      const browserTelemetry = tool?.inputSchema.properties?.browser_telemetry;
+
+      expect(browserTelemetry).toBeDefined();
+      expect(JSON.stringify(browserTelemetry)).not.toContain('"$ref"');
+    } finally {
+      await close();
+    }
   });
 
   test("passes the optional project selector through to the client", async () => {

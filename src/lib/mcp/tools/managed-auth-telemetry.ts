@@ -1,19 +1,21 @@
 import { z } from "zod";
 
-const telemetryCategorySchema = z.object({
-  enabled: z.boolean().optional(),
-});
+function telemetryCategorySchema() {
+  return z.object({
+    enabled: z.boolean().optional(),
+  });
+}
 
 const telemetryCategoriesSchema = z.object({
-  captcha: telemetryCategorySchema.optional(),
-  connection: telemetryCategorySchema.optional(),
-  console: telemetryCategorySchema.optional(),
-  control: telemetryCategorySchema.optional(),
-  interaction: telemetryCategorySchema.optional(),
-  network: telemetryCategorySchema.optional(),
-  page: telemetryCategorySchema.optional(),
-  screenshot: telemetryCategorySchema.optional(),
-  system: telemetryCategorySchema.optional(),
+  captcha: telemetryCategorySchema().optional(),
+  connection: telemetryCategorySchema().optional(),
+  console: telemetryCategorySchema().optional(),
+  control: telemetryCategorySchema().optional(),
+  interaction: telemetryCategorySchema().optional(),
+  network: telemetryCategorySchema().optional(),
+  page: telemetryCategorySchema().optional(),
+  screenshot: telemetryCategorySchema().optional(),
+  system: telemetryCategorySchema().optional(),
 });
 
 export const managedAuthBrowserTelemetrySchema = z
