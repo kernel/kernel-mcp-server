@@ -1,0 +1,270 @@
+{
+  "meta": {
+    "purpose": "Golden fixtures of the Redis state written by the OAuth /authorize and /token endpoints for fixed logins. Key names, HMAC derivations, stored values, and TTLs must stay byte-identical unless a diff is reviewed deliberately.",
+    "regeneration": {
+      "command": "bun scripts/record-oauth-redis-contract.ts",
+      "enforcement": "CI regenerates this file and fails when it differs from what is committed.",
+      "redis": "Isolated disposable Redis; must be loopback unless OAUTH_RECORDING_ALLOW_REMOTE_REDIS=1. Database 15 is flushed between scenarios.",
+      "ttl_note": "ttl_seconds is the exact ttlSeconds argument the OAuth code passed to the Redis writers, captured at the dependency seam for the specific key it was called with. The live Redis TTL is only sanity-checked against it (within 10s) to confirm expiration was applied."
+    },
+    "key_derivations": {
+      "jwt:<hmac>": "HMAC-SHA256(CLERK_SECRET_KEY, access token), hex digest",
+      "refresh:<hmac>": "HMAC-SHA256(CLERK_SECRET_KEY, refresh token), hex digest",
+      "oauth-request:<hmac>": "HMAC-SHA256(CLERK_SECRET_KEY, '<client_id>:<code_challenge>'), hex digest",
+      "client:<client_id>": "Legacy allowlisted clients only; the client id is used literally, not hashed."
+    },
+    "pinned_inputs": {
+      "environment": {
+        "CLERK_SECRET_KEY": "sk_test_recording_fixture",
+        "NEXT_PUBLIC_CLERK_DOMAIN": "clerk.recording.invalid",
+        "KERNEL_CLI_PROD_CLIENT_ID": "rec_cli_prod",
+        "KERNEL_CLI_STAGING_CLIENT_ID": "rec_cli_staging",
+        "KERNEL_CLI_DEV_CLIENT_ID": "rec_cli_dev",
+        "OAUTH_LEGACY_NON_PKCE_CLIENT_IDS": "rec_legacy_client"
+      },
+      "identifiers": {
+        "pkce_client_id": "rec_pkce_client",
+        "project_client_id": "rec_project_client",
+        "legacy_client_id": "rec_legacy_client",
+        "clerk_user_id": "user_rec_1",
+        "clerk_org_id": "org_rec_1",
+        "project_id": "proj_rec_1",
+        "clerk_session_token": "rec-clerk-session-token",
+        "seed_id_token": "rec-id-token-seed-v1",
+        "seed_refresh_token": "rec-refresh-seed-v1"
+      },
+      "pkce": {
+        "code_verifier": "recording-code-verifier-0123456789abcdef",
+        "code_challenge": "EicgRPETe-PXVNj6D8JnnGpVo9wX8fcNL9jNzQegmas",
+        "note": "code_challenge is base64url(SHA-256(code_verifier)) with no padding."
+      },
+      "clerk_responses": {
+        "authorization_code_organization": {
+          "access_token": "rec-clerk-access-token-org",
+          "id_token": "rec-id-token-org-v1",
+          "refresh_token": "rec-refresh-initial-org-v1",
+          "expires_in": 3600,
+          "token_type": "Bearer"
+        },
+        "authorization_code_project": {
+          "access_token": "rec-clerk-access-token-project",
+          "id_token": "rec-id-token-project-v1",
+          "refresh_token": "rec-refresh-initial-project-v1",
+          "expires_in": 3600,
+          "token_type": "Bearer"
+        },
+        "refresh_after_org_grant": {
+          "access_token": "rec-clerk-access-token-refresh",
+          "id_token": "rec-id-token-after-refresh-v1",
+          "refresh_token": "rec-refresh-rotated-v1",
+          "expires_in": 3600,
+          "token_type": "Bearer"
+        },
+        "legacy_non_pkce_exchange": {
+          "access_token": "rec-clerk-access-token-legacy",
+          "id_token": "rec-id-token-legacy-v1",
+          "refresh_token": "rec-refresh-legacy-grant-v1",
+          "expires_in": 3600,
+          "token_type": "Bearer"
+        },
+        "refresh_after_backfill_seed": {
+          "access_token": "rec-clerk-access-token-backfill",
+          "id_token": "rec-id-token-backfill-v1",
+          "refresh_token": "rec-refresh-backfill-rotated-v1",
+          "expires_in": 3600,
+          "token_type": "Bearer"
+        }
+      },
+      "context_serialization": "Stored values are JSON strings whose field order follows the writer: version, clerk_user_id?, clerk_org_id, access_scope[, project_id]."
+    },
+    "coverage": [
+      "authorization_code_org_scoped_pkce: PKCE authorization for an organization-wide scope: authorize stores the oauth-request context, the code exchange consumes it and persists jwt/refresh mappings.",
+      "authorization_code_project_scoped_pkce: Same as above but the selected scope is a single project, so the persisted context carries project_id.",
+      "refresh_token_rotation_sliding_ttl: An initial org-scoped grant is followed by a refresh_token grant: the old refresh mapping is deleted, the rotated one is written with a fresh sliding TTL.",
+      "legacy_non_pkce_client: An allowlisted legacy client without PKCE: authorize stores the context under the literal client:<client_id> key, which its exchanges read.",
+      "refresh_backfills_clerk_user_id_from_id_token: A pre-existing context without clerk_user_id (stored by older versions) is refreshed: the id_token subject is backfilled into the newly written contexts."
+    ]
+  },
+  "scenarios": [
+    {
+      "name": "authorization_code_org_scoped_pkce",
+      "description": "PKCE authorization for an organization-wide scope: authorize stores the oauth-request context, the code exchange consumes it and persists jwt/refresh mappings.",
+      "snapshots": [
+        {
+          "after": "after_authorize",
+          "keys": [
+            {
+              "key": "oauth-request:06dcc014a0e11f4b90a6d48dce64b89085b2cd868b50d7996ee7e793a545f414",
+              "value": "{\"version\":1,\"clerk_user_id\":\"user_rec_1\",\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"organization\"}",
+              "ttl_seconds": 3600
+            }
+          ]
+        },
+        {
+          "after": "after_token_exchange",
+          "keys": [
+            {
+              "key": "jwt:f354fa5d08a8a7980a9e46916d041eaadbd3da546397224b45f37dbbba269f5f",
+              "value": "{\"version\":1,\"clerk_user_id\":\"user_rec_1\",\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"organization\"}",
+              "ttl_seconds": 3600
+            },
+            {
+              "key": "refresh:5a492120707275e568071d1de4a0f33ab6d95247a0a89ac6ee3e94ab4af587c6",
+              "value": "{\"version\":1,\"clerk_user_id\":\"user_rec_1\",\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"organization\"}",
+              "ttl_seconds": 2592000
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "authorization_code_project_scoped_pkce",
+      "description": "Same as above but the selected scope is a single project, so the persisted context carries project_id.",
+      "snapshots": [
+        {
+          "after": "after_authorize",
+          "keys": [
+            {
+              "key": "oauth-request:1a0d98caaf238aeb350c65051b25a0fa9265bf0bf769816c8dd4cf5eb132e760",
+              "value": "{\"version\":1,\"clerk_user_id\":\"user_rec_1\",\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"project\",\"project_id\":\"proj_rec_1\"}",
+              "ttl_seconds": 3600
+            }
+          ]
+        },
+        {
+          "after": "after_token_exchange",
+          "keys": [
+            {
+              "key": "jwt:f9c717769b693a3f41c28e0bdb1241686285b26e84cfa7d89648299cba042836",
+              "value": "{\"version\":1,\"clerk_user_id\":\"user_rec_1\",\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"project\",\"project_id\":\"proj_rec_1\"}",
+              "ttl_seconds": 3600
+            },
+            {
+              "key": "refresh:9152aa32fd1dbd4be8d9d377f258da227855ff0ddac45f87d3ba52bb3c36293a",
+              "value": "{\"version\":1,\"clerk_user_id\":\"user_rec_1\",\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"project\",\"project_id\":\"proj_rec_1\"}",
+              "ttl_seconds": 2592000
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "refresh_token_rotation_sliding_ttl",
+      "description": "An initial org-scoped grant is followed by a refresh_token grant: the old refresh mapping is deleted, the rotated one is written with a fresh sliding TTL.",
+      "snapshots": [
+        {
+          "after": "after_initial_authorization_code_grant",
+          "keys": [
+            {
+              "key": "jwt:f354fa5d08a8a7980a9e46916d041eaadbd3da546397224b45f37dbbba269f5f",
+              "value": "{\"version\":1,\"clerk_user_id\":\"user_rec_1\",\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"organization\"}",
+              "ttl_seconds": 3600
+            },
+            {
+              "key": "refresh:5a492120707275e568071d1de4a0f33ab6d95247a0a89ac6ee3e94ab4af587c6",
+              "value": "{\"version\":1,\"clerk_user_id\":\"user_rec_1\",\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"organization\"}",
+              "ttl_seconds": 2592000
+            }
+          ]
+        },
+        {
+          "after": "after_refresh_grant",
+          "keys": [
+            {
+              "key": "jwt:339e3960e97f29e7f574acf069d5437259977134bf5ca1e6e276bcd0ba83e8c1",
+              "value": "{\"version\":1,\"clerk_user_id\":\"user_rec_1\",\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"organization\"}",
+              "ttl_seconds": 3600
+            },
+            {
+              "key": "jwt:f354fa5d08a8a7980a9e46916d041eaadbd3da546397224b45f37dbbba269f5f",
+              "value": "{\"version\":1,\"clerk_user_id\":\"user_rec_1\",\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"organization\"}",
+              "ttl_seconds": 3600
+            },
+            {
+              "key": "refresh:d5b1e992e291db7209e801cdb0428263e2bb960581aa1d07d97ba92bd256a678",
+              "value": "{\"version\":1,\"clerk_user_id\":\"user_rec_1\",\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"organization\"}",
+              "ttl_seconds": 2592000
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "legacy_non_pkce_client",
+      "description": "An allowlisted legacy client without PKCE: authorize stores the context under the literal client:<client_id> key, which its exchanges read.",
+      "snapshots": [
+        {
+          "after": "after_authorize",
+          "keys": [
+            {
+              "key": "client:rec_legacy_client",
+              "value": "{\"version\":1,\"clerk_user_id\":\"user_rec_1\",\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"organization\"}",
+              "ttl_seconds": 3600
+            }
+          ]
+        },
+        {
+          "after": "after_token_exchange",
+          "keys": [
+            {
+              "key": "client:rec_legacy_client",
+              "value": "{\"version\":1,\"clerk_user_id\":\"user_rec_1\",\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"organization\"}",
+              "ttl_seconds": 3600
+            },
+            {
+              "key": "jwt:abf831c1434d9fd3ffa39ee4b8d08baee0ea3f2820bb397b47020976cd39b8d4",
+              "value": "{\"version\":1,\"clerk_user_id\":\"user_rec_1\",\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"organization\"}",
+              "ttl_seconds": 3600
+            },
+            {
+              "key": "refresh:32ebe0edb7810a711cb9512453d3c35951c92e29d6fdef05b0e113a290b836b7",
+              "value": "{\"version\":1,\"clerk_user_id\":\"user_rec_1\",\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"organization\"}",
+              "ttl_seconds": 2592000
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "refresh_backfills_clerk_user_id_from_id_token",
+      "description": "A pre-existing context without clerk_user_id (stored by older versions) is refreshed: the id_token subject is backfilled into the newly written contexts.",
+      "snapshots": [
+        {
+          "after": "after_seeding_legacy_contexts",
+          "keys": [
+            {
+              "key": "jwt:e7eff5decd43cef2cff150346e1abd0f70148901d02f75f3ff156d4585c2845d",
+              "value": "{\"version\":1,\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"organization\"}",
+              "ttl_seconds": 3600
+            },
+            {
+              "key": "refresh:fbfc42851abca9b7e7916c50bc0ad80c3cfc771a4d01021147b613047802748a",
+              "value": "{\"version\":1,\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"organization\"}",
+              "ttl_seconds": 2592000
+            }
+          ]
+        },
+        {
+          "after": "after_refresh_grant",
+          "keys": [
+            {
+              "key": "jwt:03ce2c74deb9d836999e931f4d325cc28f7587c8063cce6681ed2a05033fc2a2",
+              "value": "{\"version\":1,\"clerk_user_id\":\"user_rec_1\",\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"organization\"}",
+              "ttl_seconds": 3600
+            },
+            {
+              "key": "jwt:e7eff5decd43cef2cff150346e1abd0f70148901d02f75f3ff156d4585c2845d",
+              "value": "{\"version\":1,\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"organization\"}",
+              "ttl_seconds": 3600
+            },
+            {
+              "key": "refresh:72e815980eb0bec62c9a33614c37ba03af317d1797b794eea10f74a941c4e607",
+              "value": "{\"version\":1,\"clerk_user_id\":\"user_rec_1\",\"clerk_org_id\":\"org_rec_1\",\"access_scope\":\"organization\"}",
+              "ttl_seconds": 2592000
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

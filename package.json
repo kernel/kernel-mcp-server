@@ -28,6 +28,7 @@
     "start": "next start -p 3002",
     "lint": "next lint",
     "test": "bun test",
+    "record:oauth-redis-contract": "bun scripts/record-oauth-redis-contract.ts",
     "format": "prettier --write \"**/*.{ts,js,json,md}\"",
     "format:check": "prettier --check \"**/*.{ts,js,json,md}\""
   },
