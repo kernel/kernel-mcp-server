@@ -12,6 +12,8 @@
 // OAUTH_RECORDING_ALLOW_REMOTE_REDIS=1. Point it at an isolated instance
 // with OAUTH_RECORDING_REDIS_URL (default redis://127.0.0.1:6379/15).
 
+import { createHmac } from "crypto";
+
 // Hard-assign every environment input the OAuth code reads instead of
 // inheriting ambient values: recordings must be reproducible, and an
 // inherited REDIS_URL could point the flushes below at real data.
@@ -43,16 +45,12 @@ process.env.OAUTH_LEGACY_NON_PKCE_CLIENT_IDS = "rec_legacy_client";
 import type { NextResponse } from "next/server";
 import type { TokenDependencies } from "@/app/token/route";
 import type { AuthorizeDependencies } from "@/app/authorize/route";
-import type { OAuthAuthorizationContext } from "@/lib/oauth-context";
 
 const { NextRequest } = await import("next/server");
 const { tokenRequest } = await import("@/app/token/route");
 const { authorizeRequest } = await import("@/app/authorize/route");
-const {
-  deriveS256CodeChallenge,
-  organizationAuthorizationContext,
-  serializeAuthorizationContext,
-} = await import("@/lib/oauth-context");
+const { deriveS256CodeChallenge, organizationAuthorizationContext } =
+  await import("@/lib/oauth-context");
 const { resolveAuthorizationContext } = await import("@/lib/org-utils");
 const { REFRESH_TOKEN_ORG_TTL_SECONDS } = await import("@/lib/const");
 const {
@@ -126,47 +124,48 @@ interface Snapshot {
   keys: { key: string; value: string; ttl_seconds: number }[];
 }
 
-interface CapturedWrite {
-  value: string;
-  ttlSeconds: number;
-}
-
 // TTLs are captured where production code hands them to the real writers,
-// so the fixture records exactly what was requested. The live Redis TTL is
-// read back only as a sanity check that expiration was applied.
-let capturedWrites: CapturedWrite[] = [];
+// keyed by the exact Redis key each writer derives, so a recorded TTL is
+// definitionally the TTL requested for that key — writes carrying the same
+// serialized value (e.g. oauth-request vs jwt vs refresh) can never be
+// attributed to each other. The live Redis TTL is read back only as a
+// sanity check that expiration was applied.
+const capturedTtlByKey = new Map<string, number>();
 
 const TTL_SANITY_TOLERANCE_SECONDS = 10;
 
-function captureWrite(
-  authorizationContext: OAuthAuthorizationContext,
-  ttlSeconds: number,
-): void {
-  capturedWrites.push({
-    value: serializeAuthorizationContext(authorizationContext),
-    ttlSeconds,
-  });
+// Same derivation as src/lib/redis.ts; CLERK_SECRET_KEY is pinned above.
+function redisKeyHash(input: string): string {
+  return createHmac("sha256", process.env.CLERK_SECRET_KEY!)
+    .update(input)
+    .digest("hex");
 }
 
 async function recordingPersist(
   args: Parameters<typeof persistOAuthTokenContexts>[0],
 ): Promise<void> {
-  captureWrite(args.authorizationContext, args.jwtTtlSeconds);
-  captureWrite(args.authorizationContext, args.refreshTtlSeconds);
+  capturedTtlByKey.set(`jwt:${redisKeyHash(args.jwt)}`, args.jwtTtlSeconds);
+  capturedTtlByKey.set(
+    `refresh:${redisKeyHash(args.newRefreshToken)}`,
+    args.refreshTtlSeconds,
+  );
   return persistOAuthTokenContexts(args);
 }
 
 async function recordingSetRequestContext(
   input: Parameters<AuthorizeDependencies["setRequestContext"]>[0],
 ): Promise<void> {
-  captureWrite(input.authorizationContext, input.ttlSeconds);
+  capturedTtlByKey.set(
+    `oauth-request:${redisKeyHash(`${input.clientId}:${input.codeChallenge}`)}`,
+    input.ttlSeconds,
+  );
   return setAuthorizationContextForRequest(input);
 }
 
 async function recordingSetClientContext(
   input: Parameters<AuthorizeDependencies["setClientContext"]>[0],
 ): Promise<void> {
-  captureWrite(input.authorizationContext, input.ttlSeconds);
+  capturedTtlByKey.set(`client:${input.clientId}`, input.ttlSeconds);
   return setAuthorizationContextForClientId(input);
 }
 
@@ -176,20 +175,23 @@ async function snapshot(after: string): Promise<Snapshot> {
     after,
     keys: await Promise.all(
       keys.map(async (key) => {
-        const value = (await redisClient.get(key))!;
+        const expectedTtl = capturedTtlByKey.get(key);
+        if (expectedTtl === undefined) {
+          throw new Error(`no captured write explains ${key}`);
+        }
+        // The recorded TTL is exact by construction; the Redis read only
+        // confirms expiration was applied.
         const liveTtl = await redisClient.ttl(key);
-        const write = capturedWrites.find(
-          (candidate) =>
-            candidate.value === value &&
-            Math.abs(candidate.ttlSeconds - liveTtl) <=
-              TTL_SANITY_TOLERANCE_SECONDS,
-        );
-        if (!write) {
+        if (Math.abs(liveTtl - expectedTtl) > TTL_SANITY_TOLERANCE_SECONDS) {
           throw new Error(
-            `no captured write explains ${key} (Redis TTL ${liveTtl}s)`,
+            `${key} expires in ${liveTtl}s but production wrote ${expectedTtl}s`,
           );
         }
-        return { key, value, ttl_seconds: write.ttlSeconds };
+        return {
+          key,
+          value: (await redisClient.get(key))!,
+          ttl_seconds: expectedTtl,
+        };
       }),
     ),
   };
@@ -402,7 +404,7 @@ async function main(): Promise<void> {
   let keyCount = 0;
   for (const scenario of scenarios) {
     await redisClient.flushDb();
-    capturedWrites = [];
+    capturedTtlByKey.clear();
     const snapshots = await scenario.run();
     keyCount += snapshots.at(-1)!.keys.length;
     recordedScenarios.push({
@@ -423,7 +425,7 @@ async function main(): Promise<void> {
         redis:
           "Isolated disposable Redis; must be loopback unless OAUTH_RECORDING_ALLOW_REMOTE_REDIS=1. Database 15 is flushed between scenarios.",
         ttl_note:
-          "ttl_seconds is the exact ttlSeconds argument the OAuth code passed to the Redis writers, captured at the dependency seam. The live Redis TTL is only sanity-checked against it (within 10s) to confirm expiration was applied.",
+          "ttl_seconds is the exact ttlSeconds argument the OAuth code passed to the Redis writers, captured at the dependency seam for the specific key it was called with. The live Redis TTL is only sanity-checked against it (within 10s) to confirm expiration was applied.",
       },
       key_derivations: {
         "jwt:<hmac>": "HMAC-SHA256(CLERK_SECRET_KEY, access token), hex digest",

@@ -5,7 +5,7 @@
       "command": "bun scripts/record-oauth-redis-contract.ts",
       "enforcement": "CI regenerates this file and fails when it differs from what is committed.",
       "redis": "Isolated disposable Redis; must be loopback unless OAUTH_RECORDING_ALLOW_REMOTE_REDIS=1. Database 15 is flushed between scenarios.",
-      "ttl_note": "ttl_seconds is the exact ttlSeconds argument the OAuth code passed to the Redis writers, captured at the dependency seam. The live Redis TTL is only sanity-checked against it (within 10s) to confirm expiration was applied."
+      "ttl_note": "ttl_seconds is the exact ttlSeconds argument the OAuth code passed to the Redis writers, captured at the dependency seam for the specific key it was called with. The live Redis TTL is only sanity-checked against it (within 10s) to confirm expiration was applied."
     },
     "key_derivations": {
       "jwt:<hmac>": "HMAC-SHA256(CLERK_SECRET_KEY, access token), hex digest",
