@@ -1,4 +1,6 @@
 const SECRET_NAME = /(API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|CREDENTIAL)/i;
+const SENSITIVE_FIELD =
+  /(API_KEY|TOKEN|JWT|SECRET|PASSWORD|PRIVATE_KEY|CREDENTIAL|^COOKIE$|^SET-COOKIE$)/i;
 const REDACTED = "[REDACTED]";
 
 function secretValues(): string[] {
@@ -21,13 +23,15 @@ export function redactString(value: string, maxLength = 20_000): string {
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, REDACTED)
     .replace(/\b(?:sk|pk|bt|kapi|whsec)[-_][A-Za-z0-9_-]{12,}\b/gi, REDACTED)
     .replace(
-      /(["']?(?:api[_-]?key|access[_-]?token|credential|password|secret)["']?\s*[:=]\s*["']?)[^"'\s,}&]+/gi,
+      /(["']?(?:api[_-]?key|access[_-]?token|credential|jwt|password|secret|token)["']?\s*[:=]\s*["']?)[^"'\s,}&]+/gi,
       `$1${REDACTED}`,
     )
     .replace(
-      /([?&](?:api[_-]?key|access[_-]?token|auth|code|credential|password|secret|session[_-]?token)=)[^&#\s]+/gi,
+      /([?&](?:api[_-]?key|access[_-]?token|auth|code|credential|jwt|password|secret|session[_-]?token|token)=)[^&#\s]+/gi,
       `$1${REDACTED}`,
     )
+    .replace(/(\b(?:cookie|set-cookie)\s*:\s*)[^\r\n]+/gi, `$1${REDACTED}`)
+    .replace(/(\/browser\/live\/)[^/?#\s]+/gi, `$1${REDACTED}`)
     .replace(/(wss?:\/\/)[^/@\s]+@/gi, `$1${REDACTED}@`)
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[REDACTED_EMAIL]");
 
@@ -45,7 +49,9 @@ export function redactValue(value: unknown, maxStringLength = 20_000): unknown {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
         key,
-        SECRET_NAME.test(key) ? REDACTED : redactValue(entry, maxStringLength),
+        SENSITIVE_FIELD.test(key)
+          ? REDACTED
+          : redactValue(entry, maxStringLength),
       ]),
     );
   }

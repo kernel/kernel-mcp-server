@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildExperimentEvents, publishBenchmark } from "./publish-braintrust";
-import { readBenchmarkArm, summarizeArm } from "./results";
+import { renderMarkdown } from "./report";
+import { readBenchmarkArm, selectPrimaryReward, summarizeArm } from "./results";
 import { redactString, redactValue } from "./redact";
 
 const temporaryDirectories: string[] = [];
@@ -114,6 +121,7 @@ describe("Harbor result ingestion", () => {
       accuracy: 1,
       false_positive_rate: 0,
       false_negative_rate: 0,
+      infra_error_rate: 0,
       ungraded_rate: 0,
       reward: 1,
       reward_lenient: 1,
@@ -137,7 +145,7 @@ describe("Harbor result ingestion", () => {
       strict: 0,
       intercepted: 1,
       infraErrors: 1,
-      ungraded: 1,
+      ungraded: 0,
       kernelMcpValid: 1,
       medianCalls: 1,
       totalCostUsd: 0.01,
@@ -171,12 +179,22 @@ describe("Harbor result ingestion", () => {
     );
     expect(infra?.scores).toEqual({ infra_error_rate: 1, ungraded_rate: 1 });
     expect(infra?.output).not.toHaveProperty("reward", 0);
+    const success = first.find(
+      (event) =>
+        event.span_attributes.type === "eval" &&
+        (event.output as { reward?: number }).reward === 1,
+    );
+    expect(success?.output).toMatchObject({
+      reward: 1,
+      rewardKey: "reward_lenient",
+    });
   });
 
   test("re-publishes the same rows and spans by deterministic ID", async () => {
     const arm = readBenchmarkArm({ name: "candidate", path: fixture() });
     const originalFetch = globalThis.fetch;
     const inserts: string[][] = [];
+    const metadataUpdates: unknown[] = [];
     globalThis.fetch = (async (request, init) => {
       const url = String(request);
       if (url.endsWith("/v1/project")) {
@@ -192,6 +210,13 @@ describe("Harbor result ingestion", () => {
           project_id: "project-id",
           name: "experiment name",
         });
+      }
+      if (
+        url.endsWith("/v1/experiment/experiment-id") &&
+        init?.method === "PATCH"
+      ) {
+        metadataUpdates.push(JSON.parse(String(init.body)));
+        return Response.json({ id: "experiment-id" });
       }
       if (url.includes("/insert")) {
         const body = JSON.parse(String(init?.body)) as {
@@ -222,12 +247,90 @@ describe("Harbor result ingestion", () => {
       expect(first).toEqual(second);
       expect(inserts).toHaveLength(2);
       expect(inserts[0]).toEqual(inserts[1]);
+      expect(metadataUpdates).toHaveLength(2);
+      expect(metadataUpdates[0]).toEqual(metadataUpdates[1]);
       expect(first.url).toBe(
         "https://www.braintrust.dev/app/Kernel/p/project%20name/experiments/experiment%20name",
       );
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  test("uses the lenient reward per trial and reports incomplete arms", () => {
+    expect(selectPrimaryReward({ reward: 0, reward_lenient: 1 })).toEqual({
+      key: "reward_lenient",
+      value: 1,
+    });
+    const arm = readBenchmarkArm({ name: "candidate", path: fixture() });
+    const second = arm.trials[1];
+    second.error = undefined;
+    second.errorClass = undefined;
+    second.rewards = { reward: 0 };
+    second.scores = {
+      accuracy: 0,
+      false_positive_rate: 0,
+      false_negative_rate: 1,
+      infra_error_rate: 0,
+      reward: 0,
+      ungraded_rate: 0,
+    };
+    const summary = summarizeArm(arm);
+    expect(summary.scored).toBe(2);
+    expect(summary.lenient).toBe(1);
+    expect(summary.configuration).toContain("codex");
+    expect(
+      renderMarkdown("test", [summary], undefined, { candidate: 124 }),
+    ).toContain("Incomplete benchmark: candidate exited 124");
+    expect(
+      renderMarkdown("test", [
+        { ...summary, arm: "candidate", lenient: 0.3 },
+        { ...summary, arm: "baseline", lenient: 0.2 },
+      ]),
+    ).toContain("+0.1 lenient");
+  });
+
+  test("keeps full errors until redaction and clamps derived scores", () => {
+    const root = fixture();
+    const successPath = join(root, "task-one__abc", "result.json");
+    const result = JSON.parse(readFileSync(successPath, "utf8")) as {
+      verifier_result: { rewards: Record<string, number> };
+      exception_info?: string;
+    };
+    result.verifier_result.rewards.reward_lenient = 2;
+    writeJson(successPath, result);
+
+    const failedPath = join(root, "task-two__def", "result.json");
+    const failed = JSON.parse(readFileSync(failedPath, "utf8")) as {
+      exception_info: unknown;
+    };
+    failed.exception_info = `${"x".repeat(395)}secret-value-after-boundary`;
+    writeJson(failedPath, failed);
+
+    const arm = readBenchmarkArm({ name: "candidate", path: root });
+    expect(arm.trials[0].scores.accuracy).toBe(1);
+    expect(arm.trials[1].error?.length).toBeGreaterThan(400);
+
+    process.env.TEST_SECRET = "secret-value-after-boundary";
+    const events = buildExperimentEvents([arm], "redaction-boundary");
+    expect(JSON.stringify(events)).not.toContain("secret-value-after-boundary");
+    expect(JSON.stringify(events)).not.toContain(`${"x".repeat(395)}secre`);
+    delete process.env.TEST_SECRET;
+  });
+
+  test("assigns unique span IDs when ATIF step IDs are absent", () => {
+    const root = fixture();
+    writeJson(join(root, "task-one__abc", "steps/run/agent/trajectory.json"), {
+      steps: [
+        { source: "agent", message: "first" },
+        { source: "agent", message: "second" },
+      ],
+    });
+    const events = buildExperimentEvents(
+      [readBenchmarkArm({ name: "candidate", path: root })],
+      "missing-step-ids",
+    ).filter((event) => event.span_attributes.type === "llm");
+    expect(new Set(events.map((event) => event.id)).size).toBe(2);
   });
 });
 
@@ -236,17 +339,61 @@ describe("Braintrust redaction", () => {
     process.env.TEST_API_KEY = "super-secret-value";
     expect(
       redactString(
-        'Bearer super-secret-value sk-proj-abcdefghijklmnop?access_token=visible "password":"generated-password" user@example.com',
+        'Bearer super-secret-value sk-proj-abcdefghijklmnop?access_token=visible&token=plain&jwt=opaque "password":"generated-password" Cookie: session=visible\nhttps://example.com/browser/live/replay-slug user@example.com',
       ),
     ).toBe(
-      'Bearer [REDACTED] [REDACTED]?access_token=[REDACTED] "password":"[REDACTED]" [REDACTED_EMAIL]',
+      'Bearer [REDACTED] [REDACTED]?access_token=[REDACTED]&token=[REDACTED]&jwt=[REDACTED] "password":"[REDACTED]" Cookie: [REDACTED]\nhttps://example.com/browser/live/[REDACTED] [REDACTED_EMAIL]',
     );
     expect(
-      redactValue({ api_key: "visible", nested: ["bt-abcdefghijklmnop"] }),
+      redactValue({
+        api_key: "visible",
+        Cookie: "session=visible",
+        nested: ["bt-abcdefghijklmnop"],
+      }),
     ).toEqual({
       api_key: "[REDACTED]",
+      Cookie: "[REDACTED]",
       nested: ["[REDACTED]"],
     });
     delete process.env.TEST_API_KEY;
+  });
+});
+
+describe("benchmark workflow hardening", () => {
+  test("uses merge-base comparisons, fixed configs, and arm statuses", () => {
+    const workflow = readFileSync(
+      join(process.cwd(), ".github/workflows/benchmark-clawbench.yml"),
+      "utf8",
+    );
+    expect(workflow).toContain("github.rest.repos.compareCommits");
+    expect(workflow).not.toContain("baseSha = pull.base.sha");
+    expect(workflow).toContain('HARBOR_VERSION: "0.21.0"');
+    expect(workflow).toContain('CODEX_BENCHMARK_VERSION: "0.120.0"');
+    expect(workflow).toContain(
+      'statuses=(--status "candidate=${CANDIDATE_STATUS:-1}")',
+    );
+  });
+
+  test("excludes private keys and forwards only the selected provider", () => {
+    const dockerignore = readFileSync(
+      join(process.cwd(), ".dockerignore"),
+      "utf8",
+    );
+    const runner = readFileSync(
+      join(process.cwd(), "benchmarks/harbor/clawbench/run.sh"),
+      "utf8",
+    );
+    expect(dockerignore.split("\n")).toContain("*.pem");
+    const heredocStart = runner.indexOf('cat >"$runtime_env"');
+    const providerCaseStart = runner.indexOf('case "$agent" in', heredocStart);
+    const providerCase = runner.slice(
+      providerCaseStart,
+      runner.indexOf('chmod 0600 "$runtime_env"'),
+    );
+    expect(providerCase).toContain("ANTHROPIC_API_KEY");
+    expect(providerCase).toContain("OPENAI_API_KEY");
+    const commonEnvironment = runner.slice(heredocStart, providerCaseStart);
+    expect(commonEnvironment).not.toContain("OPENAI_API_KEY");
+    expect(commonEnvironment).not.toContain("ANTHROPIC_API_KEY");
   });
 });

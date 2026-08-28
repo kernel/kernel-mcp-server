@@ -5,4 +5,5 @@ node_modules
 coverage
 .env*
 *.log
+*.pem
 benchmarks/harbor/.image.env

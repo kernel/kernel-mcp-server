@@ -10,6 +10,7 @@ import {
 
 interface Options {
   arms: string[];
+  statuses: Record<string, number>;
   json?: string;
   markdown?: string;
   publication?: string;
@@ -17,7 +18,11 @@ interface Options {
 }
 
 function parseArgs(args: string[]): Options {
-  const options: Options = { arms: [], title: "ClawBench benchmark" };
+  const options: Options = {
+    arms: [],
+    statuses: {},
+    title: "ClawBench benchmark",
+  };
   for (let index = 0; index < args.length; index += 1) {
     const flag = args[index];
     const value = args[index + 1];
@@ -28,6 +33,21 @@ function parseArgs(args: string[]): Options {
       case "--arm":
         options.arms.push(value);
         break;
+      case "--status": {
+        const separator = value.indexOf("=");
+        const status = Number(value.slice(separator + 1));
+        if (
+          separator <= 0 ||
+          separator === value.length - 1 ||
+          !Number.isInteger(status)
+        ) {
+          throw new Error(
+            `Invalid --status ${JSON.stringify(value)}; expected name=exit-code`,
+          );
+        }
+        options.statuses[value.slice(0, separator)] = status;
+        break;
+      }
       case "--json":
         options.json = value;
         break;
@@ -61,28 +81,38 @@ function cost(value: number | undefined): string {
   return value === undefined ? "—" : `$${value.toFixed(4)}`;
 }
 
-function markdown(
+export function renderMarkdown(
   title: string,
   summaries: ArmSummary[],
   publication?: Record<string, unknown>,
+  statuses: Record<string, number> = {},
 ): string {
-  const lines = [
-    "<!-- kernel-mcp-clawbench -->",
-    `## ${title}`,
+  const lines = ["<!-- kernel-mcp-clawbench -->", `## ${title}`];
+  const failed = Object.entries(statuses).filter(([, status]) => status !== 0);
+  if (failed.length > 0) {
+    lines.push(
+      "",
+      `> [!WARNING]\n> Incomplete benchmark: ${failed.map(([arm, status]) => `${arm} exited ${status}`).join(", ")}. Scores below include only completed Harbor results and are not a complete comparison.`,
+    );
+  }
+  lines.push(
     "",
-    "| Arm | Lenient | Strict | Intercepted | Infra | Ungraded | Kernel MCP valid | Median calls | Median duration | Cost |",
-    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
-  ];
+    "| Arm | Configuration | Lenient | Strict | Intercepted | Infra | Ungraded | Kernel MCP valid | Median calls | Median duration | Cost |",
+    "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+  );
   for (const summary of summaries) {
     lines.push(
-      `| ${summary.arm} | ${ratio(summary.lenient, summary.trials)} | ${ratio(summary.strict, summary.trials)} | ${ratio(summary.intercepted, summary.trials)} | ${summary.infraErrors} | ${summary.ungraded} | ${ratio(summary.kernelMcpValid, summary.kernelMcpChecked)} | ${summary.medianCalls ?? "—"} | ${duration(summary.medianDurationMs)} | ${cost(summary.totalCostUsd)} |`,
+      `| ${summary.arm} | ${summary.configuration ?? "—"} | ${ratio(summary.lenient, summary.trials)} | ${ratio(summary.strict, summary.trials)} | ${ratio(summary.intercepted, summary.trials)} | ${summary.infraErrors} | ${summary.ungraded} | ${ratio(summary.kernelMcpValid, summary.kernelMcpChecked)} | ${summary.medianCalls ?? "—"} | ${duration(summary.medianDurationMs)} | ${cost(summary.totalCostUsd)} |`,
     );
   }
 
   const candidate = summaries.find((summary) => summary.arm === "candidate");
   const baseline = summaries.find((summary) => summary.arm === "baseline");
-  if (candidate && baseline) {
-    const signed = (value: number) => `${value >= 0 ? "+" : ""}${value}`;
+  if (candidate && baseline && failed.length === 0) {
+    const signed = (value: number) => {
+      const rounded = Number(value.toFixed(3));
+      return `${rounded >= 0 ? "+" : ""}${rounded}`;
+    };
     const deltas = [
       `**${signed(candidate.lenient - baseline.lenient)} lenient**`,
       candidate.strict !== undefined && baseline.strict !== undefined
@@ -133,9 +163,15 @@ function main(): void {
     benchmark: "clawbench",
     generatedAt: new Date().toISOString(),
     arms: summaries,
+    statuses: options.statuses,
     publication,
   };
-  const rendered = markdown(options.title, summaries, publication);
+  const rendered = renderMarkdown(
+    options.title,
+    summaries,
+    publication,
+    options.statuses,
+  );
   write(options.json, `${JSON.stringify(result, undefined, 2)}\n`);
   write(options.markdown, rendered);
   process.stdout.write(rendered);

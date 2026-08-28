@@ -72,6 +72,7 @@ export interface ArmSummary {
   medianCalls?: number;
   medianDurationMs?: number;
   totalCostUsd?: number;
+  configuration?: string;
 }
 
 function object(value: unknown): JsonObject {
@@ -102,11 +103,11 @@ function readJsonIfPresent(path: string): JsonObject {
   return existsSync(path) ? readJson(path) : {};
 }
 
-function boundedError(value: unknown): string | undefined {
+function errorText(value: unknown): string | undefined {
   if (value === null || value === undefined) return undefined;
   const text =
     typeof value === "string" ? value : JSON.stringify(value, undefined, 2);
-  return text.replace(/\s+/g, " ").trim().slice(0, 400) || undefined;
+  return text.replace(/\s+/g, " ").trim() || undefined;
 }
 
 function numericRecord(value: unknown): Record<string, number> {
@@ -116,6 +117,22 @@ function numericRecord(value: unknown): Record<string, number> {
       return parsed === undefined ? [] : [[key, parsed]];
     }),
   );
+}
+
+export function selectPrimaryReward(
+  rewards: Record<string, number>,
+): { key: "reward_lenient" | "reward"; value: number } | undefined {
+  if (rewards.reward_lenient !== undefined) {
+    return { key: "reward_lenient", value: rewards.reward_lenient };
+  }
+  if (rewards.reward !== undefined) {
+    return { key: "reward", value: rewards.reward };
+  }
+  return undefined;
+}
+
+function clampScore(value: number): number {
+  return Math.min(1, Math.max(0, value));
 }
 
 function isoSeconds(value: unknown): number | undefined {
@@ -180,13 +197,15 @@ function trialScores(
     return { infra_error_rate: 1, ungraded_rate: 1 };
   }
 
-  const reward = rewards.reward ?? rewards.reward_lenient;
-  if (reward === undefined) return { ungraded_rate: 1 };
+  const primary = selectPrimaryReward(rewards);
+  if (!primary) return { infra_error_rate: 0, ungraded_rate: 1 };
 
+  const reward = clampScore(primary.value);
   const scores: Record<string, number> = {
     accuracy: reward,
     false_positive_rate: 0,
     false_negative_rate: 1 - reward,
+    infra_error_rate: 0,
     ungraded_rate: 0,
   };
   for (const [key, value] of Object.entries(rewards)) {
@@ -204,7 +223,7 @@ function parseTrial(arm: string, trialDir: string): BenchmarkTrial {
   const steps = array(result.step_results);
   const exception = result.exception_info;
   const exceptionFile = join(trialDir, "exception.txt");
-  const error = boundedError(
+  const error = errorText(
     exception ??
       (existsSync(exceptionFile)
         ? readFileSync(exceptionFile, "utf8")
@@ -327,13 +346,24 @@ export function summarizeArm(arm: BenchmarkArm): ArmSummary {
       (trial) =>
         trial.errorClass !== "infra" && trial.rewards[key] !== undefined,
     );
-  const lenient = numeric("reward_lenient");
-  const primary = lenient.length > 0 ? lenient : numeric("reward");
+  const primary = arm.trials.flatMap((trial) => {
+    if (trial.errorClass === "infra") return [];
+    const reward = selectPrimaryReward(trial.rewards);
+    return reward ? [{ trial, reward }] : [];
+  });
   const strict = numeric("reward_strict");
   const validity = numeric("kernel_mcp_valid");
   const costs = arm.trials.flatMap((trial) =>
     trial.metrics.costUsd === undefined ? [] : [trial.metrics.costUsd],
   );
+  const configurations = [
+    ...new Set(
+      arm.trials.map(
+        (trial) =>
+          `${trial.agent}${trial.agentVersion ? `@${trial.agentVersion}` : ""}${trial.model ? ` · ${trial.model}` : ""} · config ${trial.agentConfigHash}`,
+      ),
+    ),
+  ];
 
   return {
     arm: arm.name,
@@ -343,11 +373,7 @@ export function summarizeArm(arm: BenchmarkArm): ArmSummary {
       (total, trial) => total + trial.rewards.intercepted,
       0,
     ),
-    lenient: primary.reduce(
-      (total, trial) =>
-        total + (trial.rewards.reward_lenient ?? trial.rewards.reward),
-      0,
-    ),
+    lenient: primary.reduce((total, entry) => total + entry.reward.value, 0),
     strict:
       strict.length === 0
         ? undefined
@@ -358,8 +384,10 @@ export function summarizeArm(arm: BenchmarkArm): ArmSummary {
     strictScored: strict.length,
     infraErrors: arm.trials.filter((trial) => trial.errorClass === "infra")
       .length,
-    ungraded: arm.trials.filter((trial) => trial.scores.ungraded_rate === 1)
-      .length,
+    ungraded: arm.trials.filter(
+      (trial) =>
+        trial.errorClass !== "infra" && trial.scores.ungraded_rate === 1,
+    ).length,
     kernelMcpValid:
       validity.length === 0
         ? undefined
@@ -384,5 +412,11 @@ export function summarizeArm(arm: BenchmarkArm): ArmSummary {
       costs.length === 0
         ? undefined
         : costs.reduce((total, cost) => total + cost, 0),
+    configuration:
+      configurations.length === 0
+        ? undefined
+        : configurations.length === 1
+          ? configurations[0]
+          : `mixed: ${configurations.join(", ")}`,
   };
 }

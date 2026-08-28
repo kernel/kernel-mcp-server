@@ -57,15 +57,15 @@ Single-task runs have a 40-minute wall-clock limit. Full-suite runs default to s
 
 ## GitHub Actions
 
-The `Benchmark ClawBench` workflow runs the complete suite weekly and on demand. Select it from the Actions tab and provide either a same-repository PR number or a ref. PR runs compare the candidate SHA with its base SHA by default.
+The `Benchmark ClawBench` workflow runs the complete suite weekly and on demand. Select it from the Actions tab and provide either a same-repository PR number or a ref. Comparison runs benchmark the candidate SHA against its merge base so unrelated changes on the target branch do not affect the delta. Harbor, Hypeman, agent, and model versions are pinned by the workflow and each arm's observed agent configuration appears in the report.
 
-A repository collaborator can also start the full PR comparison by commenting this exact command on a same-repository pull request:
+An organization member or repository collaborator can also start the full PR comparison by commenting this exact command on a same-repository pull request:
 
 ```text
 /benchmark clawbench
 ```
 
-The command parser does not execute comment text. It accepts only the exact command, rejects fork pull requests and non-collaborators, and resolves the candidate and base SHAs through GitHub's pull-request API. The workflow uses the `benchmarks` environment for credentials, updates one benchmark comment on the pull request, and publishes the same results to Braintrust.
+The command parser does not execute comment text. It accepts only the exact command, rejects fork pull requests and untrusted commenters, and resolves the candidate and merge-base SHAs through GitHub's API. The workflow uses the `benchmarks` environment for credentials, updates one benchmark comment on the pull request, and publishes the same results to Braintrust.
 
 ## Results
 
@@ -98,4 +98,4 @@ BRAINTRUST_PROJECT=kernel-mcp-server-benchmarks \
     --arm baseline=/path/to/baseline-job
 ```
 
-The experiment name and deterministic row/span IDs make it safe to publish the same job directories again. Rows contain task identity, numeric rewards, provenance, bounded errors, timing, token, call, and cost metrics. ATIF agent/tool activity is attached as child spans after secret redaction. Task instructions, ground truth, browser session URLs, and recordings are not placed on experiment rows or public pull-request comments.
+The experiment name and deterministic row/span IDs make it safe to publish the same job directories again. Re-publication replaces the rows and refreshes experiment metadata. Rows contain task identity, numeric rewards, provenance, bounded errors, timing, token, call, and cost metrics. ATIF agent/tool activity is attached as child spans after secret redaction. Task instructions, ground truth, browser session URLs, and recordings are not placed on experiment rows or public pull-request comments.

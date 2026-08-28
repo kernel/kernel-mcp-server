@@ -35,7 +35,7 @@ on:
         default: "30"
         type: string
       compare_to_base:
-        description: "Run the PR/base or ref/main comparison arm"
+        description: "Compare the candidate with its merge base"
         required: true
         default: true
         type: boolean
@@ -75,6 +75,9 @@ jobs:
             const repo = context.repo.repo;
             const defaultBranch = context.payload.repository.default_branch;
             const event = context.eventName;
+            const mergeBase = async (base, head) =>
+              (await github.rest.repos.compareCommits({ owner, repo, base, head }))
+                .data.merge_base_commit.sha;
             let headSha;
             let baseSha;
             let prNumber = "";
@@ -94,7 +97,7 @@ jobs:
               }
               const allowed = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
               if (!allowed.has(context.payload.comment.author_association)) {
-                core.setFailed("Only repository collaborators can run benchmarks");
+                core.setFailed("Only organization members or repository collaborators can run benchmarks");
                 return;
               }
               const pull = (await github.rest.pulls.get({
@@ -108,7 +111,7 @@ jobs:
               }
               prNumber = String(pull.number);
               headSha = pull.head.sha;
-              baseSha = pull.base.sha;
+              baseSha = await mergeBase(pull.base.sha, headSha);
               compare = true;
             } else if (event === "workflow_dispatch") {
               if (process.env.GITHUB_REF_NAME !== defaultBranch) {
@@ -132,18 +135,19 @@ jobs:
                 }
                 prNumber = String(number);
                 headSha = pull.head.sha;
-                baseSha = pull.base.sha;
+                baseSha = await mergeBase(pull.base.sha, headSha);
               } else {
                 headSha = (await github.rest.repos.getCommit({
                   owner,
                   repo,
                   ref: process.env.INPUT_REF || defaultBranch,
                 })).data.sha;
-                baseSha = (await github.rest.repos.getCommit({
+                const defaultSha = (await github.rest.repos.getCommit({
                   owner,
                   repo,
                   ref: defaultBranch,
                 })).data.sha;
+                baseSha = await mergeBase(defaultSha, headSha);
               }
             } else {
               headSha = (await github.rest.repos.getCommit({ owner, repo, ref: defaultBranch })).data.sha;
@@ -173,7 +177,7 @@ jobs:
             const experiment = `${subject}-${shortHead}-${process.env.GITHUB_RUN_ID}${attemptSuffix}`;
             const candidate = prNumber ? `PR #${prNumber} (${shortHead})` : shortHead;
             const title = compare
-              ? `ClawBench · ${candidate} vs base (${baseSha.slice(0, 7)})`
+              ? `ClawBench · ${candidate} vs merge base (${baseSha.slice(0, 7)})`
               : `ClawBench · ${candidate}`;
 
             core.setOutput("enabled", "true");
@@ -215,6 +219,12 @@ jobs:
       CLAWBENCH_JUDGE_API_TYPE: ${{ vars.CLAWBENCH_JUDGE_API_TYPE }}
       BRAINTRUST_API_KEY: ${{ secrets.BRAINTRUST_API_KEY }}
       BRAINTRUST_PROJECT: ${{ vars.BRAINTRUST_PROJECT }}
+      HARBOR_VERSION: "0.21.0"
+      HARBOR_HYPEMAN_VERSION: "0.1.1"
+      CODEX_BENCHMARK_MODEL: gpt-5.6-luna
+      CODEX_BENCHMARK_VERSION: "0.120.0"
+      CLAUDE_BENCHMARK_MODEL: claude-sonnet-5
+      CLAUDE_BENCHMARK_VERSION: "2.1.238"
       HARBOR_N_CONCURRENT: ${{ needs.resolve.outputs.concurrency }}
       BENCHMARK_PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
       BENCHMARK_HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
@@ -395,9 +405,16 @@ jobs:
         env:
           CANDIDATE_DIR: ${{ steps.run.outputs.candidate_dir }}
           BASELINE_DIR: ${{ steps.run.outputs.baseline_dir }}
+          CANDIDATE_STATUS: ${{ steps.run.outputs.candidate_status }}
+          BASELINE_STATUS: ${{ steps.run.outputs.baseline_status }}
+          BENCHMARK_COMPARE: ${{ needs.resolve.outputs.compare }}
           BENCHMARK_TITLE: ${{ needs.resolve.outputs.title }}
         run: |
           args=()
+          statuses=(--status "candidate=${CANDIDATE_STATUS:-1}")
+          if [[ "$BENCHMARK_COMPARE" == "true" ]]; then
+            statuses+=(--status "baseline=${BASELINE_STATUS:-1}")
+          fi
           [[ -f "$CANDIDATE_DIR/result.json" ]] && \
             args+=(--arm "candidate=$CANDIDATE_DIR")
           [[ -f "$BASELINE_DIR/result.json" ]] && \
@@ -411,6 +428,7 @@ jobs:
             --json "$RUNNER_TEMP/benchmark-summary.json" \
             --markdown "$RUNNER_TEMP/benchmark-summary.md" \
             "${publication[@]}" \
+            "${statuses[@]}" \
             "${args[@]}"
           cat "$RUNNER_TEMP/benchmark-summary.md" >>"$GITHUB_STEP_SUMMARY"
 
@@ -420,7 +438,6 @@ jobs:
         env:
           PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
           BENCHMARK_TITLE: ${{ needs.resolve.outputs.title }}
-          REPORT_OUTCOME: ${{ steps.report.outcome }}
         with:
           script: |
             const fs = require("fs");

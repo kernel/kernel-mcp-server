@@ -7,6 +7,7 @@ import {
   type BenchmarkTrial,
   parseArmSpec,
   readBenchmarkArm,
+  selectPrimaryReward,
   summarizeArm,
 } from "./results";
 import { redactString, redactValue } from "./redact";
@@ -162,11 +163,13 @@ function trialMetadata(trial: BenchmarkTrial): Record<string, unknown> {
 
 function atifEvents(trial: BenchmarkTrial, rowId: string): BraintrustEvent[] {
   const events: BraintrustEvent[] = [];
-  for (const step of trajectorySteps(trial).filter(
+  const agentSteps = trajectorySteps(trial).filter(
     (candidate) => candidate.source === "agent",
-  )) {
-    const stepId = step.step_id ?? 0;
-    const llmId = uuidV5(`${rowId}:llm:${stepId}`);
+  );
+  for (const [stepIndex, step] of agentSteps.entries()) {
+    const stepId = step.step_id;
+    const stepKey = `${stepId ?? "missing"}:${stepIndex}`;
+    const llmId = uuidV5(`${rowId}:llm:${stepKey}`);
     const start = step.timestamp
       ? Date.parse(step.timestamp) / 1000
       : undefined;
@@ -190,6 +193,7 @@ function atifEvents(trial: BenchmarkTrial, rowId: string): BraintrustEvent[] {
       metadata: {
         phase: "agent_execution",
         stepId,
+        stepIndex,
         model: step.model_name ?? trial.model,
       },
       metrics: llmMetrics,
@@ -198,7 +202,7 @@ function atifEvents(trial: BenchmarkTrial, rowId: string): BraintrustEvent[] {
 
     for (const [toolIndex, call] of (step.tool_calls ?? []).entries()) {
       const toolId = uuidV5(
-        `${rowId}:tool:${stepId}:${call.tool_call_id ?? toolIndex}`,
+        `${rowId}:tool:${stepKey}:${call.tool_call_id ?? toolIndex}`,
       );
       const observation = step.observation?.results?.find(
         (result) => result.source_call_id === call.tool_call_id,
@@ -215,6 +219,7 @@ function atifEvents(trial: BenchmarkTrial, rowId: string): BraintrustEvent[] {
         metadata: {
           phase: "agent_execution",
           stepId,
+          stepIndex,
           toolCallId: call.tool_call_id,
         },
         metrics: start === undefined ? undefined : { start: start, end: start },
@@ -233,10 +238,10 @@ export function buildExperimentEvents(
   for (const arm of arms) {
     for (const trial of arm.trials) {
       const rowId = uuidV5(`${experimentName}:${arm.name}:${trial.id}`);
-      const reward =
+      const primaryReward =
         trial.errorClass === "infra"
           ? undefined
-          : (trial.rewards.reward ?? trial.rewards.reward_lenient);
+          : selectPrimaryReward(trial.rewards);
       events.push({
         id: rowId,
         span_id: rowId,
@@ -246,8 +251,8 @@ export function buildExperimentEvents(
         created: trial.startedAt,
         input: { source: trial.source, taskName: trial.taskName },
         output: {
-          reward,
-          rewardKey: reward === undefined ? undefined : "reward",
+          reward: primaryReward?.value,
+          rewardKey: primaryReward?.key,
           error: trial.error ? redactString(trial.error, 400) : undefined,
         },
         expected: { reward: 1 },
@@ -353,6 +358,7 @@ export async function publishBenchmark(
   const project = await api.request<BraintrustProject>("/v1/project", "POST", {
     name: projectName,
   });
+  const metadata = experimentMetadata(arms);
   const experiment = await api.request<BraintrustExperiment>(
     "/v1/experiment",
     "POST",
@@ -360,9 +366,10 @@ export async function publishBenchmark(
       project_id: project.id,
       name: experimentName,
       public: false,
-      metadata: experimentMetadata(arms),
+      metadata,
     },
   );
+  await api.request(`/v1/experiment/${experiment.id}`, "PATCH", { metadata });
   const events = buildExperimentEvents(arms, experimentName);
   await insertEvents(api, experiment.id, events);
   const organization = await api.request<{ name: string }>(

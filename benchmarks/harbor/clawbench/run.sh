@@ -68,6 +68,9 @@ case "$agent" in
     ;;
 esac
 
+harbor_version=${HARBOR_VERSION:-0.21.0}
+harbor_hypeman_version=${HARBOR_HYPEMAN_VERSION:-0.1.1}
+
 runtime_root=$(mktemp -d)
 runtime_env=$(mktemp)
 trap 'rm -rf "$runtime_root"; rm -f "$runtime_env"' EXIT
@@ -113,13 +116,22 @@ CLAWBENCH_JUDGE_BASE_URL=${CLAWBENCH_JUDGE_BASE_URL:-}
 CLAWBENCH_JUDGE_API_KEY=${CLAWBENCH_JUDGE_API_KEY:-}
 CLAWBENCH_JUDGE_MODEL=${CLAWBENCH_JUDGE_MODEL:-deepseek-v4-pro}
 CLAWBENCH_JUDGE_API_TYPE=${CLAWBENCH_JUDGE_API_TYPE:-openai-completions}
-ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-}
-ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
-CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
-CLAUDE_FORCE_OAUTH=${CLAUDE_FORCE_OAUTH:-false}
-OPENAI_API_KEY=${OPENAI_API_KEY:-}
 EOF
+
+case "$agent" in
+  claude-code)
+    {
+      printf 'ANTHROPIC_API_KEY=%s\n' "${ANTHROPIC_API_KEY:-}"
+      printf 'ANTHROPIC_AUTH_TOKEN=%s\n' "${ANTHROPIC_AUTH_TOKEN:-}"
+      printf 'ANTHROPIC_BASE_URL=%s\n' "${ANTHROPIC_BASE_URL:-}"
+      printf 'CLAUDE_CODE_OAUTH_TOKEN=%s\n' "${CLAUDE_CODE_OAUTH_TOKEN:-}"
+      printf 'CLAUDE_FORCE_OAUTH=%s\n' "${CLAUDE_FORCE_OAUTH:-false}"
+    } >>"$runtime_env"
+    ;;
+  codex)
+    printf 'OPENAI_API_KEY=%s\n' "$OPENAI_API_KEY" >>"$runtime_env"
+    ;;
+esac
 chmod 0600 "$runtime_env"
 
 job_name=${3:-kernel-mcp-${agent}-${task_id}-$(date -u +%Y%m%dT%H%M%SZ)}
@@ -133,7 +145,7 @@ else
 fi
 
 timeout --signal=INT --kill-after=30s "${HARBOR_BENCHMARK_TIMEOUT:-$default_timeout}" \
-  uvx --from "harbor==0.21.0" --with "harbor-hypeman==0.1.1" harbor run \
+  uvx --from "harbor==$harbor_version" --with "harbor-hypeman==$harbor_hypeman_version" harbor run \
   --path "$dataset" \
   --agent "$agent" \
   --model "$model" \
