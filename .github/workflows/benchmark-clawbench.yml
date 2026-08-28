@@ -1,0 +1,462 @@
+name: Benchmark ClawBench
+
+on:
+  issue_comment:
+    types: [created]
+  schedule:
+    - cron: "0 13 * * 1"
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Same-repository PR to benchmark"
+        required: false
+        type: string
+      ref:
+        description: "Ref to benchmark when no PR is supplied"
+        required: false
+        default: "main"
+        type: string
+      task:
+        description: "ClawBench task ID or all"
+        required: true
+        default: "all"
+        type: string
+      agent:
+        description: "Stock Harbor agent"
+        required: true
+        default: "codex"
+        type: choice
+        options:
+          - codex
+          - claude-code
+      concurrency:
+        description: "Concurrent Harbor trials per arm"
+        required: true
+        default: "30"
+        type: string
+      compare_to_base:
+        description: "Run the PR/base or ref/main comparison arm"
+        required: true
+        default: true
+        type: boolean
+
+permissions: {}
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      enabled: ${{ steps.resolve.outputs.enabled }}
+      head_sha: ${{ steps.resolve.outputs.head_sha }}
+      base_sha: ${{ steps.resolve.outputs.base_sha }}
+      compare: ${{ steps.resolve.outputs.compare }}
+      pr_number: ${{ steps.resolve.outputs.pr_number }}
+      task: ${{ steps.resolve.outputs.task }}
+      agent: ${{ steps.resolve.outputs.agent }}
+      concurrency: ${{ steps.resolve.outputs.concurrency }}
+      experiment: ${{ steps.resolve.outputs.experiment }}
+      title: ${{ steps.resolve.outputs.title }}
+    steps:
+      - id: resolve
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+          INPUT_REF: ${{ inputs.ref }}
+          INPUT_TASK: ${{ inputs.task }}
+          INPUT_AGENT: ${{ inputs.agent }}
+          INPUT_CONCURRENCY: ${{ inputs.concurrency }}
+          INPUT_COMPARE: ${{ inputs.compare_to_base }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const defaultBranch = context.payload.repository.default_branch;
+            const event = context.eventName;
+            let headSha;
+            let baseSha;
+            let prNumber = "";
+            let compare = false;
+            let task = "all";
+            let agent = "codex";
+            let concurrency = "30";
+
+            if (event === "issue_comment") {
+              if ((context.payload.comment.body || "").trim() !== "/benchmark clawbench") {
+                core.setOutput("enabled", "false");
+                return;
+              }
+              if (!context.payload.issue.pull_request) {
+                core.setFailed("/benchmark clawbench can only be used on a pull request");
+                return;
+              }
+              const allowed = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+              if (!allowed.has(context.payload.comment.author_association)) {
+                core.setFailed("Only repository collaborators can run benchmarks");
+                return;
+              }
+              const pull = (await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: context.payload.issue.number,
+              })).data;
+              if (pull.head.repo?.full_name !== `${owner}/${repo}`) {
+                core.setFailed("Benchmarks cannot run code from fork pull requests");
+                return;
+              }
+              prNumber = String(pull.number);
+              headSha = pull.head.sha;
+              baseSha = pull.base.sha;
+              compare = true;
+            } else if (event === "workflow_dispatch") {
+              if (process.env.GITHUB_REF_NAME !== defaultBranch) {
+                core.setFailed(`Run this workflow from ${defaultBranch}; choose the target with the inputs`);
+                return;
+              }
+              task = process.env.INPUT_TASK || "all";
+              agent = process.env.INPUT_AGENT || "codex";
+              concurrency = process.env.INPUT_CONCURRENCY || "30";
+              compare = process.env.INPUT_COMPARE === "true";
+              if (process.env.INPUT_PR_NUMBER) {
+                const number = Number(process.env.INPUT_PR_NUMBER);
+                if (!Number.isInteger(number) || number <= 0) {
+                  core.setFailed("pr_number must be a positive integer");
+                  return;
+                }
+                const pull = (await github.rest.pulls.get({ owner, repo, pull_number: number })).data;
+                if (pull.head.repo?.full_name !== `${owner}/${repo}`) {
+                  core.setFailed("Benchmarks cannot run code from fork pull requests");
+                  return;
+                }
+                prNumber = String(number);
+                headSha = pull.head.sha;
+                baseSha = pull.base.sha;
+              } else {
+                headSha = (await github.rest.repos.getCommit({
+                  owner,
+                  repo,
+                  ref: process.env.INPUT_REF || defaultBranch,
+                })).data.sha;
+                baseSha = (await github.rest.repos.getCommit({
+                  owner,
+                  repo,
+                  ref: defaultBranch,
+                })).data.sha;
+              }
+            } else {
+              headSha = (await github.rest.repos.getCommit({ owner, repo, ref: defaultBranch })).data.sha;
+              baseSha = headSha;
+              compare = false;
+            }
+
+            if (!/^(all|v2-[a-z0-9-]+)$/.test(task)) {
+              core.setFailed("task must be all or a ClawBench v2 task ID");
+              return;
+            }
+            if (!new Set(["codex", "claude-code"]).has(agent)) {
+              core.setFailed("agent must be codex or claude-code");
+              return;
+            }
+            const concurrencyNumber = Number(concurrency);
+            if (!Number.isInteger(concurrencyNumber) || concurrencyNumber < 1 || concurrencyNumber > 30) {
+              core.setFailed("concurrency must be an integer from 1 through 30");
+              return;
+            }
+            if (headSha === baseSha) compare = false;
+
+            const shortHead = headSha.slice(0, 7);
+            const attempt = Number(process.env.GITHUB_RUN_ATTEMPT || "1");
+            const attemptSuffix = attempt > 1 ? `-attempt${attempt}` : "";
+            const subject = prNumber ? `pr-${prNumber}` : compare ? "ref" : "main";
+            const experiment = `${subject}-${shortHead}-${process.env.GITHUB_RUN_ID}${attemptSuffix}`;
+            const candidate = prNumber ? `PR #${prNumber} (${shortHead})` : shortHead;
+            const title = compare
+              ? `ClawBench · ${candidate} vs base (${baseSha.slice(0, 7)})`
+              : `ClawBench · ${candidate}`;
+
+            core.setOutput("enabled", "true");
+            core.setOutput("head_sha", headSha);
+            core.setOutput("base_sha", baseSha);
+            core.setOutput("compare", String(compare));
+            core.setOutput("pr_number", prNumber);
+            core.setOutput("task", task);
+            core.setOutput("agent", agent);
+            core.setOutput("concurrency", String(concurrencyNumber));
+            core.setOutput("experiment", experiment);
+            core.setOutput("title", title);
+
+  benchmark:
+    needs: resolve
+    if: needs.resolve.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    environment: benchmarks
+    permissions:
+      contents: read
+      issues: write
+    concurrency:
+      group: benchmark-clawbench-${{ needs.resolve.outputs.pr_number || needs.resolve.outputs.head_sha }}
+      cancel-in-progress: false
+    env:
+      HYPEMAN_API_KEY: ${{ secrets.HYPEMAN_API_KEY }}
+      HYPEMAN_BASE_URL: ${{ vars.HYPEMAN_BASE_URL }}
+      KERNEL_MCP_BENCHMARK_API_KEY: ${{ secrets.KERNEL_MCP_BENCHMARK_API_KEY }}
+      KERNEL_PROJECT: ${{ vars.KERNEL_PROJECT }}
+      PURELY_MAIL_API_KEY: ${{ secrets.PURELY_MAIL_API_KEY }}
+      PURELY_MAIL_DOMAIN: ${{ vars.PURELY_MAIL_DOMAIN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      CLAWBENCH_JUDGE_BASE_URL: ${{ vars.CLAWBENCH_JUDGE_BASE_URL }}
+      CLAWBENCH_JUDGE_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      CLAWBENCH_JUDGE_MODEL: ${{ vars.CLAWBENCH_JUDGE_MODEL }}
+      CLAWBENCH_JUDGE_API_TYPE: ${{ vars.CLAWBENCH_JUDGE_API_TYPE }}
+      BRAINTRUST_API_KEY: ${{ secrets.BRAINTRUST_API_KEY }}
+      BRAINTRUST_PROJECT: ${{ vars.BRAINTRUST_PROJECT }}
+      HARBOR_N_CONCURRENT: ${{ needs.resolve.outputs.concurrency }}
+      BENCHMARK_PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+      BENCHMARK_HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
+    steps:
+      - name: Mark the PR benchmark as running
+        if: needs.resolve.outputs.pr_number != ''
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          BENCHMARK_TITLE: ${{ needs.resolve.outputs.title }}
+        with:
+          script: |
+            const marker = "<!-- kernel-mcp-clawbench -->";
+            const body = `${marker}\n## ${process.env.BENCHMARK_TITLE}\n\nBenchmark running: ${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              per_page: 100,
+            });
+            const existing = comments.find((comment) =>
+              comment.user?.type === "Bot" && comment.body?.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: Number(process.env.PR_NUMBER),
+                body,
+              });
+            }
+
+      - name: Check out trusted benchmark tooling
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: harness
+          persist-credentials: false
+
+      - name: Check out candidate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ needs.resolve.outputs.head_sha }}
+          path: candidate
+          persist-credentials: false
+
+      - name: Check out base
+        if: needs.resolve.outputs.compare == 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ needs.resolve.outputs.base_sha }}
+          path: baseline
+          persist-credentials: false
+
+      - name: Check out pinned ClawBench
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: kernel/ClawBench
+          ref: 45a71c4b0c78186851c94cfc77bfe619c9e01387
+          path: clawbench
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version: "1.3.3"
+
+      - uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4 # v6.7.0
+        with:
+          version: "0.8.17"
+
+      - name: Install benchmark tools
+        run: |
+          bun install --cwd harness --frozen-lockfile
+          archive="$RUNNER_TEMP/hypeman_0.18.0_linux_amd64.tar.gz"
+          checksums="$RUNNER_TEMP/hypeman_0.18.0_checksums.txt"
+          curl --fail --location --silent --show-error \
+            https://github.com/kernel/hypeman-cli/releases/download/v0.18.0/hypeman_0.18.0_linux_amd64.tar.gz \
+            --output "$archive"
+          curl --fail --location --silent --show-error \
+            https://github.com/kernel/hypeman-cli/releases/download/v0.18.0/hypeman_0.18.0_checksums.txt \
+            --output "$checksums"
+          (cd "$RUNNER_TEMP" && grep 'hypeman_0.18.0_linux_amd64.tar.gz$' "$checksums" | sha256sum --check --strict)
+          tar -xzf "$archive" -C "$RUNNER_TEMP" hypeman
+          sudo install "$RUNNER_TEMP/hypeman" /usr/local/bin/hypeman
+          uv sync --directory clawbench --frozen
+
+      - name: Build candidate image
+        working-directory: candidate
+        run: ./benchmarks/harbor/build-image.sh
+
+      - name: Build base image
+        if: needs.resolve.outputs.compare == 'true'
+        working-directory: baseline
+        run: ./benchmarks/harbor/build-image.sh
+
+      - name: Run synchronized benchmark arms
+        id: run
+        shell: bash
+        env:
+          CLAWBENCH_REPO: ${{ github.workspace }}/clawbench
+          CLAWBENCH_REF: 45a71c4b0c78186851c94cfc77bfe619c9e01387
+          HARBOR_BENCHMARK_TIMEOUT: 7h
+          BENCHMARK_AGENT: ${{ needs.resolve.outputs.agent }}
+          BENCHMARK_TASK: ${{ needs.resolve.outputs.task }}
+          BENCHMARK_COMPARE: ${{ needs.resolve.outputs.compare }}
+          BENCHMARK_EXPERIMENT: ${{ needs.resolve.outputs.experiment }}
+        run: |
+          set -u
+          jobs_root="$RUNNER_TEMP/harbor-jobs"
+          mkdir -p "$jobs_root"
+          candidate_job="candidate-$BENCHMARK_EXPERIMENT"
+          baseline_job="baseline-$BENCHMARK_EXPERIMENT"
+
+          run_arm() {
+            local checkout=$1 arm=$2 job_name=$3
+            set +e
+            "$checkout/benchmarks/harbor/clawbench/run.sh" \
+              "$BENCHMARK_AGENT" \
+              "$BENCHMARK_TASK" \
+              "$job_name" \
+              "$jobs_root/$arm" \
+              >"$RUNNER_TEMP/$arm.log" 2>&1
+            echo $? >"$RUNNER_TEMP/$arm.status"
+          }
+
+          run_arm "$GITHUB_WORKSPACE/candidate" candidate "$candidate_job" &
+          candidate_pid=$!
+          if [[ "$BENCHMARK_COMPARE" == "true" ]]; then
+            run_arm "$GITHUB_WORKSPACE/baseline" baseline "$baseline_job" &
+            baseline_pid=$!
+          fi
+
+          while kill -0 "$candidate_pid" 2>/dev/null || { [[ -n "${baseline_pid:-}" ]] && kill -0 "$baseline_pid" 2>/dev/null; }; do
+            echo "ClawBench is still running at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            sleep 60
+          done
+          wait "$candidate_pid"
+          if [[ -n "${baseline_pid:-}" ]]; then wait "$baseline_pid"; fi
+
+          candidate_status=$(cat "$RUNNER_TEMP/candidate.status")
+          baseline_status=0
+          if [[ -f "$RUNNER_TEMP/baseline.status" ]]; then
+            baseline_status=$(cat "$RUNNER_TEMP/baseline.status")
+          fi
+          echo "candidate_status=$candidate_status" >>"$GITHUB_OUTPUT"
+          echo "baseline_status=$baseline_status" >>"$GITHUB_OUTPUT"
+          echo "candidate_dir=$jobs_root/candidate/$candidate_job" >>"$GITHUB_OUTPUT"
+          echo "baseline_dir=$jobs_root/baseline/$baseline_job" >>"$GITHUB_OUTPUT"
+
+          if ((candidate_status != 0)); then tail -100 "$RUNNER_TEMP/candidate.log" >&2; fi
+          if ((baseline_status != 0)); then tail -100 "$RUNNER_TEMP/baseline.log" >&2; fi
+
+      - name: Publish Braintrust experiment
+        id: publish
+        continue-on-error: true
+        shell: bash
+        env:
+          CANDIDATE_DIR: ${{ steps.run.outputs.candidate_dir }}
+          BASELINE_DIR: ${{ steps.run.outputs.baseline_dir }}
+          BENCHMARK_EXPERIMENT: ${{ needs.resolve.outputs.experiment }}
+        run: |
+          args=()
+          [[ -f "$CANDIDATE_DIR/result.json" ]] && \
+            args+=(--arm "candidate=$CANDIDATE_DIR")
+          [[ -f "$BASELINE_DIR/result.json" ]] && \
+            args+=(--arm "baseline=$BASELINE_DIR")
+          ((${#args[@]} > 0)) || { echo "No completed Harbor job to publish" >&2; exit 1; }
+          bun harness/benchmarks/harbor/publish-braintrust.ts \
+            --experiment "$BENCHMARK_EXPERIMENT" \
+            --output "$RUNNER_TEMP/publication.json" \
+            "${args[@]}"
+
+      - name: Render benchmark report
+        id: report
+        if: always()
+        continue-on-error: true
+        shell: bash
+        env:
+          CANDIDATE_DIR: ${{ steps.run.outputs.candidate_dir }}
+          BASELINE_DIR: ${{ steps.run.outputs.baseline_dir }}
+          BENCHMARK_TITLE: ${{ needs.resolve.outputs.title }}
+        run: |
+          args=()
+          [[ -f "$CANDIDATE_DIR/result.json" ]] && \
+            args+=(--arm "candidate=$CANDIDATE_DIR")
+          [[ -f "$BASELINE_DIR/result.json" ]] && \
+            args+=(--arm "baseline=$BASELINE_DIR")
+          ((${#args[@]} > 0)) || { echo "No completed Harbor job to report" >&2; exit 1; }
+          publication=()
+          [[ -f "$RUNNER_TEMP/publication.json" ]] && \
+            publication=(--publication "$RUNNER_TEMP/publication.json")
+          bun harness/benchmarks/harbor/report.ts \
+            --title "$BENCHMARK_TITLE" \
+            --json "$RUNNER_TEMP/benchmark-summary.json" \
+            --markdown "$RUNNER_TEMP/benchmark-summary.md" \
+            "${publication[@]}" \
+            "${args[@]}"
+          cat "$RUNNER_TEMP/benchmark-summary.md" >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Update PR benchmark comment
+        if: always() && needs.resolve.outputs.pr_number != ''
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        env:
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          BENCHMARK_TITLE: ${{ needs.resolve.outputs.title }}
+          REPORT_OUTCOME: ${{ steps.report.outcome }}
+        with:
+          script: |
+            const fs = require("fs");
+            const marker = "<!-- kernel-mcp-clawbench -->";
+            const reportPath = `${process.env.RUNNER_TEMP}/benchmark-summary.md`;
+            const body = fs.existsSync(reportPath)
+              ? fs.readFileSync(reportPath, "utf8")
+              : `${marker}\n## ${process.env.BENCHMARK_TITLE}\n\nBenchmark failed before a report was produced. [Open the workflow run](${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}).`;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              per_page: 100,
+            });
+            const existing = comments.find((comment) =>
+              comment.user?.type === "Bot" && comment.body?.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: Number(process.env.PR_NUMBER),
+                body,
+              });
+            }
+
+      - name: Check benchmark execution
+        if: always()
+        shell: bash
+        env:
+          CANDIDATE_STATUS: ${{ steps.run.outputs.candidate_status }}
+          BASELINE_STATUS: ${{ steps.run.outputs.baseline_status }}
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+          REPORT_OUTCOME: ${{ steps.report.outcome }}
+        run: |
+          [[ "$CANDIDATE_STATUS" == "0" ]]
+          [[ "$BASELINE_STATUS" == "0" ]]
+          [[ "$PUBLISH_OUTCOME" == "success" ]]
+          [[ "$REPORT_OUTCOME" == "success" ]]

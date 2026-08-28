@@ -19,7 +19,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 benchmark_dir="$repo_root/benchmarks/harbor"
 image_env="$benchmark_dir/.image.env"
 clawbench_repo=${CLAWBENCH_REPO:-$repo_root/../ClawBench}
-clawbench_ref=${CLAWBENCH_REF:-df6743fd8abcd09cb7636ef8c310dd4db016162c}
+clawbench_ref=${CLAWBENCH_REF:-45a71c4b0c78186851c94cfc77bfe619c9e01387}
 
 [[ -f "$image_env" ]] || {
   echo "Missing $image_env; run benchmarks/harbor/build-image.sh first" >&2
@@ -105,6 +105,8 @@ cat >"$runtime_env" <<EOF
 KERNEL_API_KEY=$KERNEL_API_KEY
 KERNEL_BASE_URL=$KERNEL_BASE_URL
 KERNEL_API_BASE_URL=$KERNEL_API_BASE_URL
+API_BASE_URL=$KERNEL_API_BASE_URL
+KERNEL_PROJECT=${KERNEL_PROJECT:-}
 PURELY_MAIL_API_KEY=$PURELY_MAIL_API_KEY
 PURELY_MAIL_DOMAIN=$PURELY_MAIL_DOMAIN
 CLAWBENCH_JUDGE_BASE_URL=${CLAWBENCH_JUDGE_BASE_URL:-}

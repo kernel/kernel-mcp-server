@@ -26,6 +26,8 @@
     "check:managed-auth-app": "bun scripts/build-managed-auth-app.mjs --check",
     "build": "bun run check:managed-auth-app && next build",
     "start": "next start -p 3002",
+    "benchmark:report": "bun benchmarks/harbor/report.ts",
+    "benchmark:publish": "bun benchmarks/harbor/publish-braintrust.ts",
     "lint": "next lint",
     "test": "bun test",
     "record:oauth-redis-contract": "bun scripts/record-oauth-redis-contract.ts",

@@ -18,11 +18,12 @@ The image records the current Git SHA, and the generated task records the ClawBe
 
 - `uv`, Harbor 0.21.0, and `harbor-hypeman` 0.1.1
 - Hypeman CLI credentials
-- a ClawBench checkout containing `df6743f` from `kernel/ClawBench` PR #1
-- `KERNEL_MCP_BENCHMARK_API_KEY` scoped to an isolated evaluation project
+- a ClawBench checkout containing pinned commit `45a71c4`
+- `KERNEL_MCP_BENCHMARK_API_KEY` scoped to an isolated evaluation project, plus its `KERNEL_PROJECT` name
 - `PURELY_MAIL_API_KEY` and `PURELY_MAIL_DOMAIN` for ClawBench account tasks
 - `OPENAI_API_KEY` for Codex, or Anthropic credentials for Claude Code
 - the ClawBench judge variables when using a hosted judge: `CLAWBENCH_JUDGE_BASE_URL`, `CLAWBENCH_JUDGE_API_KEY`, `CLAWBENCH_JUDGE_MODEL`, and `CLAWBENCH_JUDGE_API_TYPE`
+- `BRAINTRUST_API_KEY` and `BRAINTRUST_PROJECT` when publishing results
 
 ## Build the trial image
 
@@ -54,6 +55,18 @@ Codex defaults to version `0.120.0` with `gpt-5.6-luna`. Claude Code defaults to
 
 Single-task runs have a 40-minute wall-clock limit. Full-suite runs default to six hours. Set `HARBOR_BENCHMARK_TIMEOUT` to override either limit. Set `HARBOR_JOBS_DIR` to choose where Harbor writes results.
 
+## GitHub Actions
+
+The `Benchmark ClawBench` workflow runs the complete suite weekly and on demand. Select it from the Actions tab and provide either a same-repository PR number or a ref. PR runs compare the candidate SHA with its base SHA by default.
+
+A repository collaborator can also start the full PR comparison by commenting this exact command on a same-repository pull request:
+
+```text
+/benchmark clawbench
+```
+
+The command parser does not execute comment text. It accepts only the exact command, rejects fork pull requests and non-collaborators, and resolves the candidate and base SHAs through GitHub's pull-request API. The workflow uses the `benchmarks` environment for credentials, updates one benchmark comment on the pull request, and publishes the same results to Braintrust.
+
 ## Results
 
 Harbor writes its normal job directory, including:
@@ -64,3 +77,25 @@ Harbor writes its normal job directory, including:
 - `kernel-mcp-result.json`: local-source and same-browser wiring details
 - `recording.mp4`: the finalized Kernel replay
 - `kernel-mcp/`: local server logs and the source/session manifest
+
+Generate a redacted summary from one or more completed jobs:
+
+```bash
+bun run benchmark:report -- \
+  --arm candidate=/path/to/candidate-job \
+  --arm baseline=/path/to/baseline-job \
+  --json /tmp/benchmark-summary.json \
+  --markdown /tmp/benchmark-summary.md
+```
+
+Publish those arms as one idempotent Braintrust experiment:
+
+```bash
+BRAINTRUST_PROJECT=kernel-mcp-server-benchmarks \
+  bun run benchmark:publish -- \
+    --experiment pr-162-a60c518-example \
+    --arm candidate=/path/to/candidate-job \
+    --arm baseline=/path/to/baseline-job
+```
+
+The experiment name and deterministic row/span IDs make it safe to publish the same job directories again. Rows contain task identity, numeric rewards, provenance, bounded errors, timing, token, call, and cost metrics. ATIF agent/tool activity is attached as child spans after secret redaction. Task instructions, ground truth, browser session URLs, and recordings are not placed on experiment rows or public pull-request comments.

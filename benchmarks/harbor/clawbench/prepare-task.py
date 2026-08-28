@@ -52,6 +52,7 @@ def _add_environment(
                     f"CLAWBENCH_SOURCE_SHA = {json.dumps(clawbench_sha)}",
                     f"KERNEL_MCP_ENABLED_TOOLSETS = {json.dumps(ENABLED_TOOLSETS)}",
                     'API_BASE_URL = "${KERNEL_API_BASE_URL:-}"',
+                    'KERNEL_PROJECT = "${KERNEL_PROJECT:-}"',
                     'REDIS_URL = "redis://127.0.0.1:6379"',
                 ]
             )
