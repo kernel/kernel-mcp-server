@@ -191,7 +191,7 @@ jobs:
     needs: resolve
     if: needs.resolve.outputs.enabled == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 480
+    timeout-minutes: 360
     environment: benchmarks
     permissions:
       contents: read
@@ -316,7 +316,7 @@ jobs:
         env:
           CLAWBENCH_REPO: ${{ github.workspace }}/clawbench
           CLAWBENCH_REF: 45a71c4b0c78186851c94cfc77bfe619c9e01387
-          HARBOR_BENCHMARK_TIMEOUT: 7h
+          HARBOR_BENCHMARK_TIMEOUT: 4h
           BENCHMARK_AGENT: ${{ needs.resolve.outputs.agent }}
           BENCHMARK_TASK: ${{ needs.resolve.outputs.task }}
           BENCHMARK_COMPARE: ${{ needs.resolve.outputs.compare }}

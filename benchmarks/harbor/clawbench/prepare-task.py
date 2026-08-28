@@ -132,7 +132,7 @@ def _patch_instruction(instruction: str) -> str:
 ---
 Kernel MCP benchmark arm:
 - Wait for the `kernel` MCP server to finish initializing before starting. In Claude Code, call `WaitForMcpServers` if it is still pending; do not conclude that the tools are unavailable while it initializes.
-- Read `./my-info/kernel_browser.json` and use its existing `session_id` for every `execute_playwright_code` call.
+- Read `/my-info/kernel_browser.json` and use its existing `session_id` for every `execute_playwright_code` call.
 - Do not create, list, update, or delete browsers. Browser lifecycle tools and `computer_action` are intentionally unavailable.
 - Use Kernel MCP `execute_playwright_code` for all browser interaction. Do not use Playwright MCP or a direct CDP client.
 - Interact through visible page navigation and DOM/UI actions. Do not call `fetch`, `XMLHttpRequest`, Playwright request APIs, or other direct HTTP clients inside `execute_playwright_code`.
