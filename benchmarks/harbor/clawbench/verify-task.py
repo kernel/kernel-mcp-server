@@ -16,7 +16,11 @@ from typing import Any
 
 LOGS_DIR = Path(os.environ.get("HARBOR_LOGS_DIR", "/logs"))
 VERIFIER_DIR = LOGS_DIR / "verifier"
-PLAYWRIGHT_TOOL = "mcp__kernel__execute_playwright_code"
+PLAYWRIGHT_TOOLS = {
+    "execute_playwright_code",
+    "kernel__execute_playwright_code",
+    "mcp__kernel__execute_playwright_code",
+}
 
 
 def read_object(path: Path) -> dict[str, Any]:
@@ -47,7 +51,7 @@ def main() -> int:
     calls = [
         call
         for call in tool_calls(trajectory)
-        if call.get("function_name") == PLAYWRIGHT_TOOL
+        if call.get("function_name") in PLAYWRIGHT_TOOLS
     ]
     called_sessions = {
         arguments.get("session_id")

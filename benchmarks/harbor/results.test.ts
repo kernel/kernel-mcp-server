@@ -383,17 +383,26 @@ describe("benchmark workflow hardening", () => {
       join(process.cwd(), "benchmarks/harbor/clawbench/run.sh"),
       "utf8",
     );
+    const verifier = readFileSync(
+      join(process.cwd(), "benchmarks/harbor/clawbench/verify-task.py"),
+      "utf8",
+    );
     expect(dockerignore.split("\n")).toContain("*.pem");
-    const heredocStart = runner.indexOf('cat >"$runtime_env"');
-    const providerCaseStart = runner.indexOf('case "$agent" in', heredocStart);
+    expect(verifier).toContain('"mcp__kernel__execute_playwright_code"');
+    expect(verifier).toContain('"kernel__execute_playwright_code"');
+    expect(verifier).toContain('"execute_playwright_code"');
+    const commonStart = runner.indexOf("printf 'KERNEL_API_KEY=%s\\n'");
+    const providerCaseStart = runner.indexOf('case "$agent" in', commonStart);
     const providerCase = runner.slice(
       providerCaseStart,
       runner.indexOf('chmod 0600 "$runtime_env"'),
     );
     expect(providerCase).toContain("ANTHROPIC_API_KEY");
     expect(providerCase).toContain("OPENAI_API_KEY");
-    const commonEnvironment = runner.slice(heredocStart, providerCaseStart);
+    const commonEnvironment = runner.slice(commonStart, providerCaseStart);
+    expect(commonEnvironment).toContain("CLAWBENCH_JUDGE_API_KEY");
     expect(commonEnvironment).not.toContain("OPENAI_API_KEY");
     expect(commonEnvironment).not.toContain("ANTHROPIC_API_KEY");
+    expect(runner).not.toContain("<<EOF");
   });
 });
