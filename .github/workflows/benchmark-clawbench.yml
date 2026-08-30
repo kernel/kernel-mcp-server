@@ -200,6 +200,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      pull-requests: write
     concurrency:
       group: benchmark-clawbench-${{ needs.resolve.outputs.pr_number || needs.resolve.outputs.head_sha }}
       cancel-in-progress: false
@@ -207,7 +208,6 @@ jobs:
       HYPEMAN_API_KEY: ${{ secrets.HYPEMAN_API_KEY }}
       HYPEMAN_BASE_URL: ${{ vars.HYPEMAN_BASE_URL }}
       KERNEL_MCP_BENCHMARK_API_KEY: ${{ secrets.KERNEL_MCP_BENCHMARK_API_KEY }}
-      KERNEL_PROJECT: ${{ vars.KERNEL_PROJECT }}
       PURELY_MAIL_API_KEY: ${{ secrets.PURELY_MAIL_API_KEY }}
       PURELY_MAIL_DOMAIN: ${{ vars.PURELY_MAIL_DOMAIN }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -231,6 +231,7 @@ jobs:
     steps:
       - name: Mark the PR benchmark as running
         if: needs.resolve.outputs.pr_number != ''
+        continue-on-error: true
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
           PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
@@ -434,6 +435,7 @@ jobs:
 
       - name: Update PR benchmark comment
         if: always() && needs.resolve.outputs.pr_number != ''
+        continue-on-error: true
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         env:
           PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
@@ -477,3 +479,4 @@ jobs:
           [[ "$BASELINE_STATUS" == "0" ]]
           [[ "$PUBLISH_OUTCOME" == "success" ]]
           [[ "$REPORT_OUTCOME" == "success" ]]
+          jq -e 'all(.arms[]; .scored > 0)' "$RUNNER_TEMP/benchmark-summary.json" >/dev/null

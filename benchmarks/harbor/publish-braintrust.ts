@@ -354,6 +354,16 @@ export async function publishBenchmark(
   experimentName: string,
   apiKey: string,
 ): Promise<Record<string, unknown>> {
+  const ungraded = arms
+    .map(summarizeArm)
+    .filter((summary) => summary.scored === 0)
+    .map((summary) => summary.arm);
+  if (ungraded.length > 0) {
+    throw new Error(
+      `Cannot publish benchmark without graded trials for: ${ungraded.join(", ")}`,
+    );
+  }
+
   const api = new BraintrustApi(apiKey);
   const project = await api.request<BraintrustProject>("/v1/project", "POST", {
     name: projectName,

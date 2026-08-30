@@ -19,11 +19,13 @@ The image records the current Git SHA, and the generated task records the ClawBe
 - `uv`, Harbor 0.21.0, and `harbor-hypeman` 0.1.1
 - Hypeman CLI credentials
 - a ClawBench checkout containing pinned commit `45a71c4`
-- `KERNEL_MCP_BENCHMARK_API_KEY` scoped to an isolated evaluation project, plus its `KERNEL_PROJECT` name
+- `KERNEL_MCP_BENCHMARK_API_KEY` scoped to an isolated evaluation project; its credential scope is the project source of truth
 - `PURELY_MAIL_API_KEY` and `PURELY_MAIL_DOMAIN` for ClawBench account tasks
 - `OPENAI_API_KEY` for Codex, or Anthropic credentials for Claude Code
 - the ClawBench judge variables when using a hosted judge: `CLAWBENCH_JUDGE_BASE_URL`, `CLAWBENCH_JUDGE_API_KEY`, `CLAWBENCH_JUDGE_MODEL`, and `CLAWBENCH_JUDGE_API_TYPE`
 - `BRAINTRUST_API_KEY` and `BRAINTRUST_PROJECT` when publishing results
+
+The runner checks `/auth/context` before generating trials and stops unless the benchmark credential and effective connection resolve to the same non-empty project scope.
 
 ## Build the trial image
 
