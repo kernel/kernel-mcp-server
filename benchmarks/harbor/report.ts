@@ -89,10 +89,16 @@ export function renderMarkdown(
 ): string {
   const lines = ["<!-- kernel-mcp-clawbench -->", `## ${title}`];
   const failed = Object.entries(statuses).filter(([, status]) => status !== 0);
-  if (failed.length > 0) {
+  const ungraded = summaries.filter((summary) => summary.scored === 0);
+  const incomplete = failed.length > 0 || ungraded.length > 0;
+  if (incomplete) {
+    const reasons = [
+      ...failed.map(([arm, status]) => `${arm} exited ${status}`),
+      ...ungraded.map((summary) => `${summary.arm} produced no graded trials`),
+    ];
     lines.push(
       "",
-      `> [!WARNING]\n> Incomplete benchmark: ${failed.map(([arm, status]) => `${arm} exited ${status}`).join(", ")}. Scores below include only completed Harbor results and are not a complete comparison.`,
+      `> [!WARNING]\n> Incomplete benchmark: ${reasons.join(", ")}. Scores below include only completed Harbor results; comparison deltas are suppressed.`,
     );
   }
   lines.push(
@@ -108,7 +114,7 @@ export function renderMarkdown(
 
   const candidate = summaries.find((summary) => summary.arm === "candidate");
   const baseline = summaries.find((summary) => summary.arm === "baseline");
-  if (candidate && baseline && failed.length === 0) {
+  if (candidate && baseline && !incomplete) {
     const signed = (value: number) => {
       const rounded = Number(value.toFixed(3));
       return `${rounded >= 0 ? "+" : ""}${rounded}`;

@@ -71,6 +71,17 @@ esac
 harbor_version=${HARBOR_VERSION:-0.21.0}
 harbor_hypeman_version=${HARBOR_HYPEMAN_VERSION:-0.1.1}
 
+export KERNEL_API_KEY=$KERNEL_MCP_BENCHMARK_API_KEY
+export KERNEL_BASE_URL=${KERNEL_BASE_URL:-https://api.onkernel.com}
+export KERNEL_API_BASE_URL=${KERNEL_API_BASE_URL:-$KERNEL_BASE_URL}
+
+curl --silent --show-error --fail-with-body \
+  --retry 3 \
+  --retry-all-errors \
+  --header "Authorization: Bearer $KERNEL_API_KEY" \
+  "${KERNEL_API_BASE_URL%/}/auth/context" |
+  bun "$benchmark_dir/verify-project-scope.ts"
+
 runtime_root=$(mktemp -d)
 runtime_env=$(mktemp)
 trap 'rm -rf "$runtime_root"; rm -f "$runtime_env"' EXIT
@@ -100,16 +111,11 @@ for task_dir in "${task_dirs[@]}"; do
     --clawbench-sha "$clawbench_ref"
 done
 
-export KERNEL_API_KEY=$KERNEL_MCP_BENCHMARK_API_KEY
-export KERNEL_BASE_URL=${KERNEL_BASE_URL:-https://api.onkernel.com}
-export KERNEL_API_BASE_URL=${KERNEL_API_BASE_URL:-$KERNEL_BASE_URL}
-
 {
   printf 'KERNEL_API_KEY=%s\n' "$KERNEL_API_KEY"
   printf 'KERNEL_BASE_URL=%s\n' "$KERNEL_BASE_URL"
   printf 'KERNEL_API_BASE_URL=%s\n' "$KERNEL_API_BASE_URL"
   printf 'API_BASE_URL=%s\n' "$KERNEL_API_BASE_URL"
-  printf 'KERNEL_PROJECT=%s\n' "${KERNEL_PROJECT:-}"
   printf 'PURELY_MAIL_API_KEY=%s\n' "$PURELY_MAIL_API_KEY"
   printf 'PURELY_MAIL_DOMAIN=%s\n' "$PURELY_MAIL_DOMAIN"
   printf 'CLAWBENCH_JUDGE_BASE_URL=%s\n' "${CLAWBENCH_JUDGE_BASE_URL:-}"

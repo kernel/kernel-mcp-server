@@ -12,6 +12,7 @@ import { buildExperimentEvents, publishBenchmark } from "./publish-braintrust";
 import { renderMarkdown } from "./report";
 import { readBenchmarkArm, selectPrimaryReward, summarizeArm } from "./results";
 import { redactString, redactValue } from "./redact";
+import { assertProjectScopedCredential } from "./verify-project-scope";
 
 const temporaryDirectories: string[] = [];
 
@@ -257,6 +258,16 @@ describe("Harbor result ingestion", () => {
     }
   });
 
+  test("does not publish arms without graded trials", async () => {
+    const arm = readBenchmarkArm({ name: "candidate", path: fixture() });
+    for (const trial of arm.trials) trial.rewards = {};
+    await expect(
+      publishBenchmark([arm], "project", "experiment", "api-key"),
+    ).rejects.toThrow(
+      "Cannot publish benchmark without graded trials for: candidate",
+    );
+  });
+
   test("uses the lenient reward per trial and reports incomplete arms", () => {
     expect(selectPrimaryReward({ reward: 0, reward_lenient: 1 })).toEqual({
       key: "reward_lenient",
@@ -288,6 +299,12 @@ describe("Harbor result ingestion", () => {
         { ...summary, arm: "baseline", lenient: 0.2 },
       ]),
     ).toContain("+0.1 lenient");
+    const ungraded = renderMarkdown("test", [
+      { ...summary, arm: "candidate", scored: 0, ungraded: summary.trials },
+      { ...summary, arm: "baseline", scored: 0, ungraded: summary.trials },
+    ]);
+    expect(ungraded).toContain("candidate produced no graded trials");
+    expect(ungraded).not.toContain("Candidate minus baseline");
   });
 
   test("keeps full errors until redaction and clamps derived scores", () => {
@@ -369,9 +386,47 @@ describe("benchmark workflow hardening", () => {
     expect(workflow).not.toContain("baseSha = pull.base.sha");
     expect(workflow).toContain('HARBOR_VERSION: "0.21.0"');
     expect(workflow).toContain('CODEX_BENCHMARK_VERSION: "0.120.0"');
+    expect(workflow).toContain("issues: write\n      pull-requests: write");
+    expect(workflow).not.toContain(
+      "KERNEL_PROJECT: ${{ vars.KERNEL_PROJECT }}",
+    );
+    expect(workflow).toContain("all(.arms[]; .scored > 0)");
+    expect(workflow).toMatch(
+      /- name: Mark the PR benchmark as running\n\s+if:.*\n\s+continue-on-error: true/,
+    );
+    expect(workflow).toMatch(
+      /- name: Update PR benchmark comment\n\s+if:.*\n\s+continue-on-error: true/,
+    );
     expect(workflow).toContain(
       'statuses=(--status "candidate=${CANDIDATE_STATUS:-1}")',
     );
+  });
+
+  test("requires the benchmark credential to resolve to one project", () => {
+    expect(() =>
+      assertProjectScopedCredential({
+        authorization: {
+          credential_scope: { project_id: "project" },
+          effective_scope: { project_id: "project" },
+        },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertProjectScopedCredential({
+        authorization: {
+          credential_scope: { project_id: null },
+          effective_scope: { project_id: null },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      assertProjectScopedCredential({
+        authorization: {
+          credential_scope: { project_id: "credential-project" },
+          effective_scope: { project_id: "other-project" },
+        },
+      }),
+    ).toThrow();
   });
 
   test("excludes private keys and forwards only the selected provider", () => {
@@ -387,7 +442,15 @@ describe("benchmark workflow hardening", () => {
       join(process.cwd(), "benchmarks/harbor/clawbench/verify-task.py"),
       "utf8",
     );
+    const taskPreparer = readFileSync(
+      join(process.cwd(), "benchmarks/harbor/clawbench/prepare-task.py"),
+      "utf8",
+    );
     expect(dockerignore.split("\n")).toContain("*.pem");
+    expect(runner).not.toContain("KERNEL_PROJECT");
+    expect(runner).toContain('"${KERNEL_API_BASE_URL%/}/auth/context"');
+    expect(runner).toContain('bun "$benchmark_dir/verify-project-scope.ts"');
+    expect(taskPreparer).not.toContain("KERNEL_PROJECT");
     expect(verifier).toContain('"mcp__kernel__execute_playwright_code"');
     expect(verifier).toContain('"kernel__execute_playwright_code"');
     expect(verifier).toContain('"execute_playwright_code"');
