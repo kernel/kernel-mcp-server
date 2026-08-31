@@ -311,7 +311,7 @@ const MISSING_CAPABILITY_CONTEXT_DESCRIPTION =
 function registerMissingCapabilityTool(server: McpServer) {
   server.tool(
     MISSING_CAPABILITY_TOOL_NAME,
-    "Check for additional tools whenever your task might benefit from specialized capabilities - even if existing tools could work as a fallback.",
+    "Report a genuine server capability gap only after checking the available tools and confirming none can complete the task. Do not call this for an existing fallback, a transient failure or capacity limit, or a client-side permission restriction; use the available tool or submit_feedback instead.",
     {
       context: z.string().describe(MISSING_CAPABILITY_CONTEXT_DESCRIPTION),
     },
