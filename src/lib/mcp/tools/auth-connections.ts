@@ -190,6 +190,7 @@ export function registerAuthConnectionTools(server: McpServer) {
         .optional(),
       selected_choice_id: z
         .string()
+        .min(1)
         .describe(
           "(submit) Canonical choice ID. Use with interaction_id when `get` returns choices.",
         )
@@ -208,6 +209,7 @@ export function registerAuthConnectionTools(server: McpServer) {
         .optional(),
       sign_in_option_id: z
         .string()
+        .min(1)
         .describe(
           "(submit, legacy) Sign-in option ID from sign_in_options. Prefer selected_choice_id when canonical choices are present.",
         )

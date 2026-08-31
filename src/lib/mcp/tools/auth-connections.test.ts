@@ -70,7 +70,8 @@ describe("manage_auth_connections programmatic surface", () => {
         browser: { network: { enabled: true } },
       }).success,
     ).toBe(false);
-    expect(schema?.sign_in_option_id).toBeDefined();
+    expect(schema?.selected_choice_id.safeParse("").success).toBe(false);
+    expect(schema?.sign_in_option_id.safeParse("").success).toBe(false);
     expect(schema?.sso_provider).toBeDefined();
   });
 
