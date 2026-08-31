@@ -446,6 +446,13 @@ export async function beginAuthLogin(
 
   const recordSession = input.record_session ?? true;
   const browserTelemetry = input.browser_telemetry ?? { enabled: true };
+  const proxy =
+    input.proxy_id || input.proxy_name
+      ? {
+          ...(input.proxy_id && { id: input.proxy_id }),
+          ...(input.proxy_name && { name: input.proxy_name }),
+        }
+      : undefined;
 
   let connection: ManagedAuth;
   if (input.mode === "new_login") {
@@ -457,13 +464,10 @@ export async function beginAuthLogin(
           save_credentials: input.save_credentials,
         }),
         record_session: recordSession,
-        browser_telemetry: browserTelemetry,
-        ...((input.proxy_id || input.proxy_name) && {
-          proxy: {
-            ...(input.proxy_id && { id: input.proxy_id }),
-            ...(input.proxy_name && { name: input.proxy_name }),
-          },
-        }),
+        browser: {
+          telemetry: browserTelemetry,
+          ...(proxy && { proxy }),
+        },
       });
     } catch (error) {
       const existingId = conflictExistingId(error);
@@ -498,14 +502,6 @@ export async function beginAuthLogin(
     };
   }
 
-  const proxy =
-    input.proxy_id || input.proxy_name
-      ? {
-          ...(input.proxy_id && { id: input.proxy_id }),
-          ...(input.proxy_name && { name: input.proxy_name }),
-        }
-      : undefined;
-
   // Capture the latest server timeline identity before starting. A signed
   // "after" checkpoint then identifies the new event even if it reaches a
   // terminal state before either the App or model polls once.
@@ -518,8 +514,10 @@ export async function beginAuthLogin(
   try {
     const login = await client.auth.connections.login(connection.id, {
       record_session: recordSession,
-      browser_telemetry: browserTelemetry,
-      ...(proxy && { proxy }),
+      browser: {
+        telemetry: browserTelemetry,
+        ...(proxy && { proxy }),
+      },
     });
     let current = withLoginState(connection, login);
     try {

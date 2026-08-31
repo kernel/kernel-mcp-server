@@ -509,6 +509,9 @@ describe("managed-auth MCP App registration", () => {
     expect(MANAGED_AUTH_APP_HTML).not.toContain("kernel-app-loading");
     expect(MANAGED_AUTH_APP_HTML).toContain("MutationObserver");
     expect(MANAGED_AUTH_APP_HTML).toContain("preventScroll");
+    expect(MANAGED_AUTH_APP_HTML).toContain("interaction_id");
+    expect(MANAGED_AUTH_APP_HTML).toContain("field_values");
+    expect(MANAGED_AUTH_APP_HTML).toContain("selected_choice_id");
     expect(MANAGED_AUTH_APP_HTML).toContain(
       'input:not([type="hidden"]):not([type="submit"])',
     );

@@ -37,16 +37,26 @@ export function registerAuthConnectionTools(server: McpServer) {
   // manage_auth_connections -- Manage Kernel managed auth connections
   server.tool(
     "manage_auth_connections",
-    'Manage reusable authenticated profiles for third-party websites. Before a browser task that needs a user account, call "list" with the exact domain_filter and inspect every page. If one relevant connection is AUTHENTICATED, create the browser with its profile_name. If multiple relevant accounts exist, ask the user which one to use. If authentication is needed and open_auth_login is available, prefer that secure App so credentials and MFA never enter chat: a direct user request to log in is already consent; if login is only discovered incidentally, ask first. For a new App login, choose a concise stable profile name derived from the service unless the user specified one. The programmatic actions remain available for every client: "create" a connection, "login" to start a hosted flow, "submit" fields/MFA/SSO, "get" status, "delete", or "wait" for completion. After authentication, resume the original task with manage_browsers using the verified profile_name.',
+    'Manage reusable authenticated profiles for third-party websites. Before a browser task that needs a user account, call "list" with the exact domain_filter and inspect every page. If one relevant connection is AUTHENTICATED, create the browser with its profile_name. If multiple relevant accounts exist, ask the user which one to use. If authentication is needed and open_auth_login is available, prefer that secure App so credentials and MFA never enter chat: a direct user request to log in is already consent; if login is only discovered incidentally, ask first. For a new App login, choose a concise stable profile name derived from the service unless the user specified one. The programmatic actions remain available for every client: "create" or "update" a connection, "login" to start a hosted flow, "submit" fields or choices, "get" status, inspect the "timeline", "delete", or "wait" for completion. Prefer interaction_id with canonical field_values or selected_choice_id when the connection returns fields or choices. After authentication, resume the original task with manage_browsers using the verified profile_name.',
     {
       ...projectSelectionInputSchema(),
       action: z
-        .enum(["create", "list", "get", "delete", "login", "submit", "wait"])
+        .enum([
+          "create",
+          "list",
+          "get",
+          "update",
+          "delete",
+          "login",
+          "submit",
+          "timeline",
+          "wait",
+        ])
         .describe("Operation to perform."),
       id: z
         .string()
         .describe(
-          "Auth connection ID. Required for get, delete, login, submit.",
+          "Auth connection ID. Required for get, update, delete, login, submit, and timeline.",
         )
         .optional(),
       domain: z
@@ -62,7 +72,7 @@ export function registerAuthConnectionTools(server: McpServer) {
       allowed_domains: z
         .array(z.string())
         .describe(
-          "(create) Additional domains valid for this auth flow. Common SSO providers (Google, Microsoft, Okta, Auth0, Apple, GitHub, Facebook, LinkedIn, Cognito, OneLogin, Ping) are allowed by default.",
+          "(create, update) Additional hostname roots valid for credential entry. Exact hostnames and their subdomains are allowed; leading www. and *. are normalized away. An omitted or empty list leaves credential entry unrestricted.",
         )
         .optional(),
       credential_name: z
@@ -92,49 +102,102 @@ export function registerAuthConnectionTools(server: McpServer) {
       login_url: z
         .string()
         .describe(
-          "(create) Optional explicit login page URL to skip discovery.",
+          "(create, update) Optional explicit login page URL to skip discovery. On update, use an empty string to clear it.",
         )
         .optional(),
       health_check_interval: z
         .number()
         .int()
+        .min(300)
+        .max(86400)
         .describe(
-          "(create) Seconds between automatic re-auth checks. Plan-dependent minimum, max 86400.",
+          "(create, update) Seconds between automatic health checks. Plan-dependent minimum, max 86400.",
+        )
+        .optional(),
+      health_checks: z
+        .boolean()
+        .describe(
+          "(create, update) Enable scheduled authentication health checks. Defaults to true on create.",
+        )
+        .optional(),
+      auto_reauth: z
+        .boolean()
+        .describe(
+          "(create, update) Permit automatic re-authentication after a scheduled health check detects an expired session. Defaults to true on create and has no effect when health_checks is false.",
         )
         .optional(),
       save_credentials: z
         .boolean()
         .describe(
-          "(create) Save credentials after each successful login. Default true.",
+          "(create, update) Save credentials after each successful login. Defaults to true on create.",
         )
         .optional(),
       record_session: z
         .boolean()
         .describe(
-          "(create) Set the connection default for recording replay video of future login, reauth, and health-check browser sessions. (login) Override that default for this login only. Omitted preserves the API default/inheritance behavior.",
+          "(create, update) Set the connection default for recording replay video of future login, reauth, and health-check browser sessions. (login) Override that default for this login only. Omitted preserves the API default or inherited value.",
         )
         .optional(),
       browser_telemetry: managedAuthBrowserTelemetrySchema
         .describe(
-          "(create) Set the connection default for browser telemetry. (login) Override it for this login only. Use { enabled: true } for the default operational categories (control, connection, system, captcha); add browser category flags to opt into console, network, page, interaction, or screenshot capture. Omitted preserves API default/inheritance behavior.",
+          "(create, update) Set the connection default for browser telemetry. (login) Override it for this login only. Use { enabled: true } for the default operational categories (control, connection, system, captcha); browser category settings can opt into console, network, page, interaction, screenshot, or platform capture, tune control CDP exclusions, and configure OTLP export. Omitted preserves the API default or inherited value.",
+        )
+        .optional(),
+      browser_stealth: z
+        .boolean()
+        .describe(
+          "(create, update, login) Whether managed-auth browser sessions use stealth mode. Defaults to true on create; omitted on update or login preserves or inherits the connection setting.",
         )
         .optional(),
       proxy_id: z
         .string()
         .min(1)
-        .describe("(create, login) Proxy ID to route the auth flow through.")
+        .describe(
+          "(create, update, login) Proxy ID to route managed-auth browser sessions through.",
+        )
         .optional(),
       proxy_name: z
         .string()
         .min(1)
-        .describe("(create, login) Proxy name to route the auth flow through.")
+        .describe(
+          "(create, update, login) Proxy name to route managed-auth browser sessions through.",
+        )
+        .optional(),
+      proxy_mode: z
+        .enum(["direct", "default"])
+        .describe(
+          "(create, update, login) Proxy mode. direct disables proxy egress; default restores the stealth-derived default. Cannot be combined with proxy_id or proxy_name.",
+        )
         .optional(),
       domain_filter: z.string().describe("(list) Filter by domain.").optional(),
+      query: z
+        .string()
+        .describe("(list) Search by connection ID, domain, or profile name.")
+        .optional(),
       ...paginationParams,
+      interaction_id: z
+        .string()
+        .min(1)
+        .describe(
+          "(submit) Opaque interaction ID returned with canonical fields and choices. Required with field_values or selected_choice_id.",
+        )
+        .optional(),
+      field_values: z
+        .record(z.string(), z.string())
+        .describe(
+          "(submit) Canonical map of field ID to value. Use with interaction_id when `get` returns fields.",
+        )
+        .optional(),
+      selected_choice_id: z
+        .string()
+        .describe(
+          "(submit) Canonical choice ID. Use with interaction_id when `get` returns choices.",
+        )
+        .optional(),
       fields: z
         .record(z.string(), z.string())
         .describe(
-          "(submit) Map of field name to value (e.g. { mfa_code: '123456' }). Look at discovered_fields from `get` to know what to provide.",
+          "(submit, legacy) Map of discovered field name to value. Prefer interaction_id and field_values when canonical fields are present.",
         )
         .optional(),
       mfa_option_id: z
@@ -143,11 +206,27 @@ export function registerAuthConnectionTools(server: McpServer) {
           "(submit) ID of the MFA option to use, from mfa_options on the connection.",
         )
         .optional(),
+      sign_in_option_id: z
+        .string()
+        .describe(
+          "(submit, legacy) Sign-in option ID from sign_in_options. Prefer selected_choice_id when canonical choices are present.",
+        )
+        .optional(),
       sso_button_selector: z
         .string()
         .describe(
-          "(submit) XPath of an SSO button to click instead of submitting fields.",
+          "(submit, legacy) XPath of an ODA SSO button. Cannot be combined with sso_provider.",
         )
+        .optional(),
+      sso_provider: z
+        .string()
+        .describe(
+          "(submit, legacy) Provider from pending_sso_buttons for a CUA SSO choice. Cannot be combined with sso_button_selector.",
+        )
+        .optional(),
+      timeline_type: z
+        .enum(["login", "reauth", "health_check"])
+        .describe("(timeline) Filter events by type.")
         .optional(),
       wait_seconds: z
         .number()
@@ -182,15 +261,84 @@ export function registerAuthConnectionTools(server: McpServer) {
         projectForOperation(extra.authInfo, params),
       );
 
+      const proxySelectors = [
+        params.proxy_id,
+        params.proxy_name,
+        params.proxy_mode,
+      ].filter((value) => value !== undefined);
       const buildProxy = () =>
-        params.proxy_id || params.proxy_name
+        proxySelectors.length === 1
           ? {
               ...(params.proxy_id && { id: params.proxy_id }),
               ...(params.proxy_name && { name: params.proxy_name }),
+              ...(params.proxy_mode && { mode: params.proxy_mode }),
             }
           : undefined;
+      const buildBrowser = () => {
+        const proxy = buildProxy();
+        return params.browser_stealth !== undefined ||
+          params.browser_telemetry !== undefined ||
+          proxy
+          ? {
+              ...(params.browser_stealth !== undefined && {
+                stealth: params.browser_stealth,
+              }),
+              ...(params.browser_telemetry !== undefined && {
+                telemetry: params.browser_telemetry,
+              }),
+              ...(proxy && { proxy }),
+            }
+          : undefined;
+      };
+      const buildCredential = () => {
+        const hasName = !!params.credential_name;
+        const hasProvider = !!params.credential_provider;
+        const hasPath = !!params.credential_path;
+        const autoTrue = params.credential_auto === true;
+        if (hasName && (hasProvider || hasPath || autoTrue)) {
+          return {
+            error:
+              "credential_name cannot be combined with credential_provider, credential_path, or credential_auto. Use one of: { credential_name } for Kernel credentials, { credential_provider, credential_path } for an external provider item, or { credential_provider, credential_auto: true } for provider domain lookup.",
+          };
+        }
+        if ((hasPath || autoTrue) && !hasProvider) {
+          return {
+            error:
+              "credential_path and credential_auto require credential_provider.",
+          };
+        }
+        if (hasPath && autoTrue) {
+          return {
+            error:
+              "credential_path and credential_auto: true are alternatives — provide exactly one.",
+          };
+        }
+        if (hasProvider && !hasPath && !autoTrue) {
+          return {
+            error:
+              "credential_provider requires either credential_path or credential_auto: true.",
+          };
+        }
+        return {
+          credential:
+            hasName || hasProvider
+              ? {
+                  ...(hasName && { name: params.credential_name }),
+                  ...(hasProvider && { provider: params.credential_provider }),
+                  ...(hasPath && { path: params.credential_path }),
+                  ...(autoTrue && { auto: true }),
+                }
+              : undefined,
+        };
+      };
 
       try {
+        if (proxySelectors.length > 1) {
+          return errorResponse(
+            "Error: provide exactly one of proxy_id, proxy_name, or proxy_mode.",
+          );
+        }
+
         switch (params.action) {
           case "create": {
             if (!params.domain || !params.profile_name) {
@@ -198,46 +346,13 @@ export function registerAuthConnectionTools(server: McpServer) {
                 "Error: domain and profile_name are required for create.",
               );
             }
-            const hasName = !!params.credential_name;
-            const hasProvider = !!params.credential_provider;
-            const hasPath = !!params.credential_path;
-            const autoTrue = params.credential_auto === true;
-            if (hasName && (hasProvider || hasPath || autoTrue)) {
-              return errorResponse(
-                "Error: credential_name cannot be combined with credential_provider, credential_path, or credential_auto. Use one of: { credential_name } for Kernel credentials, { credential_provider, credential_path } for an external provider item, or { credential_provider, credential_auto: true } for provider domain lookup.",
-              );
-            }
-            if ((hasPath || autoTrue) && !hasProvider) {
-              return errorResponse(
-                "Error: credential_path and credential_auto require credential_provider.",
-              );
-            }
-            if (hasPath && autoTrue) {
-              return errorResponse(
-                "Error: credential_path and credential_auto: true are alternatives — provide exactly one.",
-              );
-            }
-            if (hasProvider && !hasPath && !autoTrue) {
-              return errorResponse(
-                "Error: credential_provider requires either credential_path or credential_auto: true.",
-              );
-            }
-            const credential =
-              hasName || hasProvider
-                ? {
-                    ...(hasName && { name: params.credential_name }),
-                    ...(hasProvider && {
-                      provider: params.credential_provider,
-                    }),
-                    ...(hasPath && { path: params.credential_path }),
-                    ...(autoTrue && { auto: true }),
-                  }
-                : undefined;
-            const proxy = buildProxy();
+            const { credential, error } = buildCredential();
+            if (error) return errorResponse(`Error: ${error}`);
+            const browser = buildBrowser();
             const connection = await client.auth.connections.create({
               domain: params.domain,
               profile_name: params.profile_name,
-              ...(params.allowed_domains && {
+              ...(params.allowed_domains !== undefined && {
                 allowed_domains: params.allowed_domains,
               }),
               ...(credential && { credential }),
@@ -245,16 +360,19 @@ export function registerAuthConnectionTools(server: McpServer) {
               ...(params.health_check_interval !== undefined && {
                 health_check_interval: params.health_check_interval,
               }),
+              ...(params.health_checks !== undefined && {
+                health_checks: params.health_checks,
+              }),
+              ...(params.auto_reauth !== undefined && {
+                auto_reauth: params.auto_reauth,
+              }),
               ...(params.save_credentials !== undefined && {
                 save_credentials: params.save_credentials,
               }),
               ...(params.record_session !== undefined && {
                 record_session: params.record_session,
               }),
-              ...(params.browser_telemetry !== undefined && {
-                browser_telemetry: params.browser_telemetry,
-              }),
-              ...(proxy && { proxy }),
+              ...(browser && { browser }),
             });
             if (!connection)
               return errorResponse("Failed to create auth connection");
@@ -264,6 +382,7 @@ export function registerAuthConnectionTools(server: McpServer) {
             const page = await client.auth.connections.list({
               ...(params.profile_name && { profile_name: params.profile_name }),
               ...(params.domain_filter && { domain: params.domain_filter }),
+              ...(params.query && { query: params.query }),
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
@@ -277,6 +396,54 @@ export function registerAuthConnectionTools(server: McpServer) {
             );
             return jsonResponse(connection);
           }
+          case "update": {
+            if (!params.id)
+              return errorResponse("Error: id is required for update.");
+            const { credential, error } = buildCredential();
+            if (error) return errorResponse(`Error: ${error}`);
+            const browser = buildBrowser();
+            const hasUpdate =
+              params.allowed_domains !== undefined ||
+              credential !== undefined ||
+              params.login_url !== undefined ||
+              params.health_check_interval !== undefined ||
+              params.health_checks !== undefined ||
+              params.auto_reauth !== undefined ||
+              params.save_credentials !== undefined ||
+              params.record_session !== undefined ||
+              browser !== undefined;
+            if (!hasUpdate) {
+              return errorResponse(
+                "Error: update requires at least one connection setting.",
+              );
+            }
+            const connection = await client.auth.connections.update(params.id, {
+              ...(params.allowed_domains !== undefined && {
+                allowed_domains: params.allowed_domains,
+              }),
+              ...(credential && { credential }),
+              ...(params.login_url !== undefined && {
+                login_url: params.login_url,
+              }),
+              ...(params.health_check_interval !== undefined && {
+                health_check_interval: params.health_check_interval,
+              }),
+              ...(params.health_checks !== undefined && {
+                health_checks: params.health_checks,
+              }),
+              ...(params.auto_reauth !== undefined && {
+                auto_reauth: params.auto_reauth,
+              }),
+              ...(params.save_credentials !== undefined && {
+                save_credentials: params.save_credentials,
+              }),
+              ...(params.record_session !== undefined && {
+                record_session: params.record_session,
+              }),
+              ...(browser && { browser }),
+            });
+            return jsonResponse(connection);
+          }
           case "delete": {
             if (!params.id)
               return errorResponse("Error: id is required for delete.");
@@ -286,21 +453,16 @@ export function registerAuthConnectionTools(server: McpServer) {
           case "login": {
             if (!params.id)
               return errorResponse("Error: id is required for login.");
-            const proxy = buildProxy();
+            const browser = buildBrowser();
             const hasOverrides =
-              !!proxy ||
-              params.record_session !== undefined ||
-              params.browser_telemetry !== undefined;
+              browser !== undefined || params.record_session !== undefined;
             const response = await client.auth.connections.login(
               params.id,
               hasOverrides
                 ? {
-                    ...(proxy && { proxy }),
+                    ...(browser && { browser }),
                     ...(params.record_session !== undefined && {
                       record_session: params.record_session,
-                    }),
-                    ...(params.browser_telemetry !== undefined && {
-                      browser_telemetry: params.browser_telemetry,
                     }),
                   }
                 : undefined,
@@ -310,26 +472,68 @@ export function registerAuthConnectionTools(server: McpServer) {
           case "submit": {
             if (!params.id)
               return errorResponse("Error: id is required for submit.");
-            const hasFields =
+            const hasCanonicalFields =
+              !!params.field_values &&
+              Object.keys(params.field_values).length > 0;
+            const hasLegacyFields =
               !!params.fields && Object.keys(params.fields).length > 0;
-            if (
-              !hasFields &&
-              !params.mfa_option_id &&
-              !params.sso_button_selector
-            )
+            const hasCanonicalSubmission =
+              hasCanonicalFields || !!params.selected_choice_id;
+            if (hasCanonicalSubmission && !params.interaction_id) {
               return errorResponse(
-                "Error: submit requires at least one of fields (non-empty), mfa_option_id, or sso_button_selector.",
+                "Error: interaction_id is required with field_values or selected_choice_id.",
               );
+            }
+            if (params.sso_button_selector && params.sso_provider) {
+              return errorResponse(
+                "Error: sso_button_selector and sso_provider cannot be combined.",
+              );
+            }
+            if (
+              !hasCanonicalSubmission &&
+              !hasLegacyFields &&
+              !params.mfa_option_id &&
+              !params.sign_in_option_id &&
+              !params.sso_button_selector &&
+              !params.sso_provider
+            ) {
+              return errorResponse(
+                "Error: submit requires at least one of field_values, selected_choice_id, fields, mfa_option_id, sign_in_option_id, sso_button_selector, or sso_provider.",
+              );
+            }
             const response = await client.auth.connections.submit(params.id, {
-              ...(hasFields && { fields: params.fields }),
+              ...(params.interaction_id && {
+                interaction_id: params.interaction_id,
+              }),
+              ...(hasCanonicalFields && { field_values: params.field_values }),
+              ...(params.selected_choice_id && {
+                selected_choice_id: params.selected_choice_id,
+              }),
+              ...(hasLegacyFields && { fields: params.fields }),
               ...(params.mfa_option_id && {
                 mfa_option_id: params.mfa_option_id,
+              }),
+              ...(params.sign_in_option_id && {
+                sign_in_option_id: params.sign_in_option_id,
               }),
               ...(params.sso_button_selector && {
                 sso_button_selector: params.sso_button_selector,
               }),
+              ...(params.sso_provider && {
+                sso_provider: params.sso_provider,
+              }),
             });
             return jsonResponse(response);
+          }
+          case "timeline": {
+            if (!params.id)
+              return errorResponse("Error: id is required for timeline.");
+            const page = await client.auth.connections.timeline(params.id, {
+              ...(params.timeline_type && { type: params.timeline_type }),
+              ...(params.limit !== undefined && { limit: params.limit }),
+              ...(params.offset !== undefined && { offset: params.offset }),
+            });
+            return paginatedJsonResponse(page);
           }
           case "wait": {
             if (!params.id && (!params.domain_filter || !params.profile_name)) {
