@@ -480,4 +480,4 @@ jobs:
           [[ "$BASELINE_STATUS" == "0" ]]
           [[ "$PUBLISH_OUTCOME" == "success" ]]
           [[ "$REPORT_OUTCOME" == "success" ]]
-          jq -e 'all(.arms[]; .scored == .trials and .infraErrors == 0 and .ungraded == 0)' "$RUNNER_TEMP/benchmark-summary.json" >/dev/null
+          jq -e 'all(.arms[]; .complete == true)' "$RUNNER_TEMP/benchmark-summary.json" >/dev/null

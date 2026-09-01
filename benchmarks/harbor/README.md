@@ -16,7 +16,7 @@ The image records the current Git SHA, and the generated task records the ClawBe
 
 ## Requirements
 
-- `uv`, Harbor 0.21.0, and `harbor-hypeman` 0.1.1
+- `uv`, Harbor 0.21.0, and `harbor-hypeman` 0.1.2
 - Hypeman CLI credentials
 - a ClawBench checkout containing pinned commit `c7feaa2`
 - `KERNEL_MCP_BENCHMARK_API_KEY` scoped to an isolated evaluation project; its credential scope is the project source of truth

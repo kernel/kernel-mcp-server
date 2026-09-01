@@ -70,7 +70,7 @@ case "$agent" in
 esac
 
 harbor_version=${HARBOR_VERSION:-0.21.0}
-harbor_hypeman_version=${HARBOR_HYPEMAN_VERSION:-0.1.1}
+harbor_hypeman_version=${HARBOR_HYPEMAN_VERSION:-0.1.2}
 
 export KERNEL_API_KEY=$KERNEL_MCP_BENCHMARK_API_KEY
 export KERNEL_BASE_URL=${KERNEL_BASE_URL:-https://api.onkernel.com}
@@ -165,6 +165,8 @@ timeout --signal=INT --kill-after=30s "${HARBOR_BENCHMARK_TIMEOUT:-$default_time
   --max-retries "${HARBOR_MAX_RETRIES:-5}" \
   --retry-include APITimeoutError \
   --retry-include APIConnectionError \
+  --retry-include RateLimitError \
+  --retry-include InternalServerError \
   --retry-include ConnectionRefusedError \
   --retry-include ExecProtocolError \
   --delete \

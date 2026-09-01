@@ -89,20 +89,13 @@ export function renderMarkdown(
 ): string {
   const lines = ["<!-- kernel-mcp-clawbench -->", `## ${title}`];
   const failed = Object.entries(statuses).filter(([, status]) => status !== 0);
-  const infra = summaries.filter((summary) => summary.infraErrors > 0);
-  const ungraded = summaries.filter((summary) => summary.ungraded > 0);
   const incomplete =
-    failed.length > 0 || infra.length > 0 || ungraded.length > 0;
+    failed.length > 0 || summaries.some((summary) => !summary.complete);
   if (incomplete) {
     const reasons = [
       ...failed.map(([arm, status]) => `${arm} exited ${status}`),
-      ...infra.map(
-        (summary) =>
-          `${summary.arm} had ${summary.infraErrors} infrastructure ${summary.infraErrors === 1 ? "failure" : "failures"}`,
-      ),
-      ...ungraded.map(
-        (summary) =>
-          `${summary.arm} had ${summary.ungraded} ungraded ${summary.ungraded === 1 ? "trial" : "trials"}`,
+      ...summaries.flatMap((summary) =>
+        summary.incompleteReasons.map((reason) => `${summary.arm} ${reason}`),
       ),
     ];
     lines.push(
