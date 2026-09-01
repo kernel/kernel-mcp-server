@@ -15,37 +15,65 @@ import {
 describe("manage_auth_connections programmatic surface", () => {
   afterEach(resetKernelClientFactory);
 
-  test("keeps every legacy action and adds wait", () => {
+  test("exposes every managed-auth action and current input", () => {
     const { schema } = captureHandler();
     expect(schema?.action.safeParse("list").success).toBe(true);
     expect(schema?.action.safeParse("get").success).toBe(true);
     expect(schema?.action.safeParse("create").success).toBe(true);
+    expect(schema?.action.safeParse("update").success).toBe(true);
     expect(schema?.action.safeParse("delete").success).toBe(true);
     expect(schema?.action.safeParse("login").success).toBe(true);
     expect(schema?.action.safeParse("submit").success).toBe(true);
+    expect(schema?.action.safeParse("timeline").success).toBe(true);
     expect(schema?.action.safeParse("wait").success).toBe(true);
+    expect(schema?.interaction_id).toBeDefined();
+    expect(schema?.field_values).toBeDefined();
+    expect(schema?.selected_choice_id).toBeDefined();
     expect(schema?.fields).toBeDefined();
     expect(schema?.mfa_option_id).toBeDefined();
     expect(schema?.sso_button_selector).toBeDefined();
     expect(schema?.allowed_domains).toBeDefined();
     expect(schema?.login_url).toBeDefined();
-    expect(schema?.credential_name).toBeDefined();
-    expect(schema?.credential_provider).toBeDefined();
-    expect(schema?.credential_path).toBeDefined();
+    expect(schema?.credential_name.description).toContain("create, update");
+    expect(schema?.credential_provider.description).toContain("create, update");
+    expect(schema?.credential_path.description).toContain("create, update");
+    expect(schema?.credential_auto.description).toContain("create, update");
+    expect(schema?.health_checks).toBeDefined();
+    expect(schema?.auto_reauth).toBeDefined();
+    expect(schema?.browser_stealth).toBeDefined();
+    expect(schema?.query).toBeDefined();
+    expect(schema?.timeline_type).toBeDefined();
     expect(schema?.record_session).toBeDefined();
     expect(schema?.flow_checkpoint).toBeDefined();
     expect(schema?.proxy_id.safeParse("").success).toBe(false);
     expect(schema?.proxy_name.safeParse("").success).toBe(false);
+    expect(schema?.proxy_mode.safeParse("direct").success).toBe(true);
     expect(schema?.browser_telemetry.safeParse({ enabled: true }).success).toBe(
       true,
     );
+    expect(
+      schema?.browser_telemetry.safeParse({
+        enabled: true,
+        browser: {
+          platform: { enabled: true },
+          control: {
+            cdp: { excluded_methods: ["Input.dispatchMouseEvent"] },
+          },
+        },
+        export: {
+          otlp: { destination: { name: "managed-auth-telemetry" } },
+        },
+      }).success,
+    ).toBe(true);
     expect(
       schema?.browser_telemetry.safeParse({
         enabled: false,
         browser: { network: { enabled: true } },
       }).success,
     ).toBe(false);
-    expect(schema?.sign_in_option_id).toBeUndefined();
+    expect(schema?.selected_choice_id.safeParse("").success).toBe(false);
+    expect(schema?.sign_in_option_id.safeParse("").success).toBe(false);
+    expect(schema?.sso_provider).toBeDefined();
   });
 
   test("publishes browser telemetry categories without JSON Schema references", async () => {
@@ -137,7 +165,7 @@ describe("manage_auth_connections programmatic surface", () => {
         extra,
       );
       expect(createBody).not.toHaveProperty("record_session");
-      expect(createBody).not.toHaveProperty("browser_telemetry");
+      expect(createBody).not.toHaveProperty("browser");
 
       await handler({ action: "login", id: "conn_1" }, extra);
       expect(loginBody).toBeUndefined();
@@ -157,9 +185,11 @@ describe("manage_auth_connections programmatic surface", () => {
       );
       expect(createBody).toMatchObject({
         record_session: true,
-        browser_telemetry: {
-          enabled: true,
-          browser: { network: { enabled: true } },
+        browser: {
+          telemetry: {
+            enabled: true,
+            browser: { network: { enabled: true } },
+          },
         },
       });
 
@@ -174,12 +204,235 @@ describe("manage_auth_connections programmatic surface", () => {
       );
       expect(loginBody).toEqual({
         record_session: false,
-        browser_telemetry: { enabled: false },
+        browser: { telemetry: { enabled: false } },
       });
     } finally {
       kernelClientMock.factory = () => unusedKernelClient;
     }
   });
+
+  test("forwards current connection settings on update", async () => {
+    const { handler } = captureHandler();
+    let updateBody: unknown;
+    kernelClientMock.factory = () => ({
+      auth: {
+        connections: {
+          update: async (_id: string, body: unknown) => {
+            updateBody = body;
+            return connection();
+          },
+        },
+      },
+    });
+    try {
+      await handler(
+        {
+          action: "update",
+          id: "conn_1",
+          allowed_domains: [],
+          credential_provider: "team-1password",
+          credential_path: "Vault/Login",
+          login_url: "",
+          health_check_interval: 1200,
+          health_checks: false,
+          auto_reauth: false,
+          save_credentials: false,
+          record_session: true,
+          browser_stealth: false,
+          proxy_mode: "direct",
+          browser_telemetry: {
+            enabled: true,
+            browser: { platform: { enabled: true } },
+            export: {
+              otlp: { destination: { name: "managed-auth-telemetry" } },
+            },
+          },
+        },
+        { authInfo: { token: "test-token" } },
+      );
+      expect(updateBody).toEqual({
+        allowed_domains: [],
+        credential: {
+          provider: "team-1password",
+          path: "Vault/Login",
+        },
+        login_url: "",
+        health_check_interval: 1200,
+        health_checks: false,
+        auto_reauth: false,
+        save_credentials: false,
+        record_session: true,
+        browser: {
+          stealth: false,
+          proxy: { mode: "direct" },
+          telemetry: {
+            enabled: true,
+            browser: { platform: { enabled: true } },
+            export: {
+              otlp: { destination: { name: "managed-auth-telemetry" } },
+            },
+          },
+        },
+      });
+    } finally {
+      kernelClientMock.factory = () => unusedKernelClient;
+    }
+  });
+
+  test("submits canonical fields and choices with interaction identity", async () => {
+    const { handler } = captureHandler();
+    const submitBodies: unknown[] = [];
+    kernelClientMock.factory = () => ({
+      auth: {
+        connections: {
+          submit: async (_id: string, body: unknown) => {
+            submitBodies.push(body);
+            return { accepted: true };
+          },
+        },
+      },
+    });
+    try {
+      const extra = { authInfo: { token: "test-token" } };
+      await handler(
+        {
+          action: "submit",
+          id: "conn_1",
+          interaction_id: "mai_1",
+          field_values: { field_email: "user@example.com" },
+        },
+        extra,
+      );
+      await handler(
+        {
+          action: "submit",
+          id: "conn_1",
+          interaction_id: "mai_2",
+          selected_choice_id: "work-account",
+        },
+        extra,
+      );
+      await handler(
+        {
+          action: "submit",
+          id: "conn_1",
+          interaction_id: "mai_3",
+          field_values: { field_email: "user@example.com" },
+          selected_choice_id: "work-account",
+        },
+        extra,
+      );
+      expect(submitBodies).toEqual([
+        {
+          interaction_id: "mai_1",
+          field_values: { field_email: "user@example.com" },
+        },
+        {
+          interaction_id: "mai_2",
+          selected_choice_id: "work-account",
+        },
+        {
+          interaction_id: "mai_3",
+          field_values: { field_email: "user@example.com" },
+          selected_choice_id: "work-account",
+        },
+      ]);
+
+      const missingInteraction = await handler(
+        {
+          action: "submit",
+          id: "conn_1",
+          selected_choice_id: "work-account",
+        },
+        extra,
+      );
+      expect(missingInteraction.isError).toBe(true);
+      expect(missingInteraction.content[0].text).toContain(
+        "interaction_id is required",
+      );
+    } finally {
+      kernelClientMock.factory = () => unusedKernelClient;
+    }
+  });
+
+  test.each([
+    [
+      { interaction_id: "mai_1", fields: { email: "user@example.com" } },
+      "interaction_id requires field_values or selected_choice_id",
+    ],
+    [
+      {
+        interaction_id: "mai_1",
+        field_values: { field_email: "user@example.com" },
+        fields: { email: "user@example.com" },
+      },
+      "field_values and selected_choice_id cannot be combined with legacy input fields",
+    ],
+    [
+      {
+        interaction_id: "mai_1",
+        selected_choice_id: "work-account",
+        sso_button_selector: "xpath=//button",
+      },
+      "field_values and selected_choice_id cannot be combined with legacy input fields",
+    ],
+    [
+      {
+        interaction_id: "mai_1",
+        selected_choice_id: "work-account",
+        sso_provider: "google",
+      },
+      "field_values and selected_choice_id cannot be combined with legacy input fields",
+    ],
+    [
+      {
+        interaction_id: "mai_1",
+        selected_choice_id: "work-account",
+        mfa_option_id: "sms",
+      },
+      "field_values and selected_choice_id cannot be combined with legacy input fields",
+    ],
+    [
+      {
+        interaction_id: "mai_1",
+        selected_choice_id: "work-account",
+        sign_in_option_id: "personal-account",
+      },
+      "field_values and selected_choice_id cannot be combined with legacy input fields",
+    ],
+    [
+      { sso_button_selector: "xpath=//button", sso_provider: "google" },
+      "sso_button_selector cannot be combined with other input types",
+    ],
+    [
+      { sso_button_selector: "xpath=//button", mfa_option_id: "sms" },
+      "sso_button_selector cannot be combined with other input types",
+    ],
+    [
+      { sso_provider: "google", mfa_option_id: "sms" },
+      "sso_provider cannot be combined with mfa_option_id or sign_in_option_id",
+    ],
+    [
+      { sign_in_option_id: "work-account", fields: { email: "value" } },
+      "sign_in_option_id cannot be combined with fields or mfa_option_id",
+    ],
+    [
+      { sign_in_option_id: "work-account", mfa_option_id: "sms" },
+      "sign_in_option_id cannot be combined with fields or mfa_option_id",
+    ],
+  ])(
+    "rejects incompatible submit shapes",
+    async (submitParams, expectedError) => {
+      const { handler } = captureHandler();
+      const result = await handler(
+        { action: "submit", id: "conn_1", ...submitParams },
+        { authInfo: { token: "test-token" } },
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(expectedError);
+    },
+  );
 
   test("legacy actions keep their established raw response shapes", async () => {
     const { handler } = captureHandler();
@@ -236,8 +489,10 @@ describe("manage_auth_connections programmatic surface", () => {
       const got = await handler({ action: "get", id: "conn_1" }, extra);
       const gotJson = JSON.parse(got.content[0].text);
       expect(gotJson.status).toBe("AUTHENTICATED");
+      expect(gotJson.interaction_id).toBe("mai_secret");
+      expect(gotJson.fields).toHaveLength(1);
+      expect(gotJson.choices).toHaveLength(1);
       expect(gotJson.discovered_fields).toHaveLength(1);
-      expect(gotJson.interaction).toBeUndefined();
 
       // login returns the raw hosted flow response.
       const login = await handler({ action: "login", id: "conn_1" }, extra);
@@ -279,6 +534,7 @@ describe("manage_auth_connections programmatic surface", () => {
         connections: {
           list: async (params: Record<string, unknown>) => {
             expect(params.domain).toBe("example.com");
+            expect(params.query).toBe("work");
             return {
               getPaginatedItems: () => [connection()],
               has_more: false,
@@ -290,7 +546,11 @@ describe("manage_auth_connections programmatic surface", () => {
     });
     try {
       const result = await handler(
-        { action: "list", domain_filter: "example.com" },
+        {
+          action: "list",
+          domain_filter: "example.com",
+          query: "work",
+        },
         { authInfo: { token: "test-token" } },
       );
       const json = JSON.parse(result.content[0].text);
@@ -301,6 +561,53 @@ describe("manage_auth_connections programmatic surface", () => {
       // No discovery steering is injected into the programmatic list shape.
       expect(json.selection).toBeUndefined();
       expect(json.next_action).toBeUndefined();
+    } finally {
+      kernelClientMock.factory = () => unusedKernelClient;
+    }
+  });
+
+  test("timeline returns the paginated event history", async () => {
+    const { handler } = captureHandler();
+    kernelClientMock.factory = () => ({
+      auth: {
+        connections: {
+          timeline: async (id: string, params: Record<string, unknown>) => {
+            expect(id).toBe("conn_1");
+            expect(params).toEqual({
+              type: "health_check",
+              limit: 10,
+              offset: 20,
+            });
+            return {
+              getPaginatedItems: () => [
+                {
+                  id: "check_1",
+                  type: "health_check",
+                  status: "AUTHENTICATED",
+                  timestamp: "2026-08-31T00:00:00Z",
+                },
+              ],
+              has_more: false,
+              next_offset: null,
+            };
+          },
+        },
+      },
+    });
+    try {
+      const result = await handler(
+        {
+          action: "timeline",
+          id: "conn_1",
+          timeline_type: "health_check",
+          limit: 10,
+          offset: 20,
+        },
+        { authInfo: { token: "test-token" } },
+      );
+      const json = JSON.parse(result.content[0].text);
+      expect(json.items).toHaveLength(1);
+      expect(json.items[0].id).toBe("check_1");
     } finally {
       kernelClientMock.factory = () => unusedKernelClient;
     }
@@ -331,9 +638,21 @@ describe("manage_auth_connections programmatic surface", () => {
         "require credential_provider",
       ],
       [{ action: "get" }, "id is required for get"],
+      [{ action: "update" }, "id is required for update"],
+      [{ action: "update", id: "conn_1" }, "at least one connection setting"],
       [{ action: "delete" }, "id is required for delete"],
       [{ action: "login" }, "id is required for login"],
+      [{ action: "timeline" }, "id is required for timeline"],
       [{ action: "submit", id: "conn_1" }, "submit requires at least one of"],
+      [
+        {
+          action: "login",
+          id: "conn_1",
+          proxy_id: "proxy_1",
+          proxy_mode: "direct",
+        },
+        "exactly one of proxy_id, proxy_name, or proxy_mode",
+      ],
     ];
     for (const [params, message] of cases) {
       const result = await handler(params, extra);

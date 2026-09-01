@@ -313,7 +313,7 @@ Call `get_connection_context` before deciding whether to create or select a proj
 - `manage_replays` - Start, stop, and list MP4 video replay recordings for a browser session. Session-scoped: start once, run your automation, then stop. Requires a paid Kernel plan.
 - `manage_extensions` - List and delete uploaded browser extensions.
 - `manage_apps` - List/search apps, invoke actions, get/list/delete deployments, and get invocation results.
-- `manage_auth_connections` - Create, list, get, delete, login, submit, and wait for managed-auth connections in every client. Use domain-filtered `list` for discovery. App-capable clients additionally receive `open_auth_login`; the programmatic actions remain available there too.
+- `manage_auth_connections` - Create, list, get, update, delete, login, submit, inspect timelines, and wait for managed-auth connections in every client. Supports health-check and automatic re-auth settings, managed-auth browser configuration, and canonical interaction-bound field/choice submissions. Use domain-filtered `list` for discovery. App-capable clients additionally receive `open_auth_login`; the programmatic actions remain available there too.
 - `manage_credentials` - Create, list, get, update, and delete stored credentials; fetch a current TOTP code for credentials with a configured totp_secret.
 - `manage_credential_providers` - Create, list, get, update, and delete external credential providers (e.g. 1Password); list available items and test the provider connection.
 
@@ -380,7 +380,7 @@ Returns: { success: true, result: "Example Domain" }
 
 Example: “Log me into my Hacker News account and update my profile to add a random emoji at the bottom.” The agent should discover `news.ycombinator.com`, open the App when needed, wait for authentication, then continue the profile edit without asking for credentials or a profile name in chat.
 
-The secure App defaults `record_session` and `browser_telemetry.enabled` to `true`, recording replay video plus the operational telemetry categories (`control`, `connection`, `system`, and `captcha`) for managed-auth browser sessions. Callers can explicitly disable either setting. The programmatic `manage_auth_connections` create/login actions preserve the API’s opt-in and inheritance behavior when these parameters are omitted.
+The secure App defaults `record_session` and `browser_telemetry.enabled` to `true`, recording replay video plus the operational telemetry categories (`control`, `connection`, `system`, and `captcha`) for managed-auth browser sessions. Callers can explicitly disable either setting. The programmatic `manage_auth_connections` create, update, and login actions pass browser telemetry through the API’s current nested `browser.telemetry` configuration while preserving defaults and inheritance when the MCP parameter is omitted.
 
 ### Set up browser profiles for authentication
 

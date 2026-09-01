@@ -108,6 +108,7 @@ describe("manage_apps invocation contract", () => {
                 created_at: "2026-08-08T00:00:00Z",
                 headless: false,
                 stealth: true,
+                memory: "2GiB",
                 timeout_seconds: 600,
                 region: "us-east",
               },

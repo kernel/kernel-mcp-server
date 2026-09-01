@@ -19,7 +19,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 benchmark_dir="$repo_root/benchmarks/harbor"
 image_env="$benchmark_dir/.image.env"
 clawbench_repo=${CLAWBENCH_REPO:-$repo_root/../ClawBench}
-clawbench_ref=${CLAWBENCH_REF:-45a71c4b0c78186851c94cfc77bfe619c9e01387}
+clawbench_ref=${CLAWBENCH_REF:-c7feaa2435ca8115c0762c44e13885fe5adf3e98}
 
 [[ -f "$image_env" ]] || {
   echo "Missing $image_env; run benchmarks/harbor/build-image.sh first" >&2

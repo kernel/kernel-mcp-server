@@ -58,11 +58,11 @@ describe("managed-auth start/resume state machine", () => {
     });
     expect(calls.createParams).toMatchObject({
       record_session: true,
-      browser_telemetry: { enabled: true },
+      browser: { telemetry: { enabled: true } },
     });
     expect(calls.loginParams).toEqual({
       record_session: true,
-      browser_telemetry: { enabled: true },
+      browser: { telemetry: { enabled: true } },
     });
   });
 
@@ -78,11 +78,11 @@ describe("managed-auth start/resume state machine", () => {
     });
     expect(calls.createParams).toMatchObject({
       record_session: false,
-      browser_telemetry: { enabled: false },
+      browser: { telemetry: { enabled: false } },
     });
     expect(calls.loginParams).toEqual({
       record_session: false,
-      browser_telemetry: { enabled: false },
+      browser: { telemetry: { enabled: false } },
     });
   });
 
