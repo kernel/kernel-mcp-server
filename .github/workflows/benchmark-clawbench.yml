@@ -342,7 +342,8 @@ jobs:
           run_arm() {
             local checkout=$1 arm=$2 job_name=$3
             set +e
-            "$checkout/benchmarks/harbor/clawbench/run.sh" \
+            KERNEL_MCP_BENCHMARK_SOURCE_ROOT="$checkout" \
+              "$GITHUB_WORKSPACE/harness/benchmarks/harbor/clawbench/run.sh" \
               "$BENCHMARK_AGENT" \
               "$BENCHMARK_TASK" \
               "$job_name" \
@@ -479,4 +480,4 @@ jobs:
           [[ "$BASELINE_STATUS" == "0" ]]
           [[ "$PUBLISH_OUTCOME" == "success" ]]
           [[ "$REPORT_OUTCOME" == "success" ]]
-          jq -e 'all(.arms[]; .scored > 0)' "$RUNNER_TEMP/benchmark-summary.json" >/dev/null
+          jq -e 'all(.arms[]; .scored == .trials and .infraErrors == 0 and .ungraded == 0)' "$RUNNER_TEMP/benchmark-summary.json" >/dev/null

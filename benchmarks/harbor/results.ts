@@ -66,6 +66,7 @@ export interface ArmSummary {
   strict?: number;
   strictScored: number;
   infraErrors: number;
+  retries: number;
   ungraded: number;
   kernelMcpValid?: number;
   kernelMcpChecked: number;
@@ -384,6 +385,7 @@ export function summarizeArm(arm: BenchmarkArm): ArmSummary {
     strictScored: strict.length,
     infraErrors: arm.trials.filter((trial) => trial.errorClass === "infra")
       .length,
+    retries: arm.nRetries,
     ungraded: arm.trials.filter(
       (trial) =>
         trial.errorClass !== "infra" && trial.scores.ungraded_rate === 1,

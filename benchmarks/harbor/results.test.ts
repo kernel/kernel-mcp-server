@@ -146,6 +146,7 @@ describe("Harbor result ingestion", () => {
       strict: 0,
       intercepted: 1,
       infraErrors: 1,
+      retries: 0,
       ungraded: 0,
       kernelMcpValid: 1,
       medianCalls: 1,
@@ -303,8 +304,15 @@ describe("Harbor result ingestion", () => {
       { ...summary, arm: "candidate", scored: 0, ungraded: summary.trials },
       { ...summary, arm: "baseline", scored: 0, ungraded: summary.trials },
     ]);
-    expect(ungraded).toContain("candidate produced no graded trials");
+    expect(ungraded).toContain("candidate had 2 ungraded trials");
     expect(ungraded).not.toContain("Candidate minus baseline");
+
+    const infra = renderMarkdown("test", [
+      { ...summary, arm: "candidate", infraErrors: 1 },
+      { ...summary, arm: "baseline" },
+    ]);
+    expect(infra).toContain("candidate had 1 infrastructure failure");
+    expect(infra).not.toContain("Candidate minus baseline");
   });
 
   test("keeps full errors until redaction and clamps derived scores", () => {
@@ -393,7 +401,9 @@ describe("benchmark workflow hardening", () => {
     expect(workflow).not.toContain(
       "KERNEL_PROJECT: ${{ vars.KERNEL_PROJECT }}",
     );
-    expect(workflow).toContain("all(.arms[]; .scored > 0)");
+    expect(workflow).toContain(
+      "all(.arms[]; .scored == .trials and .infraErrors == 0 and .ungraded == 0)",
+    );
     expect(workflow).toMatch(
       /- name: Mark the PR benchmark as running\n\s+if:.*\n\s+continue-on-error: true/,
     );
@@ -403,6 +413,27 @@ describe("benchmark workflow hardening", () => {
     expect(workflow).toContain(
       'statuses=(--status "candidate=${CANDIDATE_STATUS:-1}")',
     );
+    expect(workflow).toContain('KERNEL_MCP_BENCHMARK_SOURCE_ROOT="$checkout"');
+    expect(workflow).toContain(
+      '"$GITHUB_WORKSPACE/harness/benchmarks/harbor/clawbench/run.sh"',
+    );
+
+    const runner = readFileSync(
+      join(process.cwd(), "benchmarks/harbor/clawbench/run.sh"),
+      "utf8",
+    );
+    expect(runner).toContain(
+      "source_root=${KERNEL_MCP_BENCHMARK_SOURCE_ROOT:-$harness_root}",
+    );
+    expect(runner).toContain('--max-retries "${HARBOR_MAX_RETRIES:-5}"');
+    for (const exception of [
+      "APITimeoutError",
+      "APIConnectionError",
+      "ConnectionRefusedError",
+      "ExecProtocolError",
+    ]) {
+      expect(runner).toContain(`--retry-include ${exception}`);
+    }
   });
 
   test("requires the benchmark credential to resolve to one project", () => {
