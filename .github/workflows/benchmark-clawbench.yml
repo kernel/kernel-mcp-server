@@ -284,7 +284,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: kernel/ClawBench
-          ref: 45a71c4b0c78186851c94cfc77bfe619c9e01387
+          ref: c7feaa2435ca8115c0762c44e13885fe5adf3e98
           path: clawbench
           persist-credentials: false
 
@@ -326,7 +326,7 @@ jobs:
         shell: bash
         env:
           CLAWBENCH_REPO: ${{ github.workspace }}/clawbench
-          CLAWBENCH_REF: 45a71c4b0c78186851c94cfc77bfe619c9e01387
+          CLAWBENCH_REF: c7feaa2435ca8115c0762c44e13885fe5adf3e98
           HARBOR_BENCHMARK_TIMEOUT: 4h
           BENCHMARK_AGENT: ${{ needs.resolve.outputs.agent }}
           BENCHMARK_TASK: ${{ needs.resolve.outputs.task }}
