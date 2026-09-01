@@ -4,7 +4,7 @@ import {
   isTerminalFailure,
 } from "@/lib/mcp/apps/managed-auth-terminal";
 
-// Mirrors the hosted UI (@onkernel/managed-auth-react 0.4.1): FAILED/CANCELED
+// Mirrors the hosted UI (@onkernel/managed-auth-react): FAILED/CANCELED
 // render StepError with the actual safe error code so ERROR_DISPLAY copy
 // survives; EXPIRED renders StepExpired.
 describe("managed-auth terminal view", () => {

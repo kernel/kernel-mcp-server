@@ -25,6 +25,22 @@ export function connection(overrides: Partial<ManagedAuth> = {}): ManagedAuth {
     hosted_url: "https://managed-auth.onkernel.com/login/conn_1?code=secret",
     live_view_url: "https://live.example/secret",
     browser_session_id: "browser_secret",
+    interaction_id: "mai_secret",
+    fields: [
+      {
+        id: "field_password",
+        ref: "password",
+        type: "password",
+        reason: "missing",
+      },
+    ],
+    choices: [
+      {
+        id: "work-account",
+        label: "Work account",
+        type: "account",
+      },
+    ],
     discovered_fields: [
       {
         label: "Password",
@@ -129,6 +145,9 @@ const forbiddenKeys = [
   "jwt",
   "authorization",
   "credential",
+  "interaction_id",
+  "fields",
+  "choices",
   "discovered_fields",
   "mfa_options",
   "pending_sso_buttons",
