@@ -615,7 +615,7 @@ describe("captureMcpFeedback", () => {
 describe("instrumentMcpAnalytics (SDK integration)", () => {
   const ORG = "org_integration";
 
-  test("keeps the feedback tool schema stable when analytics is disabled", async () => {
+  test("keeps analytics tool contracts stable", async () => {
     const disabled = await connectTestMcp(
       (server) => instrumentMcpAnalytics(server, null),
       {},
@@ -638,6 +638,19 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       expect(disabledTool).toBeDefined();
       expect(disabledTool?.inputSchema).toEqual(enabledTool?.inputSchema);
       expect(disabledTool?.inputSchema.required).toContain("context");
+
+      const missingCapabilityTool = (
+        await enabled.client.listTools()
+      ).tools.find(({ name }) => name === "get_more_tools");
+      expect(missingCapabilityTool?.description).toContain(
+        "only after checking the available tools",
+      );
+      expect(missingCapabilityTool?.description).toContain(
+        "transient failure or capacity limit",
+      );
+      expect(missingCapabilityTool?.description).toContain(
+        "client-side permission restriction",
+      );
 
       const result = await disabled.client.callTool({
         name: KERNEL_FEEDBACK_TOOL_NAME,
