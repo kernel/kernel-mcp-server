@@ -438,6 +438,7 @@ describe("benchmark workflow hardening", () => {
     expect(workflow).toContain("github.rest.repos.compareCommits");
     expect(workflow).not.toContain("baseSha = pull.base.sha");
     expect(workflow).toContain('HARBOR_VERSION: "0.21.0"');
+    expect(workflow).toContain('HARBOR_HYPEMAN_VERSION: "0.1.2"');
     expect(workflow).toContain('CODEX_BENCHMARK_VERSION: "0.120.0"');
     expect(
       workflow.match(/c7feaa2435ca8115c0762c44e13885fe5adf3e98/g),
