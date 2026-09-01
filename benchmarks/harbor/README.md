@@ -16,7 +16,7 @@ The image records the current Git SHA, and the generated task records the ClawBe
 
 ## Requirements
 
-- `uv`, Harbor 0.21.0, and `harbor-hypeman` 0.1.1
+- `uv`, Harbor 0.21.0, and `harbor-hypeman` 0.1.2
 - Hypeman CLI credentials
 - a ClawBench checkout containing pinned commit `c7feaa2`
 - `KERNEL_MCP_BENCHMARK_API_KEY` scoped to an isolated evaluation project; its credential scope is the project source of truth
@@ -56,6 +56,8 @@ HARBOR_N_CONCURRENT=10 \
 Codex defaults to version `0.120.0` with `gpt-5.6-luna`. Claude Code defaults to version `2.1.238` with `claude-sonnet-5`. Override these with `CODEX_BENCHMARK_MODEL`, `CODEX_BENCHMARK_VERSION`, `CLAUDE_BENCHMARK_MODEL`, or `CLAUDE_BENCHMARK_VERSION`.
 
 Single-task runs have a 40-minute wall-clock limit. Full-suite runs default to six hours. Set `HARBOR_BENCHMARK_TIMEOUT` to override either limit. Set `HARBOR_JOBS_DIR` to choose where Harbor writes results.
+
+The runner retries a whole isolated trial up to five times for transient Hypeman connection, timeout, and exec-stream failures. Set `HARBOR_MAX_RETRIES` to override that limit. Per-request SDK retries remain disabled because transparently retrying instance or image creation can duplicate a request whose first response was lost.
 
 ## GitHub Actions
 
@@ -101,3 +103,5 @@ BRAINTRUST_PROJECT=kernel-mcp-server-benchmarks \
 ```
 
 The experiment name and deterministic row/span IDs make it safe to publish the same job directories again. Re-publication replaces the rows and refreshes experiment metadata. Rows contain task identity, numeric rewards, provenance, bounded errors, timing, token, call, and cost metrics. ATIF agent/tool activity is attached as child spans after secret redaction. Task instructions, ground truth, browser session URLs, and recordings are not placed on experiment rows or public pull-request comments.
+
+Reports suppress comparison deltas when either arm has an infrastructure failure or ungraded trial. The workflow fails unless every intended trial is graded, while still retaining the incomplete report for diagnosis.

@@ -15,10 +15,11 @@ agent=${1:-}
 [[ "$agent" == "claude-code" || "$agent" == "codex" ]] || usage
 task_id=${2:-v2-1134-chapter-finder-redcross}
 
-repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
-benchmark_dir="$repo_root/benchmarks/harbor"
-image_env="$benchmark_dir/.image.env"
-clawbench_repo=${CLAWBENCH_REPO:-$repo_root/../ClawBench}
+harness_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+source_root=${KERNEL_MCP_BENCHMARK_SOURCE_ROOT:-$harness_root}
+benchmark_dir="$harness_root/benchmarks/harbor"
+image_env="$source_root/benchmarks/harbor/.image.env"
+clawbench_repo=${CLAWBENCH_REPO:-$harness_root/../ClawBench}
 clawbench_ref=${CLAWBENCH_REF:-c7feaa2435ca8115c0762c44e13885fe5adf3e98}
 
 [[ -f "$image_env" ]] || {
@@ -69,7 +70,7 @@ case "$agent" in
 esac
 
 harbor_version=${HARBOR_VERSION:-0.21.0}
-harbor_hypeman_version=${HARBOR_HYPEMAN_VERSION:-0.1.1}
+harbor_hypeman_version=${HARBOR_HYPEMAN_VERSION:-0.1.2}
 
 export KERNEL_API_KEY=$KERNEL_MCP_BENCHMARK_API_KEY
 export KERNEL_BASE_URL=${KERNEL_BASE_URL:-https://api.onkernel.com}
@@ -161,6 +162,12 @@ timeout --signal=INT --kill-after=30s "${HARBOR_BENCHMARK_TIMEOUT:-$default_time
   --job-name "$job_name" \
   --jobs-dir "$jobs_dir" \
   --n-concurrent "${HARBOR_N_CONCURRENT:-1}" \
-  --max-retries 0 \
+  --max-retries "${HARBOR_MAX_RETRIES:-5}" \
+  --retry-include APITimeoutError \
+  --retry-include APIConnectionError \
+  --retry-include RateLimitError \
+  --retry-include InternalServerError \
+  --retry-include ConnectionRefusedError \
+  --retry-include ExecProtocolError \
   --delete \
   --yes

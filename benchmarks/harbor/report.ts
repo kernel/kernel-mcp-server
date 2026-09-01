@@ -89,12 +89,14 @@ export function renderMarkdown(
 ): string {
   const lines = ["<!-- kernel-mcp-clawbench -->", `## ${title}`];
   const failed = Object.entries(statuses).filter(([, status]) => status !== 0);
-  const ungraded = summaries.filter((summary) => summary.scored === 0);
-  const incomplete = failed.length > 0 || ungraded.length > 0;
+  const incomplete =
+    failed.length > 0 || summaries.some((summary) => !summary.complete);
   if (incomplete) {
     const reasons = [
       ...failed.map(([arm, status]) => `${arm} exited ${status}`),
-      ...ungraded.map((summary) => `${summary.arm} produced no graded trials`),
+      ...summaries.flatMap((summary) =>
+        summary.incompleteReasons.map((reason) => `${summary.arm} ${reason}`),
+      ),
     ];
     lines.push(
       "",
@@ -103,12 +105,12 @@ export function renderMarkdown(
   }
   lines.push(
     "",
-    "| Arm | Configuration | Lenient | Strict | Intercepted | Infra | Ungraded | Kernel MCP valid | Median calls | Median duration | Cost |",
-    "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    "| Arm | Configuration | Lenient | Strict | Intercepted | Infra | Retries | Ungraded | Kernel MCP valid | Median calls | Median duration | Cost |",
+    "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
   );
   for (const summary of summaries) {
     lines.push(
-      `| ${summary.arm} | ${summary.configuration ?? "—"} | ${ratio(summary.lenient, summary.trials)} | ${ratio(summary.strict, summary.trials)} | ${ratio(summary.intercepted, summary.trials)} | ${summary.infraErrors} | ${summary.ungraded} | ${ratio(summary.kernelMcpValid, summary.kernelMcpChecked)} | ${summary.medianCalls ?? "—"} | ${duration(summary.medianDurationMs)} | ${cost(summary.totalCostUsd)} |`,
+      `| ${summary.arm} | ${summary.configuration ?? "—"} | ${ratio(summary.lenient, summary.trials)} | ${ratio(summary.strict, summary.trials)} | ${ratio(summary.intercepted, summary.trials)} | ${summary.infraErrors} | ${summary.retries} | ${summary.ungraded} | ${ratio(summary.kernelMcpValid, summary.kernelMcpChecked)} | ${summary.medianCalls ?? "—"} | ${duration(summary.medianDurationMs)} | ${cost(summary.totalCostUsd)} |`,
     );
   }
 

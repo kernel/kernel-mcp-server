@@ -66,7 +66,10 @@ export interface ArmSummary {
   strict?: number;
   strictScored: number;
   infraErrors: number;
+  retries: number;
   ungraded: number;
+  complete: boolean;
+  incompleteReasons: string[];
   kernelMcpValid?: number;
   kernelMcpChecked: number;
   medianCalls?: number;
@@ -353,6 +356,26 @@ export function summarizeArm(arm: BenchmarkArm): ArmSummary {
   });
   const strict = numeric("reward_strict");
   const validity = numeric("kernel_mcp_valid");
+  const infraErrors = arm.trials.filter(
+    (trial) => trial.errorClass === "infra",
+  ).length;
+  const ungraded = arm.trials.filter(
+    (trial) => trial.errorClass !== "infra" && trial.scores.ungraded_rate === 1,
+  ).length;
+  const incompleteReasons = [
+    ...(arm.nTotalTrials === 0 ? ["had no intended trials"] : []),
+    ...(primary.length !== arm.nTotalTrials
+      ? [`scored ${primary.length}/${arm.nTotalTrials} trials`]
+      : []),
+    ...(infraErrors > 0
+      ? [
+          `had ${infraErrors} infrastructure ${infraErrors === 1 ? "failure" : "failures"}`,
+        ]
+      : []),
+    ...(ungraded > 0
+      ? [`had ${ungraded} ungraded ${ungraded === 1 ? "trial" : "trials"}`]
+      : []),
+  ];
   const costs = arm.trials.flatMap((trial) =>
     trial.metrics.costUsd === undefined ? [] : [trial.metrics.costUsd],
   );
@@ -382,12 +405,11 @@ export function summarizeArm(arm: BenchmarkArm): ArmSummary {
             0,
           ),
     strictScored: strict.length,
-    infraErrors: arm.trials.filter((trial) => trial.errorClass === "infra")
-      .length,
-    ungraded: arm.trials.filter(
-      (trial) =>
-        trial.errorClass !== "infra" && trial.scores.ungraded_rate === 1,
-    ).length,
+    infraErrors,
+    retries: arm.nRetries,
+    ungraded,
+    complete: incompleteReasons.length === 0,
+    incompleteReasons,
     kernelMcpValid:
       validity.length === 0
         ? undefined

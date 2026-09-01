@@ -114,6 +114,24 @@ function fixture(): string {
   return root;
 }
 
+function completeArm() {
+  const arm = readBenchmarkArm({ name: "candidate", path: fixture() });
+  const failed = arm.trials[1];
+  failed.error = undefined;
+  failed.errorClass = undefined;
+  failed.rewards = { reward: 0, intercepted: 0 };
+  failed.scores = {
+    accuracy: 0,
+    false_positive_rate: 0,
+    false_negative_rate: 1,
+    infra_error_rate: 0,
+    intercepted: 0,
+    reward: 0,
+    ungraded_rate: 0,
+  };
+  return arm;
+}
+
 describe("Harbor result ingestion", () => {
   test("keeps infrastructure errors out of task-quality scores", () => {
     const arm = readBenchmarkArm({ name: "candidate", path: fixture() });
@@ -146,10 +164,32 @@ describe("Harbor result ingestion", () => {
       strict: 0,
       intercepted: 1,
       infraErrors: 1,
+      retries: 0,
       ungraded: 0,
+      complete: false,
+      incompleteReasons: ["scored 1/2 trials", "had 1 infrastructure failure"],
       kernelMcpValid: 1,
       medianCalls: 1,
       totalCostUsd: 0.01,
+    });
+  });
+
+  test("requires every intended trial to be graded", () => {
+    expect(summarizeArm(completeArm()).complete).toBe(true);
+
+    const missing = completeArm();
+    missing.nTotalTrials = 3;
+    expect(summarizeArm(missing)).toMatchObject({
+      complete: false,
+      incompleteReasons: ["scored 2/3 trials"],
+    });
+
+    const empty = completeArm();
+    empty.nTotalTrials = 0;
+    empty.trials = [];
+    expect(summarizeArm(empty)).toMatchObject({
+      complete: false,
+      incompleteReasons: ["had no intended trials"],
     });
   });
 
@@ -192,7 +232,7 @@ describe("Harbor result ingestion", () => {
   });
 
   test("re-publishes the same rows and spans by deterministic ID", async () => {
-    const arm = readBenchmarkArm({ name: "candidate", path: fixture() });
+    const arm = completeArm();
     const originalFetch = globalThis.fetch;
     const inserts: string[][] = [];
     const metadataUpdates: unknown[] = [];
@@ -258,14 +298,12 @@ describe("Harbor result ingestion", () => {
     }
   });
 
-  test("does not publish arms without graded trials", async () => {
+  test("does not publish incomplete arms", async () => {
     const arm = readBenchmarkArm({ name: "candidate", path: fixture() });
     for (const trial of arm.trials) trial.rewards = {};
     await expect(
       publishBenchmark([arm], "project", "experiment", "api-key"),
-    ).rejects.toThrow(
-      "Cannot publish benchmark without graded trials for: candidate",
-    );
+    ).rejects.toThrow("Cannot publish incomplete benchmark arms: candidate");
   });
 
   test("uses the lenient reward per trial and reports incomplete arms", () => {
@@ -273,19 +311,7 @@ describe("Harbor result ingestion", () => {
       key: "reward_lenient",
       value: 1,
     });
-    const arm = readBenchmarkArm({ name: "candidate", path: fixture() });
-    const second = arm.trials[1];
-    second.error = undefined;
-    second.errorClass = undefined;
-    second.rewards = { reward: 0 };
-    second.scores = {
-      accuracy: 0,
-      false_positive_rate: 0,
-      false_negative_rate: 1,
-      infra_error_rate: 0,
-      reward: 0,
-      ungraded_rate: 0,
-    };
+    const arm = completeArm();
     const summary = summarizeArm(arm);
     expect(summary.scored).toBe(2);
     expect(summary.lenient).toBe(1);
@@ -300,11 +326,38 @@ describe("Harbor result ingestion", () => {
       ]),
     ).toContain("+0.1 lenient");
     const ungraded = renderMarkdown("test", [
-      { ...summary, arm: "candidate", scored: 0, ungraded: summary.trials },
-      { ...summary, arm: "baseline", scored: 0, ungraded: summary.trials },
+      {
+        ...summary,
+        arm: "candidate",
+        scored: 0,
+        ungraded: summary.trials,
+        complete: false,
+        incompleteReasons: ["had 2 ungraded trials"],
+      },
+      {
+        ...summary,
+        arm: "baseline",
+        scored: 0,
+        ungraded: summary.trials,
+        complete: false,
+        incompleteReasons: ["had 2 ungraded trials"],
+      },
     ]);
-    expect(ungraded).toContain("candidate produced no graded trials");
+    expect(ungraded).toContain("candidate had 2 ungraded trials");
     expect(ungraded).not.toContain("Candidate minus baseline");
+
+    const infra = renderMarkdown("test", [
+      {
+        ...summary,
+        arm: "candidate",
+        infraErrors: 1,
+        complete: false,
+        incompleteReasons: ["had 1 infrastructure failure"],
+      },
+      { ...summary, arm: "baseline" },
+    ]);
+    expect(infra).toContain("candidate had 1 infrastructure failure");
+    expect(infra).not.toContain("Candidate minus baseline");
   });
 
   test("keeps full errors until redaction and clamps derived scores", () => {
@@ -385,6 +438,7 @@ describe("benchmark workflow hardening", () => {
     expect(workflow).toContain("github.rest.repos.compareCommits");
     expect(workflow).not.toContain("baseSha = pull.base.sha");
     expect(workflow).toContain('HARBOR_VERSION: "0.21.0"');
+    expect(workflow).toContain('HARBOR_HYPEMAN_VERSION: "0.1.2"');
     expect(workflow).toContain('CODEX_BENCHMARK_VERSION: "0.120.0"');
     expect(
       workflow.match(/c7feaa2435ca8115c0762c44e13885fe5adf3e98/g),
@@ -393,7 +447,7 @@ describe("benchmark workflow hardening", () => {
     expect(workflow).not.toContain(
       "KERNEL_PROJECT: ${{ vars.KERNEL_PROJECT }}",
     );
-    expect(workflow).toContain("all(.arms[]; .scored > 0)");
+    expect(workflow).toContain("all(.arms[]; .complete == true)");
     expect(workflow).toMatch(
       /- name: Mark the PR benchmark as running\n\s+if:.*\n\s+continue-on-error: true/,
     );
@@ -403,6 +457,32 @@ describe("benchmark workflow hardening", () => {
     expect(workflow).toContain(
       'statuses=(--status "candidate=${CANDIDATE_STATUS:-1}")',
     );
+    expect(workflow).toContain('KERNEL_MCP_BENCHMARK_SOURCE_ROOT="$checkout"');
+    expect(workflow).toContain(
+      '"$GITHUB_WORKSPACE/harness/benchmarks/harbor/clawbench/run.sh"',
+    );
+
+    const runner = readFileSync(
+      join(process.cwd(), "benchmarks/harbor/clawbench/run.sh"),
+      "utf8",
+    );
+    expect(runner).toContain(
+      "source_root=${KERNEL_MCP_BENCHMARK_SOURCE_ROOT:-$harness_root}",
+    );
+    expect(runner).toContain(
+      "harbor_hypeman_version=${HARBOR_HYPEMAN_VERSION:-0.1.2}",
+    );
+    expect(runner).toContain('--max-retries "${HARBOR_MAX_RETRIES:-5}"');
+    for (const exception of [
+      "APITimeoutError",
+      "APIConnectionError",
+      "RateLimitError",
+      "InternalServerError",
+      "ConnectionRefusedError",
+      "ExecProtocolError",
+    ]) {
+      expect(runner).toContain(`--retry-include ${exception}`);
+    }
   });
 
   test("requires the benchmark credential to resolve to one project", () => {
