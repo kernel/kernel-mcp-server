@@ -34,9 +34,10 @@ describe("manage_auth_connections programmatic surface", () => {
     expect(schema?.sso_button_selector).toBeDefined();
     expect(schema?.allowed_domains).toBeDefined();
     expect(schema?.login_url).toBeDefined();
-    expect(schema?.credential_name).toBeDefined();
-    expect(schema?.credential_provider).toBeDefined();
-    expect(schema?.credential_path).toBeDefined();
+    expect(schema?.credential_name.description).toContain("create, update");
+    expect(schema?.credential_provider.description).toContain("create, update");
+    expect(schema?.credential_path.description).toContain("create, update");
+    expect(schema?.credential_auto.description).toContain("create, update");
     expect(schema?.health_checks).toBeDefined();
     expect(schema?.auto_reauth).toBeDefined();
     expect(schema?.browser_stealth).toBeDefined();
@@ -311,6 +312,16 @@ describe("manage_auth_connections programmatic surface", () => {
         },
         extra,
       );
+      await handler(
+        {
+          action: "submit",
+          id: "conn_1",
+          interaction_id: "mai_3",
+          field_values: { field_email: "user@example.com" },
+          selected_choice_id: "work-account",
+        },
+        extra,
+      );
       expect(submitBodies).toEqual([
         {
           interaction_id: "mai_1",
@@ -318,6 +329,11 @@ describe("manage_auth_connections programmatic surface", () => {
         },
         {
           interaction_id: "mai_2",
+          selected_choice_id: "work-account",
+        },
+        {
+          interaction_id: "mai_3",
+          field_values: { field_email: "user@example.com" },
           selected_choice_id: "work-account",
         },
       ]);
@@ -338,6 +354,85 @@ describe("manage_auth_connections programmatic surface", () => {
       kernelClientMock.factory = () => unusedKernelClient;
     }
   });
+
+  test.each([
+    [
+      { interaction_id: "mai_1", fields: { email: "user@example.com" } },
+      "interaction_id requires field_values or selected_choice_id",
+    ],
+    [
+      {
+        interaction_id: "mai_1",
+        field_values: { field_email: "user@example.com" },
+        fields: { email: "user@example.com" },
+      },
+      "field_values and selected_choice_id cannot be combined with legacy input fields",
+    ],
+    [
+      {
+        interaction_id: "mai_1",
+        selected_choice_id: "work-account",
+        sso_button_selector: "xpath=//button",
+      },
+      "field_values and selected_choice_id cannot be combined with legacy input fields",
+    ],
+    [
+      {
+        interaction_id: "mai_1",
+        selected_choice_id: "work-account",
+        sso_provider: "google",
+      },
+      "field_values and selected_choice_id cannot be combined with legacy input fields",
+    ],
+    [
+      {
+        interaction_id: "mai_1",
+        selected_choice_id: "work-account",
+        mfa_option_id: "sms",
+      },
+      "field_values and selected_choice_id cannot be combined with legacy input fields",
+    ],
+    [
+      {
+        interaction_id: "mai_1",
+        selected_choice_id: "work-account",
+        sign_in_option_id: "personal-account",
+      },
+      "field_values and selected_choice_id cannot be combined with legacy input fields",
+    ],
+    [
+      { sso_button_selector: "xpath=//button", sso_provider: "google" },
+      "sso_button_selector cannot be combined with other input types",
+    ],
+    [
+      { sso_button_selector: "xpath=//button", mfa_option_id: "sms" },
+      "sso_button_selector cannot be combined with other input types",
+    ],
+    [
+      { sso_provider: "google", mfa_option_id: "sms" },
+      "sso_provider cannot be combined with mfa_option_id or sign_in_option_id",
+    ],
+    [
+      { sign_in_option_id: "work-account", fields: { email: "value" } },
+      "sign_in_option_id cannot be combined with fields or mfa_option_id",
+    ],
+    [
+      { sign_in_option_id: "work-account", mfa_option_id: "sms" },
+      "sign_in_option_id cannot be combined with fields or mfa_option_id",
+    ],
+  ])(
+    "rejects incompatible submit shapes",
+    async (submitParams, expectedError) => {
+      const { handler } = captureHandler();
+      const result = await handler(
+        { action: "submit", id: "conn_1", ...submitParams },
+        { authInfo: { token: "test-token" } },
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(expectedError);
+    },
+  );
 
   test("legacy actions keep their established raw response shapes", async () => {
     const { handler } = captureHandler();

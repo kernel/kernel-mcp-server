@@ -78,25 +78,25 @@ export function registerAuthConnectionTools(server: McpServer) {
       credential_name: z
         .string()
         .describe(
-          "(create) Name of a pre-stored Kernel credential to use for automatic login.",
+          "(create, update) Name of a pre-stored Kernel credential to use for automatic login.",
         )
         .optional(),
       credential_provider: z
         .string()
         .describe(
-          "(create) External credential provider name (e.g. '1password'). Use with credential_path or credential_auto.",
+          "(create, update) External credential provider name (e.g. '1password'). Use with credential_path or credential_auto.",
         )
         .optional(),
       credential_path: z
         .string()
         .describe(
-          "(create) Provider-specific item path (e.g. 'VaultName/ItemName').",
+          "(create, update) Provider-specific item path (e.g. 'VaultName/ItemName').",
         )
         .optional(),
       credential_auto: z
         .boolean()
         .describe(
-          "(create) If true, the provider auto-looks up credentials by domain.",
+          "(create, update) If true, the provider auto-looks up credentials by domain.",
         )
         .optional(),
       login_url: z
@@ -481,26 +481,56 @@ export function registerAuthConnectionTools(server: McpServer) {
               !!params.fields && Object.keys(params.fields).length > 0;
             const hasCanonicalSubmission =
               hasCanonicalFields || !!params.selected_choice_id;
+            const hasLegacySubmission =
+              hasLegacyFields ||
+              !!params.mfa_option_id ||
+              !!params.sign_in_option_id ||
+              !!params.sso_button_selector ||
+              !!params.sso_provider;
+            if (!hasCanonicalSubmission && !hasLegacySubmission) {
+              return errorResponse(
+                "Error: submit requires at least one of field_values, selected_choice_id, fields, mfa_option_id, sign_in_option_id, sso_button_selector, or sso_provider.",
+              );
+            }
+            if (params.interaction_id && !hasCanonicalSubmission) {
+              return errorResponse(
+                "Error: interaction_id requires field_values or selected_choice_id.",
+              );
+            }
+            if (hasCanonicalSubmission && hasLegacySubmission) {
+              return errorResponse(
+                "Error: field_values and selected_choice_id cannot be combined with legacy input fields.",
+              );
+            }
             if (hasCanonicalSubmission && !params.interaction_id) {
               return errorResponse(
                 "Error: interaction_id is required with field_values or selected_choice_id.",
               );
             }
-            if (params.sso_button_selector && params.sso_provider) {
+            if (
+              params.sso_button_selector &&
+              (params.sso_provider ||
+                params.mfa_option_id ||
+                params.sign_in_option_id)
+            ) {
               return errorResponse(
-                "Error: sso_button_selector and sso_provider cannot be combined.",
+                "Error: sso_button_selector cannot be combined with other input types.",
               );
             }
             if (
-              !hasCanonicalSubmission &&
-              !hasLegacyFields &&
-              !params.mfa_option_id &&
-              !params.sign_in_option_id &&
-              !params.sso_button_selector &&
-              !params.sso_provider
+              params.sso_provider &&
+              (params.mfa_option_id || params.sign_in_option_id)
             ) {
               return errorResponse(
-                "Error: submit requires at least one of field_values, selected_choice_id, fields, mfa_option_id, sign_in_option_id, sso_button_selector, or sso_provider.",
+                "Error: sso_provider cannot be combined with mfa_option_id or sign_in_option_id.",
+              );
+            }
+            if (
+              params.sign_in_option_id &&
+              (hasLegacyFields || params.mfa_option_id)
+            ) {
+              return errorResponse(
+                "Error: sign_in_option_id cannot be combined with fields or mfa_option_id.",
               );
             }
             const response = await client.auth.connections.submit(params.id, {
