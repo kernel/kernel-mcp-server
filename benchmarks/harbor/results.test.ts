@@ -542,10 +542,10 @@ describe("Braintrust redaction", () => {
     process.env.TEST_API_KEY = "super-secret-value";
     expect(
       redactString(
-        'Bearer super-secret-value sk-proj-abcdefghijklmnop?access_token=visible&token=plain&jwt=opaque "password":"generated-password" "session_id":"session-123" Cookie: session=visible\nhttps://example.com/browser/live/replay-slug user@example.com await page.locator("#password").fill("typed-password")',
+        'Bearer super-secret-value sk-proj-abcdefghijklmnop?access_token=visible&token=plain&jwt=opaque "password":"generated-password" "session_id":"session-123" Cookie: session=visible\nhttps://example.com/browser/live/replay-slug user@example.com await page.locator("#password").fill("typed-password"); await page.fill("#password", "two-arg-secret")',
       ),
     ).toBe(
-      'Bearer [REDACTED] [REDACTED]?access_token=[REDACTED]&token=[REDACTED]&jwt=[REDACTED] "password":"[REDACTED]" "session_id":"[REDACTED]" Cookie: [REDACTED]\nhttps://example.com/browser/live/[REDACTED] [REDACTED_EMAIL] await page.locator("#password").fill("[REDACTED]")',
+      'Bearer [REDACTED] [REDACTED]?access_token=[REDACTED]&token=[REDACTED]&jwt=[REDACTED] "password":"[REDACTED]" "session_id":"[REDACTED]" Cookie: [REDACTED]\nhttps://example.com/browser/live/[REDACTED] [REDACTED_EMAIL] await page.locator("#password").fill("[REDACTED]"); await page.fill("#password", "[REDACTED]")',
     );
     const redacted = redactValue({
       api_key: "visible",
@@ -565,9 +565,24 @@ describe("Braintrust redaction", () => {
     expect(() =>
       assertSafeToPublish({ code: "page.fill('still-visible')" }),
     ).toThrow("typed form value");
+    expect(() =>
+      assertSafeToPublish({
+        code: "page.fill('#password', 'still-visible')",
+      }),
+    ).toThrow("typed form value");
     expect(
       privateInfoRead("exec_command", {
         cmd: "cat /my-info/email_credentials.json",
+      }),
+    ).toBe(true);
+    expect(
+      privateInfoRead("Bash", {
+        command: "cat ./my-info/alex_green_personal_info.json",
+      }),
+    ).toBe(true);
+    expect(
+      privateInfoRead("Read", {
+        file_path: "/workspace/my-info/email_credentials.json",
       }),
     ).toBe(true);
     expect(

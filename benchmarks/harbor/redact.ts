@@ -51,12 +51,30 @@ function secretValues(): string[] {
     .sort((left, right) => right.length - left.length);
 }
 
+const TYPED_CALL = /\.(?:fill|type)\(([^)]*)\)/g;
+const STRING_LITERAL = /(["'`])((?:\\.|(?!\1).)*)\1/g;
+
+function typedCallValues(value: string): string[] {
+  const values: string[] = [];
+  for (const call of value.matchAll(TYPED_CALL)) {
+    const literals = [...call[1].matchAll(STRING_LITERAL)];
+    const typedValue = literals.at(-1)?.[2];
+    if (typedValue !== undefined) values.push(typedValue);
+  }
+  return values;
+}
+
 function redactTypedLiterals(value: string): string {
-  return value.replace(
-    /(\.(?:fill|type)\(\s*)(["'`])(?:\\.|(?!\2)[^\\])*?\2/g,
-    (_match, prefix: string, quote: string) =>
-      `${prefix}${quote}${REDACTED}${quote}`,
-  );
+  return value.replace(TYPED_CALL, (call, argumentsText: string) => {
+    const literals = [...argumentsText.matchAll(STRING_LITERAL)];
+    const typedValue = literals.at(-1);
+    if (!typedValue || typedValue.index === undefined) return call;
+    const start = typedValue.index;
+    const end = start + typedValue[0].length;
+    const quote = typedValue[1];
+    const redactedArguments = `${argumentsText.slice(0, start)}${quote}${REDACTED}${quote}${argumentsText.slice(end)}`;
+    return call.replace(argumentsText, redactedArguments);
+  });
 }
 
 export function redactStringWithSecrets(
@@ -133,10 +151,8 @@ export function collectSensitiveValues(value: unknown): string[] {
     )) {
       values.add(match[1]);
     }
-    for (const match of text.matchAll(
-      /\.(?:fill|type)\(\s*(["'`])((?:\\.|(?!\1).){4,})\1/g,
-    )) {
-      values.add(match[2]);
+    for (const typedValue of typedCallValues(text)) {
+      if (typedValue.length >= 4) values.add(typedValue);
     }
     for (const match of text.matchAll(
       /["'](?:id|name|type)["']\s*:\s*["'][^"']*password[^"']*["'][\s\S]{0,300}?["']value["']\s*:\s*["']([^"']{4,})["']/gi,
@@ -167,13 +183,29 @@ export function collectSensitiveValues(value: unknown): string[] {
 }
 
 export function privateInfoRead(toolName: string, input: unknown): boolean {
-  if (!/(?:^|__)exec_command$/.test(toolName)) return false;
-  const command =
+  if (!/(?:^|__)(?:exec_command|bash|read)$/i.test(toolName)) return false;
+  const fields =
     input !== null && typeof input === "object"
-      ? String((input as Record<string, unknown>).cmd ?? "")
-      : String(input ?? "");
-  return /(?:^|\s|["'])\/?(?:workspace\/)?my-info\/(?!kernel_browser\.json)/.test(
-    command,
+      ? (input as Record<string, unknown>)
+      : {};
+  const text = [
+    fields.cmd,
+    fields.command,
+    fields.file_path,
+    fields.path,
+    typeof input === "string" ? input : undefined,
+  ]
+    .filter((entry) => entry !== undefined)
+    .map(String)
+    .join("\n");
+  const paths = [
+    ...text.matchAll(
+      /(?:^|[\s"'`=])(?:\.\/|\/(?:workspace\/)?|workspace\/)?my-info\/([^\s"'`;)]*)/g,
+    ),
+  ].map((match) => match[1]);
+  return paths.some(
+    (path) =>
+      path.length === 0 || !/^kernel_browser\.json(?:$|[?#])/.test(path),
   );
 }
 
@@ -181,10 +213,8 @@ function assertSafeString(value: string): void {
   if (/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(value)) {
     throw new Error("Braintrust payload still contains an email address");
   }
-  for (const match of value.matchAll(
-    /\.(?:fill|type)\(\s*(["'`])((?:\\.|(?!\1).)*)\1/g,
-  )) {
-    if (match[2] !== REDACTED) {
+  for (const typedValue of typedCallValues(value)) {
+    if (typedValue !== REDACTED) {
       throw new Error("Braintrust payload still contains a typed form value");
     }
   }
