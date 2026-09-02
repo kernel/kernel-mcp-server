@@ -388,7 +388,9 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
         .optional(),
       session_id: z
         .string()
-        .describe("(release) Session ID of browser to release.")
+        .describe(
+          "(release) Session ID of the browser to release. Must be the ID, not the session name.",
+        )
         .optional(),
       reuse: z
         .boolean()

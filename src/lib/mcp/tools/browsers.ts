@@ -433,7 +433,7 @@ export function registerBrowserCapabilities(
   // manage_browsers -- Manage browser sessions and read archived telemetry
   server.tool(
     "manage_browsers",
-    'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished. Sessions can be addressed by ID or by the name given at creation. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
+    'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished. Live sessions can be addressed by ID or by the name given at creation or set on update; deleted sessions only by ID. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
     {
       ...projectSelectionInputSchema(),
       action: z
@@ -442,19 +442,25 @@ export function registerBrowserCapabilities(
       session_id: z
         .string()
         .describe(
-          "Browser session ID or name. Required for update, get, get_telemetry, and delete actions.",
+          "Browser session ID or name. Required for update, get, get_telemetry, and delete actions. A name resolves only a live session; for a deleted session (get_telemetry) pass its ID.",
         )
         .optional(),
       name: z
         .string()
         .describe(
-          "(create, update) Human-readable session name, unique among active sessions in the project. Once set, the session can be addressed by this name wherever a session_id is accepted. On update, an empty string clears the name.",
+          "(create, update) Human-readable session name, unique among active sessions in the project. 1-255 chars of letters, digits, '.', '_' or '-', and not a cuid-like ID. While the session is live it can be passed as session_id to the browser tools (manage_browsers, computer_action, execute_playwright_code, execute_shell_command, browser_curl, manage_replays). On update, an empty string clears the name.",
         )
         .optional(),
       tags: z
         .record(z.string())
         .describe(
-          "(create, update) Key-value tags for grouping sessions. Up to 50 pairs. On update, an empty object clears all tags.",
+          "(create, update) Key-value tags for grouping sessions. Up to 50 pairs. On update, an empty object clears all tags. (list) Return only sessions carrying all of these tags.",
+        )
+        .optional(),
+      query: z
+        .string()
+        .describe(
+          "(list) Text filter matched against session name, session ID, profile name or ID, proxy ID, or pool name.",
         )
         .optional(),
       start_url: z
@@ -768,6 +774,8 @@ export function registerBrowserCapabilities(
             const page = await client.browsers.list({
               ...(params.status && { status: params.status }),
               ...(params.region && { region: params.region }),
+              ...(params.query && { query: params.query }),
+              ...(params.tags !== undefined && { tags: params.tags }),
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });

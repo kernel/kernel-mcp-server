@@ -439,6 +439,48 @@ describe("manage_browsers id or name", () => {
       expect(updateCalls).toEqual([
         ["checkout-flow", { name: "checkout-flow-2", tags: {} }],
       ]);
+
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: { action: "update", session_id: "brr_123", name: "" },
+      });
+      expect(updateCalls[1]).toEqual(["brr_123", { name: "" }]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("passes query and tags filters to list", async () => {
+    const listCalls: unknown[] = [];
+    const kernelClient = {
+      browsers: {
+        list: async (params: unknown) => {
+          listCalls.push(params);
+          return {
+            getPaginatedItems: () => [],
+            has_more: false,
+            next_offset: null,
+          };
+        },
+      },
+    };
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      kernelClient,
+    );
+
+    try {
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "list",
+          query: "checkout",
+          tags: { team: "payments" },
+        },
+      });
+      expect(listCalls).toEqual([
+        { query: "checkout", tags: { team: "payments" } },
+      ]);
     } finally {
       await close();
     }
