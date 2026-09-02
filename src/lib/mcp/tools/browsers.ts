@@ -433,7 +433,7 @@ export function registerBrowserCapabilities(
   // manage_browsers -- Manage browser sessions and read archived telemetry
   server.tool(
     "manage_browsers",
-    'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
+    'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished. Sessions can be addressed by ID or by the name given at creation. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
     {
       ...projectSelectionInputSchema(),
       action: z
@@ -442,7 +442,19 @@ export function registerBrowserCapabilities(
       session_id: z
         .string()
         .describe(
-          "Browser session ID. Required for update, get, get_telemetry, and delete actions.",
+          "Browser session ID or name. Required for update, get, get_telemetry, and delete actions.",
+        )
+        .optional(),
+      name: z
+        .string()
+        .describe(
+          "(create, update) Human-readable session name, unique among active sessions in the project. Once set, the session can be addressed by this name wherever a session_id is accepted. On update, an empty string clears the name.",
+        )
+        .optional(),
+      tags: z
+        .record(z.string())
+        .describe(
+          "(create, update) Key-value tags for grouping sessions. Up to 50 pairs. On update, an empty object clears all tags.",
         )
         .optional(),
       start_url: z
@@ -679,6 +691,8 @@ export function registerBrowserCapabilities(
               createParams.chrome_policy = params.chrome_policy;
             }
             if (params.proxy_id) createParams.proxy_id = params.proxy_id;
+            if (params.name !== undefined) createParams.name = params.name;
+            if (params.tags !== undefined) createParams.tags = params.tags;
             const browserConfig = buildBrowserCreateConfig(params);
             if (!browserConfig.ok) return errorResponse(browserConfig.error);
             Object.assign(createParams, browserConfig.value);
@@ -723,6 +737,8 @@ export function registerBrowserCapabilities(
             } else if (params.proxy_id !== undefined) {
               updateParams.proxy_id = params.proxy_id;
             }
+            if (params.name !== undefined) updateParams.name = params.name;
+            if (params.tags !== undefined) updateParams.tags = params.tags;
             const browserConfig = buildBrowserUpdateConfig(params);
             if (!browserConfig.ok) return errorResponse(browserConfig.error);
             Object.assign(updateParams, browserConfig.value);

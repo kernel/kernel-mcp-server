@@ -393,6 +393,94 @@ describe("manage_browsers region", () => {
   });
 });
 
+describe("manage_browsers id or name", () => {
+  test("passes name and tags through create and update", async () => {
+    const createCalls: unknown[] = [];
+    const updateCalls: unknown[] = [];
+    const kernelClient = {
+      browsers: {
+        create: async (params: unknown) => {
+          createCalls.push(params);
+          return { session_id: "brr_123", name: "checkout-flow" };
+        },
+        update: async (idOrName: string, params: unknown) => {
+          updateCalls.push([idOrName, params]);
+          return { session_id: "brr_123" };
+        },
+      },
+    };
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      kernelClient,
+    );
+
+    try {
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "create",
+          name: "checkout-flow",
+          tags: { team: "payments" },
+        },
+      });
+      expect(createCalls).toEqual([
+        { name: "checkout-flow", tags: { team: "payments" } },
+      ]);
+
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "update",
+          session_id: "checkout-flow",
+          name: "checkout-flow-2",
+          tags: {},
+        },
+      });
+      expect(updateCalls).toEqual([
+        ["checkout-flow", { name: "checkout-flow-2", tags: {} }],
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("forwards a session name unchanged to get and delete", async () => {
+    const seen: string[] = [];
+    const kernelClient = {
+      browsers: {
+        retrieve: async (idOrName: string) => {
+          seen.push(`get:${idOrName}`);
+          return { session_id: "brr_123", name: idOrName };
+        },
+        deleteByID: async (idOrName: string) => {
+          seen.push(`delete:${idOrName}`);
+        },
+      },
+    };
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      kernelClient,
+    );
+
+    try {
+      const got = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "get", session_id: "checkout-flow" },
+        }),
+      );
+      expect(got.session_id).toBe("brr_123");
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: { action: "delete", session_id: "checkout-flow" },
+      });
+      expect(seen).toEqual(["get:checkout-flow", "delete:checkout-flow"]);
+    } finally {
+      await close();
+    }
+  });
+});
+
 describe("browser resources", () => {
   test("uses injected dependencies", async () => {
     const kernelClient = {

@@ -40,7 +40,7 @@
     "@clerk/themes": "^2.4.19",
     "@modelcontextprotocol/sdk": "1.26.0",
     "@onkernel/managed-auth-react": "0.5.1",
-    "@onkernel/sdk": "^0.97.0",
+    "@onkernel/sdk": "^0.98.0",
     "@posthog/mcp": "0.10.1",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/redis": "^4.0.11",

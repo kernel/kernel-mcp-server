@@ -36,7 +36,7 @@ export function registerPlaywrightTool(
       session_id: z
         .string()
         .min(1, "session_id is required")
-        .describe("Browser session ID to execute the code against."),
+        .describe("Browser session ID or name to execute the code against."),
     },
     {
       title: "Execute Playwright code",

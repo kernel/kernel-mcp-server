@@ -304,7 +304,7 @@ Call `get_connection_context` before deciding whether to create or select a proj
 
 ### manage\_\* tools
 
-- `manage_browsers` - Create, update, list, get, and delete browser sessions, and read archived telemetry for active or deleted sessions. Supports headless/stealth modes, profiles, proxies, viewports, extensions, and SSH tunneling.
+- `manage_browsers` - Create, update, list, get, and delete browser sessions, and read archived telemetry for active or deleted sessions. Supports headless/stealth modes, profiles, proxies, viewports, extensions, names and tags, and SSH tunneling. Every tool that takes a `session_id` also accepts the session's name.
 - `manage_profiles` - Setup (with guided live browser session), search/list with pagination, get, and delete browser profiles for persisting cookies and logins.
 - `manage_projects` - Create, list, get, update, and delete organization projects. Inspect and update per-project resource limits.
 - `manage_api_keys` - Create, list, get, update, and delete org-wide or project-scoped API keys. Create returns the plaintext key once.
@@ -332,7 +332,7 @@ Call `get_connection_context` before deciding whether to create or select a proj
 
 Project resources use the prefix `kernel://orgs/{organization_id}/projects/{project_id}`.
 
-- `/browsers` and `/browsers/{session_id}` - List or access browser sessions
+- `/browsers` and `/browsers/{session_id}` - List or access browser sessions (`{session_id}` may be a session ID or name)
 - `/browser-pools` and `/browser-pools/{id_or_name}` - List or access browser pools
 - `/profiles` and `/profiles/{profile_name}` - List or access browser profiles
 - `/apps` and `/apps/{app_name}` - List or access deployed apps

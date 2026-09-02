@@ -98,7 +98,7 @@ Production-ready platform for deploying and hosting browser automation code. Han
       session_id: z
         .string()
         .describe(
-          "The browser session ID to debug (e.g., 'abc123example456xyz')",
+          "The browser session ID or name to debug (e.g., 'abc123example456xyz' or 'checkout-flow')",
         ),
       issue_description: z
         .string()

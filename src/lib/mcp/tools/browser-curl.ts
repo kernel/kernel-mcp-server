@@ -33,7 +33,7 @@ export function registerBrowserCurlTool(server: McpServer) {
     "Send an HTTP request through an existing Kernel browser session's Chrome network stack. Use when the request needs that browser session's cookies, proxy, network context, or origin behavior; do not use for general documentation lookup or web search.",
     {
       ...projectSelectionInputSchema(),
-      session_id: z.string().describe("Browser session ID."),
+      session_id: z.string().describe("Browser session ID or name."),
       url: z.string().url().describe("Target http or https URL."),
       method: z
         .enum(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
