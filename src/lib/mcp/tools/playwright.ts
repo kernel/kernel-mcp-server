@@ -25,13 +25,13 @@ export function registerPlaywrightTool(
   // execute_playwright_code -- Run Playwright/TypeScript code against a browser
   server.tool(
     "execute_playwright_code",
-    "Execute Playwright/TypeScript automation code against an existing Kernel browser session. Does not create or delete browsers -- use manage_browsers to manage session lifecycle.",
+    "Execute Playwright/TypeScript automation or browser-wide WebMCP helpers against an existing Kernel browser session. Does not create or delete browsers -- use manage_browsers to manage session lifecycle.",
     {
       ...projectSelectionInputSchema(),
       code: z
         .string()
         .describe(
-          "Playwright/TypeScript code with `page`, `context`, and `browser` objects in scope; the value you `return` is sent back. Every invocation should return useful page state. After navigation or interaction, return a condensed accessibility snapshot of the relevant region, e.g. `await page.goto('https://example.com'); return await page.locator('main').ariaSnapshot();` or `await page.getByRole('button', { name: 'Submit' }).click(); return await page.locator('main').ariaSnapshot();`. For targeted reads, return a compact value or object. Do not dump the full DOM or body text.",
+          "Playwright/TypeScript code with `page`, `context`, `browser`, and browser-wide `webmcp` helpers in scope; the value you `return` is sent back as the tool result. After navigation or interaction, return a focused `ariaSnapshot()` of the relevant region for current page state, e.g. `await page.locator('main').ariaSnapshot()`. Every invocation should return useful page state. For targeted reads, return a compact value or object. Do not dump the full DOM or body text. A global webmcp object is available for discovering and using webmcp tools across all pages open in the browser: Use `await webmcp.listTools()` to discover structured page actions and `await webmcp.invokeTool(toolRef, input, { timeoutSec })` to invoke an exact registration. If the site you're interacting with exposes webmcp tools, then you should prefer those and use `await webmcp.listTools()` in return values alongside snapshots to get feedback on what your code has done.",
         ),
       session_id: z
         .string()
