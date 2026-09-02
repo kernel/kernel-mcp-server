@@ -11,7 +11,12 @@ import { join } from "node:path";
 import { buildExperimentEvents, publishBenchmark } from "./publish-braintrust";
 import { renderMarkdown } from "./report";
 import { readBenchmarkArm, selectPrimaryReward, summarizeArm } from "./results";
-import { redactString, redactValue } from "./redact";
+import {
+  assertSafeToPublish,
+  privateInfoRead,
+  redactString,
+  redactValue,
+} from "./redact";
 import { assertProjectScopedCredential } from "./verify-project-scope";
 
 const temporaryDirectories: string[] = [];
@@ -66,6 +71,14 @@ function fixture(): string {
     },
     started_at: "2026-01-01T00:00:00Z",
     finished_at: "2026-01-01T00:01:00Z",
+    environment_setup: {
+      started_at: "2026-01-01T00:00:00Z",
+      finished_at: "2026-01-01T00:00:05Z",
+    },
+    agent_setup: {
+      started_at: "2026-01-01T00:00:05Z",
+      finished_at: "2026-01-01T00:00:10Z",
+    },
     step_results: [
       {
         agent_result: {
@@ -74,6 +87,14 @@ function fixture(): string {
           n_output_tokens: 20,
           cost_usd: 0.01,
         },
+        agent_execution: {
+          started_at: "2026-01-01T00:00:20Z",
+          finished_at: "2026-01-01T00:00:40Z",
+        },
+        verifier: {
+          started_at: "2026-01-01T00:00:45Z",
+          finished_at: "2026-01-01T00:00:55Z",
+        },
       },
     ],
   });
@@ -81,18 +102,39 @@ function fixture(): string {
     steps: [
       {
         step_id: 1,
+        source: "system",
+        timestamp: "2026-01-01T00:00:20Z",
+        message: "system prompt",
+      },
+      {
+        step_id: 2,
+        source: "user",
+        timestamp: "2026-01-01T00:00:20Z",
+        message: "perform the task",
+      },
+      {
+        step_id: 3,
         source: "agent",
-        timestamp: "2026-01-01T00:00:01Z",
-        message: "working",
+        timestamp: "2026-01-01T00:00:21Z",
+        message: "",
         tool_calls: [
           {
             tool_call_id: "call-1",
             function_name: "execute_playwright_code",
-            arguments: { code: "return 'done'" },
+            arguments: {
+              session_id: "session-123",
+              code: "await page.locator('#password').fill('secret-password'); return 'done'",
+            },
           },
         ],
         observation: {
           results: [{ source_call_id: "call-1", content: "done" }],
+        },
+        metrics: {
+          prompt_tokens: 100,
+          cached_tokens: 80,
+          completion_tokens: 20,
+          cost_usd: 0.01,
         },
       },
     ],
@@ -101,6 +143,20 @@ function fixture(): string {
     kernel_mcp_server_sha: "server-sha",
     clawbench_source_sha: "clawbench-sha",
   });
+  writeJson(join(success, "steps/run/verifier/kernel-mcp-result.json"), {
+    expected_session_id: "session-123",
+  });
+  writeJson(
+    join(success, "steps/run/verifier/data/kernel-browser-lifecycle.json"),
+    {
+      timeout_seconds: 1920,
+      deletion_verified: true,
+      events: [
+        { event: "browser_created", ts: 1767225620 },
+        { event: "browser_deleted", ts: 1767225640 },
+      ],
+    },
+  );
 
   const failed = join(root, "task-two__def");
   writeJson(join(failed, "result.json"), {
@@ -152,6 +208,30 @@ describe("Harbor result ingestion", () => {
       infra_error_rate: 1,
       ungraded_rate: 1,
     });
+  });
+
+  test("classifies ungraded step setup failures as infrastructure", () => {
+    const root = fixture();
+    const failedPath = join(root, "task-two__def", "result.json");
+    const failed = JSON.parse(readFileSync(failedPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    delete failed.exception_info;
+    failed.verifier_result = null;
+    failed.step_results = [
+      {
+        exception_info: {
+          exception_type: "RuntimeError",
+          exception_message: "Step setup exited with code 1",
+        },
+      },
+    ];
+    writeJson(failedPath, failed);
+
+    const arm = readBenchmarkArm({ name: "candidate", path: root });
+    expect(arm.trials[1].errorClass).toBe("infra");
+    expect(arm.trials[1].error).toContain("Step setup exited with code 1");
   });
 
   test("summarizes against the intended task denominator", () => {
@@ -207,10 +287,14 @@ describe("Harbor result ingestion", () => {
     expect(
       first.filter((event) => event.span_attributes.type === "tool"),
     ).toHaveLength(1);
+    expect(
+      first.filter((event) => event.span_attributes.type === "task"),
+    ).toHaveLength(7);
     const root = first.find((event) => event.span_attributes.type === "eval");
     expect(root?.input).toEqual({
       source: "clawbench-v2",
       taskName: "v2-task-one",
+      instruction: "perform the task",
     });
     expect(root?.span_parents).toEqual([]);
     const infra = first.find(
@@ -229,6 +313,55 @@ describe("Harbor result ingestion", () => {
       reward: 1,
       rewardKey: "reward_lenient",
     });
+    const llm = first.find((event) => event.span_attributes.type === "llm");
+    expect(llm?.input).toEqual([
+      {
+        source: "system",
+        message: "system prompt",
+        toolCalls: [],
+        observations: [],
+      },
+      {
+        source: "user",
+        message: "perform the task",
+        toolCalls: [],
+        observations: [],
+      },
+    ]);
+    expect(llm?.output).toMatchObject({
+      message: "",
+      toolCalls: [
+        {
+          name: "execute_playwright_code",
+          arguments: {
+            session_id: "[REDACTED]",
+            code: "await page.locator('#password').fill('[REDACTED]'); return 'done'",
+          },
+        },
+      ],
+    });
+    const tool = first.find((event) => event.span_attributes.type === "tool");
+    expect(tool?.metadata).toMatchObject({
+      sessionIdMatchesExpected: true,
+    });
+    const browser = first.find(
+      (event) => event.span_attributes.name === "browser_session",
+    );
+    expect(browser?.metadata).toMatchObject({
+      timeoutSeconds: 1920,
+      deletionVerified: true,
+    });
+    expect(llm?.metrics).toMatchObject({
+      start: Date.parse("2026-01-01T00:00:20Z") / 1000,
+      end: Date.parse("2026-01-01T00:00:21Z") / 1000,
+      prompt_tokens: 100,
+      prompt_cached_tokens: 80,
+      completion_tokens: 20,
+      tokens: 120,
+      cost_usd: 0.01,
+    });
+    expect(root?.metrics).not.toHaveProperty("input_tokens");
+    expect(root?.metrics).not.toHaveProperty("cost_usd");
   });
 
   test("re-publishes the same rows and spans by deterministic ID", async () => {
@@ -409,22 +542,39 @@ describe("Braintrust redaction", () => {
     process.env.TEST_API_KEY = "super-secret-value";
     expect(
       redactString(
-        'Bearer super-secret-value sk-proj-abcdefghijklmnop?access_token=visible&token=plain&jwt=opaque "password":"generated-password" Cookie: session=visible\nhttps://example.com/browser/live/replay-slug user@example.com',
+        'Bearer super-secret-value sk-proj-abcdefghijklmnop?access_token=visible&token=plain&jwt=opaque "password":"generated-password" "session_id":"session-123" Cookie: session=visible\nhttps://example.com/browser/live/replay-slug user@example.com await page.locator("#password").fill("typed-password")',
       ),
     ).toBe(
-      'Bearer [REDACTED] [REDACTED]?access_token=[REDACTED]&token=[REDACTED]&jwt=[REDACTED] "password":"[REDACTED]" Cookie: [REDACTED]\nhttps://example.com/browser/live/[REDACTED] [REDACTED_EMAIL]',
+      'Bearer [REDACTED] [REDACTED]?access_token=[REDACTED]&token=[REDACTED]&jwt=[REDACTED] "password":"[REDACTED]" "session_id":"[REDACTED]" Cookie: [REDACTED]\nhttps://example.com/browser/live/[REDACTED] [REDACTED_EMAIL] await page.locator("#password").fill("[REDACTED]")',
     );
-    expect(
-      redactValue({
-        api_key: "visible",
-        Cookie: "session=visible",
-        nested: ["bt-abcdefghijklmnop"],
-      }),
-    ).toEqual({
+    const redacted = redactValue({
+      api_key: "visible",
+      Cookie: "session=visible",
+      session_id: "session-123",
+      max_output_tokens: 1000,
+      nested: ["bt-abcdefghijklmnop"],
+    });
+    expect(redacted).toEqual({
       api_key: "[REDACTED]",
       Cookie: "[REDACTED]",
+      session_id: "[REDACTED]",
+      max_output_tokens: 1000,
       nested: ["[REDACTED]"],
     });
+    expect(() => assertSafeToPublish(redacted)).not.toThrow();
+    expect(() =>
+      assertSafeToPublish({ code: "page.fill('still-visible')" }),
+    ).toThrow("typed form value");
+    expect(
+      privateInfoRead("exec_command", {
+        cmd: "cat /my-info/email_credentials.json",
+      }),
+    ).toBe(true);
+    expect(
+      privateInfoRead("exec_command", {
+        cmd: "cat /my-info/kernel_browser.json",
+      }),
+    ).toBe(false);
     delete process.env.TEST_API_KEY;
   });
 });
@@ -473,6 +623,7 @@ describe("benchmark workflow hardening", () => {
       "harbor_hypeman_version=${HARBOR_HYPEMAN_VERSION:-0.1.2}",
     );
     expect(runner).toContain('--max-retries "${HARBOR_MAX_RETRIES:-5}"');
+    expect(runner).toContain('bun "$benchmark_dir/verify-purelymail.ts"');
     for (const exception of [
       "APITimeoutError",
       "APIConnectionError",
@@ -480,6 +631,8 @@ describe("benchmark workflow hardening", () => {
       "InternalServerError",
       "ConnectionRefusedError",
       "ExecProtocolError",
+      "AgentSetupTimeoutError",
+      "RuntimeError",
     ]) {
       expect(runner).toContain(`--retry-include ${exception}`);
     }

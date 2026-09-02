@@ -4,13 +4,22 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import {
   type BenchmarkArm,
+  type BenchmarkPhase,
   type BenchmarkTrial,
   parseArmSpec,
   readBenchmarkArm,
   selectPrimaryReward,
   summarizeArm,
 } from "./results";
-import { redactString, redactValue } from "./redact";
+import {
+  assertSafeToPublish,
+  collectSensitiveValues,
+  privateInfoRead,
+  redactString,
+  redactValue,
+  redactValueWithSecrets,
+  REDACTED_PRIVATE_INFO,
+} from "./redact";
 
 interface CliOptions {
   arms: string[];
@@ -41,7 +50,7 @@ interface BraintrustEvent {
   span_id: string;
   root_span_id: string;
   span_parents: string[];
-  span_attributes: { name: string; type: "eval" | "llm" | "tool" };
+  span_attributes: { name: string; type: "eval" | "llm" | "tool" | "task" };
   created?: string;
   input?: unknown;
   output?: unknown;
@@ -127,14 +136,17 @@ function metricRecord(trial: BenchmarkTrial): Record<string, number> {
     Object.entries({
       start: trial.metrics.start,
       end: trial.metrics.end,
-      input_tokens: trial.metrics.inputTokens,
-      cached_tokens: trial.metrics.cacheTokens,
-      output_tokens: trial.metrics.outputTokens,
-      cost_usd: trial.metrics.costUsd,
       duration_ms: trial.metrics.durationMs,
       tool_calls: trial.metrics.toolCalls,
     }).filter((entry): entry is [string, number] => entry[1] !== undefined),
   );
+}
+
+function taskInstruction(trial: BenchmarkTrial): unknown {
+  const userSteps = trajectorySteps(trial).filter(
+    (step) => step.source === "user" && step.message !== undefined,
+  );
+  return redactValue(userSteps.at(-1)?.message);
 }
 
 function trialMetadata(trial: BenchmarkTrial): Record<string, unknown> {
@@ -161,24 +173,220 @@ function trialMetadata(trial: BenchmarkTrial): Record<string, unknown> {
   };
 }
 
+function timestampSeconds(value?: string): number | undefined {
+  if (!value) return undefined;
+  const millis = Date.parse(value);
+  return Number.isFinite(millis) ? millis / 1000 : undefined;
+}
+
+function timestampIso(value?: number): string | undefined {
+  return value === undefined ? undefined : new Date(value * 1000).toISOString();
+}
+
+function stepContext(
+  step: AtifStep,
+  sensitiveValues: string[],
+): Record<string, unknown> {
+  const calls = step.tool_calls ?? [];
+  return {
+    source: step.source,
+    message: redactValueWithSecrets(step.message, sensitiveValues),
+    toolCalls: calls.map((call) => ({
+      name: call.function_name ?? "tool",
+      arguments: redactValueWithSecrets(call.arguments, sensitiveValues),
+    })),
+    observations: (step.observation?.results ?? []).map((result) => {
+      const call = calls.find(
+        (candidate) => candidate.tool_call_id === result.source_call_id,
+      );
+      const toolName = call?.function_name ?? "tool";
+      return {
+        source_call_id: result.source_call_id,
+        content:
+          call && privateInfoRead(toolName, call.arguments)
+            ? REDACTED_PRIVATE_INFO
+            : redactValueWithSecrets(result.content, sensitiveValues),
+      };
+    }),
+  };
+}
+
+function llmInput(
+  steps: AtifStep[],
+  stepIndex: number,
+  sensitiveValues: string[],
+): unknown {
+  const prior = steps.slice(0, stepIndex);
+  let previousAgent = -1;
+  for (let index = prior.length - 1; index >= 0; index -= 1) {
+    if (prior[index].source === "agent") {
+      previousAgent = index;
+      break;
+    }
+  }
+  const context =
+    previousAgent === -1
+      ? prior
+      : prior.slice(previousAgent, previousAgent + 1);
+  return context.map((step) => stepContext(step, sensitiveValues));
+}
+
+function llmOutput(step: AtifStep, sensitiveValues: string[]): unknown {
+  if ((step.tool_calls ?? []).length === 0) {
+    return redactValueWithSecrets(step.message, sensitiveValues);
+  }
+  return {
+    message: redactValueWithSecrets(step.message, sensitiveValues),
+    toolCalls: (step.tool_calls ?? []).map((call) => ({
+      name: call.function_name ?? "tool",
+      arguments: redactValueWithSecrets(call.arguments, sensitiveValues),
+    })),
+  };
+}
+
+function privateInfoValues(steps: AtifStep[]): string[] {
+  const values = new Set<string>();
+  for (const step of steps) {
+    for (const call of step.tool_calls ?? []) {
+      const toolName = call.function_name ?? "tool";
+      if (!privateInfoRead(toolName, call.arguments)) continue;
+      const observation = step.observation?.results?.find(
+        (result) => result.source_call_id === call.tool_call_id,
+      );
+      if (typeof observation?.content !== "string") continue;
+      for (const match of observation.content.matchAll(
+        /["']\s*:\s*["']([^"'\\]{4,})["']/g,
+      )) {
+        values.add(match[1]);
+      }
+    }
+  }
+  return [...values];
+}
+
+function phaseEvent(
+  rowId: string,
+  name: string,
+  phase: BenchmarkPhase,
+  metadata: Record<string, unknown> = {},
+): BraintrustEvent | undefined {
+  if (phase.start === undefined || phase.end === undefined) return undefined;
+  const id = uuidV5(`${rowId}:phase:${name}`);
+  return {
+    id,
+    span_id: id,
+    root_span_id: rowId,
+    span_parents: [rowId],
+    span_attributes: { name, type: "task" },
+    created: timestampIso(phase.start),
+    metadata: { phase: name, ...metadata },
+    metrics: {
+      start: phase.start,
+      end: phase.end,
+      ...(phase.durationMs === undefined
+        ? {}
+        : { duration_ms: phase.durationMs }),
+    },
+    _is_merge: false,
+  };
+}
+
+function phaseEvents(trial: BenchmarkTrial, rowId: string): BraintrustEvent[] {
+  const events: BraintrustEvent[] = [];
+  for (const [name, phase] of Object.entries({
+    environment_setup: trial.phases.environmentSetup,
+    agent_setup: trial.phases.agentSetup,
+    agent_execution: trial.phases.agentExecution,
+    verifier: trial.phases.verifier,
+  })) {
+    if (!phase) continue;
+    const event = phaseEvent(rowId, name, phase);
+    if (event) events.push(event);
+  }
+
+  const stepSetupStart = trial.phases.agentSetup?.end;
+  const stepSetupEnd = trial.phases.agentExecution?.start;
+  if (
+    stepSetupStart !== undefined &&
+    stepSetupEnd !== undefined &&
+    stepSetupEnd > stepSetupStart
+  ) {
+    const event = phaseEvent(rowId, "step_setup", {
+      start: stepSetupStart,
+      end: stepSetupEnd,
+      durationMs: (stepSetupEnd - stepSetupStart) * 1000,
+    });
+    if (event) events.push(event);
+  }
+
+  if (trial.browser?.start !== undefined && trial.browser.end !== undefined) {
+    const event = phaseEvent(
+      rowId,
+      "browser_session",
+      {
+        start: trial.browser.start,
+        end: trial.browser.end,
+        durationMs: (trial.browser.end - trial.browser.start) * 1000,
+      },
+      {
+        timeoutSeconds: trial.browser.timeoutSeconds,
+        deletionVerified: trial.browser.deletionVerified,
+      },
+    );
+    if (event) events.push(event);
+  }
+
+  const finalizeStart = trial.phases.verifier?.end;
+  const finalizeEnd = trial.metrics.end;
+  if (
+    finalizeStart !== undefined &&
+    finalizeEnd !== undefined &&
+    finalizeEnd > finalizeStart
+  ) {
+    const event = phaseEvent(rowId, "finalize", {
+      start: finalizeStart,
+      end: finalizeEnd,
+      durationMs: (finalizeEnd - finalizeStart) * 1000,
+    });
+    if (event) events.push(event);
+  }
+  return events;
+}
+
 function atifEvents(trial: BenchmarkTrial, rowId: string): BraintrustEvent[] {
   const events: BraintrustEvent[] = [];
-  const agentSteps = trajectorySteps(trial).filter(
-    (candidate) => candidate.source === "agent",
-  );
-  for (const [stepIndex, step] of agentSteps.entries()) {
+  const steps = trajectorySteps(trial);
+  const sensitiveValues = [
+    ...collectSensitiveValues(steps),
+    ...privateInfoValues(steps),
+  ];
+  const agentExecutionId = uuidV5(`${rowId}:phase:agent_execution`);
+  let previousEnd = trial.phases.agentExecution?.start;
+
+  for (const [trajectoryIndex, step] of steps.entries()) {
+    if (step.source !== "agent") continue;
     const stepId = step.step_id;
-    const stepKey = `${stepId ?? "missing"}:${stepIndex}`;
+    const stepKey = `${stepId ?? "missing"}:${trajectoryIndex}`;
     const llmId = uuidV5(`${rowId}:llm:${stepKey}`);
-    const start = step.timestamp
-      ? Date.parse(step.timestamp) / 1000
-      : undefined;
+    const end = timestampSeconds(step.timestamp);
+    const start =
+      previousEnd === undefined || end === undefined
+        ? end
+        : Math.min(previousEnd, end);
+    if (end !== undefined) previousEnd = end;
+    const promptTokens = number(step.metrics?.prompt_tokens);
+    const completionTokens = number(step.metrics?.completion_tokens);
     const llmMetrics = Object.fromEntries(
       Object.entries({
         start,
-        end: start,
-        prompt_tokens: number(step.metrics?.prompt_tokens),
-        completion_tokens: number(step.metrics?.completion_tokens),
+        end,
+        prompt_tokens: promptTokens,
+        prompt_cached_tokens: number(step.metrics?.cached_tokens),
+        completion_tokens: completionTokens,
+        tokens:
+          promptTokens === undefined || completionTokens === undefined
+            ? undefined
+            : promptTokens + completionTokens,
         cost_usd: number(step.metrics?.cost_usd),
       }).filter((entry): entry is [string, number] => entry[1] !== undefined),
     );
@@ -186,14 +394,21 @@ function atifEvents(trial: BenchmarkTrial, rowId: string): BraintrustEvent[] {
       id: llmId,
       span_id: llmId,
       root_span_id: rowId,
-      span_parents: [rowId],
+      span_parents: [
+        trial.phases.agentExecution?.start !== undefined &&
+        trial.phases.agentExecution.end !== undefined
+          ? agentExecutionId
+          : rowId,
+      ],
       span_attributes: { name: "agent", type: "llm" },
-      created: step.timestamp,
-      output: redactValue(step.message),
+      created: timestampIso(start) ?? step.timestamp,
+      input: llmInput(steps, trajectoryIndex, sensitiveValues),
+      output: llmOutput(step, sensitiveValues),
       metadata: {
         phase: "agent_execution",
+        timing: "ATIF turn completion interval",
         stepId,
-        stepIndex,
+        trajectoryIndex,
         model: step.model_name ?? trial.model,
       },
       metrics: llmMetrics,
@@ -207,22 +422,34 @@ function atifEvents(trial: BenchmarkTrial, rowId: string): BraintrustEvent[] {
       const observation = step.observation?.results?.find(
         (result) => result.source_call_id === call.tool_call_id,
       );
+      const toolName = call.function_name ?? "tool";
+      const sessionId =
+        call.arguments !== null && typeof call.arguments === "object"
+          ? (call.arguments as Record<string, unknown>).session_id
+          : undefined;
+      const sessionIdMatchesExpected =
+        typeof sessionId === "string" && trial.expectedBrowserSessionId
+          ? sessionId === trial.expectedBrowserSessionId
+          : undefined;
       events.push({
         id: toolId,
         span_id: toolId,
         root_span_id: rowId,
         span_parents: [llmId],
-        span_attributes: { name: call.function_name ?? "tool", type: "tool" },
+        span_attributes: { name: toolName, type: "tool" },
         created: step.timestamp,
-        input: redactValue(call.arguments),
-        output: redactValue(observation?.content),
+        input: redactValueWithSecrets(call.arguments, sensitiveValues),
+        output: privateInfoRead(toolName, call.arguments)
+          ? REDACTED_PRIVATE_INFO
+          : redactValueWithSecrets(observation?.content, sensitiveValues),
         metadata: {
           phase: "agent_execution",
+          timing: "not available in ATIF",
           stepId,
-          stepIndex,
+          trajectoryIndex,
           toolCallId: call.tool_call_id,
+          sessionIdMatchesExpected,
         },
-        metrics: start === undefined ? undefined : { start: start, end: start },
         _is_merge: false,
       });
     }
@@ -249,7 +476,11 @@ export function buildExperimentEvents(
         span_parents: [],
         span_attributes: { name: trial.taskName, type: "eval" },
         created: trial.startedAt,
-        input: { source: trial.source, taskName: trial.taskName },
+        input: {
+          source: trial.source,
+          taskName: trial.taskName,
+          instruction: taskInstruction(trial),
+        },
         output: {
           reward: primaryReward?.value,
           rewardKey: primaryReward?.key,
@@ -262,9 +493,11 @@ export function buildExperimentEvents(
         metrics: metricRecord(trial),
         _is_merge: false,
       });
+      events.push(...phaseEvents(trial, rowId));
       events.push(...atifEvents(trial, rowId));
     }
   }
+  assertSafeToPublish(events);
   return events;
 }
 
