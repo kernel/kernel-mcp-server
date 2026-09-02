@@ -98,7 +98,7 @@ Production-ready platform for deploying and hosting browser automation code. Han
       session_id: z
         .string()
         .describe(
-          "The browser session ID to debug (e.g., 'abc123example456xyz')",
+          "The browser session ID or name to debug (e.g., 'abc123example456xyz' or 'checkout-flow'). A name resolves only a live session; if the session was deleted, pass its ID so telemetry can still be read.",
         ),
       issue_description: z
         .string()
@@ -135,7 +135,7 @@ kernel browsers playwright --help
 
 ## Telemetry Events (structured signal — works even after the session is deleted)
 
-When telemetry was captured, it's usually the fastest way to pinpoint a failure — read it before reaching for screenshots or logs. If the session has been deleted, it's the only signal still available: every CLI command in this guide needs a live session.
+When telemetry was captured, it's usually the fastest way to pinpoint a failure — read it before reaching for screenshots or logs. If the session has been deleted, it's the only signal still available: every CLI command in this guide needs a live session. A deleted session must be addressed by its ID; its name no longer resolves.
 
 Start broad: call \`manage_browsers\` with action "get_telemetry", session_id "${session_id}", and no filters. That starts at session creation and returns the first page (up to 100 events); page with \`next_offset\` as \`offset\` while \`has_more\` is true, preserving \`categories\`, \`until\`, and \`order\`. An empty unfiltered read is definitive: nothing was archived. Narrow when the output is too large to scan or you already know where to look: \`categories\` to isolate a signal you've spotted, \`order\` "desc" when the end of the session matters most, \`since\`/\`until\` to bracket a known failing step. Correlate event timestamps with the failing automation step.
 

@@ -30,7 +30,7 @@ export function registerShellTool(
     'Execute a command synchronously inside a browser VM. Returns stdout, stderr, and exit code. The command field is the executable; use args for its arguments. Common uses: read files (command: "cat", args: ["/var/log/supervisord.log"]), list dirs (command: "ls", args: ["/var/log"]), check DNS (command: "cat", args: ["/etc/resolv.conf"]), test connectivity (command: "curl", args: ["-I", "https://example.com"]).',
     {
       ...projectSelectionInputSchema(),
-      session_id: z.string().describe("Browser session ID."),
+      session_id: z.string().describe("Browser session ID or name."),
       command: z
         .string()
         .describe("Executable to run (e.g., 'cat', 'ls', 'curl')."),

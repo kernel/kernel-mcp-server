@@ -23,7 +23,7 @@ export function registerReplayTools(server: McpServer) {
       action: z
         .enum(["start", "stop", "list"])
         .describe("Operation to perform."),
-      session_id: z.string().describe("Browser session ID."),
+      session_id: z.string().describe("Browser session ID or name."),
       replay_id: z.string().describe("(stop) Replay ID to stop.").optional(),
       framerate: z
         .number()
@@ -84,7 +84,7 @@ export function registerReplayTools(server: McpServer) {
             if (!params.replay_id)
               return errorResponse("Error: replay_id is required for stop.");
             await client.browsers.replays.stop(params.replay_id, {
-              id: params.session_id,
+              id_or_name: params.session_id,
             });
             return textResponse("Replay stopped successfully");
           }
