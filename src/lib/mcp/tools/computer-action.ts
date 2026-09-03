@@ -64,7 +64,9 @@ const computerActionSchema = z.object({
     .object({
       keys: z
         .array(z.string())
-        .describe('X11 keysym names or combos like "Ctrl+t", "Return".'),
+        .describe(
+          'Each item must be one X11 keysym or chord, such as "Return", "Ctrl+t", or "Ctrl+minus". For sequential or repeated key presses, use separate array items; do not combine keys with spaces or commas. Use type_text to enter text.',
+        ),
       duration: z.number().int().min(0).optional(),
       hold_keys: z.array(z.string()).optional(),
     })
