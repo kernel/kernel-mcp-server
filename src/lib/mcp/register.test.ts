@@ -16,6 +16,7 @@ const NON_AUTH_TOOLSETS = [
   "computer",
   "shell",
   "playwright",
+  "webmcp",
   "replays",
   "credentials",
   "credential_providers",

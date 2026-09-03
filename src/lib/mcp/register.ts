@@ -23,6 +23,7 @@ import { registerProjectCapabilities } from "@/lib/mcp/tools/projects";
 import { registerProxyTools } from "@/lib/mcp/tools/proxies";
 import { registerReplayTools } from "@/lib/mcp/tools/replays";
 import { registerShellTool } from "@/lib/mcp/tools/shell";
+import { registerWebMcpTool } from "@/lib/mcp/tools/webmcp";
 type McpToolOptions = McpDependencies;
 type McpRegistrationOptions = {
   mcpApps?: boolean;
@@ -48,6 +49,7 @@ const mcpToolRegistrations = [
   ["computer", registerComputerActionTool],
   ["shell", registerShellTool],
   ["playwright", registerPlaywrightTool],
+  ["webmcp", registerWebMcpTool],
   ["replays", registerReplayTools],
   ["auth_connections", registerManagedAuthCapabilities],
   ["credentials", registerCredentialTools],

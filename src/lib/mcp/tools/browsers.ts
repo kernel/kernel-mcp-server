@@ -448,7 +448,7 @@ export function registerBrowserCapabilities(
       name: z
         .string()
         .describe(
-          "(create, update) Human-readable session name, unique among active sessions in the project. 1-255 chars of letters, digits, '.', '_' or '-', and not a cuid-like ID. While the session is live it can be passed as session_id to the browser tools (manage_browsers, computer_action, execute_playwright_code, execute_shell_command, browser_curl, manage_replays). On update, an empty string clears the name.",
+          "(create, update) Human-readable session name, unique among active sessions in the project. 1-255 chars of letters, digits, '.', '_' or '-', and not a cuid-like ID. While the session is live it can be passed as session_id to the browser tools (manage_browsers, computer_action, execute_playwright_code, execute_shell_command, browser_curl, manage_replays, webmcp). On update, an empty string clears the name.",
         )
         .optional(),
       tags: z
