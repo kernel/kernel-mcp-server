@@ -292,7 +292,7 @@ Many other MCP-capable tools accept:
 
 Configure these values wherever the tool expects MCP server settings.
 
-## Tools (20 model-facing, plus 1 app-only helper)
+## Tools (21 model-facing, plus 1 app-only helper)
 
 Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Standalone tools handle high-frequency and interactive workflows.
 
@@ -316,6 +316,7 @@ Call `get_connection_context` before deciding whether to create or select a proj
 - `manage_auth_connections` - Create, list, get, update, delete, login, submit, inspect timelines, and wait for managed-auth connections in every client. Supports health-check and automatic re-auth settings, managed-auth browser configuration, and canonical interaction-bound field/choice submissions. Use domain-filtered `list` for discovery. App-capable clients additionally receive `open_auth_login`; the programmatic actions remain available there too.
 - `manage_credentials` - Create, list, get, update, and delete stored credentials; fetch a current TOTP code for credentials with a configured totp_secret.
 - `manage_credential_providers` - Create, list, get, update, and delete external credential providers (e.g. 1Password); list available items and test the provider connection.
+- `manage_vaults` - Create/select project-owned vaults, manage Link and AgentCard wallet/card items, perform advertised authorization operations, and inspect state and events. Attach vaults using `manage_browsers.vaults` at browser creation. These tools prepare and observe credentials; they do not submit merchant payments.
 
 ### Standalone tools
 
@@ -382,6 +383,20 @@ Returns: { success: true, result: "Example Domain" }
 Example: “Log me into my Hacker News account and update my profile to add a random emoji at the bottom.” The agent should discover `news.ycombinator.com`, open the App when needed, wait for authentication, then continue the profile edit without asking for credentials or a profile name in chat.
 
 The secure App defaults `record_session` and `browser_telemetry.enabled` to `true`, recording replay video plus the operational telemetry categories (`control`, `connection`, `system`, and `captcha`) for managed-auth browser sessions. Callers can explicitly disable either setting. The programmatic `manage_auth_connections` create, update, and login actions pass browser telemetry through the API’s current nested `browser.telemetry` configuration while preserving defaults and inheritance when the MCP parameter is omitted.
+
+### Prepare payment credentials with a vault
+
+This surface uses a [pinned, vendored SDK preview](vendor/README.md). It requires an API deployment with the corresponding vault support enabled; installing the MCP server does not enable or deploy that API.
+
+1. Call `get_connection_context` and select the owning project. Use `manage_vaults` with `action: "list"`, `"get"`, or `"upsert"` (`name` required for upsert) to select/create a vault. Omitted project selection uses the fixed connection project or the API default project, including for list. Ownership and the vault name are immutable.
+2. Use `action: "upsert_item"`, `id_or_name`, `key`, and an `item` containing exactly `type` and `spec`. For a Link wallet, use `{"type":"wallet","spec":{"provider":"link","authorization":{"method":"oauth","client":{"type":"kernel_managed"}}}}`. Follow the returned OAuth action URL until connected. For AgentCard, use `{"type":"wallet","spec":{"provider":"agentcard"}}` and follow `card_enrollment`. An optional AgentCard `user_id` must already be enrolled by a wallet in this organization. Never send card data or OAuth tokens/codes to MCP.
+3. Read the wallet with `action: "get_item"`. When advertised in `available_expansions`, pass `expand: ["payment_methods"]` to obtain display-safe funding methods. Create a card item with its provider's complete spec: Link requires `wallet`, `payment_method_id`, `merchant_name`, `merchant_url`, `amount` in minor currency units, `currency`, at least 100 characters of purchase `context`, and explicit `test: true` or `false`. AgentCard requires `wallet`, `merchant`, `amount`, and `currency`, with optional `card_id`; sandbox/live mode is deployment-configured, not an item flag. Confirm the intended mode before checkout. Permitted Link domains are returned in `state.domains`; this preview has no writable domains field.
+4. For Link, read `available_operations` and their descriptions, then call `action: "perform_item_operation"` with `operation: "authorize"` only when advertised. Creating or updating a Link card does not authorize it. Follow the returned approval/collection actions on provider-hosted surfaces; if no usable surface is supplied, request user assistance rather than inventing a callback. `update_item` accepts a complete card `spec`: Link only while requested, AgentCard before/between authorizations when permitted. AgentCard checkout submission triggers its own approval-gated authorization; there is no separate AgentCard authorize operation here.
+5. Create a browser in the same project with `manage_browsers`, `action: "create"`, and `vaults: [{"name":"checkout"}]` (or an ID instead of a name). Up to 20 references are supported, each with exactly one identifier and no duplicates; attachments cannot change after creation. Use returned non-secret `state.aliases` in checkout. Observe outcomes using `get_item` and `item_events`; for events, continue with `after` set to the last returned event ID. Both reads support `wait` from 0 to 60 seconds; configure the MCP client timeout above `wait + 30` seconds.
+
+**Payment safety:** vault API calls do not submit a merchant payment or authorize arbitrary retries. Never retry a failed, timed-out, rejected, or indeterminate payment, including by creating another item/browser. `ready`, `consumed`, or an `approved` authorization alone does not prove a successful charge. Inspect typed item state, authorization outcomes, and event names before deciding what happened. Never request raw card values, OAuth tokens/codes, ciphertext, provider secrets, or sensitive provider responses.
+
+MCP returns allowlisted metadata, actions, aliases, funding-method displays, and typed outcomes. It omits arbitrary spec metadata, event payloads, unstructured authorization reasons, unknown fields, and raw API error details. All vault SDK calls and vault-attached browser creation disable automatic retries. Deleting a vault invalidates its items; deleting a wallet also invalidates dependent cards. There is no rename, project move, callback, raw-secret, or payment-retry tool.
 
 ### Set up browser profiles for authentication
 

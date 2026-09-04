@@ -90,6 +90,25 @@ describe("throwToolError classification", () => {
     ).toContain("[code: last_active_project]");
   });
 
+  test("replaces sensitive error text without losing API classification", () => {
+    try {
+      throwToolError(
+        "manage_vaults",
+        "upsert_item",
+        codedApiError(409, "secret-code", "secret-provider-response"),
+        "State conflict. Read the item; do not retry the payment.",
+      );
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).name).toBe("KernelApiError409");
+      expect((error as Error).message).toBe(
+        "Error in manage_vaults (upsert_item): State conflict. Read the item; do not retry the payment.",
+      );
+      return;
+    }
+    throw new Error("throwToolError did not throw");
+  });
+
   test("ignores absent and non-string API codes", () => {
     const absent = apiError(409, "conflict");
     expect(caught(absent).message).not.toContain("[code:");

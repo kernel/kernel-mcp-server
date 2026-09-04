@@ -11,6 +11,7 @@ import {
   type McpDependencies,
 } from "@/lib/mcp/dependencies";
 import type { KernelClient } from "@/lib/mcp/kernel-client";
+import { vaultErrorMessage } from "@/lib/mcp/tools/vault-responses";
 import {
   registerJsonResourceCollection,
   registerJsonResourceTemplate,
@@ -433,7 +434,7 @@ export function registerBrowserCapabilities(
   // manage_browsers -- Manage browser sessions and read archived telemetry
   server.tool(
     "manage_browsers",
-    'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished. Live sessions can be addressed by ID or by the name given at creation or set on update; deleted sessions only by ID. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
+    'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished. Live sessions can be addressed by ID or by the name given at creation or set on update; deleted sessions only by ID. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed. For payment workflows, first prepare a project-owned vault with manage_vaults, then attach it using vaults at creation in the same project; bindings are immutable. Use only returned non-secret item aliases in checkout and inspect item state/events for outcomes. Never extract raw payment credentials or retry failed, timed-out, rejected, or indeterminate payments.',
     {
       ...projectSelectionInputSchema(),
       action: z
@@ -474,6 +475,27 @@ export function registerBrowserCapabilities(
         .record(z.string(), z.unknown())
         .describe(
           "(create) Chrome enterprise policy overrides. Kernel-managed policies such as extensions, proxy, CDP, and automation are blocked by the API.",
+        )
+        .optional(),
+      vaults: z
+        .array(
+          z
+            .object({
+              id: z.string().min(1).optional(),
+              name: z.string().min(1).max(255).optional(),
+            })
+            .strict()
+            .refine(
+              ({ id, name }) => (id !== undefined) !== (name !== undefined),
+              {
+                message:
+                  "Each vault reference must provide exactly one of id or name.",
+              },
+            ),
+        )
+        .max(20)
+        .describe(
+          "(create only) Project-owned vaults prepared with manage_vaults. Each reference supplies exactly one ID or name; no duplicates. Links are immutable after creation. Attaching a vault does not submit or authorize a merchant payment.",
         )
         .optional(),
       headless: z
@@ -676,9 +698,16 @@ export function registerBrowserCapabilities(
       );
 
       try {
+        if (params.vaults !== undefined && params.action !== "create") {
+          return errorResponse(
+            "Error: vaults is create-only; browser vault bindings are immutable.",
+          );
+        }
         switch (params.action) {
           case "create": {
             const createParams: BrowserCreateParams = {};
+            if (params.vaults !== undefined)
+              createParams.vaults = params.vaults;
             if (params.headless !== undefined)
               createParams.headless = params.headless;
             if (params.gpu !== undefined) createParams.gpu = params.gpu;
@@ -707,7 +736,12 @@ export function registerBrowserCapabilities(
             if (telemetry.value !== undefined)
               createParams.telemetry = telemetry.value;
 
-            const browser = await client.browsers.create(createParams);
+            const browser = await client.browsers.create(
+              createParams,
+              params.vaults !== undefined
+                ? { maxRetries: 0, signal: extra.signal }
+                : undefined,
+            );
             if (!browser)
               return errorResponse("Failed to create browser session");
 
@@ -829,7 +863,12 @@ export function registerBrowserCapabilities(
           }
         }
       } catch (error) {
-        throwToolError("manage_browsers", params.action, error);
+        throwToolError(
+          "manage_browsers",
+          params.action,
+          error,
+          params.vaults !== undefined ? vaultErrorMessage(error) : undefined,
+        );
       }
     },
   );

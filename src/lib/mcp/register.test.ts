@@ -20,6 +20,7 @@ const NON_AUTH_TOOLSETS = [
   "replays",
   "credentials",
   "credential_providers",
+  "vaults",
 ].join(",");
 
 function captureRegistration(mcpApps: boolean) {
@@ -115,6 +116,30 @@ describe("MCP toolset allowlist", () => {
   });
 });
 
+test("enables and disables vaults through the existing toolset selectors", () => {
+  const previousEnabled = process.env.KERNEL_MCP_ENABLED_TOOLSETS;
+  const previousDisabled = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+  process.env.KERNEL_MCP_ENABLED_TOOLSETS = "manage_vaults";
+  delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+  try {
+    expect(captureRegistration(false).legacyTools).toEqual([
+      "get_connection_context",
+      "manage_vaults",
+    ]);
+    process.env.KERNEL_MCP_DISABLED_TOOLSETS = "vaults";
+    expect(captureRegistration(false).legacyTools).toEqual([
+      "get_connection_context",
+    ]);
+  } finally {
+    if (previousEnabled === undefined)
+      delete process.env.KERNEL_MCP_ENABLED_TOOLSETS;
+    else process.env.KERNEL_MCP_ENABLED_TOOLSETS = previousEnabled;
+    if (previousDisabled === undefined)
+      delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+    else process.env.KERNEL_MCP_DISABLED_TOOLSETS = previousDisabled;
+  }
+});
+
 describe("project selection registration", () => {
   const projectScopedTools = [
     "manage_profiles",
@@ -130,6 +155,7 @@ describe("project selection registration", () => {
     "manage_replays",
     "manage_auth_connections",
     "manage_credentials",
+    "manage_vaults",
     "open_auth_login",
     "begin_auth_login",
   ];
