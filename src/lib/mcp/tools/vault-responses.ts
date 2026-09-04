@@ -78,8 +78,8 @@ export const vaultItemOutputSchema = z.discriminatedUnion("type", [
     ...itemFields,
     type: z.literal("wallet"),
     spec: z.discriminatedUnion("provider", [
-      linkWalletSpecSchema.strip(),
-      agentCardWalletSpecSchema.strip(),
+      linkWalletSpecSchema().strip(),
+      agentCardWalletSpecSchema().strip(),
     ]),
     state: z.discriminatedUnion("provider", [
       z.object({
@@ -132,8 +132,8 @@ export const vaultItemOutputSchema = z.discriminatedUnion("type", [
     ...itemFields,
     type: z.literal("card"),
     spec: z.discriminatedUnion("provider", [
-      linkCardSpecSchema.omit({ metadata: true }).strip(),
-      agentCardCardSpecSchema.strip(),
+      linkCardSpecSchema().omit({ metadata: true }).strip(),
+      agentCardCardSpecSchema().strip(),
     ]),
     state: z.discriminatedUnion("provider", [
       z.object({

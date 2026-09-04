@@ -75,17 +75,17 @@ export function registerVaultTools(
           "(upsert) Immutable vault name, unique in the project; cannot be a cuid-like ID. Creates or retrieves, never renames.",
         )
         .optional(),
-      key: vaultItemKeySchema
+      key: vaultItemKeySchema()
         .describe(
           "Immutable item key within this vault. Required for item operations except list_items.",
         )
         .optional(),
-      item: vaultItemInputSchema
+      item: vaultItemInputSchema()
         .describe(
           "(upsert_item) Exactly type and provider-discriminated spec. Identical PUTs may retrieve an existing item; changed specs conflict, and authorized Link cards cannot be replaced. Use get_item to inspect, not repeated writes.",
         )
         .optional(),
-      spec: cardSpecSchema
+      spec: cardSpecSchema()
         .describe(
           "(update_item) Complete replacement card spec, not a partial patch. The API enforces provider and lifecycle constraints. Never use this to repeat an uncertain payment.",
         )

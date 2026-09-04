@@ -10,10 +10,13 @@ import type {
 import { describe, expect, test } from "bun:test";
 import { connectTestMcp, toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
 import {
-  cardSpecSchema,
-  vaultItemInputSchema,
+  cardSpecSchema as createCardSpecSchema,
+  vaultItemInputSchema as createVaultItemInputSchema,
 } from "@/lib/mcp/tools/vault-schemas";
 import { registerVaultTools } from "@/lib/mcp/tools/vaults";
+
+const cardSpecSchema = createCardSpecSchema();
+const vaultItemInputSchema = createVaultItemInputSchema();
 
 const dates = {
   created_at: "2026-09-01T00:00:00Z",
@@ -173,6 +176,7 @@ describe("manage_vaults", () => {
       const { tools } = await client.listTools();
       expect(tools.map(({ name }) => name)).toEqual(["manage_vaults"]);
       const tool = tools[0];
+      expect(JSON.stringify(tool.inputSchema)).not.toContain('"$ref"');
       expect(tool.annotations).toMatchObject({
         readOnlyHint: false,
         destructiveHint: true,
