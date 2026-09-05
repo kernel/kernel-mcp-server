@@ -321,7 +321,7 @@ Call `get_connection_context` before deciding whether to create or select a proj
 - `manage_vault_cards` - Create card requests or replace their full specification; does not implicitly authorize Link cards.
 - `manage_vault_items` - List, get, invoke advertised operations, observe events, and delete vault items. Provider approvals remain user actions; ready does not mean paid.
 
-See [Vault payments](docs/vault-payments.md) for both provider flows, safety rules, and response shapes. `manage_browsers` accepts creation-only `vaults` references (max 20); existing sessions and pools cannot gain vault bindings. The four vault tools share the `vaults` toolset and prepare/observe credentials rather than submitting merchant payments.
+See [Vault payments](docs/vault-payments.md) for both provider flows, safety rules, and response shapes. `manage_browsers` accepts creation-only `vaults` references (max 20); existing sessions and pools cannot gain vault bindings. The four vault tools share the `vaults` toolset and prepare/observe credentials rather than submitting merchant payments. They are exposed only when `GET /org/entitlements` reports `features.vaults.enabled: true` for the current credential; missing or unavailable entitlements hide them. Toolset configuration cannot override this access check.
 
 ### Standalone tools
 

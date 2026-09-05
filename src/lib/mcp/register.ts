@@ -28,6 +28,7 @@ import { registerVaultCapabilities } from "@/lib/mcp/tools/vaults";
 type McpToolOptions = McpDependencies;
 type McpRegistrationOptions = {
   mcpApps?: boolean;
+  vaults?: boolean;
   dependencies?: McpDependencies;
 };
 type RegisterMcpToolset = (server: McpServer, options: McpToolOptions) => void;
@@ -171,6 +172,7 @@ export function registerMcpCapabilities(
   server: McpServer,
   {
     mcpApps = false,
+    vaults = false,
     dependencies = defaultMcpDependencies,
   }: McpRegistrationOptions = {},
 ) {
@@ -183,7 +185,10 @@ export function registerMcpCapabilities(
   registerConnectionContextTool(server);
 
   for (const [toolset, registerToolset] of mcpToolRegistrations) {
-    if (toolsetEnabled(enabledToolsets, disabledToolsets, toolset)) {
+    if (
+      (toolset !== "vaults" || vaults) &&
+      toolsetEnabled(enabledToolsets, disabledToolsets, toolset)
+    ) {
       registerToolset(server, dependencies);
     }
   }

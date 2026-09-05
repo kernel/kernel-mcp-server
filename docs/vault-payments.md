@@ -9,6 +9,14 @@ that a development or staging MCP endpoint makes a card request a test transacti
 
 ## Tools and scope
 
+The four vault tools are exposed only when the current credential's
+`GET /org/entitlements` response reports `features.vaults.enabled: true`.
+Access is rechecked on every authenticated MCP request, including tool calls,
+without caching grants across requests or connections. A missing field, malformed
+response, or failed lookup hides the vault tools but leaves other toolsets usable.
+The lookup has a five-second timeout, forwards cancellation, and is not retried.
+The `vaults` toolset configuration can further restrict access, never grant it.
+
 | Tool                   | Actions                                     |
 | ---------------------- | ------------------------------------------- |
 | `manage_vaults`        | `create`, `list`, `get`, `delete`           |

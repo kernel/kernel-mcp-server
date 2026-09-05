@@ -24,6 +24,7 @@ import {
   verifyMcpTransportSession,
 } from "@/lib/mcp-transport-session";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
+import { resolveMcpVaultAccess } from "@/lib/mcp/entitlements";
 import { name, version } from "../../../server.json";
 
 export async function OPTIONS(_req: NextRequest): Promise<Response> {
@@ -105,15 +106,20 @@ export function connectionScopeFailureResponse(
 // Handler variants keep per-connection capabilities out of tools/list unless
 // the authenticated connection can use them.
 const serverInfo = { serverInfo: { name, version } };
-function createHandler({ mcpApps = false }: { mcpApps?: boolean } = {}) {
+function createHandler({
+  mcpApps = false,
+  vaults = false,
+}: { mcpApps?: boolean; vaults?: boolean } = {}) {
   return createMcpHandler((server) => {
     instrumentMcpAnalytics(server);
-    registerMcpCapabilities(server, { mcpApps });
+    registerMcpCapabilities(server, { mcpApps, vaults });
   }, serverInfo);
 }
 
 const handler = createHandler();
 const mcpAppsHandler = createHandler({ mcpApps: true });
+const vaultsHandler = createHandler({ vaults: true });
+const vaultsMcpAppsHandler = createHandler({ mcpApps: true, vaults: true });
 
 type AuthInfoExtra = {
   userId: string | null;
@@ -165,13 +171,17 @@ async function handleMcpRequestWithIdentity({
     }
     return connectionScopeFailureResponse(connection);
   }
+  // Recheck with the current credential on every request, including tools/call.
+  const vaults = await resolveMcpVaultAccess({ token, signal: req.signal });
   const connectionContext = connection.context;
   const connectionAnalytics =
     observeConnection && isMcpAnalyticsEnabled()
       ? connectionAnalyticsFromContext(connectionContext)
       : null;
+  const baseHandler = vaults ? vaultsHandler : handler;
+  const appsHandler = vaults ? vaultsMcpAppsHandler : mcpAppsHandler;
   const authHandler = withMcpAuth(
-    mcpApps ? mcpAppsHandler : handler,
+    mcpApps ? appsHandler : baseHandler,
     async () => ({
       token,
       scopes,
