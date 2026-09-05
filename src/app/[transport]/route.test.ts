@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { Kernel } from "@onkernel/sdk";
 import type { McpConnectionScopeFailureAnalytics } from "@/lib/mcp/analytics";
 import { defaultMcpDependencies } from "@/lib/mcp/dependencies";
 
@@ -135,6 +136,109 @@ describe("connection scope failures through the handler", () => {
       },
     ]);
   });
+});
+
+describe("vault entitlement routing", () => {
+  function installKernelResponses(entitlements: (token: string) => Response) {
+    const paths: string[] = [];
+    defaultMcpDependencies.createKernelClient = (token) =>
+      new Kernel({
+        apiKey: token,
+        baseURL: "https://api.example.test",
+        maxRetries: 0,
+        fetch: async (input) => {
+          const path = new URL(String(input)).pathname;
+          paths.push(path);
+          if (path === "/auth/context")
+            return Response.json({
+              authentication: {
+                method: "api_key",
+                source: "api_key",
+                credential_id: "key_test",
+              },
+              principal: { type: "api_key", id: "key_test" },
+              organization: { id: token === "sk_allowed" ? "org_a" : "org_b" },
+              authorization: {
+                credential_scope: { project_id: null },
+                effective_scope: { project_id: null },
+              },
+            });
+          if (path === "/org/entitlements") return entitlements(token);
+          throw new Error(`Unexpected API request: ${path}`);
+        },
+      });
+    return paths;
+  }
+
+  async function call(method: string, token = "sk_allowed", params?: object) {
+    const response = await POST(
+      new nextServer.NextRequest("https://mcp.example.test/mcp", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      }),
+    );
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    const event = text.split("\n").find((line) => line.startsWith("data: "));
+    return JSON.parse(event ? event.slice(6) : text);
+  }
+
+  test("selects tools per credential and rechecks access after revocation", async () => {
+    let enabled = true;
+    const paths = installKernelResponses((token) =>
+      Response.json({
+        features: { vaults: { enabled: token === "sk_allowed" && enabled } },
+      }),
+    );
+    const allowed = await call("tools/list");
+    expect(
+      allowed.result.tools.map((tool: { name: string }) => tool.name),
+    ).toContain("manage_vaults");
+    const denied = await call("tools/list", "sk_denied");
+    expect(
+      denied.result.tools.filter((tool: { name: string }) =>
+        tool.name.startsWith("manage_vault"),
+      ),
+    ).toHaveLength(0);
+    expect(
+      denied.result.tools.map((tool: { name: string }) => tool.name),
+    ).toContain("manage_browsers");
+    enabled = false;
+    const revoked = await call("tools/call", "sk_allowed", {
+      name: "manage_vaults",
+      arguments: { action: "list" },
+    });
+    expect(JSON.stringify(revoked)).toContain("not found");
+    expect(paths).toEqual([
+      "/auth/context",
+      "/org/entitlements",
+      "/auth/context",
+      "/org/entitlements",
+      "/auth/context",
+      "/org/entitlements",
+    ]);
+  });
+
+  test.each([200, 404, 503])(
+    "keeps other tools available when entitlements are absent or fail (HTTP %s)",
+    async (status) => {
+      installKernelResponses(() => Response.json({ features: {} }, { status }));
+      const result = await call("tools/list");
+      expect(
+        result.result.tools.filter((tool: { name: string }) =>
+          tool.name.startsWith("manage_vault"),
+        ),
+      ).toHaveLength(0);
+      expect(
+        result.result.tools.map((tool: { name: string }) => tool.name),
+      ).toContain("manage_browsers");
+    },
+  );
 });
 
 describe("connectionScopeFailureResponse", () => {

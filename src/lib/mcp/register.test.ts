@@ -20,9 +20,10 @@ const NON_AUTH_TOOLSETS = [
   "replays",
   "credentials",
   "credential_providers",
+  "vaults",
 ].join(",");
 
-function captureRegistration(mcpApps: boolean) {
+function captureRegistration(mcpApps: boolean, vaults = false) {
   const legacyTools: string[] = [];
   const appTools: string[] = [];
   const resources: string[] = [];
@@ -47,7 +48,7 @@ function captureRegistration(mcpApps: boolean) {
       return { enable() {}, disable() {} };
     },
   } as unknown as McpServer;
-  registerMcpCapabilities(server, { mcpApps });
+  registerMcpCapabilities(server, { mcpApps, vaults });
   return { legacyTools, appTools, resources, schemas };
 }
 
@@ -85,6 +86,39 @@ describe("MCP Apps additive registration", () => {
 });
 
 describe("MCP toolset allowlist", () => {
+  test.each([false, true])(
+    "requires vault access even with an allowlist (MCP Apps: %s)",
+    (mcpApps) => {
+      const previousEnabled = process.env.KERNEL_MCP_ENABLED_TOOLSETS;
+      const previousDisabled = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+      process.env.KERNEL_MCP_ENABLED_TOOLSETS = "vaults";
+      delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+      try {
+        expect(captureRegistration(mcpApps).legacyTools).toEqual([
+          "get_connection_context",
+        ]);
+        expect(captureRegistration(mcpApps, true).legacyTools).toEqual([
+          "get_connection_context",
+          "manage_vault_wallets",
+          "manage_vault_cards",
+          "manage_vault_items",
+          "manage_vaults",
+        ]);
+        process.env.KERNEL_MCP_DISABLED_TOOLSETS = "vaults";
+        expect(captureRegistration(mcpApps, true).legacyTools).toEqual([
+          "get_connection_context",
+        ]);
+      } finally {
+        if (previousEnabled === undefined)
+          delete process.env.KERNEL_MCP_ENABLED_TOOLSETS;
+        else process.env.KERNEL_MCP_ENABLED_TOOLSETS = previousEnabled;
+        if (previousDisabled === undefined)
+          delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+        else process.env.KERNEL_MCP_DISABLED_TOOLSETS = previousDisabled;
+      }
+    },
+  );
+
   test("keeps connection context and only the selected browser controls", () => {
     const previousEnabled = process.env.KERNEL_MCP_ENABLED_TOOLSETS;
     const previousDisabled = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
@@ -130,12 +164,16 @@ describe("project selection registration", () => {
     "manage_replays",
     "manage_auth_connections",
     "manage_credentials",
+    "manage_vaults",
+    "manage_vault_wallets",
+    "manage_vault_cards",
+    "manage_vault_items",
     "open_auth_login",
     "begin_auth_login",
   ];
 
   test("advertises one stable project-aware tool contract", () => {
-    const registration = captureRegistration(true);
+    const registration = captureRegistration(true, true);
 
     for (const name of projectScopedTools) {
       expect(registration.schemas.get(name)).toHaveProperty("project");
