@@ -20,6 +20,7 @@ const NON_AUTH_TOOLSETS = [
   "replays",
   "credentials",
   "credential_providers",
+  "vaults",
 ].join(",");
 
 function captureRegistration(mcpApps: boolean) {
@@ -85,6 +86,33 @@ describe("MCP Apps additive registration", () => {
 });
 
 describe("MCP toolset allowlist", () => {
+  test("enables the vault toolset independently and honors its denylist", () => {
+    const previousEnabled = process.env.KERNEL_MCP_ENABLED_TOOLSETS;
+    const previousDisabled = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+    process.env.KERNEL_MCP_ENABLED_TOOLSETS = "vaults";
+    delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+    try {
+      expect(captureRegistration(false).legacyTools).toEqual([
+        "get_connection_context",
+        "manage_vault_wallets",
+        "manage_vault_cards",
+        "manage_vault_items",
+        "manage_vaults",
+      ]);
+      process.env.KERNEL_MCP_DISABLED_TOOLSETS = "vaults";
+      expect(captureRegistration(false).legacyTools).toEqual([
+        "get_connection_context",
+      ]);
+    } finally {
+      if (previousEnabled === undefined)
+        delete process.env.KERNEL_MCP_ENABLED_TOOLSETS;
+      else process.env.KERNEL_MCP_ENABLED_TOOLSETS = previousEnabled;
+      if (previousDisabled === undefined)
+        delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+      else process.env.KERNEL_MCP_DISABLED_TOOLSETS = previousDisabled;
+    }
+  });
+
   test("keeps connection context and only the selected browser controls", () => {
     const previousEnabled = process.env.KERNEL_MCP_ENABLED_TOOLSETS;
     const previousDisabled = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
@@ -130,6 +158,10 @@ describe("project selection registration", () => {
     "manage_replays",
     "manage_auth_connections",
     "manage_credentials",
+    "manage_vaults",
+    "manage_vault_wallets",
+    "manage_vault_cards",
+    "manage_vault_items",
     "open_auth_login",
     "begin_auth_login",
   ];

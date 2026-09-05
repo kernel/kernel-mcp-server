@@ -341,6 +341,27 @@ describe("sanitizeMcpAnalyticsEvent", () => {
     expect(result?.properties[PostHogMCPAnalyticsProperty.IsError]).toBe(false);
   });
 
+  test("drops vault specs, aliases, provider actions, and error bodies", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.ToolName]: "manage_vault_cards",
+      [PostHogMCPAnalyticsProperty.Parameters]: {
+        spec: { metadata: { order: "private-order" } },
+      },
+      [PostHogMCPAnalyticsProperty.Response]: {
+        state: { aliases: { number: "private-alias" } },
+        action: { url: "https://provider.example/approve?code=private-code" },
+      },
+      [PostHogMCPAnalyticsProperty.ErrorMessage]: "private-provider-body",
+    });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    expect(JSON.stringify(result)).not.toContain("private-");
+    expect(result?.properties[PostHogMCPAnalyticsProperty.ToolName]).toBe(
+      "manage_vault_cards",
+    );
+  });
+
   test("drops $set so no person properties can flow", async () => {
     const event = toolCallEvent({ $set: { email: "agent@example.com" } });
 

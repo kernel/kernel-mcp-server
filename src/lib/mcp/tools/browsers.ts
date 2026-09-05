@@ -23,6 +23,7 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
+import { browserVaultsSchema } from "@/lib/mcp/vault-schemas";
 import {
   projectForOperation,
   projectSelectionInputSchema,
@@ -470,6 +471,7 @@ export function registerBrowserCapabilities(
           "(create) URL to open when the browser is created. Navigation is best-effort.",
         )
         .optional(),
+      vaults: browserVaultsSchema,
       chrome_policy: z
         .record(z.string(), z.unknown())
         .describe(
@@ -676,9 +678,16 @@ export function registerBrowserCapabilities(
       );
 
       try {
+        if (params.vaults !== undefined && params.action !== "create") {
+          return errorResponse(
+            "Vault bindings are creation-only; they cannot be added to an existing browser.",
+          );
+        }
         switch (params.action) {
           case "create": {
             const createParams: BrowserCreateParams = {};
+            if (params.vaults !== undefined)
+              createParams.vaults = params.vaults;
             if (params.headless !== undefined)
               createParams.headless = params.headless;
             if (params.gpu !== undefined) createParams.gpu = params.gpu;
@@ -707,7 +716,12 @@ export function registerBrowserCapabilities(
             if (telemetry.value !== undefined)
               createParams.telemetry = telemetry.value;
 
-            const browser = await client.browsers.create(createParams);
+            const browser = await client.browsers.create(
+              createParams,
+              params.vaults?.length
+                ? { maxRetries: 0, signal: extra.signal }
+                : undefined,
+            );
             if (!browser)
               return errorResponse("Failed to create browser session");
 

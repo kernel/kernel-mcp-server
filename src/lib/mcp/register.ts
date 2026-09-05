@@ -24,6 +24,7 @@ import { registerProxyTools } from "@/lib/mcp/tools/proxies";
 import { registerReplayTools } from "@/lib/mcp/tools/replays";
 import { registerShellTool } from "@/lib/mcp/tools/shell";
 import { registerWebMcpTool } from "@/lib/mcp/tools/webmcp";
+import { registerVaultCapabilities } from "@/lib/mcp/tools/vaults";
 type McpToolOptions = McpDependencies;
 type McpRegistrationOptions = {
   mcpApps?: boolean;
@@ -54,6 +55,7 @@ const mcpToolRegistrations = [
   ["auth_connections", registerManagedAuthCapabilities],
   ["credentials", registerCredentialTools],
   ["credential_providers", registerCredentialProviderTools],
+  ["vaults", registerVaultCapabilities],
 ] as const satisfies readonly (readonly [string, RegisterMcpToolset])[];
 
 type McpToolset = (typeof mcpToolRegistrations)[number][0];
