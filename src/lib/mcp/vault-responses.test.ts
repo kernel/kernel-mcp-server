@@ -219,6 +219,90 @@ describe("vault public responses", () => {
   });
 
   test.each([
+    [400, "invalid_request", "Invalid vault request."],
+    [404, "not_found", "Vault, item, or project not found or unavailable."],
+    [409, "conflict", "conflicts with the current configuration or state"],
+    [500, "project_error", "Unable to resolve the vault's project."],
+    [500, "db_error", "The vault storage request could not be completed."],
+    [
+      500,
+      "provider_error",
+      "The payment provider could not complete the vault request.",
+    ],
+    [500, "provider_rate_limited", "rate limited requests"],
+    [429, "spend_request_rate_limited", "rate limited spend requests"],
+  ] as const)(
+    "returns curated text for HTTP %s / %s",
+    async (status, code, message) => {
+      const fixture = await connectVaultTest([
+        Response.json(
+          {
+            code,
+            message: "access_token=hidden-free-text",
+            details: "hidden-details",
+          },
+          { status },
+        ),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          action: "get",
+          vault: "checkout",
+          key: "order-1",
+        });
+        const text = JSON.stringify(result);
+        expect(result.isError).toBe(true);
+        expect(text).toContain(`${status} `);
+        expect(text).toContain(message);
+        expect(text).toContain(`[code: ${code}]`);
+        expect(text).toContain("Do not replay a payment.");
+        expect(text).not.toContain("hidden");
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test.each(
+    [
+      undefined,
+      null,
+      123,
+      {},
+      [],
+      "",
+      "unknown_error",
+      "__proto__",
+      "constructor",
+      "invalid_request hidden-suffix",
+    ].map((code) => ({ code })),
+  )(
+    "uses a generic fallback for unrecognized error codes",
+    async ({ code }) => {
+      const fixture = await connectVaultTest([
+        Response.json(
+          { code, message: "password=hidden-password" },
+          { status: 400 },
+        ),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          action: "get",
+          vault: "checkout",
+          key: "order-1",
+        });
+        const text = JSON.stringify(result);
+        expect(result.isError).toBe(true);
+        expect(text).toContain("400 Vault request failed.");
+        expect(text).not.toContain("[code:");
+        expect(text).not.toContain("hidden");
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test.each([
     {
       message: "Expansion unavailable",
       code: "expansion_unavailable",
@@ -226,6 +310,12 @@ describe("vault public responses", () => {
       headers: { authorization: "hidden-auth" },
     },
     { raw_provider: { secret: "hidden-without-message" } },
+    {
+      code: "invalid_request",
+      message: "access_token=hidden-plaintext-secret",
+    },
+    { code: "access_token=hidden-code-secret", message: "Invalid request" },
+    { code: "conflict", message: "password=hidden-password-secret" },
     {
       message: "Follow https://provider.example/?code=hidden-code",
       code: "action_required",
@@ -245,9 +335,17 @@ describe("vault public responses", () => {
         });
         expect(result.isError).toBe(true);
         expect(JSON.stringify(result)).not.toContain("hidden");
-        if (body.code) expect(JSON.stringify(result)).toContain(body.code);
+        if (
+          ["provider_error", "invalid_request", "conflict"].includes(
+            body.code ?? "",
+          )
+        ) {
+          expect(JSON.stringify(result)).toContain(`[code: ${body.code}]`);
+        } else {
+          expect(JSON.stringify(result)).not.toContain("[code:");
+        }
         if (body.message === "Expansion unavailable")
-          expect(JSON.stringify(result)).toContain(body.message);
+          expect(JSON.stringify(result)).not.toContain(body.message);
       } finally {
         await fixture.close();
       }

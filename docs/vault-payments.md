@@ -4,6 +4,9 @@ The vault tools prepare and observe payment credentials. They do **not** submit
 merchant payments, expose real card values, or complete provider approval actions.
 They use the same vault API as the Kernel CLI.
 
+**These are live payment cards. Test-mode creation is unsupported.** Do not assume
+that a development or staging MCP endpoint makes a card request a test transaction.
+
 ## Tools and scope
 
 | Tool                   | Actions                                     |
@@ -177,6 +180,8 @@ A reusable card remaining `ready` does not establish that the last payment succe
   public state, non-secret aliases, masks, safe action/approval URLs, advertised
   operations/expansions, and payment outcomes. Unknown provider fields, opaque
   event data, free-form metadata, and URLs carrying OAuth codes/tokens are omitted.
+  API errors retain the HTTP status but use curated messages for recognized error
+  codes. Unknown codes use a generic fallback; upstream error text is never returned.
   There is no raw-output or raw-card tool.
 - Vault lists return `{items, has_more, next_offset}`. Item lists return `{items}`.
   `get` with `expand: ["payment_methods"]` is equivalent to the wallet

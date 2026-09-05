@@ -32,6 +32,9 @@ describe("vault SDK request contracts", () => {
           openWorldHint: true,
         });
       }
+      const cards = tools.find((tool) => tool.name === "manage_vault_cards");
+      expect(cards?.description).toContain("live payment cards");
+      expect(cards?.description).toContain("Test-mode creation is unsupported");
       expect(fixture.requests).toHaveLength(0);
     } finally {
       await fixture.close();

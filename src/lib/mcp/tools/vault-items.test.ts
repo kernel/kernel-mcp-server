@@ -113,7 +113,7 @@ describe("advertised vault operations", () => {
     async (stage) => {
       const failure = Response.json(
         {
-          code: "provider_unavailable",
+          code: "provider_error",
           message: "Provider unavailable",
           opaque: "hidden",
         },
@@ -130,7 +130,7 @@ describe("advertised vault operations", () => {
           operation: "authorize",
         });
         expect(result.isError).toBe(true);
-        expect(JSON.stringify(result)).toContain("provider_unavailable");
+        expect(JSON.stringify(result)).toContain("provider_error");
         expect(JSON.stringify(result)).not.toContain("hidden");
         expect(fixture.requests).toHaveLength(stage === "get" ? 1 : 2);
       } finally {

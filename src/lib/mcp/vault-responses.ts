@@ -139,12 +139,36 @@ export function vaultItemResponse(item: unknown) {
   });
 }
 
-function publicErrorMessage(value: unknown): string {
-  if (typeof value !== "string") return "Vault request failed";
-  return value.replace(/https?:\/\/[^\s"'<>]+/g, (url) =>
-    isDisplaySafeVaultURL(url) ? url : "[redacted URL]",
-  );
-}
+const vaultErrorMessages = new Map([
+  [
+    "invalid_request",
+    "Invalid vault request. Check the tool's documented inputs.",
+  ],
+  ["not_found", "Vault, item, or project not found or unavailable."],
+  [
+    "conflict",
+    "The vault request conflicts with the current configuration or state. Inspect the item and its advertised operations and expansions.",
+  ],
+  [
+    "project_error",
+    "Unable to resolve the vault's project. Check connection scope and project selection.",
+  ],
+  ["db_error", "The vault storage request could not be completed."],
+  [
+    "provider_error",
+    "The payment provider could not complete the vault request.",
+  ],
+  [
+    "provider_rate_limited",
+    "The payment provider has rate limited requests. Stop and wait before taking further action.",
+  ],
+  [
+    "spend_request_rate_limited",
+    "The payment provider has rate limited spend requests. Stop and wait before taking further action.",
+  ],
+]);
+const vaultErrorGuidance =
+  "Inspect item state/events before taking further action. Do not replay a payment.";
 
 export function throwVaultError(
   tool: string,
@@ -159,14 +183,8 @@ export function throwVaultError(
     );
   }
   if (error instanceof APIError && typeof error.status === "number") {
-    // SDK errors can stringify the entire provider body when no message is present.
-    // Retain only the standard public message/code, never that fallback or headers.
+    // Neither provider messages nor unknown codes are safe to return, even as strings.
     const body = error.error;
-    const message = publicErrorMessage(
-      body && typeof body === "object" && "message" in body
-        ? body.message
-        : undefined,
-    );
     const code =
       body &&
       typeof body === "object" &&
@@ -174,12 +192,17 @@ export function throwVaultError(
       typeof body.code === "string"
         ? body.code
         : undefined;
+    const message =
+      code === undefined ? undefined : vaultErrorMessages.get(code);
     throwToolError(
       tool,
       action,
       APIError.generate(
         error.status,
-        { message, code },
+        {
+          message: `${message ?? "Vault request failed."} ${vaultErrorGuidance}`,
+          ...(message !== undefined && { code }),
+        },
         undefined,
         new Headers(),
       ),
