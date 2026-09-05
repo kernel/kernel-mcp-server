@@ -141,6 +141,46 @@ describe("advertised vault operations", () => {
 });
 
 describe("vault observation and deletion", () => {
+  test("advertises wait as get/events-only", async () => {
+    const fixture = await connectVaultTest([]);
+    try {
+      const { tools } = await fixture.client.listTools();
+      const tool = tools.find((tool) => tool.name === "manage_vault_items");
+      expect(tool?.inputSchema.properties?.wait).toMatchObject({
+        description: expect.stringContaining("(get, events)"),
+        minimum: 0,
+        maximum: 60,
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each(["list", "invoke", "delete"])(
+    "rejects wait on %s without making a request",
+    async (action) => {
+      const fixture = await connectVaultTest([]);
+      try {
+        for (const wait of [0, 60]) {
+          const result = await fixture.call("manage_vault_items", {
+            action,
+            vault: "checkout",
+            key: "order-1",
+            operation: "authorize",
+            wait,
+          });
+          expect(result.isError).toBe(true);
+          expect(JSON.stringify(result)).toContain(
+            "wait is only supported for get and events",
+          );
+        }
+        expect(fixture.requests).toHaveLength(0);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
   test("returns pending state without polling, and preserves the event cursor on an empty wait", async () => {
     const event = {
       id: "evt_2",

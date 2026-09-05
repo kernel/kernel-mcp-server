@@ -39,10 +39,10 @@ export function registerVaultCapabilities(
     {
       ...vaultProjectSchema,
       action: z.enum(["create", "list", "get", "delete"]),
-      vault: vaultSelectorSchema
+      vault: vaultSelectorSchema()
         .describe("(get, delete) Vault ID or immutable name.")
         .optional(),
-      name: vaultSelectorSchema
+      name: vaultSelectorSchema()
         .describe("(create) Immutable vault name.")
         .optional(),
       ...paginationParams,

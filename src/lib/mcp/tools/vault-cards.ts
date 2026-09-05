@@ -20,7 +20,7 @@ export function registerVaultCardTools(
     'Configure payment card requests, not merchant payments. "create" creates or retrieves an identical card request by immutable key. "update" replaces the ENTIRE spec, removing omitted optional fields, only when the API permits it. Neither implicitly authorizes Link: inspect available_operations with manage_vault_items and obtain explicit user approval before invoking. AgentCard authorizes at checkout. Amounts are integer minor currency units. No card data, OAuth tokens, provider secrets, or domain configuration. Never reconfigure a card to retry a failed, timed-out, rejected, or indeterminate payment. Requests are not automatically retried.',
     {
       ...vaultItemSchema,
-      key: vaultKeySchema,
+      key: vaultKeySchema(),
       action: z.enum(["create", "update"]),
       provider: vaultProviderSchema,
       spec: z

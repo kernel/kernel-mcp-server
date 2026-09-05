@@ -181,7 +181,8 @@ A reusable card remaining `ready` does not establish that the last payment succe
 - Vault lists return `{items, has_more, next_offset}`. Item lists return `{items}`.
   `get` with `expand: ["payment_methods"]` is equivalent to the wallet
   `payment_methods` action. An unavailable expansion returns an API error.
-- `get` and `events` accept `wait: 0..60`. Each call is one bounded observation,
+- Only `get` and `events` accept `wait: 0..60`; other actions reject it.
+  `invoke` does not wait for authorization. Each observation is bounded,
   not a background polling loop or readiness guarantee. The SDK timeout is the
   wait plus 30 seconds; configure the MCP client's timeout accordingly, or use
   shorter waits. Request cancellation is propagated to the SDK.

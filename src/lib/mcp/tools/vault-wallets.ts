@@ -22,7 +22,7 @@ export function registerVaultWalletTools(
     'Connect payment wallets without exposing secrets. "create" creates or retrieves an identical wallet by immutable key and returns a provider connection/enrollment action for the user to complete. "payment_methods" requests the advertised live payment_methods expansion (unavailable expansions return an API error). Select Link payment_method_id explicitly; never automatically choose a default. AgentCard card_id may be omitted for cardholder selection at checkout approval. Capabilities are advisory; absent means unknown. Never provide card data or OAuth codes/tokens. Requests are not automatically retried.',
     {
       ...vaultItemSchema,
-      key: vaultKeySchema,
+      key: vaultKeySchema(),
       action: z.enum(["create", "payment_methods"]),
       provider: vaultProviderSchema
         .describe("(create) Payment provider.")

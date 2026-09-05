@@ -28,7 +28,7 @@ export function registerVaultItemTools(
     {
       ...vaultItemSchema,
       action: z.enum(["list", "get", "invoke", "events", "delete"]),
-      key: vaultKeySchema
+      key: vaultKeySchema()
         .describe("Required except for list. Immutable item key, not ID.")
         .optional(),
       operation: z
@@ -69,6 +69,15 @@ export function registerVaultItemTools(
       );
       const options = { maxRetries: 0, signal: extra.signal };
       try {
+        if (
+          params.wait !== undefined &&
+          params.action !== "get" &&
+          params.action !== "events"
+        ) {
+          return errorResponse(
+            "wait is only supported for get and events; invoke does not wait for authorization.",
+          );
+        }
         if (params.action === "list") {
           const items = await client.vaults.items.list(params.vault, options);
           return jsonResponse({

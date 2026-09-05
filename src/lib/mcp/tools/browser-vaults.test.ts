@@ -4,6 +4,18 @@ import { connectTestMcp } from "@/lib/mcp/mcp-test-fixtures";
 import { registerBrowserCapabilities } from "@/lib/mcp/tools/browsers";
 
 describe("browser vault attachment", () => {
+  test("advertises inline vault references without JSON Schema refs", async () => {
+    const fixture = await connectTestMcp(registerBrowserCapabilities, {});
+    try {
+      const { tools } = await fixture.client.listTools();
+      const browser = tools.find((tool) => tool.name === "manage_browsers");
+      expect(browser?.inputSchema.properties).toHaveProperty("vaults");
+      expect(JSON.stringify(browser?.inputSchema)).not.toContain('"$ref"');
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test("forwards creation-only references by ID and name", async () => {
     const requests: Array<{ body: unknown; options: unknown }> = [];
     const fixture = await connectTestMcp(registerBrowserCapabilities, {

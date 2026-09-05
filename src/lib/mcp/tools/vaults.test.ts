@@ -25,6 +25,7 @@ describe("vault SDK request contracts", () => {
       ]);
       for (const tool of tools) {
         expect(tool.inputSchema.properties).toHaveProperty("project");
+        expect(JSON.stringify(tool.inputSchema)).not.toContain('"$ref"');
         expect(tool.annotations).toMatchObject({
           readOnlyHint: false,
           idempotentHint: false,
