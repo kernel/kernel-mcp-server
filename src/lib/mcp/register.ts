@@ -23,9 +23,12 @@ import { registerProjectCapabilities } from "@/lib/mcp/tools/projects";
 import { registerProxyTools } from "@/lib/mcp/tools/proxies";
 import { registerReplayTools } from "@/lib/mcp/tools/replays";
 import { registerShellTool } from "@/lib/mcp/tools/shell";
+import { registerWebMcpTool } from "@/lib/mcp/tools/webmcp";
+import { registerVaultCapabilities } from "@/lib/mcp/tools/vaults";
 type McpToolOptions = McpDependencies;
 type McpRegistrationOptions = {
   mcpApps?: boolean;
+  vaults?: boolean;
   dependencies?: McpDependencies;
 };
 type RegisterMcpToolset = (server: McpServer, options: McpToolOptions) => void;
@@ -48,10 +51,12 @@ const mcpToolRegistrations = [
   ["computer", registerComputerActionTool],
   ["shell", registerShellTool],
   ["playwright", registerPlaywrightTool],
+  ["webmcp", registerWebMcpTool],
   ["replays", registerReplayTools],
   ["auth_connections", registerManagedAuthCapabilities],
   ["credentials", registerCredentialTools],
   ["credential_providers", registerCredentialProviderTools],
+  ["vaults", registerVaultCapabilities],
 ] as const satisfies readonly (readonly [string, RegisterMcpToolset])[];
 
 type McpToolset = (typeof mcpToolRegistrations)[number][0];
@@ -167,6 +172,7 @@ export function registerMcpCapabilities(
   server: McpServer,
   {
     mcpApps = false,
+    vaults = false,
     dependencies = defaultMcpDependencies,
   }: McpRegistrationOptions = {},
 ) {
@@ -179,7 +185,10 @@ export function registerMcpCapabilities(
   registerConnectionContextTool(server);
 
   for (const [toolset, registerToolset] of mcpToolRegistrations) {
-    if (toolsetEnabled(enabledToolsets, disabledToolsets, toolset)) {
+    if (
+      (toolset !== "vaults" || vaults) &&
+      toolsetEnabled(enabledToolsets, disabledToolsets, toolset)
+    ) {
       registerToolset(server, dependencies);
     }
   }

@@ -292,7 +292,7 @@ Many other MCP-capable tools accept:
 
 Configure these values wherever the tool expects MCP server settings.
 
-## Tools (19 model-facing, plus 1 app-only helper)
+## Tools
 
 Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Standalone tools handle high-frequency and interactive workflows.
 
@@ -304,7 +304,7 @@ Call `get_connection_context` before deciding whether to create or select a proj
 
 ### manage\_\* tools
 
-- `manage_browsers` - Create, update, list, get, and delete browser sessions, and read archived telemetry for active or deleted sessions. Supports headless/stealth modes, profiles, proxies, viewports, extensions, names and tags, and SSH tunneling. The browser tools (`manage_browsers`, `computer_action`, `execute_playwright_code`, `execute_shell_command`, `browser_curl`, `manage_replays`) accept a live session's name in place of its `session_id`; deleted sessions, and `manage_browser_pools` release, take the ID only.
+- `manage_browsers` - Create, update, list, get, and delete browser sessions, and read archived telemetry for active or deleted sessions. Supports headless/stealth modes, profiles, proxies, viewports, extensions, names and tags, and SSH tunneling. The browser tools (`manage_browsers`, `computer_action`, `execute_playwright_code`, `execute_shell_command`, `browser_curl`, `manage_replays`, `webmcp`) accept a live session's name in place of its `session_id`; deleted sessions, and `manage_browser_pools` release, take the ID only.
 - `manage_profiles` - Setup (with guided live browser session), search/list with pagination, get, and delete browser profiles for persisting cookies and logins.
 - `manage_projects` - Create, list, get, update, and delete organization projects. Inspect and update per-project resource limits.
 - `manage_api_keys` - Create, list, get, update, and delete org-wide or project-scoped API keys. Create returns the plaintext key once.
@@ -316,13 +316,20 @@ Call `get_connection_context` before deciding whether to create or select a proj
 - `manage_auth_connections` - Create, list, get, update, delete, login, submit, inspect timelines, and wait for managed-auth connections in every client. Supports health-check and automatic re-auth settings, managed-auth browser configuration, and canonical interaction-bound field/choice submissions. Use domain-filtered `list` for discovery. App-capable clients additionally receive `open_auth_login`; the programmatic actions remain available there too.
 - `manage_credentials` - Create, list, get, update, and delete stored credentials; fetch a current TOTP code for credentials with a configured totp_secret.
 - `manage_credential_providers` - Create, list, get, update, and delete external credential providers (e.g. 1Password); list available items and test the provider connection.
+- `manage_vaults` - Create, list, get, and delete project-owned payment vaults.
+- `manage_vault_wallets` - Connect Link or AgentCard wallets and inspect live payment methods.
+- `manage_vault_cards` - Create card requests or replace their full specification; does not implicitly authorize Link cards.
+- `manage_vault_items` - List, get, invoke advertised operations, observe events, and delete vault items. Provider approvals remain user actions; ready does not mean paid.
+
+See [Vault payments](docs/vault-payments.md) for both provider flows, safety rules, and response shapes. `manage_browsers` accepts creation-only `vaults` references (max 20); existing sessions and pools cannot gain vault bindings. The four vault tools share the `vaults` toolset and prepare/observe credentials rather than submitting merchant payments. They are exposed only when `GET /org/entitlements` reports `features.vaults.enabled: true` for the current credential; missing or unavailable entitlements hide them. Toolset configuration cannot override this access check.
 
 ### Standalone tools
 
 - `get_connection_context` - Inspect the authenticated principal, organization, credential scope, and effective project scope.
 - `computer_action` - Mouse, keyboard, clipboard, and screenshot controls for browser sessions (click, type, press_key, scroll, move, get_position, read_clipboard, write_clipboard, screenshot).
 - `browser_curl` - Send HTTP requests through an existing browser session's Chrome network stack.
-- `execute_playwright_code` - Execute Playwright/TypeScript code against an existing browser session. Does not create or delete browsers - use `manage_browsers` for session lifecycle.
+- `execute_playwright_code` - Execute Playwright/TypeScript code and browser-wide WebMCP helpers against an existing browser session. Does not create or delete browsers - use `manage_browsers` for session lifecycle.
+- `webmcp` - List native page tools across every tab and frame in a browser, then synchronously invoke an exact opaque `tool_ref` with structured input.
 - `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
 - `search_docs` - Search Kernel platform documentation and guides.
 - `submit_feedback` - send product, mcp, or documentation feedback directly to the KERNEL team without interrupting the current task.
