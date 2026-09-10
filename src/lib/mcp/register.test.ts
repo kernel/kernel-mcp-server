@@ -99,6 +99,7 @@ describe("MCP toolset allowlist", () => {
         ]);
         expect(captureRegistration(mcpApps, true).legacyTools).toEqual([
           "get_connection_context",
+          "manage_vault_provider_configs",
           "manage_vault_wallets",
           "manage_vault_cards",
           "manage_vault_items",

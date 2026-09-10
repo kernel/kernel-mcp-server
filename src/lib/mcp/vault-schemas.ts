@@ -41,29 +41,91 @@ export const vaultWaitSchema = z
 const integer = () => z.number().int().safe();
 const currency = () => z.string().regex(/^[A-Za-z]{3}$/);
 
+export function providerConfigReferenceSchema() {
+  return z
+    .object({
+      id: vaultSelectorSchema().optional(),
+      name: vaultSelectorSchema().optional(),
+    })
+    .strict("Unexpected provider config reference fields.")
+    .refine(
+      (value) => (value.id !== undefined) !== (value.name !== undefined),
+      "Provide exactly one provider config id or name.",
+    );
+}
+
+// Strict-object issues include unknown keys in MCP errors. A misplaced secret
+// can be a key, so reject extras without copying those keys into the issue.
+function secretInputObject<T extends z.ZodRawShape>(shape: T) {
+  return z
+    .object(shape)
+    .passthrough()
+    .refine(
+      (value) =>
+        Object.keys(value).every((key) =>
+          Object.prototype.hasOwnProperty.call(shape, key),
+        ),
+      "Unexpected credential fields.",
+    );
+}
+
+export const providerCredentialsSchema = secretInputObject({
+  client_id: z.string().min(1).optional(),
+  client_secret: z
+    .string()
+    .min(1)
+    .describe(
+      "Write-only secret; supply through a trusted client, never chat.",
+    ),
+});
+
 // Keep provider specifications in sync with https://api.onkernel.com/spec.yaml.
 export const linkWalletSpecSchema = z
   .object({
     provider: z.literal("link").optional(),
-    authorization: z
-      .object({
-        method: z.literal("oauth"),
-        client: z.object({ type: z.literal("kernel_managed") }).strict(),
-      })
-      .strict(),
+    authorization: z.union([
+      z
+        .object({
+          method: z.literal("oauth"),
+          client: z
+            .object({ type: z.literal("kernel_managed") })
+            .strict("Unexpected OAuth client fields."),
+        })
+        .strict("Kernel-managed authorization does not accept tokens."),
+      z
+        .object({
+          method: z.literal("oauth"),
+          client: z
+            .object({
+              type: z.literal("customer_managed"),
+              provider_config: providerConfigReferenceSchema(),
+            })
+            .strict("Unexpected OAuth client fields."),
+          tokens: secretInputObject({
+            access_token: z.string().min(1),
+            refresh_token: z.string().min(1),
+          }).describe(
+            "Write-only token pair from the same grant. Supply through a trusted backend, never chat. Kernel owns subsequent refresh rotation.",
+          ),
+        })
+        .strict("Unexpected imported authorization fields."),
+    ]),
   })
-  .strict();
+  .strict("Unexpected Link wallet fields.");
 
 export const agentcardWalletSpecSchema = z
   .object({
     provider: z.literal("agentcard").optional(),
+    provider_config: providerConfigReferenceSchema().optional(),
     user_id: z
       .string()
       .regex(/^usr_[A-Za-z0-9_]+$/)
-      .describe("An AgentCard user already enrolled in this organization.")
+      .describe(
+        "An AgentCard user already enrolled in this organization under the same provider configuration.",
+      )
       .optional(),
   })
-  .strict();
+  .strict("Unexpected AgentCard wallet fields.");
 
 function linkTotalSchema() {
   return z

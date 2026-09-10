@@ -14,6 +14,9 @@ function fields(names: string): OutputFields {
 }
 
 export const vaultFields = fields("id name created_at updated_at");
+export const vaultProviderConfigFields = fields(
+  "id name provider client_id test_mode created_at updated_at",
+);
 const operationFields = fields("type description");
 const totalFields = fields("type display_text amount");
 const paymentMethodFields = {
@@ -34,7 +37,11 @@ export const vaultItemFields: OutputFields = {
     ...fields(
       "provider wallet user_id payment_method_id card_id amount currency merchant merchant_name merchant_url context expires_at",
     ),
-    authorization: { method: null, client: fields("type") },
+    provider_config: fields("id name"),
+    authorization: {
+      method: null,
+      client: { type: null, provider_config: fields("id name") },
+    },
     totals: totalFields,
     line_items: {
       ...fields(
@@ -128,6 +135,24 @@ export function projectVaultOutput(
   return result;
 }
 
+// Also remove supplied secrets if an upstream response echoes them in public fields.
+export function redactVaultSecrets(
+  value: unknown,
+  secrets: (string | undefined)[],
+): unknown {
+  return JSON.parse(
+    JSON.stringify(value, (_key, field) => {
+      if (typeof field !== "string") return field;
+      for (const secret of secrets) {
+        if (!secret) continue;
+        field = field.split(secret).join("[redacted]");
+        field = field.split(encodeURIComponent(secret)).join("[redacted]");
+      }
+      return field;
+    }),
+  );
+}
+
 type VaultItemTarget = {
   project?: string;
   vault: string;
@@ -163,8 +188,15 @@ export function vaultObservationHints(target: VaultItemTarget, after?: string) {
   ];
 }
 
-export function vaultItemResponse(item: unknown, target: VaultItemTarget) {
-  const projected = projectVaultOutput(item, vaultItemFields);
+export function vaultItemResponse(
+  item: unknown,
+  target: VaultItemTarget,
+  secrets: (string | undefined)[] = [],
+) {
+  const projected = redactVaultSecrets(
+    projectVaultOutput(item, vaultItemFields),
+    secrets,
+  );
   const advertised = advertisedOperationsSchema.safeParse(projected);
   return jsonResponse({
     item: projected,
@@ -179,10 +211,11 @@ export function vaultItemResponse(item: unknown, target: VaultItemTarget) {
         : [],
     },
     guidance: [
-      "Ask the user to complete returned provider actions; never send card data or OAuth codes/tokens to MCP. Read operation descriptions and obtain explicit user approval before invoking.",
+      "Ask the user to complete returned provider actions. Never request card data or OAuth codes/tokens in chat; imported grants must come from a trusted backend. Read operation descriptions and obtain explicit user approval before invoking.",
       "Use returned aliases only in a new browser created with this vault attached, respecting returned permitted domains. Ready does not mean paid.",
       "Observe get/events for outcomes. Do not retry failed, timed-out, rejected, or indeterminate payments or reconfigure a card to retry them.",
       "Invocation hints are not approval to execute. Availability may change; invoke rechecks the advertised operations.",
+      "recovery_required is an unresolved original outcome, not decline or expiry. Stop payment attempts; reconcile with the provider or support. No reset exists, and deletion may be blocked for this item and its parents.",
     ],
   });
 }
@@ -192,7 +225,14 @@ const vaultErrorMessages = new Map([
     "invalid_request",
     "Invalid vault request. Check the tool's documented inputs.",
   ],
-  ["not_found", "Vault, item, or project not found or unavailable."],
+  [
+    "not_found",
+    "Vault, item, provider configuration, or project not found or unavailable.",
+  ],
+  [
+    "forbidden",
+    "This credential cannot perform the vault operation. Provider configuration writes require organization scope.",
+  ],
   [
     "conflict",
     "The vault request conflicts with the current configuration or state. Inspect the item and its advertised operations and expansions.",

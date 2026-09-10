@@ -24,18 +24,20 @@ import {
 import { registerVaultWalletTools } from "@/lib/mcp/tools/vault-wallets";
 import { registerVaultCardTools } from "@/lib/mcp/tools/vault-cards";
 import { registerVaultItemTools } from "@/lib/mcp/tools/vault-items";
+import { registerVaultProviderConfigTools } from "@/lib/mcp/tools/vault-provider-configs";
 
 export function registerVaultCapabilities(
   server: McpServer,
   dependencies: McpDependencies = defaultMcpDependencies,
 ) {
+  registerVaultProviderConfigTools(server, dependencies);
   registerVaultWalletTools(server, dependencies);
   registerVaultCardTools(server, dependencies);
   registerVaultItemTools(server, dependencies);
 
   server.tool(
     "manage_vaults",
-    'Manage project-owned payment vaults, not merchant payments. "create" creates or retrieves a vault by immutable name; "list" lists the effective project only; "get" reads one; "delete" invalidates the vault and every item credential. Confirm deletion with the user first. Connect a wallet with manage_vault_wallets, configure a card with manage_vault_cards, and observe actions/outcomes with manage_vault_items. Requests are not automatically retried.',
+    'Manage project-owned payment vaults, not merchant payments. "create" creates or retrieves a vault by immutable name; "list" lists the effective project only; "get" reads one; "delete" invalidates the vault and every item credential. Confirm deletion with the user first; unresolved payment operations block deletion and require provider/support reconciliation. Connect a wallet with manage_vault_wallets, configure a card with manage_vault_cards, and observe actions/outcomes with manage_vault_items. Requests are not automatically retried.',
     {
       ...vaultProjectSchema,
       action: z.enum(["create", "list", "get", "delete"]),

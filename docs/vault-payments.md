@@ -4,12 +4,17 @@ The vault tools prepare and observe payment credentials. They do **not** submit
 merchant payments, expose real card values, or complete provider approval actions.
 They use the same vault API as the Kernel CLI.
 
-**These are live payment cards. Test-mode creation is unsupported.** Do not assume
-that a development or staging MCP endpoint makes a card request a test transaction.
+**Assume real payment effects.** Mode comes from the selected provider credentials;
+there is no per-item test flag. AgentCard configuration responses report the
+introspected `test_mode`. A development or staging MCP endpoint does not make a
+card request a test transaction.
+
+For the unreleased provider configuration APIs, see the
+[SDK validation and release gate](vault-sdk-preview.md).
 
 ## Tools and scope
 
-The four vault tools are exposed only when the current credential's
+The five vault tools are exposed only when the current credential's
 `GET /org/entitlements` response reports `features.vaults.enabled: true`.
 Access is rechecked on every authenticated MCP request, including tool calls,
 without caching grants across requests or connections. A missing field, malformed
@@ -17,14 +22,19 @@ response, or failed lookup hides the vault tools but leaves other toolsets usabl
 The lookup has a five-second timeout, forwards cancellation, and is not retried.
 The `vaults` toolset configuration can further restrict access, never grant it.
 
-| Tool                   | Actions                                     |
-| ---------------------- | ------------------------------------------- |
-| `manage_vaults`        | `create`, `list`, `get`, `delete`           |
-| `manage_vault_wallets` | `create`, `payment_methods`                 |
-| `manage_vault_cards`   | `create`, `update`                          |
-| `manage_vault_items`   | `list`, `get`, `invoke`, `events`, `delete` |
+| Tool                            | Actions                                     |
+| ------------------------------- | ------------------------------------------- |
+| `manage_vault_provider_configs` | `create`, `list`, `get`, `update`, `delete` |
+| `manage_vaults`                 | `create`, `list`, `get`, `delete`           |
+| `manage_vault_wallets`          | `create`, `payment_methods`                 |
+| `manage_vault_cards`            | `create`, `update`                          |
+| `manage_vault_items`            | `list`, `get`, `invoke`, `events`, `delete` |
 
-Every tool accepts an optional `project` name or ID. Vaults are project-owned;
+Provider configurations are organization-owned and do not accept a project
+selector. Reads are available to project-scoped credentials; writes require an
+organization-scoped connection. The API remains the authorization authority.
+
+The other four tools accept an optional `project` name or ID. Vaults are project-owned;
 omitting `project` uses the API's effective default project, **not** all projects.
 Project-scoped connections cannot switch projects. Use `get_connection_context`
 to inspect the connection's scope.
@@ -50,6 +60,70 @@ KERNEL_MCP_ENABLED_TOOLSETS=vaults
 For browser checkout automation too, use `vaults browsers playwright computer`.
 To hide the payment tools, set `KERNEL_MCP_DISABLED_TOOLSETS=vaults`.
 This filters discovery; API authorization still enforces resource access.
+
+## Provider configurations and imported grants
+
+`manage_vault_provider_configs` supports both `link` and `agentcard`:
+
+- `create`: `name`, `provider`, and `credentials: {client_id, client_secret}`.
+  Duplicate names return a conflict, never a credential replacement.
+- `get` / `delete`: `config` selects an ID or name. Deletion requires confirmation
+  and is blocked while any non-deleted item references the config.
+- `list`: optional `limit` (1–100) and `offset` (0 or greater); returns one page
+  with `items`, `has_more`, and `next_offset`.
+- `update`: `config` plus `name` and/or `credentials: {client_secret}`. Omitted
+  fields stay unchanged. Provider, client ID, and credential mode cannot change.
+  Secret rotation affects all wallets bound to the configuration.
+
+Client secrets and imported tokens are write-only inputs for a **trusted backend
+or client**. Do not ask users to paste them into chat. Do not use a client that logs
+MCP arguments. The server disables SDK payload logging and omits credentials from
+output and analytics; validation and API failures do not return raw secret bodies.
+Public configuration responses contain ID, name, provider, non-secret client ID,
+timestamps, and AgentCard's introspected mode only.
+
+Configuration credentials identify an application; **they are not user grants**.
+A customer-managed Link wallet requires the backend to complete Link OAuth first,
+then call `manage_vault_wallets` with the following specification (placeholders are
+not real credentials):
+
+```json
+{
+  "action": "create",
+  "vault": "checkout",
+  "key": "imported-wallet",
+  "provider": "link",
+  "spec": {
+    "authorization": {
+      "method": "oauth",
+      "client": {
+        "type": "customer_managed",
+        "provider_config": { "name": "my-link-client" }
+      },
+      "tokens": {
+        "access_token": "<valid-access-token-from-backend>",
+        "refresh_token": "<same-grant-refresh-token-from-backend>"
+      }
+    }
+  }
+}
+```
+
+Both tokens must belong to the referenced client and the same grant. Import
+requires a valid access token; refresh expired access in the backend first.
+After import, **Kernel owns refresh-token rotation**; stop refreshing that grant
+in the backend. Configuration selection alone does not start hosted Link OAuth.
+
+Use exactly one config `id` or `name`. Responses preserve the resolved config ID;
+renaming does not rebind wallets. An identical wallet create never replaces its
+grant, even after rotation or degradation. Changing config requires a new wallet.
+There is no in-place imported reauthorization: obtain a fresh grant and use a new
+wallet key for **new payments only**. Existing cards remain bound to the old wallet;
+retain unresolved attempts for provider/support reconciliation, not retries.
+
+For AgentCard, add `"provider_config": {"name": "my-agentcard"}` to the wallet
+`spec`; no user OAuth tokens are accepted. Omit it to retain Kernel-managed
+credentials. A reused `user_id` must belong to the same organization and config.
 
 ## Link flow
 
@@ -157,7 +231,7 @@ then connect a wallet with `manage_vault_wallets`:
 ```
 
 Complete the returned enrollment action. Alternatively, `spec.user_id` may refer
-to a user already enrolled in this organization. Once connected, configure a card
+to a user already enrolled in this organization under the same configuration. Once connected, configure a card
 with `manage_vault_cards`:
 
 ```json
@@ -216,8 +290,16 @@ A reusable card remaining `ready` does not establish that the last payment succe
   No vault request is automatically retried. After a failed, timed-out, rejected,
   or indeterminate payment, inspect state/events; do not replay checkout, invoke
   again, or reconfigure a card to retry it.
-- Card `update` replaces the **entire spec**; omitted optional fields are removed.
-  The API decides when a card can be reconfigured.
+- Requested-card `update` replaces the spec. Pending issuance updates preserve
+  omitted optional fields and clear explicit empty lists; only provider-supported
+  changes are allowed. Provider/wallet bindings cannot change after authorization
+  starts. The tool forwards omissions and empty values without normalization.
+  The API decides which edits are allowed; an uncertain update enters
+  `recovery_required` and must not be retried.
+- `recovery_required` is preserved in responses and ends the API's bounded wait.
+  It is neither decline nor expiry. Stop payment attempts and reconcile with the
+  provider or support. There is no reset or caller-asserted reconciliation tool.
+  Unresolved cards can also block deletion of their wallet and vault.
 - Browser attachments accept at most 20 references, each containing exactly one
   `id` or `name`. They are creation-only and unavailable for browser pools. You
   cannot add vaults to an existing browser. Vault-bound browser creation also
