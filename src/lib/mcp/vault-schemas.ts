@@ -47,37 +47,52 @@ export function providerConfigReferenceSchema() {
       id: vaultSelectorSchema().optional(),
       name: vaultSelectorSchema().optional(),
     })
-    .strict("Unexpected provider config reference fields.")
+    .strict()
     .refine(
       (value) => (value.id !== undefined) !== (value.name !== undefined),
       "Provide exactly one provider config id or name.",
     );
 }
 
-// Strict-object issues include unknown keys in MCP errors. A misplaced secret
-// can be a key, so reject extras without copying those keys into the issue.
-function secretInputObject<T extends z.ZodRawShape>(shape: T) {
-  return z
-    .object(shape)
-    .passthrough()
-    .refine(
-      (value) =>
-        Object.keys(value).every((key) =>
-          Object.prototype.hasOwnProperty.call(shape, key),
-        ),
-      "Unexpected credential fields.",
-    );
+// MCP serializes Zod issues before the tool callback runs. Validate each input
+// field without exposing rejected values or nested keys, retaining its schema
+// for tools/list and its normal parsed output for the callback.
+export function vaultToolInput<Shape extends z.ZodRawShape>(shape: Shape) {
+  return Object.fromEntries(
+    Object.entries(shape).map(([key, schema]) => [
+      key,
+      z.preprocess((value, context) => {
+        if (!schema.safeParse(value).success) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Invalid vault tool input. Check the documented schema.",
+            fatal: true,
+          });
+          return z.NEVER;
+        }
+        return value;
+      }, schema),
+    ]),
+  ) as {
+    [Key in keyof Shape]: z.ZodEffects<
+      Shape[Key],
+      z.output<Shape[Key]>,
+      unknown
+    >;
+  };
 }
 
-export const providerCredentialsSchema = secretInputObject({
-  client_id: z.string().min(1).optional(),
-  client_secret: z
-    .string()
-    .min(1)
-    .describe(
-      "Write-only secret; supply through a trusted client, never chat.",
-    ),
-});
+export const providerCredentialsSchema = z
+  .object({
+    client_id: z.string().min(1).optional(),
+    client_secret: z
+      .string()
+      .min(1)
+      .describe(
+        "Write-only secret; supply through a trusted client, never chat.",
+      ),
+  })
+  .strict();
 
 // Keep provider specifications in sync with https://api.onkernel.com/spec.yaml.
 export const linkWalletSpecSchema = z
@@ -87,11 +102,9 @@ export const linkWalletSpecSchema = z
       z
         .object({
           method: z.literal("oauth"),
-          client: z
-            .object({ type: z.literal("kernel_managed") })
-            .strict("Unexpected OAuth client fields."),
+          client: z.object({ type: z.literal("kernel_managed") }).strict(),
         })
-        .strict("Kernel-managed authorization does not accept tokens."),
+        .strict(),
       z
         .object({
           method: z.literal("oauth"),
@@ -100,18 +113,21 @@ export const linkWalletSpecSchema = z
               type: z.literal("customer_managed"),
               provider_config: providerConfigReferenceSchema(),
             })
-            .strict("Unexpected OAuth client fields."),
-          tokens: secretInputObject({
-            access_token: z.string().min(1),
-            refresh_token: z.string().min(1),
-          }).describe(
-            "Write-only token pair from the same grant. Supply through a trusted backend, never chat. Kernel owns subsequent refresh rotation.",
-          ),
+            .strict(),
+          tokens: z
+            .object({
+              access_token: z.string().min(1),
+              refresh_token: z.string().min(1),
+            })
+            .strict()
+            .describe(
+              "Write-only token pair from the same grant. Supply through a trusted backend, never chat. Kernel owns subsequent refresh rotation.",
+            ),
         })
-        .strict("Unexpected imported authorization fields."),
+        .strict(),
     ]),
   })
-  .strict("Unexpected Link wallet fields.");
+  .strict();
 
 export const agentcardWalletSpecSchema = z
   .object({
@@ -125,7 +141,7 @@ export const agentcardWalletSpecSchema = z
       )
       .optional(),
   })
-  .strict("Unexpected AgentCard wallet fields.");
+  .strict();
 
 function linkTotalSchema() {
   return z

@@ -17,6 +17,7 @@ import {
   vaultItemSchema,
   vaultKeySchema,
   vaultWaitSchema,
+  vaultToolInput,
 } from "@/lib/mcp/vault-schemas";
 
 export function registerVaultItemTools(
@@ -26,7 +27,7 @@ export function registerVaultItemTools(
   server.tool(
     "manage_vault_items",
     'Inspect payment vault items and immutable audit events. "list" reads items; "get" reads state, public aliases, required user actions, available_operations, and available_expansions. "invoke" fetches the item again and submits only an advertised operation; read its description and obtain explicit user approval first. Provider actions (OAuth, enrollment, MFA, approval) must be completed by the user, not invoked as operations. "events" observes outcomes; use the last event ID as after. "delete" invalidates an item credential; confirm with the user first. Unresolved payments block item and parent deletion. recovery_required is not decline or expiry: stop payment attempts and reconcile with the provider or support; no reset exists. Ready does not mean paid. Requests are never automatically retried. Do not retry failed, timed-out, rejected, or indeterminate payments; inspect state/events instead.',
-    {
+    vaultToolInput({
       ...vaultItemSchema,
       action: z.enum(["list", "get", "invoke", "events", "delete"]),
       key: vaultKeySchema()
@@ -54,7 +55,7 @@ export function registerVaultItemTools(
           "(events) Return events after this event ID; preserve the vault and item key.",
         )
         .optional(),
-    },
+    }),
     {
       title: "Inspect and operate Kernel vault items",
       readOnlyHint: false,

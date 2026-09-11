@@ -135,22 +135,47 @@ export function projectVaultOutput(
   return result;
 }
 
-// Also remove supplied secrets if an upstream response echoes them in public fields.
-export function redactVaultSecrets(
+function secretVariants(secrets: (string | undefined)[]) {
+  return secrets
+    .filter((secret): secret is string => !!secret)
+    .flatMap((secret) => [secret, encodeURIComponent(secret)]);
+}
+
+function containsVaultSecret(value: unknown, secrets: string[]): boolean {
+  if (typeof value === "string")
+    return secrets.some((secret) => value.includes(secret));
+  if (value && typeof value === "object") {
+    return Object.values(value).some((field) =>
+      containsVaultSecret(field, secrets),
+    );
+  }
+  return false;
+}
+
+function redactVaultSecrets(value: unknown, secrets: string[]): unknown {
+  if (typeof value === "string") {
+    let text = value;
+    for (const secret of secrets) text = text.split(secret).join("[redacted]");
+    return text;
+  }
+  if (Array.isArray(value))
+    return value.map((field) => redactVaultSecrets(field, secrets));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, field]) => [
+        key,
+        redactVaultSecrets(field, secrets),
+      ]),
+    );
+  }
+  return value;
+}
+
+export function vaultResponse(
   value: unknown,
-  secrets: (string | undefined)[],
-): unknown {
-  return JSON.parse(
-    JSON.stringify(value, (_key, field) => {
-      if (typeof field !== "string") return field;
-      for (const secret of secrets) {
-        if (!secret) continue;
-        field = field.split(secret).join("[redacted]");
-        field = field.split(encodeURIComponent(secret)).join("[redacted]");
-      }
-      return field;
-    }),
-  );
+  secrets: (string | undefined)[] = [],
+) {
+  return jsonResponse(redactVaultSecrets(value, secretVariants(secrets)));
 }
 
 type VaultItemTarget = {
@@ -193,31 +218,35 @@ export function vaultItemResponse(
   target: VaultItemTarget,
   secrets: (string | undefined)[] = [],
 ) {
-  const projected = redactVaultSecrets(
-    projectVaultOutput(item, vaultItemFields),
+  const projected = projectVaultOutput(item, vaultItemFields);
+  const advertised = advertisedOperationsSchema.safeParse(projected);
+  const secretValues = secretVariants(secrets);
+  const safeHint = (hint: unknown) => !containsVaultSecret(hint, secretValues);
+  return vaultResponse(
+    {
+      item: projected,
+      hints: {
+        observation: vaultObservationHints(target).filter(safeHint),
+        invocation: advertised.success
+          ? advertised.data.available_operations
+              .map(({ type }) => ({
+                tool: "manage_vault_items",
+                arguments: { ...target, action: "invoke", operation: type },
+                requires_user_approval: true,
+              }))
+              .filter(safeHint)
+          : [],
+      },
+      guidance: [
+        "Ask the user to complete returned provider actions. Never request card data or OAuth codes/tokens in chat; imported grants must come from a trusted backend. Read operation descriptions and obtain explicit user approval before invoking.",
+        "Use returned aliases only in a new browser created with this vault attached, respecting returned permitted domains. Ready does not mean paid.",
+        "Observe get/events for outcomes. Do not retry failed, timed-out, rejected, or indeterminate payments or reconfigure a card to retry them.",
+        "Invocation hints are not approval to execute. Availability may change; invoke rechecks the advertised operations.",
+        "recovery_required is an unresolved original outcome, not decline or expiry. Stop payment attempts; reconcile with the provider or support. No reset exists, and deletion may be blocked for this item and its parents.",
+      ],
+    },
     secrets,
   );
-  const advertised = advertisedOperationsSchema.safeParse(projected);
-  return jsonResponse({
-    item: projected,
-    hints: {
-      observation: vaultObservationHints(target),
-      invocation: advertised.success
-        ? advertised.data.available_operations.map(({ type }) => ({
-            tool: "manage_vault_items",
-            arguments: { ...target, action: "invoke", operation: type },
-            requires_user_approval: true,
-          }))
-        : [],
-    },
-    guidance: [
-      "Ask the user to complete returned provider actions. Never request card data or OAuth codes/tokens in chat; imported grants must come from a trusted backend. Read operation descriptions and obtain explicit user approval before invoking.",
-      "Use returned aliases only in a new browser created with this vault attached, respecting returned permitted domains. Ready does not mean paid.",
-      "Observe get/events for outcomes. Do not retry failed, timed-out, rejected, or indeterminate payments or reconfigure a card to retry them.",
-      "Invocation hints are not approval to execute. Availability may change; invoke rechecks the advertised operations.",
-      "recovery_required is an unresolved original outcome, not decline or expiry. Stop payment attempts; reconcile with the provider or support. No reset exists, and deletion may be blocked for this item and its parents.",
-    ],
-  });
 }
 
 const vaultErrorMessages = new Map([

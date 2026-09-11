@@ -7,15 +7,11 @@ import type {
 import { z } from "zod";
 import type { McpDependencies } from "@/lib/mcp/dependencies";
 import { connectionContextFromAuthInfo } from "@/lib/mcp/project-selection";
-import {
-  errorResponse,
-  jsonResponse,
-  paginatedJsonResponse,
-} from "@/lib/mcp/responses";
+import { errorResponse } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 import {
   projectVaultOutput,
-  redactVaultSecrets,
+  vaultResponse,
   throwVaultError,
   vaultProviderConfigFields,
 } from "@/lib/mcp/vault-responses";
@@ -23,6 +19,7 @@ import {
   providerCredentialsSchema,
   vaultProviderSchema,
   vaultSelectorSchema,
+  vaultToolInput,
 } from "@/lib/mcp/vault-schemas";
 
 export function registerVaultProviderConfigTools(
@@ -32,7 +29,7 @@ export function registerVaultProviderConfigTools(
   server.tool(
     "manage_vault_provider_configs",
     'Manage organization-owned Link and AgentCard application credentials, not user OAuth grants. "create" requires name, provider, and credentials (client_id/client_secret); duplicate names conflict without replacing secrets. "list" and "get" return public configuration metadata only. "update" renames or rotates client_secret across all bound wallets; omitted fields stay unchanged. Provider, client_id, mode, and wallet bindings are immutable. "delete" requires user confirmation and fails while any non-deleted item references the config; it does not revoke unrelated grants. Writes require an organization-scoped connection. Supply write-only secrets through a trusted client, never chat. No automatic retries.',
-    {
+    vaultToolInput({
       action: z.enum(["create", "list", "get", "update", "delete"]),
       config: vaultSelectorSchema()
         .describe(
@@ -51,7 +48,7 @@ export function registerVaultProviderConfigTools(
         )
         .optional(),
       ...paginationParams,
-    },
+    }),
     {
       title: "Manage Kernel vault provider configurations",
       readOnlyHint: false,
@@ -88,10 +85,9 @@ export function registerVaultProviderConfigTools(
         });
       const options = { maxRetries: 0, signal: extra.signal };
       const project = (value: unknown) =>
-        redactVaultSecrets(
-          projectVaultOutput(value, vaultProviderConfigFields),
-          [params.credentials?.client_secret],
-        );
+        projectVaultOutput(value, vaultProviderConfigFields);
+      const respond = (value: unknown) =>
+        vaultResponse(value, [params.credentials?.client_secret]);
       try {
         switch (params.action) {
           case "create": {
@@ -112,7 +108,7 @@ export function registerVaultProviderConfigTools(
                 client_secret: params.credentials.client_secret,
               },
             };
-            return jsonResponse(
+            return respond(
               project(await client.vaultProviderConfigs.create(body, options)),
             );
           }
@@ -124,16 +120,20 @@ export function registerVaultProviderConfigTools(
               },
               options,
             );
-            return paginatedJsonResponse(page, {
-              mapItem: project,
-              emptyText:
-                "No provider configurations found in the organization.",
+            const items = page.getPaginatedItems();
+            return respond({
+              items: items.map(project),
+              has_more: page.has_more,
+              next_offset: page.next_offset,
+              ...(items.length === 0 && {
+                note: "No provider configurations found in the organization.",
+              }),
             });
           }
           case "get":
             if (!params.config)
               return errorResponse("config is required for get.");
-            return jsonResponse(
+            return respond(
               project(
                 await client.vaultProviderConfigs.retrieve(
                   params.config,
@@ -156,7 +156,7 @@ export function registerVaultProviderConfigTools(
                 },
               }),
             };
-            return jsonResponse(
+            return respond(
               project(
                 await client.vaultProviderConfigs.update(
                   params.config,
@@ -170,7 +170,7 @@ export function registerVaultProviderConfigTools(
             if (!params.config)
               return errorResponse("config is required for delete.");
             await client.vaultProviderConfigs.delete(params.config, options);
-            return jsonResponse({
+            return respond({
               status: "deleted_or_not_found",
               config: params.config,
             });
@@ -181,7 +181,7 @@ export function registerVaultProviderConfigTools(
           error instanceof APIError &&
           error.status === 404
         ) {
-          return jsonResponse({
+          return respond({
             status: "deleted_or_not_found",
             config: params.config,
           });
