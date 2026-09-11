@@ -220,6 +220,7 @@ describe("vault public responses", () => {
 
   test.each([
     [400, "invalid_request", "Invalid vault request."],
+    [403, "forbidden", "Check connection scope and permissions."],
     [
       404,
       "not_found",
@@ -261,6 +262,7 @@ describe("vault public responses", () => {
         expect(text).toContain(`[code: ${code}]`);
         expect(text).toContain("Do not replay a payment.");
         expect(text).not.toContain("hidden");
+        expect(text).not.toContain("Provider configuration writes");
       } finally {
         await fixture.close();
       }

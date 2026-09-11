@@ -288,6 +288,61 @@ describe("config scope and validation", () => {
     }
   });
 
+  test.each(["list", "get", "delete"])(
+    "%s ignores unused write fields without sending credentials",
+    async (action) => {
+      const response =
+        action === "list"
+          ? Response.json([config])
+          : action === "get"
+            ? Response.json(config)
+            : new Response(null, { status: 204 });
+      const fixture = await connectVaultTest(
+        [response],
+        organizationWideAuthInfo(),
+      );
+      try {
+        const result = await fixture.call(tool, {
+          ...create,
+          action,
+          config: config.id,
+        });
+        expect(result.isError).not.toBe(true);
+        expectSecretFree(result);
+        expect(fixture.requests).toHaveLength(1);
+        expect(fixture.requests[0].body).toBeUndefined();
+        expect(fixture.requests[0].path).toBe(
+          action === "list"
+            ? "/vault-provider-configs"
+            : `/vault-provider-configs/${config.id}`,
+        );
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test("update ignores the create-only provider without changing identity", async () => {
+    const fixture = await connectVaultTest(
+      [Response.json({ ...config, name: "renamed" })],
+      organizationWideAuthInfo(),
+    );
+    try {
+      const result = await fixture.call(tool, {
+        action: "update",
+        config: config.id,
+        provider: "link",
+        name: "renamed",
+      });
+      expect(result.isError).not.toBe(true);
+      expect(toolResultJSON(result).provider).toBe(config.provider);
+      expect(fixture.requests).toHaveLength(1);
+      expect(fixture.requests[0].body).toEqual({ name: "renamed" });
+    } finally {
+      await fixture.close();
+    }
+  });
+
   const invalidConfigInputs: Record<string, unknown>[] = [
     { action: "create" },
     { ...create, credentials: { client_secret: secret } },
@@ -297,7 +352,6 @@ describe("config scope and validation", () => {
       credentials: { client_id: config.client_id, client_secret: "" },
     },
     { action: "update", config: config.id, credentials: create.credentials },
-    { action: "update", config: config.id, provider: "link", name: "renamed" },
     { action: "update", config: config.id },
     { action: "update", name: "renamed" },
     { action: "get" },
@@ -305,7 +359,6 @@ describe("config scope and validation", () => {
     { action: "delete" },
     { action: "list", limit: 101 },
     { action: "list", offset: -1 },
-    { action: "list", credentials: { client_secret: secret } },
   ];
   test.each(invalidConfigInputs)(
     "rejects malformed or immutable config changes without disclosure",

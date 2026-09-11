@@ -231,7 +231,7 @@ const vaultErrorMessages = new Map([
   ],
   [
     "forbidden",
-    "This credential cannot perform the vault operation. Provider configuration writes require organization scope.",
+    "This credential cannot perform the vault operation. Check connection scope and permissions.",
   ],
   [
     "conflict",

@@ -71,19 +71,6 @@ export function registerVaultProviderConfigTools(
           "Provider configuration writes require an organization-scoped connection.",
         );
       }
-      if (params.action !== "create" && params.provider !== undefined) {
-        return errorResponse(
-          "provider is only accepted for create; configuration identity is immutable.",
-        );
-      }
-      if (
-        !["create", "update"].includes(params.action) &&
-        (params.credentials !== undefined || params.name !== undefined)
-      ) {
-        return errorResponse(
-          "name and credentials are only accepted for create or update.",
-        );
-      }
       if (
         params.action === "update" &&
         params.credentials?.client_id !== undefined
