@@ -9,8 +9,8 @@ there is no per-item test flag. AgentCard configuration responses report the
 introspected `test_mode`. A development or staging MCP endpoint does not make a
 card request a test transaction.
 
-For the unreleased provider configuration APIs, see the
-[SDK validation and release gate](vault-sdk-preview.md).
+Provider configuration support uses the released Node SDK 0.101.0. See
+[SDK validation](vault-sdk-validation.md) for build and test commands.
 
 ## Tools and scope
 
