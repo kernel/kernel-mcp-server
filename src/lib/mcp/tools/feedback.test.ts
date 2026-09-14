@@ -93,6 +93,7 @@ describe("submit_feedback", () => {
         '"registrable_domain"',
       );
       expect(JSON.stringify(tool?.inputSchema)).toContain('"datacenter"');
+      expect(JSON.stringify(tool?.inputSchema)).toContain('"config_registry"');
 
       const result = await client.callTool({
         name: KERNEL_FEEDBACK_TOOL_NAME,
@@ -116,8 +117,6 @@ describe("submit_feedback", () => {
             browser_image_version: "2026.09.14",
             reproducibility: "consistent",
             browser_session_id: "session_123",
-            config_registry_analysis_id: "analysis_123",
-            config_registry_recommendation_applied: true,
           },
         },
       });
@@ -146,8 +145,6 @@ describe("submit_feedback", () => {
             browser_image_version: "2026.09.14",
             reproducibility: "consistent",
             browser_session_id: "session_123",
-            config_registry_analysis_id: "analysis_123",
-            config_registry_recommendation_applied: true,
           },
         },
       ]);
@@ -156,7 +153,104 @@ describe("submit_feedback", () => {
     }
   });
 
-  test("requires structured fields only for bot-detection feedback", async () => {
+  test("records config-registry outcomes against the applied configuration", async () => {
+    const captured: KernelFeedback[] = [];
+    const { client, close } = await connectTestMcp(
+      (server) =>
+        registerFeedbackTool(server, (feedback) => {
+          captured.push(feedback);
+        }),
+      {},
+    );
+
+    try {
+      const result = await client.callTool({
+        name: KERNEL_FEEDBACK_TOOL_NAME,
+        arguments: {
+          context:
+            "Reporting that an applied config registry recommendation still failed so its quality can be measured.",
+          summary: "The recommended configuration remained blocked",
+          feedback_type: "config_registry",
+          sentiment: "negative",
+          task_completed: false,
+          bot_detection: {
+            registrable_domain: "example.com",
+            observed_outcome: "blocked",
+            challenge_type: "access_denied",
+            reproducibility: "consistent",
+            browser_session_id: "session_456",
+          },
+          config_registry: {
+            request_method: "resolve",
+            analysis_id: "analysis_123",
+            recommendation_match_scope: "exact",
+            recommendation_verification: "verified",
+            applied_browser: {
+              stealth: true,
+              headless: false,
+              gpu: false,
+              viewport: {
+                width: 1920,
+                height: 1080,
+                refresh_rate: 25,
+              },
+            },
+            applied_proxy: {
+              mode: "managed",
+              type: "residential",
+              country: "us",
+            },
+          },
+        },
+      });
+
+      expect(toolResultJSON(result)).toMatchObject({
+        recorded: true,
+        feedback_type: "config_registry",
+        sentiment: "negative",
+      });
+      expect(captured).toEqual([
+        {
+          summary: "The recommended configuration remained blocked",
+          feedback_type: "config_registry",
+          sentiment: "negative",
+          task_completed: false,
+          bot_detection: {
+            registrable_domain: "example.com",
+            observed_outcome: "blocked",
+            challenge_type: "access_denied",
+            reproducibility: "consistent",
+            browser_session_id: "session_456",
+          },
+          config_registry: {
+            request_method: "resolve",
+            analysis_id: "analysis_123",
+            recommendation_match_scope: "exact",
+            recommendation_verification: "verified",
+            applied_browser: {
+              stealth: true,
+              headless: false,
+              gpu: false,
+              viewport: {
+                width: 1920,
+                height: 1080,
+                refresh_rate: 25,
+              },
+            },
+            applied_proxy: {
+              mode: "managed",
+              type: "residential",
+              country: "US",
+            },
+          },
+        },
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("requires structured fields for site and config-registry feedback", async () => {
     const captured: KernelFeedback[] = [];
     const { client, close } = await connectTestMcp(
       (server) =>
@@ -178,6 +272,25 @@ describe("submit_feedback", () => {
         },
       });
       expect(missingReport.isError).toBe(true);
+      expect(captured).toEqual([]);
+
+      const missingConfig = await client.callTool({
+        name: KERNEL_FEEDBACK_TOOL_NAME,
+        arguments: {
+          context:
+            "Reporting a failed recommendation without the applied settings needed to attribute its outcome.",
+          summary: "The recommended configuration remained blocked",
+          feedback_type: "config_registry",
+          sentiment: "negative",
+          task_completed: false,
+          bot_detection: {
+            registrable_domain: "example.com",
+            observed_outcome: "blocked",
+            reproducibility: "single_observation",
+          },
+        },
+      });
+      expect(missingConfig.isError).toBe(true);
       expect(captured).toEqual([]);
 
       const reportOnProductFeedback = await client.callTool({

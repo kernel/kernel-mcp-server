@@ -613,27 +613,13 @@ describe("captureMcpFeedback", () => {
     expect(captured).toEqual([
       {
         event: MCP_FEEDBACK_SUBMITTED_EVENT,
-        properties: {
+        properties: expect.objectContaining({
           $groups: { organization: "org_analytics" },
           feedback_summary: "Browser timeout guidance was unclear",
           feedback_type: "product",
           feedback_sentiment: "mixed",
           feedback_product_area: "browsers",
           feedback_destination: undefined,
-          feedback_bot_detection_registrable_domain: undefined,
-          feedback_bot_detection_observed_outcome: undefined,
-          feedback_bot_detection_suspected_vendor: undefined,
-          feedback_bot_detection_challenge_type: undefined,
-          feedback_bot_detection_stealth: undefined,
-          feedback_bot_detection_proxy_type: undefined,
-          feedback_bot_detection_region: undefined,
-          feedback_bot_detection_browser_version: undefined,
-          feedback_bot_detection_browser_image_version: undefined,
-          feedback_bot_detection_reproducibility: undefined,
-          feedback_bot_detection_browser_session_id: undefined,
-          feedback_bot_detection_config_registry_analysis_id: undefined,
-          feedback_bot_detection_config_registry_recommendation_applied:
-            undefined,
           feedback_category: undefined,
           feedback_task_completed: true,
           feedback_tools_used: ["manage_browsers"],
@@ -642,7 +628,7 @@ describe("captureMcpFeedback", () => {
             "Include a retry interval in the response.",
           feedback_user_request: undefined,
           feedback_details: "The error linked to [url] for [email]",
-        },
+        }),
       },
     ]);
   });
@@ -674,8 +660,6 @@ describe("captureMcpFeedback", () => {
           browser_image_version: "2026.09.14",
           reproducibility: "consistent",
           browser_session_id: "session_123",
-          config_registry_analysis_id: "analysis_123",
-          config_registry_recommendation_applied: true,
         },
       },
       {
@@ -708,8 +692,87 @@ describe("captureMcpFeedback", () => {
           feedback_bot_detection_browser_image_version: "2026.09.14",
           feedback_bot_detection_reproducibility: "consistent",
           feedback_bot_detection_browser_session_id: "session_123",
-          feedback_bot_detection_config_registry_analysis_id: "analysis_123",
-          feedback_bot_detection_config_registry_recommendation_applied: true,
+        }),
+      },
+    ]);
+  });
+
+  test("attributes config-registry feedback to the applied configuration", async () => {
+    const captured: unknown[] = [];
+    const analytics = {
+      capture: async (event: unknown) => {
+        captured.push(event);
+      },
+    } as McpAnalytics;
+
+    await captureMcpFeedback(
+      {
+        summary: "The recommended configuration remained blocked",
+        feedback_type: "config_registry",
+        sentiment: "negative",
+        task_completed: false,
+        bot_detection: {
+          registrable_domain: "example.com",
+          observed_outcome: "blocked",
+          challenge_type: "access_denied",
+          reproducibility: "consistent",
+          browser_session_id: "session_456",
+        },
+        config_registry: {
+          request_method: "resolve",
+          analysis_id: "analysis_123",
+          recommendation_match_scope: "exact",
+          recommendation_verification: "verified",
+          applied_browser: {
+            stealth: true,
+            headless: false,
+            gpu: false,
+            viewport: { width: 1920, height: 1080, refresh_rate: 25 },
+          },
+          applied_proxy: {
+            mode: "managed",
+            type: "residential",
+            country: "US",
+          },
+        },
+      },
+      {
+        authInfo: {
+          extra: {
+            connectionContext: {
+              scope: { organizationId: "org_analytics" },
+            },
+          },
+        },
+      },
+      analytics,
+    );
+
+    expect(captured).toEqual([
+      {
+        event: MCP_FEEDBACK_SUBMITTED_EVENT,
+        properties: expect.objectContaining({
+          $groups: { organization: "org_analytics" },
+          feedback_type: "config_registry",
+          feedback_destination: "config_registry_quality",
+          feedback_bot_detection_registrable_domain: "example.com",
+          feedback_bot_detection_observed_outcome: "blocked",
+          feedback_config_registry_request_method: "resolve",
+          feedback_config_registry_analysis_id: "analysis_123",
+          feedback_config_registry_recommendation_match_scope: "exact",
+          feedback_config_registry_recommendation_verification: "verified",
+          feedback_config_registry_applied_config_key:
+            "stealth-true|headless-false|gpu-false|viewport-1920x1080@25|proxy-managed-residential-US",
+          feedback_config_registry_browser_stealth: true,
+          feedback_config_registry_browser_headless: false,
+          feedback_config_registry_browser_gpu: false,
+          feedback_config_registry_viewport_width: 1920,
+          feedback_config_registry_viewport_height: 1080,
+          feedback_config_registry_viewport_refresh_rate: 25,
+          feedback_config_registry_proxy_mode: "managed",
+          feedback_config_registry_proxy_type: "residential",
+          feedback_config_registry_proxy_country: "US",
+          feedback_task_completed: false,
         }),
       },
     ]);
