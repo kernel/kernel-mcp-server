@@ -92,6 +92,7 @@ describe("submit_feedback", () => {
       expect(JSON.stringify(tool?.inputSchema)).toContain(
         '"registrable_domain"',
       );
+      expect(JSON.stringify(tool?.inputSchema)).toContain('"datacenter"');
 
       const result = await client.callTool({
         name: KERNEL_FEEDBACK_TOOL_NAME,
@@ -201,7 +202,7 @@ describe("submit_feedback", () => {
     }
   });
 
-  test("rejects URLs in bot-detection domain reports", async () => {
+  test("rejects URLs, subdomains, and private hosts in domain reports", async () => {
     const captured: KernelFeedback[] = [];
     const { client, close } = await connectTestMcp(
       (server) =>
@@ -212,23 +213,30 @@ describe("submit_feedback", () => {
     );
 
     try {
-      const result = await client.callTool({
-        name: KERNEL_FEEDBACK_TOOL_NAME,
-        arguments: {
-          context:
-            "Reporting a site outcome while ensuring paths and query strings cannot enter the prioritization event.",
-          summary: "A site blocked the browser",
-          feedback_type: "bot_detection",
-          sentiment: "negative",
-          bot_detection: {
-            registrable_domain: "https://example.com/account?user=1",
-            observed_outcome: "blocked",
-            reproducibility: "single_observation",
+      for (const registrableDomain of [
+        "https://example.com/account?user=1",
+        "auth.example.com",
+        "service.local",
+      ]) {
+        const result = await client.callTool({
+          name: KERNEL_FEEDBACK_TOOL_NAME,
+          arguments: {
+            context:
+              "Reporting a site outcome while ensuring sensitive host details cannot enter the prioritization event.",
+            summary: "A site blocked the browser",
+            feedback_type: "bot_detection",
+            sentiment: "negative",
+            task_completed: false,
+            bot_detection: {
+              registrable_domain: registrableDomain,
+              observed_outcome: "blocked",
+              reproducibility: "single_observation",
+            },
           },
-        },
-      });
+        });
 
-      expect(result.isError).toBe(true);
+        expect(result.isError).toBe(true);
+      }
       expect(captured).toEqual([]);
     } finally {
       await close();

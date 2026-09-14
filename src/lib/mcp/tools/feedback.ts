@@ -1,19 +1,20 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { parse as parseDomain } from "tldts";
 import { z } from "zod";
 import { MCP_INTENT_ARGUMENT_DESCRIPTION } from "@/lib/mcp/analytics-context";
 import { errorResponse, jsonResponse } from "@/lib/mcp/responses";
 
 export const KERNEL_FEEDBACK_TOOL_NAME = "submit_feedback";
 
-const registrableDomainPattern =
-  /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
-
 const botDetectionReportSchema = z.object({
   registrable_domain: z
     .string()
     .trim()
     .toLowerCase()
-    .regex(registrableDomainPattern)
+    .refine((value) => {
+      const parsed = parseDomain(value, { allowPrivateDomains: false });
+      return parsed.isIcann && parsed.domain === value;
+    }, "must be a public registrable domain without a subdomain or URL components")
     .describe(
       'the public registrable domain where the result was observed (e.g. "example.com"). include no protocol, path, query, fragment, port, subdomain, account-specific host, or private/internal hostname. public registrable domains are allowed only in this field so reports can prioritize config registry coverage.',
     ),
@@ -52,7 +53,15 @@ const botDetectionReportSchema = z.object({
     .optional()
     .describe("whether KERNEL stealth mode was enabled for the observation."),
   proxy_type: z
-    .enum(["none", "isp", "residential", "mobile", "custom", "unknown"])
+    .enum([
+      "none",
+      "datacenter",
+      "isp",
+      "residential",
+      "mobile",
+      "custom",
+      "unknown",
+    ])
     .optional()
     .describe(
       "the egress type used for the observation. never include a proxy URL, credential, provider account, or IP address.",
