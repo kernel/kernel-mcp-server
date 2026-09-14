@@ -1,9 +1,115 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { MCP_INTENT_ARGUMENT_DESCRIPTION } from "@/lib/mcp/analytics-context";
-import { jsonResponse } from "@/lib/mcp/responses";
+import { errorResponse, jsonResponse } from "@/lib/mcp/responses";
 
 export const KERNEL_FEEDBACK_TOOL_NAME = "submit_feedback";
+
+const registrableDomainPattern =
+  /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+
+const botDetectionReportSchema = z.object({
+  registrable_domain: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(registrableDomainPattern)
+    .describe(
+      'the public registrable domain where the result was observed (e.g. "example.com"). include no protocol, path, query, fragment, port, subdomain, account-specific host, or private/internal hostname. public registrable domains are allowed only in this field so reports can prioritize config registry coverage.',
+    ),
+  observed_outcome: z
+    .enum(["passed", "challenged", "blocked", "degraded"])
+    .describe(
+      'what the site did: "passed" = the intended flow remained usable, "challenged" = an anti-bot step appeared but the flow could continue, "blocked" = the flow could not continue, and "degraded" = content or functionality was restricted.',
+    ),
+  suspected_vendor: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe(
+      'the suspected bot-detection vendor or product, when supported by evidence (e.g. "Akamai Bot Manager"). omit rather than guess.',
+    ),
+  challenge_type: z
+    .enum([
+      "captcha",
+      "javascript_challenge",
+      "access_denied",
+      "rate_limited",
+      "login_block",
+      "fingerprint_block",
+      "content_restricted",
+      "other",
+      "unknown",
+    ])
+    .optional()
+    .describe(
+      "the dominant challenge or block observed. use unknown when the flow failed without a recognizable challenge surface.",
+    ),
+  stealth: z
+    .enum(["enabled", "disabled", "unknown"])
+    .optional()
+    .describe("whether KERNEL stealth mode was enabled for the observation."),
+  proxy_type: z
+    .enum(["none", "isp", "residential", "mobile", "custom", "unknown"])
+    .optional()
+    .describe(
+      "the egress type used for the observation. never include a proxy URL, credential, provider account, or IP address.",
+    ),
+  region: z
+    .string()
+    .trim()
+    .min(1)
+    .max(50)
+    .optional()
+    .describe(
+      'the KERNEL browser region used for the observation (e.g. "us-east"). do not include a street address, postal code, or user location.',
+    ),
+  browser_version: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("the browser version reported by the KERNEL session, if known."),
+  browser_image_version: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("the KERNEL browser image version or release tag, if known."),
+  reproducibility: z
+    .enum(["single_observation", "intermittent", "consistent", "unknown"])
+    .describe(
+      'how repeatable the outcome was: "single_observation" = tried once, "intermittent" = outcomes varied, "consistent" = repeated attempts matched, and "unknown" = repetition was not observable.',
+    ),
+  browser_session_id: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe(
+      "the KERNEL browser session ID for internal correlation, if available. never substitute a CDP or live-view URL.",
+    ),
+  config_registry_analysis_id: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe(
+      "the related KERNEL config registry analysis ID, if one was used.",
+    ),
+  config_registry_recommendation_applied: z
+    .boolean()
+    .optional()
+    .describe(
+      "whether the observation used the config registry's recommended browser configuration.",
+    ),
+});
 
 const feedbackFields = {
   context: z.string().describe(MCP_INTENT_ARGUMENT_DESCRIPTION),
@@ -16,9 +122,9 @@ const feedbackFields = {
       'a one-sentence headline capturing the feedback (e.g. "browser creation timed out without recovery guidance", "manage_browsers returned exactly the context needed", or "the proxy docs need a residential example").',
     ),
   feedback_type: z
-    .enum(["product", "mcp", "docs", "other"])
+    .enum(["product", "bot_detection", "mcp", "docs", "other"])
     .describe(
-      'what this feedback is about. "product" = any KERNEL product or feature, such as browsers, apps, profiles, proxies, browser pools, replays, telemetry, managed auth, credentials, extensions, projects, or api keys. "mcp" = this mcp server itself, including a tool, input schema, response format, error, or its instructions. "docs" = KERNEL documentation. "other" = anything that does not fit the other types.',
+      'what this feedback is about. "product" = any KERNEL product or feature, such as browsers, apps, profiles, proxies, browser pools, replays, telemetry, managed auth, credentials, extensions, projects, or api keys. "bot_detection" = a site-specific pass, challenge, block, or degraded result that should inform config registry prioritization; include `bot_detection`. "mcp" = this mcp server itself, including a tool, input schema, response format, error, or its instructions. "docs" = KERNEL documentation. "other" = anything that does not fit the other types.',
     ),
   sentiment: z
     .enum(["positive", "neutral", "negative", "mixed"])
@@ -32,7 +138,12 @@ const feedbackFields = {
     .max(100)
     .optional()
     .describe(
-      'the KERNEL product or area this is about, in free text (e.g. "browsers", "apps", "managed auth", "browser pools", "proxies", or "telemetry"). most useful for product feedback; for mcp feedback put the tool name in `details` or `friction_points` instead.',
+      'the KERNEL product or area this is about, in free text (e.g. "browsers", "apps", "managed auth", "browser pools", "proxies", or "telemetry"). most useful for product feedback; use `feedback_type: "bot_detection"` instead of putting bot detection here, and for mcp feedback put the tool name in `details` or `friction_points`.',
+    ),
+  bot_detection: botDetectionReportSchema
+    .optional()
+    .describe(
+      'the structured site outcome. required when `feedback_type` is "bot_detection" and rejected for every other feedback type. these fields make reports directly groupable for config registry prioritization.',
     ),
   category: z
     .enum([
@@ -54,7 +165,7 @@ const feedbackFields = {
     .boolean()
     .optional()
     .describe(
-      'whether the user\'s task was completed. be honest: `false` is useful signal. most relevant when `feedback_type` is "mcp".',
+      "whether the user's task was completed. be honest: `false` is useful signal. required for bot-detection feedback and also useful for mcp feedback.",
     ),
   tools_used: z
     .array(z.string().trim().min(1).max(100))
@@ -111,7 +222,7 @@ export type KernelFeedbackCapture = (
 ) => void | Promise<void>;
 
 const TOOL_DESCRIPTION =
-  "send feedback about anything KERNEL to the KERNEL team. set `feedback_type` to route it: `product` for any KERNEL product or feature, `mcp` for this mcp server, `docs` for KERNEL documentation, or `other`. all sentiments are welcome through `sentiment`: praise and feature requests are useful, not just problems. use this for confusing or broken experiences, papercuts, missing capabilities, unhelpful errors, feature requests, and things that worked especially well. keep `summary` to one sentence and make the detail fields concise and actionable, quoting the product surface, tool name, parameter, or error text when possible. include a concrete `suggested_improvement` when one is clear. never include credentials, tokens, api keys, urls, browser or page content, customer or account names, or personal data. the user can also ask to send feedback directly. submitting feedback is a side report to KERNEL, not a reason to stop: continue and finish the user's task with the other available tools.";
+  "send feedback about anything KERNEL to the KERNEL team. set `feedback_type` to route it: `product` for any KERNEL product or feature, `bot_detection` for a site-specific pass, challenge, block, or degraded result that should inform config registry prioritization, `mcp` for this mcp server, `docs` for KERNEL documentation, or `other`. for bot detection, fill the structured `bot_detection` object with the public registrable domain, outcome, reproducibility, and any known browser configuration; positive passes are as useful as blocks. all sentiments are welcome through `sentiment`: praise and feature requests are useful, not just problems. use this for confusing or broken experiences, papercuts, missing capabilities, unhelpful errors, feature requests, and things that worked especially well. keep `summary` to one sentence and make the detail fields concise and actionable, quoting the product surface, tool name, parameter, or error text when possible. include a concrete `suggested_improvement` when one is clear. never include credentials, tokens, api keys, urls, paths, browser or page content, customer or account names, private hosts, IP addresses, or personal data. a public registrable domain is allowed only in `bot_detection.registrable_domain`; never include a subdomain or account-specific host. the user can also ask to send feedback directly. submitting feedback is a side report to KERNEL, not a reason to stop: continue and finish the user's task with the other available tools.";
 
 const RESPONSE_MESSAGES = {
   recorded:
@@ -143,6 +254,18 @@ export function registerFeedbackTool(
       },
     },
     async ({ context: _context, ...feedback }, extra) => {
+      if (feedback.feedback_type === "bot_detection") {
+        if (!feedback.bot_detection || feedback.task_completed === undefined) {
+          return errorResponse(
+            "bot_detection and task_completed are required when feedback_type is bot_detection.",
+          );
+        }
+      } else if (feedback.bot_detection) {
+        return errorResponse(
+          "bot_detection is only accepted when feedback_type is bot_detection.",
+        );
+      }
+
       let status: FeedbackCaptureStatus = "unavailable";
       if (capture) {
         try {

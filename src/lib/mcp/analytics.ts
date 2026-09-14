@@ -164,6 +164,20 @@ const SENT_PROPERTIES = new Set<string>([
   "feedback_type",
   "feedback_sentiment",
   "feedback_product_area",
+  "feedback_destination",
+  "feedback_bot_detection_registrable_domain",
+  "feedback_bot_detection_observed_outcome",
+  "feedback_bot_detection_suspected_vendor",
+  "feedback_bot_detection_challenge_type",
+  "feedback_bot_detection_stealth",
+  "feedback_bot_detection_proxy_type",
+  "feedback_bot_detection_region",
+  "feedback_bot_detection_browser_version",
+  "feedback_bot_detection_browser_image_version",
+  "feedback_bot_detection_reproducibility",
+  "feedback_bot_detection_browser_session_id",
+  "feedback_bot_detection_config_registry_analysis_id",
+  "feedback_bot_detection_config_registry_recommendation_applied",
   "feedback_category",
   "feedback_task_completed",
   "feedback_tools_used",
@@ -517,6 +531,10 @@ export function captureMcpFeedback(
   extra: unknown,
   analytics: McpAnalytics,
 ) {
+  const botDetection =
+    feedback.feedback_type === "bot_detection"
+      ? feedback.bot_detection
+      : undefined;
   return captureMcpCustomEvent(analytics, extra, MCP_FEEDBACK_SUBMITTED_EVENT, {
     feedback_summary: redactAnalyticsText(feedback.summary),
     feedback_type: feedback.feedback_type,
@@ -524,6 +542,37 @@ export function captureMcpFeedback(
     feedback_product_area: feedback.product_area
       ? redactAnalyticsText(feedback.product_area)
       : undefined,
+    feedback_destination: botDetection
+      ? "config_registry_prioritization"
+      : undefined,
+    feedback_bot_detection_registrable_domain: botDetection?.registrable_domain,
+    feedback_bot_detection_observed_outcome: botDetection?.observed_outcome,
+    feedback_bot_detection_suspected_vendor: botDetection?.suspected_vendor
+      ? redactAnalyticsText(botDetection.suspected_vendor)
+      : undefined,
+    feedback_bot_detection_challenge_type: botDetection?.challenge_type,
+    feedback_bot_detection_stealth: botDetection?.stealth,
+    feedback_bot_detection_proxy_type: botDetection?.proxy_type,
+    feedback_bot_detection_region: botDetection?.region
+      ? redactAnalyticsText(botDetection.region)
+      : undefined,
+    feedback_bot_detection_browser_version: botDetection?.browser_version
+      ? redactAnalyticsText(botDetection.browser_version)
+      : undefined,
+    feedback_bot_detection_browser_image_version:
+      botDetection?.browser_image_version
+        ? redactAnalyticsText(botDetection.browser_image_version)
+        : undefined,
+    feedback_bot_detection_reproducibility: botDetection?.reproducibility,
+    feedback_bot_detection_browser_session_id: botDetection?.browser_session_id
+      ? redactAnalyticsText(botDetection.browser_session_id)
+      : undefined,
+    feedback_bot_detection_config_registry_analysis_id:
+      botDetection?.config_registry_analysis_id
+        ? redactAnalyticsText(botDetection.config_registry_analysis_id)
+        : undefined,
+    feedback_bot_detection_config_registry_recommendation_applied:
+      botDetection?.config_registry_recommendation_applied,
     feedback_category: feedback.category,
     feedback_task_completed: feedback.task_completed,
     feedback_tools_used: feedback.tools_used?.map(redactAnalyticsText),
