@@ -185,6 +185,11 @@ describe("submit_feedback", () => {
             analysis_id: "analysis_123",
             recommendation_match_scope: "exact",
             recommendation_verification: "verified",
+            recommendation_evidence: {
+              sample_size: 5,
+              success_rate: 1,
+              last_verified_at: "2026-09-13T12:00:00Z",
+            },
             applied_browser: {
               stealth: true,
               headless: false,
@@ -227,6 +232,11 @@ describe("submit_feedback", () => {
             analysis_id: "analysis_123",
             recommendation_match_scope: "exact",
             recommendation_verification: "verified",
+            recommendation_evidence: {
+              sample_size: 5,
+              success_rate: 1,
+              last_verified_at: "2026-09-13T12:00:00Z",
+            },
             applied_browser: {
               stealth: true,
               headless: false,
@@ -291,6 +301,40 @@ describe("submit_feedback", () => {
         },
       });
       expect(missingConfig.isError).toBe(true);
+      expect(captured).toEqual([]);
+
+      const missingSession = await client.callTool({
+        name: KERNEL_FEEDBACK_TOOL_NAME,
+        arguments: {
+          context:
+            "Reporting an applied recommendation without a browser session correlation identifier.",
+          summary: "The recommended configuration remained blocked",
+          feedback_type: "config_registry",
+          sentiment: "negative",
+          task_completed: false,
+          bot_detection: {
+            registrable_domain: "example.com",
+            observed_outcome: "blocked",
+            reproducibility: "single_observation",
+          },
+          config_registry: {
+            request_method: "lookup",
+            recommendation_evidence: {
+              sample_size: 3,
+              success_rate: 1,
+              last_verified_at: null,
+            },
+            applied_browser: {
+              stealth: true,
+              headless: false,
+              gpu: false,
+              viewport: { width: 1920, height: 1080 },
+            },
+            applied_proxy: { mode: "direct" },
+          },
+        },
+      });
+      expect(missingSession.isError).toBe(true);
       expect(captured).toEqual([]);
 
       const reportOnProductFeedback = await client.callTool({

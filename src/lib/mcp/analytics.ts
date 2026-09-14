@@ -180,6 +180,9 @@ const SENT_PROPERTIES = new Set<string>([
   "feedback_config_registry_analysis_id",
   "feedback_config_registry_recommendation_match_scope",
   "feedback_config_registry_recommendation_verification",
+  "feedback_config_registry_evidence_sample_size",
+  "feedback_config_registry_evidence_success_rate",
+  "feedback_config_registry_evidence_last_verified_at",
   "feedback_config_registry_applied_config_key",
   "feedback_config_registry_browser_stealth",
   "feedback_config_registry_browser_headless",
@@ -612,6 +615,12 @@ export function captureMcpFeedback(
       configRegistry?.recommendation_match_scope,
     feedback_config_registry_recommendation_verification:
       configRegistry?.recommendation_verification,
+    feedback_config_registry_evidence_sample_size:
+      configRegistry?.recommendation_evidence.sample_size,
+    feedback_config_registry_evidence_success_rate:
+      configRegistry?.recommendation_evidence.success_rate,
+    feedback_config_registry_evidence_last_verified_at:
+      configRegistry?.recommendation_evidence.last_verified_at,
     feedback_config_registry_applied_config_key: configRegistry
       ? configRegistryAppliedConfigKey(configRegistry)
       : undefined,

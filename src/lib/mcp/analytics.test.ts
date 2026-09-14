@@ -723,6 +723,11 @@ describe("captureMcpFeedback", () => {
           analysis_id: "analysis_123",
           recommendation_match_scope: "exact",
           recommendation_verification: "verified",
+          recommendation_evidence: {
+            sample_size: 5,
+            success_rate: 1,
+            last_verified_at: "2026-09-13T12:00:00Z",
+          },
           applied_browser: {
             stealth: true,
             headless: false,
@@ -761,6 +766,10 @@ describe("captureMcpFeedback", () => {
           feedback_config_registry_analysis_id: "analysis_123",
           feedback_config_registry_recommendation_match_scope: "exact",
           feedback_config_registry_recommendation_verification: "verified",
+          feedback_config_registry_evidence_sample_size: 5,
+          feedback_config_registry_evidence_success_rate: 1,
+          feedback_config_registry_evidence_last_verified_at:
+            "2026-09-13T12:00:00Z",
           feedback_config_registry_applied_config_key:
             "stealth-true|headless-false|gpu-false|viewport-1920x1080@25|proxy-managed-residential-US",
           feedback_config_registry_browser_stealth: true,

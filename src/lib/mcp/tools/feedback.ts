@@ -66,6 +66,26 @@ const configRegistryFeedbackSchema = z.object({
     .enum(["verified", "inferred"])
     .optional()
     .describe("the verification value returned with the recommendation."),
+  recommendation_evidence: z.object({
+    sample_size: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe("the recommendation evidence sample_size value."),
+    success_rate: z
+      .number()
+      .min(0)
+      .max(1)
+      .describe("the recommendation evidence success_rate value."),
+    last_verified_at: z
+      .string()
+      .datetime({ offset: true })
+      .nullable()
+      .optional()
+      .describe(
+        "the recommendation evidence last_verified_at timestamp, or null when it has never been verified.",
+      ),
+  }),
   applied_browser: configRegistryAppliedBrowserSchema.describe(
     "the returned browser settings, applied unchanged for the observed outcome.",
   ),
@@ -217,7 +237,7 @@ const feedbackFields = {
   config_registry: configRegistryFeedbackSchema
     .optional()
     .describe(
-      'the config registry recommendation and exact settings used for the observed site outcome. required when `feedback_type` is "config_registry" and rejected for every other feedback type. use this only after applying the recommendation unchanged, whether it passes or fails; if the settings were changed first, report `bot_detection` instead.',
+      'the config registry recommendation, evidence snapshot, and exact settings used for the observed site outcome. required when `feedback_type` is "config_registry" and rejected for every other feedback type. `bot_detection.browser_session_id` is also required so KERNEL can investigate without collecting sensitive page details here. use this only after applying the recommendation unchanged, whether it passes or fails; if the settings were changed first, report `bot_detection` instead.',
     ),
   category: z
     .enum([
@@ -296,7 +316,7 @@ export type KernelFeedbackCapture = (
 ) => void | Promise<void>;
 
 const TOOL_DESCRIPTION =
-  "send feedback about anything KERNEL to the KERNEL team. set `feedback_type` to route it: `product` for any KERNEL product or feature, `bot_detection` for a site-specific pass, challenge, block, or degraded result not tied to an unchanged registry recommendation, `config_registry` for the result after requesting and applying a config registry recommendation unchanged, `mcp` for this mcp server, `docs` for KERNEL documentation, or `other`. for bot detection, fill `bot_detection` with the public registrable domain, outcome, and reproducibility. when a config registry recommendation was requested and applied unchanged, choose `config_registry` and also fill `config_registry` with the request metadata and exact browser and proxy settings used; report both passes and failures so recommendation quality can be measured. if any recommended setting was changed before testing, use `bot_detection` instead so the result is not attributed to the original recommendation. all sentiments are welcome through `sentiment`: praise and feature requests are useful, not just problems. use this for confusing or broken experiences, papercuts, missing capabilities, unhelpful errors, feature requests, and things that worked especially well. keep `summary` to one sentence and make the detail fields concise and actionable, quoting the product surface, tool name, parameter, or error text when possible. include a concrete `suggested_improvement` when one is clear. never include credentials, tokens, api keys, urls, paths, browser or page content, customer or account names, private hosts, IP addresses, or personal data. a public registrable domain is allowed only in `bot_detection.registrable_domain`; never include a subdomain or account-specific host. the user can also ask to send feedback directly. submitting feedback is a side report to KERNEL, not a reason to stop: continue and finish the user's task with the other available tools.";
+  "send feedback about anything KERNEL to the KERNEL team. set `feedback_type` to route it: `product` for any KERNEL product or feature, `bot_detection` for a site-specific pass, challenge, block, or degraded result not tied to an unchanged registry recommendation, `config_registry` for the result after requesting and applying a config registry recommendation unchanged, `mcp` for this mcp server, `docs` for KERNEL documentation, or `other`. for bot detection, fill `bot_detection` with the public registrable domain, outcome, and reproducibility. when a config registry recommendation was requested and applied unchanged, choose `config_registry`; include the request metadata, recommendation evidence, exact browser and proxy settings used, and `bot_detection.browser_session_id`. report both passes and failures so recommendation quality can be measured. if any recommended setting was changed before testing, use `bot_detection` instead so the result is not attributed to the original recommendation. all sentiments are welcome through `sentiment`: praise and feature requests are useful, not just problems. use this for confusing or broken experiences, papercuts, missing capabilities, unhelpful errors, feature requests, and things that worked especially well. keep `summary` to one sentence and make the detail fields concise and actionable, quoting the product surface, tool name, parameter, or error text when possible. include a concrete `suggested_improvement` when one is clear. never include credentials, tokens, api keys, urls, paths, browser or page content, customer or account names, private hosts, IP addresses, or personal data. a public registrable domain is allowed only in `bot_detection.registrable_domain`; never include a subdomain or account-specific host. the user can also ask to send feedback directly. submitting feedback is a side report to KERNEL, not a reason to stop: continue and finish the user's task with the other available tools.";
 
 const RESPONSE_MESSAGES = {
   recorded:
@@ -347,6 +367,11 @@ export function registerFeedbackTool(
         if (!feedback.config_registry) {
           return errorResponse(
             "config_registry is required when feedback_type is config_registry.",
+          );
+        }
+        if (!feedback.bot_detection?.browser_session_id) {
+          return errorResponse(
+            "bot_detection.browser_session_id is required when feedback_type is config_registry.",
           );
         }
       } else if (feedback.config_registry) {

@@ -332,7 +332,7 @@ See [Vault payments](docs/vault-payments.md) for both provider flows, safety rul
 - `webmcp` - List native page tools across every tab and frame in a browser, then synchronously invoke an exact opaque `tool_ref` with structured input.
 - `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
 - `search_docs` - Search Kernel platform documentation and guides.
-- `submit_feedback` - send product, bot-detection, config-registry, mcp, or documentation feedback directly to the KERNEL team without interrupting the current task. Config-registry reports connect the observed site outcome to the recommendation metadata and exact browser and proxy settings applied unchanged; general bot-detection reports remain available for outcomes not tied to a registry recommendation.
+- `submit_feedback` - send product, bot-detection, config-registry, mcp, or documentation feedback directly to the KERNEL team without interrupting the current task. Config-registry reports connect the observed site outcome to the browser session, recommendation metadata and evidence, and exact browser and proxy settings applied unchanged; general bot-detection reports remain available for outcomes not tied to a registry recommendation.
 - `open_auth_login` - Open a secure interactive Managed Auth MCP App after user consent. Registered only for clients that declare MCP Apps support; credentials and MFA never enter MCP/model traffic.
 
 ## Resources
