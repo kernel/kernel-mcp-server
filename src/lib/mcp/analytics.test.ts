@@ -11,10 +11,12 @@ import {
 import {
   captureMcpConnectionScopeFailure,
   captureMcpFeedback,
+  captureMissingCapabilityReport,
   captureOAuthTokenExchange,
   clientCapabilityAnalyticsFromInitialize,
   enrichMcpAnalyticsEvent,
   instrumentMcpAnalytics,
+  MCP_CAPABILITY_REQUESTED_EVENT,
   MCP_CLIENT_ELICITATION_MODE_PROPERTY,
   MCP_CLIENT_SUPPORTS_APPS_PROPERTY,
   MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY,
@@ -370,10 +372,10 @@ describe("sanitizeMcpAnalyticsEvent", () => {
     expect(result?.properties.$set).toBeUndefined();
   });
 
-  test("redacts emails, URLs, and tokens from intent", async () => {
+  test("redacts identifiable values from analytics text", async () => {
     const event = toolCallEvent({
       [PostHogMCPAnalyticsProperty.Intent]:
-        "Checking out on https://shop.example.com/cart for buyer@example.com with key sk_abc123DEF456",
+        "Checking /tmp/private/cart.json on shop.example.com at 192.0.2.1 for buyer@example.com using https://shop.example.com/cart and key sk_abc123DEF456",
     });
 
     const result = await sanitizeMcpAnalyticsEvent(event);
@@ -384,8 +386,14 @@ describe("sanitizeMcpAnalyticsEvent", () => {
     expect(intent).toContain("[url]");
     expect(intent).toContain("[email]");
     expect(intent).toContain("[token]");
+    expect(intent).toContain("[domain]");
+    expect(intent).toContain("[ip]");
+    expect(intent).toContain("[path]");
     expect(intent).not.toContain("buyer@example.com");
     expect(intent).not.toContain("sk_abc123DEF456");
+    expect(intent).not.toContain("shop.example.com");
+    expect(intent).not.toContain("192.0.2.1");
+    expect(intent).not.toContain("/tmp/private/cart.json");
   });
 
   test("deletes non-string intents", async () => {
@@ -576,6 +584,59 @@ describe("captureMcpConnectionScopeFailure", () => {
   });
 });
 
+describe("captureMissingCapabilityReport", () => {
+  test("routes structured Kernel demand and redacts sensitive text", async () => {
+    const captured: unknown[] = [];
+    const analytics = {
+      capture: async (event: unknown) => {
+        captured.push(event);
+      },
+    } as McpAnalytics;
+
+    await captureMissingCapabilityReport(
+      {
+        context:
+          "Uploading /tmp/private/image.png to files.example.com requires a browser filesystem transfer capability.",
+        gap_reason: "kernel_capability_missing",
+        capability_area: "browser_files",
+        capability: "browser filesystem upload",
+        requested_action: "transfer",
+        task_outcome: "blocked",
+        tools_checked: ["manage_browsers"],
+      },
+      {
+        authInfo: {
+          extra: {
+            connectionContext: {
+              scope: { organizationId: "org_analytics" },
+            },
+          },
+        },
+      },
+      analytics,
+    );
+
+    expect(captured).toEqual([
+      {
+        event: MCP_CAPABILITY_REQUESTED_EVENT,
+        properties: expect.objectContaining({
+          $groups: { organization: "org_analytics" },
+          [PostHogMCPAnalyticsProperty.Intent]:
+            "Uploading [path] to [domain] requires a browser filesystem transfer capability.",
+          missing_capability_gap_reason: "kernel_capability_missing",
+          missing_capability_destination: "kernel_product_demand",
+          missing_capability_area: "browser_files",
+          missing_capability_name: "browser filesystem upload",
+          missing_capability_requested_action: "transfer",
+          missing_capability_task_outcome: "blocked",
+          missing_capability_tools_checked: ["manage_browsers"],
+          missing_capability_privacy_redacted: true,
+        }),
+      },
+    ]);
+  });
+});
+
 describe("captureMcpFeedback", () => {
   test("routes redacted feedback through contextual MCP analytics", async () => {
     const captured: unknown[] = [];
@@ -619,9 +680,11 @@ describe("captureMcpFeedback", () => {
           feedback_type: "product",
           feedback_sentiment: "mixed",
           feedback_product_area: "browsers",
-          feedback_destination: undefined,
+          feedback_destination: "product_feedback",
           feedback_category: undefined,
+          feedback_task_outcome: "completed",
           feedback_task_completed: true,
+          feedback_privacy_redacted: true,
           feedback_tools_used: ["manage_browsers"],
           feedback_friction_points: "- The response did not say when to retry.",
           feedback_suggested_improvement:
@@ -819,14 +882,46 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
         await enabled.client.listTools()
       ).tools.find(({ name }) => name === "get_more_tools");
       expect(missingCapabilityTool?.description).toContain(
-        "only after checking the available tools",
+        "after checking the tool list",
       );
       expect(missingCapabilityTool?.description).toContain(
-        "transient failure or capacity limit",
+        "transient or capacity failure",
       );
       expect(missingCapabilityTool?.description).toContain(
         "client-side permission restriction",
       );
+      expect(missingCapabilityTool?.inputSchema.required).toEqual([
+        "context",
+        "gap_reason",
+        "capability_area",
+        "capability",
+        "requested_action",
+        "task_outcome",
+      ]);
+      const disabledMissingCapabilityTool = (
+        await disabled.client.listTools()
+      ).tools.find(({ name }) => name === "get_more_tools");
+      expect(disabledMissingCapabilityTool?.inputSchema).toEqual(
+        missingCapabilityTool?.inputSchema,
+      );
+
+      const unavailableRequest = await disabled.client.callTool({
+        name: "get_more_tools",
+        arguments: {
+          context:
+            "Transferring a binary into a browser requires a filesystem upload capability that no listed tool provides.",
+          gap_reason: "kernel_capability_missing",
+          capability_area: "browser_files",
+          capability: "browser filesystem upload",
+          requested_action: "transfer",
+          task_outcome: "blocked",
+          tools_checked: ["manage_browsers"],
+        },
+      });
+      expect(toolResultJSON(unavailableRequest)).toMatchObject({
+        recorded: false,
+        status: "unavailable",
+      });
 
       const result = await disabled.client.callTool({
         name: KERNEL_FEEDBACK_TOOL_NAME,
@@ -836,6 +931,9 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
           summary: "Feedback analytics are unavailable",
           feedback_type: "mcp",
           sentiment: "negative",
+          task_outcome: "blocked",
+          affected_tool: "submit_feedback",
+          category: "tool_correctness",
         },
       });
       expect(toolResultJSON(result)).toMatchObject({
@@ -899,9 +997,10 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     )._requestHandlers;
     const handler = handlers.get(method);
     if (!handler) throw new Error(`no handler registered for ${method}`);
-    await handler(request, extra);
+    const result = await handler(request, extra);
     // The SDK's event sink captures fire-and-forget; give it a tick to flush.
     await new Promise((resolve) => setTimeout(resolve, 50));
+    return result;
   }
 
   test("attributes initialize, tools/list, and tools/call to the organization", async () => {
@@ -961,6 +1060,54 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
 
     // identify stays unwired, so no $identify event is ever published.
     expect(byEvent.has("$identify")).toBe(false);
+  });
+
+  test("captures only structured capability demand", async () => {
+    const captured: { event?: string }[] = [];
+
+    const capabilityResult = await simulateRequest(captured, "tools/call", {
+      name: "get_more_tools",
+      arguments: {
+        context:
+          "Transferring a local binary into a browser requires a filesystem upload capability that no listed tool provides.",
+        gap_reason: "kernel_capability_missing",
+        capability_area: "browser_files",
+        capability: "browser filesystem upload",
+        requested_action: "transfer",
+        task_outcome: "blocked",
+        tools_checked: ["kernel__manage_browsers"],
+      },
+    });
+    await simulateRequest(captured, "tools/call", {
+      name: "get_more_tools",
+      arguments: {
+        context:
+          "Retrying an existing browser tool after a capacity failure does not require a new server capability.",
+        gap_reason: "transient_or_capacity_failure",
+        capability_area: "browsers",
+        capability: "browser creation",
+        requested_action: "create",
+        task_outcome: "blocked",
+        tools_checked: ["manage_browsers"],
+      },
+    });
+
+    expect(capabilityResult).toBeDefined();
+    const requests = captured.filter(
+      ({ event }) => event === MCP_CAPABILITY_REQUESTED_EVENT,
+    ) as { properties: Record<string, unknown> }[];
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.properties).toMatchObject({
+      $groups: { organization: ORG },
+      [PostHogMCPAnalyticsProperty.SessionId]: "ses_integration",
+      missing_capability_gap_reason: "kernel_capability_missing",
+      missing_capability_destination: "kernel_product_demand",
+      missing_capability_area: "browser_files",
+      missing_capability_name: "browser filesystem upload",
+      missing_capability_requested_action: "transfer",
+      missing_capability_task_outcome: "blocked",
+      missing_capability_tools_checked: ["manage_browsers"],
+    });
   });
 
   test("captures feedback with the surrounding MCP session metadata", async () => {

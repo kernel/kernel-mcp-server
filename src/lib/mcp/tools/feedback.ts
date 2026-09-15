@@ -3,8 +3,36 @@ import { parse as parseDomain } from "tldts";
 import { z } from "zod";
 import { MCP_INTENT_ARGUMENT_DESCRIPTION } from "@/lib/mcp/analytics-context";
 import { errorResponse, jsonResponse } from "@/lib/mcp/responses";
+import {
+  normalizeKernelMcpToolName,
+  type KernelMcpToolName,
+} from "@/lib/mcp/tool-names";
 
 export const KERNEL_FEEDBACK_TOOL_NAME = "submit_feedback";
+
+const taskOutcomeSchema = z.enum([
+  "completed",
+  "completed_with_workaround",
+  "partially_completed",
+  "blocked",
+  "not_applicable",
+  "unknown",
+]);
+
+const affectedToolSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(100)
+  .transform((value, context): KernelMcpToolName => {
+    const toolName = normalizeKernelMcpToolName(value);
+    if (toolName) return toolName;
+    context.addIssue({
+      code: "custom",
+      message: "must name a tool provided by the KERNEL MCP server",
+    });
+    return z.NEVER;
+  });
 
 const configRegistryAppliedBrowserSchema = z.object({
   stealth: z.boolean().describe("the applied browser stealth setting."),
@@ -218,7 +246,17 @@ const feedbackFields = {
   sentiment: z
     .enum(["positive", "neutral", "negative", "mixed"])
     .describe(
-      'the overall tone. use "negative" for something broken or blocking, "mixed" for mostly fine with a concrete problem, "neutral" for a suggestion or feature request with no strong sentiment, and "positive" for praise or something that worked well. all sentiments are welcome.',
+      'the overall tone. use "negative" for something broken or blocking, "mixed" for mostly fine with a concrete problem, "neutral" for a suggestion or feature request with no strong sentiment, and "positive" for praise or something that worked well. all sentiments are welcome, but task_outcome—not sentiment—describes impact.',
+    ),
+  task_outcome: taskOutcomeSchema
+    .optional()
+    .describe(
+      'the outcome of the user\'s task: "completed", "completed_with_workaround", "partially_completed", "blocked", "not_applicable" for feedback not tied to a task, or "unknown" only for legacy submissions without an outcome. preferred over task_completed.',
+    ),
+  affected_tool: affectedToolSchema
+    .optional()
+    .describe(
+      'the single KERNEL MCP tool this report is primarily about. required for `feedback_type: "mcp"`. use the canonical tool name without a client namespace; namespaced forms are normalized when recognized. feedback about tools from another MCP server or the client itself belongs with that owner.',
     ),
   product_area: z
     .string()
@@ -227,7 +265,7 @@ const feedbackFields = {
     .max(100)
     .optional()
     .describe(
-      'the KERNEL product or area this is about, in free text (e.g. "browsers", "apps", "managed auth", "browser pools", "proxies", or "telemetry"). most useful for product feedback; use `feedback_type: "bot_detection"` instead of putting bot detection here, and for mcp feedback put the tool name in `details` or `friction_points`.',
+      'the KERNEL product or area this is about, in free text (e.g. "browsers", "apps", "managed auth", "browser pools", "proxies", or "telemetry"). required for product feedback. use `feedback_type: "bot_detection"` instead of putting bot detection here, and use affected_tool for mcp feedback.',
     ),
   bot_detection: botDetectionReportSchema
     .optional()
@@ -253,13 +291,13 @@ const feedbackFields = {
     ])
     .optional()
     .describe(
-      'for mcp feedback (`feedback_type: "mcp"`) only: the single category that best describes the dominant theme. use "missing_tool" when a capability is absent, "tool_description" when tool documentation is unclear, "tool_input_schema" when arguments are confusing, "tool_output_format" when a response is hard to consume, "instructions_clarity" when mcp instructions are unclear, "tool_correctness" when a tool returns wrong data, "error_message" when an error is unhelpful, and "performance" when latency is the issue. omit for product, docs, or other feedback.',
+      'for mcp feedback (`feedback_type: "mcp"`) only: the single category that best describes the dominant theme. `missing_tool` remains accepted for compatibility but is routed outside MCP quality; use `get_more_tools` for new capability requests. use "tool_description" when tool documentation is unclear, "tool_input_schema" when arguments are confusing, "tool_output_format" when a response is hard to consume, "instructions_clarity" when mcp instructions are unclear, "tool_correctness" when a tool returns wrong data, "error_message" when an error is unhelpful, and "performance" when latency is the issue. omit for product, docs, or other feedback.',
     ),
   task_completed: z
     .boolean()
     .optional()
     .describe(
-      "whether the user's task was completed. be honest: `false` is useful signal. required for bot-detection and config-registry feedback, and also useful for mcp feedback.",
+      "legacy task completion signal retained for compatibility. prefer task_outcome, which distinguishes workarounds, partial completion, blockers, and feedback not tied to a task. task_completed remains required for bot-detection and config-registry feedback.",
     ),
   tools_used: z
     .array(z.string().trim().min(1).max(100))
@@ -316,7 +354,7 @@ export type KernelFeedbackCapture = (
 ) => void | Promise<void>;
 
 const TOOL_DESCRIPTION =
-  "send feedback about anything KERNEL to the KERNEL team. set `feedback_type` to route it: `product` for any KERNEL product or feature, `bot_detection` for a site-specific pass, challenge, block, or degraded result not tied to an unchanged registry recommendation, `config_registry` for the result after requesting and applying a config registry recommendation unchanged, `mcp` for this mcp server, `docs` for KERNEL documentation, or `other`. for bot detection, fill `bot_detection` with the public registrable domain, outcome, and reproducibility. when a config registry recommendation was requested and applied unchanged, choose `config_registry`; include the request metadata, recommendation evidence, exact browser and proxy settings used, and `bot_detection.browser_session_id`. report both passes and failures so recommendation quality can be measured. if any recommended setting was changed before testing, use `bot_detection` instead so the result is not attributed to the original recommendation. all sentiments are welcome through `sentiment`: praise and feature requests are useful, not just problems. use this for confusing or broken experiences, papercuts, missing capabilities, unhelpful errors, feature requests, and things that worked especially well. keep `summary` to one sentence and make the detail fields concise and actionable, quoting the product surface, tool name, parameter, or error text when possible. include a concrete `suggested_improvement` when one is clear. never include credentials, tokens, api keys, urls, paths, browser or page content, customer or account names, private hosts, IP addresses, or personal data. a public registrable domain is allowed only in `bot_detection.registrable_domain`; never include a subdomain or account-specific host. the user can also ask to send feedback directly. submitting feedback is a side report to KERNEL, not a reason to stop: continue and finish the user's task with the other available tools.";
+  "send feedback about a KERNEL product, this KERNEL MCP server, or KERNEL documentation. use get_more_tools—not this tool—for a genuinely absent capability. for mcp feedback, identify the single affected KERNEL tool and its category; do not report client behavior or tools owned by another server. describe task impact with task_outcome, while sentiment remains useful for tone and praise. set feedback_type to product, bot_detection, config_registry, mcp, docs, or other. for bot detection, fill bot_detection with the public registrable domain, outcome, and reproducibility. after applying a config registry recommendation unchanged, submit exactly one config_registry report for the tested recommendation, whether it passed or failed; include the recommendation metadata, evidence, exact browser and proxy settings, and bot_detection.browser_session_id. if any setting changed before testing, use bot_detection instead. keep summary to one sentence, make detail fields concise and actionable, and include a concrete suggested_improvement when one is clear. never include credentials, tokens, api keys, urls, paths, browser or page content, customer or account names, private hosts, IP addresses, or personal data. a public registrable domain is allowed only in bot_detection.registrable_domain. submitting feedback is a side report, not a reason to stop; continue the user's task with the other available tools.";
 
 const RESPONSE_MESSAGES = {
   recorded:
@@ -329,6 +367,35 @@ const RESPONSE_MESSAGES = {
 } as const;
 
 type FeedbackCaptureStatus = keyof typeof RESPONSE_MESSAGES;
+
+function taskCompletedForOutcome(
+  outcome: z.infer<typeof taskOutcomeSchema>,
+): boolean | undefined {
+  switch (outcome) {
+    case "completed":
+    case "completed_with_workaround":
+      return true;
+    case "partially_completed":
+    case "blocked":
+      return false;
+    case "not_applicable":
+    case "unknown":
+      return undefined;
+  }
+}
+
+function kernelToolsUsed(toolsUsed: string[] | undefined) {
+  return new Set(
+    toolsUsed
+      ?.map(normalizeKernelMcpToolName)
+      .filter(
+        (toolName): toolName is KernelMcpToolName =>
+          toolName !== undefined &&
+          toolName !== KERNEL_FEEDBACK_TOOL_NAME &&
+          toolName !== "get_more_tools",
+      ),
+  );
+}
 
 export function registerFeedbackTool(
   server: McpServer,
@@ -348,6 +415,54 @@ export function registerFeedbackTool(
       },
     },
     async ({ context: _context, ...feedback }, extra) => {
+      if (feedback.task_outcome === undefined) {
+        feedback.task_outcome =
+          feedback.task_completed === undefined
+            ? "unknown"
+            : feedback.task_completed
+              ? "completed"
+              : "blocked";
+      } else {
+        const expectedTaskCompleted = taskCompletedForOutcome(
+          feedback.task_outcome,
+        );
+        if (
+          feedback.task_completed !== undefined &&
+          feedback.task_completed !== expectedTaskCompleted
+        ) {
+          return errorResponse(
+            "task_outcome and task_completed describe conflicting outcomes.",
+          );
+        }
+        feedback.task_completed ??= expectedTaskCompleted;
+      }
+
+      if (feedback.feedback_type === "mcp") {
+        const candidates = kernelToolsUsed(feedback.tools_used);
+        if (!feedback.affected_tool && candidates.size === 1) {
+          feedback.affected_tool = [...candidates][0];
+        }
+        if (
+          !feedback.affected_tool &&
+          feedback.tools_used &&
+          feedback.tools_used.length > 0 &&
+          candidates.size === 0
+        ) {
+          return errorResponse(
+            "this feedback names no KERNEL MCP tool; report client or external-server feedback to its owner.",
+          );
+        }
+      } else {
+        if (feedback.affected_tool) {
+          return errorResponse(
+            "affected_tool is only accepted for mcp feedback.",
+          );
+        }
+        if (feedback.category) {
+          return errorResponse("category is only accepted for mcp feedback.");
+        }
+      }
+
       const hasSiteOutcome =
         feedback.feedback_type === "bot_detection" ||
         feedback.feedback_type === "config_registry";

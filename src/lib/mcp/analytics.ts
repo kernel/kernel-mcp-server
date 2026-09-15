@@ -1,5 +1,5 @@
+import { createHash } from "node:crypto";
 import {
-  getMoreToolsResult,
   instrument,
   PostHogMCPAnalyticsEvent,
   PostHogMCPAnalyticsProperty,
@@ -8,7 +8,6 @@ import {
 } from "@posthog/mcp";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { PostHog } from "posthog-node";
-import { z } from "zod";
 import type {
   McpConnectionAnalyticsContext,
   McpConnectionContext,
@@ -18,6 +17,10 @@ import {
   type KernelFeedback,
   registerFeedbackTool,
 } from "@/lib/mcp/tools/feedback";
+import {
+  type MissingCapabilityReport,
+  registerMissingCapabilityTool,
+} from "@/lib/mcp/tools/missing-capability";
 import {
   clientDeclaresExtension,
   clientElicitationModes,
@@ -67,6 +70,7 @@ export type McpConnectionScopeFailureAnalytics = {
 export const MCP_CONNECTION_SCOPE_FAILURE_EVENT =
   "mcp_connection_scope_failure";
 export const MCP_FEEDBACK_SUBMITTED_EVENT = "mcp_feedback_submitted";
+export const MCP_CAPABILITY_REQUESTED_EVENT = "mcp_capability_requested";
 
 if (!projectToken && process.env.NODE_ENV !== "production") {
   console.error(
@@ -163,6 +167,10 @@ const SENT_PROPERTIES = new Set<string>([
   "feedback_summary",
   "feedback_type",
   "feedback_sentiment",
+  "feedback_task_outcome",
+  "feedback_affected_tool",
+  "feedback_dedupe_key",
+  "feedback_privacy_redacted",
   "feedback_product_area",
   "feedback_destination",
   "feedback_bot_detection_registrable_domain",
@@ -200,25 +208,34 @@ const SENT_PROPERTIES = new Set<string>([
   "feedback_suggested_improvement",
   "feedback_user_request",
   "feedback_details",
+  "missing_capability_gap_reason",
+  "missing_capability_destination",
+  "missing_capability_area",
+  "missing_capability_name",
+  "missing_capability_requested_action",
+  "missing_capability_task_outcome",
+  "missing_capability_tools_checked",
+  "missing_capability_dedupe_key",
+  "missing_capability_privacy_redacted",
 ]);
 
-// Intent is the only free-form text this captures, and an agent writes it. Long enough for
-// the 15-25 words asked for, short enough that a client ignoring the instruction can't
-// stream a payload or a prompt into an event property.
+// Free-form analytics text is agent-written. Intent stays long enough for the 15-25 words
+// requested by the schema but short enough that a client ignoring the instruction cannot
+// stream a payload or prompt into one event property.
 const INTENT_MAX_LENGTH = 300;
 
-// The intent descriptions ask agents to leave specifics out, and the agent writing the string
-// is the only thing holding them to it. These cover the shapes that are unambiguous when one
-// does slip through. They are not a substitute for the instruction: no pattern can tell that a
-// plain noun is a customer's name, so an intent still has to be treated as agent-written prose.
-//
-// A capability gap is often named as a long snake_case or kebab-case identifier, and that name
-// is the whole point of the report, so length alone can't stand in for a credential. What marks
-// one is either a vendor prefix (Kernel API keys are sk_*) or an unbroken high-entropy run:
-// mixed case with a digit, or hex. Separator-joined lowercase names match none of those.
+// Instructions remain the first privacy boundary, but feedback has enough free-form fields
+// that recognizable identifiers must also be removed server-side. Plain organization and
+// person names cannot be identified reliably without false positives, so schemas still tell
+// agents to anonymize them.
 const INTENT_REDACTIONS: readonly [RegExp, string][] = [
   [/[^\s@]+@[^\s@]+\.[^\s@]+/g, "[email]"],
   [/[a-z][a-z0-9+.-]*:\/\/\S+/gi, "[url]"],
+  [/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, "[ip]"],
+  [/\b(?=[A-F0-9:]*[A-F])(?:[A-F0-9]{1,4}:){2,}[A-F0-9:]{1,}\b/gi, "[ip]"],
+  [/(?<!\w)(?:~\/|\/)(?:[\w.-]+\/)+[\w.-]+/g, "[path]"],
+  [/\b[A-Z]:\\(?:[^\\\s]+\\)*[^\\\s]+/gi, "[path]"],
+  [/\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b/gi, "[domain]"],
   [
     /\b(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[a-z])(?=[A-Za-z0-9]*[A-Z])[A-Za-z0-9]{20,}\b/g,
     "[token]",
@@ -302,57 +319,23 @@ function annotateProjectParamUsage(properties: Record<string, unknown>) {
   properties[MCP_USED_PROJECT_PROPERTY] = hasNonEmptyParam(args, "project");
 }
 
+function redactAnalyticsTextWithStatus(text: string) {
+  let value = text.trim();
+  let redacted = false;
+  for (const [pattern, replacement] of INTENT_REDACTIONS) {
+    const next = value.replace(pattern, replacement);
+    redacted ||= next !== value;
+    value = next;
+  }
+  return { value, redacted };
+}
+
 function redactAnalyticsText(text: string) {
-  return INTENT_REDACTIONS.reduce(
-    (redacted, [pattern, replacement]) =>
-      redacted.replace(pattern, replacement),
-    text.trim(),
-  );
+  return redactAnalyticsTextWithStatus(text).value;
 }
 
 function sanitizeIntent(intent: string) {
   return redactAnalyticsText(intent).slice(0, INTENT_MAX_LENGTH);
-}
-
-// Must stay the SDK's default name: reportMissing advertises a tool under this name and
-// dispatches calls to it as capability reports, and the name is what ties the two together.
-const MISSING_CAPABILITY_TOOL_NAME = "get_more_tools";
-
-const MISSING_CAPABILITY_CONTEXT_DESCRIPTION =
-  "The capability that is missing and what the user was trying to do, in 15-25 words, third " +
-  "person. Used for product analytics. Name the capability, not the specifics: never include " +
-  "credentials, tokens, URLs, domain or account names, file contents, or personal data. " +
-  'Example: "Wanted to run one automation across several sessions at once; no tool exposes ' +
-  'fan-out over a pool."';
-
-/**
- * Advertises `get_more_tools`, which agents call when no tool covers what they were asked
- * to do. Registered here rather than left to `reportMissing` alone, which injects its own
- * descriptor only when no tool of this name exists: the SDK asks for "a description of
- * your goal" and skips the `context` description configured below, and this is the one
- * intent field describing the user's original ask, so it's the likeliest to carry a target
- * site or an account. The tool description itself is the SDK's — it's what gets an agent to
- * report a gap instead of giving up.
- *
- * The callback is the fallback path. `instrument` answers a call to this tool itself, with
- * this same result, and records `$mcp_missing_capability` instead of a tool call.
- */
-function registerMissingCapabilityTool(server: McpServer) {
-  server.tool(
-    MISSING_CAPABILITY_TOOL_NAME,
-    "Report a genuine server capability gap only after checking the available tools and confirming none can complete the task. Do not call this for an existing fallback, a transient failure or capacity limit, or a client-side permission restriction; use the available tool or submit_feedback instead.",
-    {
-      context: z.string().describe(MISSING_CAPABILITY_CONTEXT_DESCRIPTION),
-    },
-    {
-      title: "Get more tools",
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: true,
-    },
-    async () => getMoreToolsResult(),
-  );
 }
 
 const ANALYTICS_CONTEXT_PROPERTY = "__mcp_connection_analytics_context";
@@ -434,6 +417,54 @@ export function captureMcpCustomEvent(
       ...(organizationId && { $groups: { organization: organizationId } }),
     },
   });
+}
+
+function analyticsDedupeKey(parts: (string | undefined)[]) {
+  return createHash("sha256")
+    .update(parts.filter(Boolean).join(":"))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+export function captureMissingCapabilityReport(
+  report: MissingCapabilityReport,
+  extra: unknown,
+  analytics: McpAnalytics,
+) {
+  const context = report.context
+    ? redactAnalyticsTextWithStatus(report.context)
+    : { value: "", redacted: false };
+  const capability = redactAnalyticsTextWithStatus(report.capability);
+  const destination =
+    report.gap_reason === "kernel_capability_missing"
+      ? "kernel_product_demand"
+      : "external_integration_demand";
+
+  return captureMcpCustomEvent(
+    analytics,
+    extra,
+    MCP_CAPABILITY_REQUESTED_EVENT,
+    {
+      [PostHogMCPAnalyticsProperty.Intent]: (
+        context.value || capability.value
+      ).slice(0, INTENT_MAX_LENGTH),
+      missing_capability_gap_reason: report.gap_reason,
+      missing_capability_destination: destination,
+      missing_capability_area: report.capability_area,
+      missing_capability_name: capability.value,
+      missing_capability_requested_action: report.requested_action,
+      missing_capability_task_outcome: report.task_outcome,
+      missing_capability_tools_checked: report.tools_checked,
+      missing_capability_dedupe_key: analyticsDedupeKey([
+        destination,
+        report.capability_area,
+        report.requested_action,
+        capability.value.toLowerCase(),
+      ]),
+      missing_capability_privacy_redacted:
+        context.redacted || capability.redacted,
+    },
+  );
 }
 
 export function enrichMcpAnalyticsEvent(event: {
@@ -573,44 +604,96 @@ export function captureMcpFeedback(
     feedback.feedback_type === "config_registry"
       ? feedback.config_registry
       : undefined;
+
+  let privacyRedacted = false;
+  const safeText = (value: string | undefined) => {
+    if (value === undefined) return undefined;
+    const sanitized = redactAnalyticsTextWithStatus(value);
+    privacyRedacted ||= sanitized.redacted;
+    return sanitized.value;
+  };
+
+  const summary = safeText(feedback.summary)!;
+  const productArea = safeText(feedback.product_area);
+  const suspectedVendor = safeText(botDetection?.suspected_vendor);
+  const region = safeText(botDetection?.region);
+  const browserVersion = safeText(botDetection?.browser_version);
+  const browserImageVersion = safeText(botDetection?.browser_image_version);
+  const browserSessionId = safeText(botDetection?.browser_session_id);
+  const analysisId = safeText(configRegistry?.analysis_id);
+  const toolsUsed = feedback.tools_used?.map((tool) => safeText(tool)!);
+  const frictionPoints = safeText(feedback.friction_points);
+  const suggestedImprovement = safeText(feedback.suggested_improvement);
+  const userRequest = safeText(feedback.user_request);
+  const details = safeText(feedback.details);
+
+  const taskOutcome =
+    feedback.task_outcome ??
+    (feedback.task_completed === true
+      ? "completed"
+      : feedback.task_completed === false
+        ? "blocked"
+        : "unknown");
+  const destination = configRegistry
+    ? "config_registry_quality"
+    : botDetection
+      ? "config_registry_prioritization"
+      : feedback.feedback_type === "mcp"
+        ? feedback.category === "missing_tool"
+          ? "legacy_capability_feedback"
+          : feedback.affected_tool
+            ? "mcp_quality"
+            : "mcp_unclassified"
+        : feedback.feedback_type === "product" &&
+            feedback.sentiment === "positive"
+          ? "product_praise"
+          : feedback.feedback_type === "product" && !productArea
+            ? "product_unclassified"
+            : `${feedback.feedback_type}_feedback`;
+  const dedupeKey = configRegistry
+    ? analyticsDedupeKey([
+        "config_registry",
+        analysisId ?? configRegistry.request_method,
+        botDetection?.registrable_domain,
+      ])
+    : botDetection
+      ? analyticsDedupeKey([
+          "bot_detection",
+          botDetection.registrable_domain,
+          botDetection.observed_outcome,
+          botDetection.reproducibility,
+        ])
+      : analyticsDedupeKey([
+          feedback.feedback_type,
+          feedback.affected_tool,
+          productArea,
+          feedback.category,
+          summary.toLowerCase().replace(/[^a-z0-9]+/g, " "),
+        ]);
+
   return captureMcpCustomEvent(analytics, extra, MCP_FEEDBACK_SUBMITTED_EVENT, {
-    feedback_summary: redactAnalyticsText(feedback.summary),
+    feedback_summary: summary,
     feedback_type: feedback.feedback_type,
     feedback_sentiment: feedback.sentiment,
-    feedback_product_area: feedback.product_area
-      ? redactAnalyticsText(feedback.product_area)
-      : undefined,
-    feedback_destination: configRegistry
-      ? "config_registry_quality"
-      : botDetection
-        ? "config_registry_prioritization"
-        : undefined,
+    feedback_task_outcome: taskOutcome,
+    feedback_affected_tool: feedback.affected_tool,
+    feedback_dedupe_key: dedupeKey,
+    feedback_privacy_redacted: privacyRedacted,
+    feedback_product_area: productArea,
+    feedback_destination: destination,
     feedback_bot_detection_registrable_domain: botDetection?.registrable_domain,
     feedback_bot_detection_observed_outcome: botDetection?.observed_outcome,
-    feedback_bot_detection_suspected_vendor: botDetection?.suspected_vendor
-      ? redactAnalyticsText(botDetection.suspected_vendor)
-      : undefined,
+    feedback_bot_detection_suspected_vendor: suspectedVendor,
     feedback_bot_detection_challenge_type: botDetection?.challenge_type,
     feedback_bot_detection_stealth: botDetection?.stealth,
     feedback_bot_detection_proxy_type: botDetection?.proxy_type,
-    feedback_bot_detection_region: botDetection?.region
-      ? redactAnalyticsText(botDetection.region)
-      : undefined,
-    feedback_bot_detection_browser_version: botDetection?.browser_version
-      ? redactAnalyticsText(botDetection.browser_version)
-      : undefined,
-    feedback_bot_detection_browser_image_version:
-      botDetection?.browser_image_version
-        ? redactAnalyticsText(botDetection.browser_image_version)
-        : undefined,
+    feedback_bot_detection_region: region,
+    feedback_bot_detection_browser_version: browserVersion,
+    feedback_bot_detection_browser_image_version: browserImageVersion,
     feedback_bot_detection_reproducibility: botDetection?.reproducibility,
-    feedback_bot_detection_browser_session_id: botDetection?.browser_session_id
-      ? redactAnalyticsText(botDetection.browser_session_id)
-      : undefined,
+    feedback_bot_detection_browser_session_id: browserSessionId,
     feedback_config_registry_request_method: configRegistry?.request_method,
-    feedback_config_registry_analysis_id: configRegistry?.analysis_id
-      ? redactAnalyticsText(configRegistry.analysis_id)
-      : undefined,
+    feedback_config_registry_analysis_id: analysisId,
     feedback_config_registry_recommendation_match_scope:
       configRegistry?.recommendation_match_scope,
     feedback_config_registry_recommendation_verification:
@@ -646,19 +729,11 @@ export function captureMcpFeedback(
         : undefined,
     feedback_category: feedback.category,
     feedback_task_completed: feedback.task_completed,
-    feedback_tools_used: feedback.tools_used?.map(redactAnalyticsText),
-    feedback_friction_points: feedback.friction_points
-      ? redactAnalyticsText(feedback.friction_points)
-      : undefined,
-    feedback_suggested_improvement: feedback.suggested_improvement
-      ? redactAnalyticsText(feedback.suggested_improvement)
-      : undefined,
-    feedback_user_request: feedback.user_request
-      ? redactAnalyticsText(feedback.user_request)
-      : undefined,
-    feedback_details: feedback.details
-      ? redactAnalyticsText(feedback.details)
-      : undefined,
+    feedback_tools_used: toolsUsed,
+    feedback_friction_points: frictionPoints,
+    feedback_suggested_improvement: suggestedImprovement,
+    feedback_user_request: userRequest,
+    feedback_details: details,
   });
 }
 
@@ -671,15 +746,17 @@ export function instrumentMcpAnalytics(
   client: PostHog | null = posthog,
 ) {
   if (!client) {
+    registerMissingCapabilityTool(server);
     registerFeedbackTool(server);
     return;
   }
 
   const analytics = instrument(server, client, {
-    // Records a `$mcp_missing_capability` event, carrying the reported gap as $mcp_intent,
-    // when an agent calls the tool registered by registerMissingCapabilityTool.
-    reportMissing: true,
-    missingCapabilityToolName: MISSING_CAPABILITY_TOOL_NAME,
+    // The first-class get_more_tools handler validates and captures structured demand itself.
+    // Point the SDK's name-based interception at an unadvertised name so calls to the real
+    // tool reach its registered schema and callback even while reportMissing is disabled.
+    reportMissing: false,
+    missingCapabilityToolName: "__posthog_missing_capability_disabled",
     // Adds a required `context` argument to every advertised tool, which the agent fills
     // with why it is making the call. Recorded as $mcp_intent. The description replaces
     // the SDK default: it repeats per tool in every tools/list response, so it stays
@@ -723,7 +800,9 @@ export function instrumentMcpAnalytics(
     beforeSend: sanitizeMcpAnalyticsEvent,
   });
 
-  registerMissingCapabilityTool(server);
+  registerMissingCapabilityTool(server, (report, extra) =>
+    captureMissingCapabilityReport(report, extra, analytics),
+  );
   registerFeedbackTool(server, (feedback, extra) =>
     captureMcpFeedback(feedback, extra, analytics),
   );

@@ -64,10 +64,119 @@ describe("submit_feedback", () => {
           friction_points: "- The timeout response did not suggest a retry.",
           suggested_improvement:
             "Include retry timing in browser creation timeout responses.",
+          task_outcome: "completed",
           task_completed: true,
           tools_used: ["manage_browsers"],
         },
       ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("normalizes KERNEL tool ownership and rejects feedback for other servers", async () => {
+    const captured: KernelFeedback[] = [];
+    const { client, close } = await connectTestMcp(
+      (server) =>
+        registerFeedbackTool(server, (feedback) => {
+          captured.push(feedback);
+        }),
+      {},
+    );
+
+    try {
+      const accepted = await client.callTool({
+        name: KERNEL_FEEDBACK_TOOL_NAME,
+        arguments: {
+          context:
+            "Reporting that a KERNEL browser control returned no output while the user remained blocked.",
+          summary: "Playwright execution returned no output",
+          feedback_type: "mcp",
+          sentiment: "negative",
+          task_outcome: "blocked",
+          affected_tool: "kernel__execute_playwright_code",
+          category: "tool_output_format",
+        },
+      });
+      expect(accepted.isError).not.toBe(true);
+      expect(captured[0]?.affected_tool).toBe("execute_playwright_code");
+
+      const external = await client.callTool({
+        name: KERNEL_FEEDBACK_TOOL_NAME,
+        arguments: {
+          context:
+            "Reporting a schema problem in a tool owned by another MCP server instead of KERNEL.",
+          summary: "Another server exposed an incomplete schema",
+          feedback_type: "mcp",
+          sentiment: "negative",
+          task_outcome: "blocked",
+          affected_tool: "mcp_driftwood_install_task",
+          category: "tool_input_schema",
+        },
+      });
+      expect(external.isError).toBe(true);
+      expect(captured).toHaveLength(1);
+
+      const missingCapability = await client.callTool({
+        name: KERNEL_FEEDBACK_TOOL_NAME,
+        arguments: {
+          context:
+            "Reporting an absent KERNEL capability through the wrong feedback channel instead of get_more_tools.",
+          summary: "A required browser operation is unavailable",
+          feedback_type: "mcp",
+          sentiment: "negative",
+          task_outcome: "blocked",
+          affected_tool: "manage_browsers",
+          category: "missing_tool",
+        },
+      });
+      expect(missingCapability.isError).not.toBe(true);
+      expect(captured).toHaveLength(2);
+    } finally {
+      await close();
+    }
+  });
+
+  test("defaults legacy task outcomes and rejects conflicting fields", async () => {
+    const captured: KernelFeedback[] = [];
+    const { client, close } = await connectTestMcp(
+      (server) =>
+        registerFeedbackTool(server, (feedback) => {
+          captured.push(feedback);
+        }),
+      {},
+    );
+
+    try {
+      const missing = await client.callTool({
+        name: KERNEL_FEEDBACK_TOOL_NAME,
+        arguments: {
+          context:
+            "Reporting product feedback without enough information to determine the task impact.",
+          summary: "Browser startup guidance was unclear",
+          feedback_type: "product",
+          sentiment: "mixed",
+          product_area: "browsers",
+        },
+      });
+      expect(missing.isError).not.toBe(true);
+      expect(captured[0]?.task_outcome).toBe("unknown");
+
+      const conflicting = await client.callTool({
+        name: KERNEL_FEEDBACK_TOOL_NAME,
+        arguments: {
+          context:
+            "Reporting product feedback with contradictory completion signals that cannot be prioritized reliably.",
+          summary: "Browser startup guidance was unclear",
+          feedback_type: "product",
+          sentiment: "mixed",
+          product_area: "browsers",
+          task_outcome: "blocked",
+          task_completed: true,
+        },
+      });
+      expect(conflicting.isError).toBe(true);
+      expect(captured).toHaveLength(1);
     } finally {
       await close();
     }
@@ -131,6 +240,7 @@ describe("submit_feedback", () => {
           summary: "Stealth sessions were consistently blocked",
           feedback_type: "bot_detection",
           sentiment: "negative",
+          task_outcome: "blocked",
           task_completed: false,
           tools_used: ["manage_browsers", "execute_playwright_code"],
           bot_detection: {
@@ -219,6 +329,7 @@ describe("submit_feedback", () => {
           summary: "The recommended configuration remained blocked",
           feedback_type: "config_registry",
           sentiment: "negative",
+          task_outcome: "blocked",
           task_completed: false,
           bot_detection: {
             registrable_domain: "example.com",
@@ -418,6 +529,9 @@ describe("submit_feedback", () => {
           summary: "The MCP response was easy to use",
           feedback_type: "mcp",
           sentiment: "positive",
+          task_outcome: "completed",
+          affected_tool: "kernel__execute_playwright_code",
+          category: "tool_output_format",
         },
       });
 
@@ -447,6 +561,8 @@ describe("submit_feedback", () => {
           summary: "Browser feedback could not be delivered",
           feedback_type: "product",
           sentiment: "negative",
+          task_outcome: "blocked",
+          product_area: "browsers",
         },
       });
 

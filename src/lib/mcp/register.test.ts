@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
+import { KERNEL_MCP_TOOL_NAMES } from "@/lib/mcp/tool-names";
 
 const NON_AUTH_TOOLSETS = [
   "profiles",
@@ -51,6 +52,20 @@ function captureRegistration(mcpApps: boolean, vaults = false) {
   registerMcpCapabilities(server, { mcpApps, vaults });
   return { legacyTools, appTools, resources, schemas };
 }
+
+describe("MCP tool ownership", () => {
+  test("recognizes every registered KERNEL tool", () => {
+    const registration = captureRegistration(true, true);
+    const knownTools = new Set<string>(KERNEL_MCP_TOOL_NAMES);
+
+    for (const toolName of [
+      ...registration.legacyTools,
+      ...registration.appTools,
+    ]) {
+      expect(knownTools.has(toolName)).toBe(true);
+    }
+  });
+});
 
 describe("MCP Apps additive registration", () => {
   test("keeps managed auth unchanged and only adds the App tools for capable clients", () => {
