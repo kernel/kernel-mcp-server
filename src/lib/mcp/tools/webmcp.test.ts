@@ -1,6 +1,7 @@
 /// <reference types="bun-types" />
 
 import { APIConnectionTimeoutError, APIError } from "@onkernel/sdk";
+import type { InvocationResult } from "@onkernel/sdk/resources/browsers/webmcp";
 import type { PostHog } from "posthog-node";
 import { describe, expect, test } from "bun:test";
 import { instrumentMcpAnalytics } from "@/lib/mcp/analytics";
@@ -75,52 +76,59 @@ describe("webmcp", () => {
     }
   });
 
-  test("invokes the exact tool reference synchronously with retries disabled", async () => {
-    const calls: unknown[][] = [];
-    const invocationResult = {
-      invocation_id: "invoke-1",
-      status: "completed" as const,
-      output: { matches: 2 },
-    };
-    const { client, close } = await connectTestMcp(registerWebMcpTool, {
-      browsers: {
-        webmcp: {
-          invokeTool: async (...args: unknown[]) => {
-            calls.push(args);
-            return invocationResult;
+  test.each(["completed", "canceled", "error", "awaiting_submission"] as const)(
+    "preserves %s from an exact invocation with retries disabled",
+    async (status) => {
+      const calls: unknown[][] = [];
+      const invocationResult: InvocationResult = {
+        invocation_id: "invoke-1",
+        status,
+        output:
+          status === "awaiting_submission"
+            ? { form_populated: true, submitted: false }
+            : { matches: 2 },
+      };
+      const { client, close } = await connectTestMcp(registerWebMcpTool, {
+        browsers: {
+          webmcp: {
+            invokeTool: async (...args: unknown[]) => {
+              calls.push(args);
+              return invocationResult;
+            },
           },
-        },
-      },
-    });
-
-    try {
-      const result = await client.callTool({
-        name: "webmcp",
-        arguments: {
-          action: "invoke",
-          session_id: "ses_1",
-          tool_ref: "opaque-ref",
-          input: { query: "kernel" },
-          timeout_sec: 30,
         },
       });
 
-      expect(calls).toEqual([
-        [
-          "ses_1",
-          {
+      try {
+        const result = await client.callTool({
+          name: "webmcp",
+          arguments: {
+            action: "invoke",
+            session_id: "ses_1",
             tool_ref: "opaque-ref",
             input: { query: "kernel" },
             timeout_sec: 30,
           },
-          { timeout: 60_000, maxRetries: 0 },
-        ],
-      ]);
-      expect(toolResultJSON(result)).toEqual(invocationResult);
-    } finally {
-      await close();
-    }
-  });
+        });
+
+        expect(calls).toEqual([
+          [
+            "ses_1",
+            {
+              tool_ref: "opaque-ref",
+              input: { query: "kernel" },
+              timeout_sec: 30,
+            },
+            { timeout: 60_000, maxRetries: 0 },
+          ],
+        ]);
+        expect(result.isError).toBeUndefined();
+        expect(toolResultJSON(result)).toEqual(invocationResult);
+      } finally {
+        await close();
+      }
+    },
+  );
 
   test("validates arguments before calling the SDK", async () => {
     let calls = 0;

@@ -38,7 +38,7 @@ export function registerVaultItemTools(
         .min(1)
         .refine((value) => value.trim().length > 0)
         .describe(
-          '(invoke) Type advertised in available_operations. The current API accepts "authorize", with no extra operation parameters. Availability is API-controlled, not inferred from provider or state.',
+          "(invoke) Type advertised in available_operations. Only operations requiring no extra inputs are supported; fill and prepare_checkout require the Kernel API. Availability is API-controlled, not inferred from provider or state.",
         )
         .optional(),
       expand: z
@@ -121,6 +121,14 @@ export function registerVaultItemTools(
               return errorResponse(
                 "Operation is not advertised in available_operations. Inspect the item before taking further action.",
               );
+            if (
+              operation.type === "fill" ||
+              operation.type === "prepare_checkout"
+            ) {
+              return errorResponse(
+                `${operation.type} requires additional inputs not supported by this tool. Use the Kernel API for this operation.`,
+              );
+            }
             const updated = await client.vaults.items.performOperation(
               params.key,
               {

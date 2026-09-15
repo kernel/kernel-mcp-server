@@ -80,6 +80,37 @@ describe("advertised vault operations", () => {
     },
   );
 
+  test.each(["fill", "prepare_checkout"])(
+    "rejects advertised %s without submitting an incomplete operation",
+    async (operation) => {
+      const fixture = await connectVaultTest([
+        Response.json({
+          ...item,
+          available_operations: [
+            { type: operation, description: "Requires additional inputs." },
+          ],
+        }),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          action: "invoke",
+          vault: "checkout",
+          key: "order-1",
+          operation,
+        });
+        expect(result.isError).toBe(true);
+        expect(JSON.stringify(result)).toContain(
+          `${operation} requires additional inputs`,
+        );
+        expect(fixture.requests.map((request) => request.method)).toEqual([
+          "GET",
+        ]);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
   test("re-fetches availability rather than trusting an earlier get", async () => {
     const fixture = await connectVaultTest([
       Response.json(item),
