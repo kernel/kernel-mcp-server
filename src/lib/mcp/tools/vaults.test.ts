@@ -13,18 +13,23 @@ import {
 } from "./vaults.test-fixtures";
 
 describe("vault SDK request contracts", () => {
-  test("advertises all four project-aware tools with conservative annotations", async () => {
+  test("advertises vault tools with scope-appropriate inputs and conservative annotations", async () => {
     const fixture = await connectVaultTest([]);
     try {
       const { tools } = await fixture.client.listTools();
       expect(tools.map((tool) => tool.name).sort()).toEqual([
         "manage_vault_cards",
         "manage_vault_items",
+        "manage_vault_provider_configs",
         "manage_vault_wallets",
         "manage_vaults",
       ]);
       for (const tool of tools) {
-        expect(tool.inputSchema.properties).toHaveProperty("project");
+        if (tool.name === "manage_vault_provider_configs") {
+          expect(tool.inputSchema.properties).not.toHaveProperty("project");
+        } else {
+          expect(tool.inputSchema.properties).toHaveProperty("project");
+        }
         expect(JSON.stringify(tool.inputSchema)).not.toContain('"$ref"');
         expect(tool.annotations).toMatchObject({
           readOnlyHint: false,
@@ -33,8 +38,13 @@ describe("vault SDK request contracts", () => {
         });
       }
       const cards = tools.find((tool) => tool.name === "manage_vault_cards");
-      expect(cards?.description).toContain("live payment cards");
-      expect(cards?.description).toContain("Test-mode creation is unsupported");
+      expect(cards?.description).toContain(
+        "Mode is determined by the wallet credentials",
+      );
+      expect(cards?.description).toContain(
+        "Pending issuance updates preserve omitted optional fields",
+      );
+      expect(cards?.description).toContain("recovery_required");
       expect(fixture.requests).toHaveLength(0);
     } finally {
       await fixture.close();

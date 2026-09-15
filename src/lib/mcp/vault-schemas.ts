@@ -41,26 +41,104 @@ export const vaultWaitSchema = z
 const integer = () => z.number().int().safe();
 const currency = () => z.string().regex(/^[A-Za-z]{3}$/);
 
+export function providerConfigReferenceSchema() {
+  return z
+    .object({
+      id: vaultSelectorSchema().optional(),
+      name: vaultSelectorSchema().optional(),
+    })
+    .strict()
+    .refine(
+      (value) => (value.id !== undefined) !== (value.name !== undefined),
+      "Provide exactly one provider config id or name.",
+    );
+}
+
+// MCP serializes Zod issues before the tool callback runs. Validate each input
+// field without exposing rejected values or nested keys, retaining its schema
+// for tools/list and its normal parsed output for the callback.
+export function vaultToolInput<Shape extends z.ZodRawShape>(shape: Shape) {
+  return Object.fromEntries(
+    Object.entries(shape).map(([key, schema]) => [
+      key,
+      z.preprocess((value, context) => {
+        if (!schema.safeParse(value).success) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Invalid vault tool input. Check the documented schema.",
+            fatal: true,
+          });
+          return z.NEVER;
+        }
+        return value;
+      }, schema),
+    ]),
+  ) as {
+    [Key in keyof Shape]: z.ZodEffects<
+      Shape[Key],
+      z.output<Shape[Key]>,
+      unknown
+    >;
+  };
+}
+
+export const providerCredentialsSchema = z
+  .object({
+    client_id: z.string().min(1).optional(),
+    client_secret: z
+      .string()
+      .min(1)
+      .describe(
+        "Write-only secret; supply through a trusted client, never chat.",
+      ),
+  })
+  .strict();
+
 // Keep provider specifications in sync with https://api.onkernel.com/spec.yaml.
 export const linkWalletSpecSchema = z
   .object({
     provider: z.literal("link").optional(),
-    authorization: z
-      .object({
-        method: z.literal("oauth"),
-        client: z.object({ type: z.literal("kernel_managed") }).strict(),
-      })
-      .strict(),
+    authorization: z.union([
+      z
+        .object({
+          method: z.literal("oauth"),
+          client: z.object({ type: z.literal("kernel_managed") }).strict(),
+        })
+        .strict(),
+      z
+        .object({
+          method: z.literal("oauth"),
+          client: z
+            .object({
+              type: z.literal("customer_managed"),
+              provider_config: providerConfigReferenceSchema(),
+            })
+            .strict(),
+          tokens: z
+            .object({
+              access_token: z.string().min(1),
+              refresh_token: z.string().min(1),
+            })
+            .strict()
+            .describe(
+              "Write-only token pair from the same grant. Supply through a trusted backend, never chat. Kernel owns subsequent refresh rotation.",
+            ),
+        })
+        .strict(),
+    ]),
   })
   .strict();
 
 export const agentcardWalletSpecSchema = z
   .object({
     provider: z.literal("agentcard").optional(),
+    provider_config: providerConfigReferenceSchema().optional(),
     user_id: z
       .string()
       .regex(/^usr_[A-Za-z0-9_]+$/)
-      .describe("An AgentCard user already enrolled in this organization.")
+      .describe(
+        "An AgentCard user already enrolled in this organization under the same provider configuration.",
+      )
       .optional(),
   })
   .strict();
