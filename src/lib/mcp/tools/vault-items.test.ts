@@ -83,15 +83,41 @@ describe("advertised vault operations", () => {
   test.each(["fill", "prepare_checkout"])(
     "rejects advertised %s without submitting an incomplete operation",
     async (operation) => {
+      const advertisedItem = {
+        ...item,
+        available_operations: [
+          { type: "authorize", description: "Require user approval." },
+          { type: operation, description: "Requires additional inputs." },
+        ],
+      };
       const fixture = await connectVaultTest([
-        Response.json({
-          ...item,
-          available_operations: [
-            { type: operation, description: "Requires additional inputs." },
-          ],
-        }),
+        Response.json(advertisedItem),
+        Response.json(advertisedItem),
       ]);
       try {
+        const observed = toolResultJSON(
+          await fixture.call("manage_vault_items", {
+            action: "get",
+            vault: "checkout",
+            key: "order-1",
+          }),
+        );
+        expect(observed.item.available_operations).toEqual(
+          advertisedItem.available_operations,
+        );
+        expect(observed.hints.invocation).toEqual([
+          {
+            tool: "manage_vault_items",
+            arguments: {
+              project: "proj_test",
+              vault: "checkout",
+              key: "order-1",
+              action: "invoke",
+              operation: "authorize",
+            },
+            requires_user_approval: true,
+          },
+        ]);
         const result = await fixture.call("manage_vault_items", {
           action: "invoke",
           vault: "checkout",
@@ -103,6 +129,7 @@ describe("advertised vault operations", () => {
           `${operation} requires additional inputs`,
         );
         expect(fixture.requests.map((request) => request.method)).toEqual([
+          "GET",
           "GET",
         ]);
       } finally {

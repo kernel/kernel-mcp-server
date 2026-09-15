@@ -6,6 +6,7 @@ import {
 } from "@onkernel/sdk";
 import { z } from "zod";
 import { jsonResponse, throwToolError } from "@/lib/mcp/responses";
+import { vaultOperationRequiresInputs } from "@/lib/mcp/vault-schemas";
 
 type OutputFields = { [key: string]: OutputFields | null };
 
@@ -229,6 +230,7 @@ export function vaultItemResponse(
         observation: vaultObservationHints(target).filter(safeHint),
         invocation: advertised.success
           ? advertised.data.available_operations
+              .filter(({ type }) => !vaultOperationRequiresInputs(type))
               .map(({ type }) => ({
                 tool: "manage_vault_items",
                 arguments: { ...target, action: "invoke", operation: type },
@@ -241,7 +243,7 @@ export function vaultItemResponse(
         "Ask the user to complete returned provider actions. Never request card data or OAuth codes/tokens in chat; imported grants must come from a trusted backend. Read operation descriptions and obtain explicit user approval before invoking.",
         "Use returned aliases only in a new browser created with this vault attached, respecting returned permitted domains. Ready does not mean paid.",
         "Observe get/events for outcomes. Do not retry failed, timed-out, rejected, or indeterminate payments or reconfigure a card to retry them.",
-        "Invocation hints are not approval to execute. Availability may change; invoke rechecks the advertised operations.",
+        "Invocation hints are not approval to execute. Availability may change; invoke rechecks the advertised operations. API-advertised fill and prepare_checkout operations require additional inputs and must use the Kernel API, not this tool.",
         "recovery_required is an unresolved original outcome, not decline or expiry. Stop payment attempts; reconcile with the provider or support. No reset exists, and deletion may be blocked for this item and its parents.",
       ],
     },

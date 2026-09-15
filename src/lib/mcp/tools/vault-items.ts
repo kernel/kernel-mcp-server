@@ -16,6 +16,7 @@ import {
 import {
   vaultItemSchema,
   vaultKeySchema,
+  vaultOperationRequiresInputs,
   vaultWaitSchema,
   vaultToolInput,
 } from "@/lib/mcp/vault-schemas";
@@ -121,10 +122,7 @@ export function registerVaultItemTools(
               return errorResponse(
                 "Operation is not advertised in available_operations. Inspect the item before taking further action.",
               );
-            if (
-              operation.type === "fill" ||
-              operation.type === "prepare_checkout"
-            ) {
+            if (vaultOperationRequiresInputs(operation.type)) {
               return errorResponse(
                 `${operation.type} requires additional inputs not supported by this tool. Use the Kernel API for this operation.`,
               );
