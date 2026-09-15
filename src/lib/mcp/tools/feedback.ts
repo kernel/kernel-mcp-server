@@ -256,7 +256,7 @@ const feedbackFields = {
   affected_tool: affectedToolSchema
     .optional()
     .describe(
-      'the single KERNEL MCP tool this report is primarily about. required for `feedback_type: "mcp"`. use the canonical tool name without a client namespace; namespaced forms are normalized when recognized. feedback about tools from another MCP server or the client itself belongs with that owner.',
+      'the single KERNEL MCP tool this report is primarily about. preferred for new `feedback_type: "mcp"` submissions; omission remains accepted for legacy clients and routes to unclassified feedback. use the canonical tool name without a client namespace; recognized KERNEL namespace forms are normalized. feedback about tools from another MCP server or the client itself belongs with that owner.',
     ),
   product_area: z
     .string()
@@ -265,7 +265,7 @@ const feedbackFields = {
     .max(100)
     .optional()
     .describe(
-      'the KERNEL product or area this is about, in free text (e.g. "browsers", "apps", "managed auth", "browser pools", "proxies", or "telemetry"). required for product feedback. use `feedback_type: "bot_detection"` instead of putting bot detection here, and use affected_tool for mcp feedback.',
+      'the KERNEL product or area this is about, in free text (e.g. "browsers", "apps", "managed auth", "browser pools", "proxies", or "telemetry"). preferred for new product feedback; omission remains accepted for legacy clients and routes to unclassified feedback. use `feedback_type: "bot_detection"` instead of putting bot detection here, and use affected_tool for mcp feedback.',
     ),
   bot_detection: botDetectionReportSchema
     .optional()

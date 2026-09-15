@@ -396,6 +396,24 @@ describe("sanitizeMcpAnalyticsEvent", () => {
     expect(intent).not.toContain("/tmp/private/cart.json");
   });
 
+  test("redacts compressed and digit-only IPv6 addresses", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.Intent]:
+        "Checking 2001:4860:4860::8888, fe80::1, and ::1 at 12:30:45.",
+    });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+    const intent = result?.properties[
+      PostHogMCPAnalyticsProperty.Intent
+    ] as string;
+
+    expect(intent.match(/\[ip\]/g)).toHaveLength(3);
+    expect(intent).toContain("12:30:45");
+    expect(intent).not.toContain("2001:4860:4860::8888");
+    expect(intent).not.toContain("fe80::1");
+    expect(intent).not.toContain("::1");
+  });
+
   test("deletes non-string intents", async () => {
     const event = toolCallEvent({
       [PostHogMCPAnalyticsProperty.Intent]: { goal: "payload" },
@@ -696,6 +714,35 @@ describe("captureMcpFeedback", () => {
     ]);
   });
 
+  test("routes product feedback without an area as unclassified before praise", async () => {
+    const captured: { properties: Record<string, unknown> }[] = [];
+    const analytics = {
+      capture: async (event: { properties: Record<string, unknown> }) => {
+        captured.push(event);
+      },
+    } as McpAnalytics;
+
+    for (const summary of ["功能无法使用", "設定を保存できない"]) {
+      await captureMcpFeedback(
+        {
+          summary,
+          feedback_type: "product",
+          sentiment: "positive",
+          task_outcome: "unknown",
+        },
+        {},
+        analytics,
+      );
+    }
+
+    expect(
+      captured.map(({ properties }) => properties.feedback_destination),
+    ).toEqual(["product_unclassified", "product_unclassified"]);
+    expect(captured[0]?.properties.feedback_dedupe_key).not.toBe(
+      captured[1]?.properties.feedback_dedupe_key,
+    );
+  });
+
   test("routes structured bot-detection feedback to config registry prioritization", async () => {
     const captured: unknown[] = [];
     const analytics = {
@@ -758,6 +805,80 @@ describe("captureMcpFeedback", () => {
         }),
       },
     ]);
+  });
+
+  test("separates lookup feedback by outcome and applied configuration", async () => {
+    const captured: { properties: Record<string, unknown> }[] = [];
+    const analytics = {
+      capture: async (event: { properties: Record<string, unknown> }) => {
+        captured.push(event);
+      },
+    } as McpAnalytics;
+    const base = {
+      summary: "The lookup recommendation was tested",
+      feedback_type: "config_registry" as const,
+      sentiment: "mixed" as const,
+      task_completed: false,
+      bot_detection: {
+        registrable_domain: "example.com",
+        observed_outcome: "blocked" as const,
+        reproducibility: "consistent" as const,
+        browser_session_id: "session_lookup",
+      },
+      config_registry: {
+        request_method: "lookup" as const,
+        recommendation_match_scope: "exact" as const,
+        recommendation_verification: "verified" as const,
+        recommendation_evidence: {
+          sample_size: 5,
+          success_rate: 1,
+          last_verified_at: "2026-09-13T12:00:00Z",
+        },
+        applied_browser: {
+          stealth: true,
+          headless: false,
+          gpu: false,
+          viewport: { width: 1920, height: 1080 },
+        },
+        applied_proxy: { mode: "direct" as const },
+      },
+    };
+
+    await captureMcpFeedback(base, {}, analytics);
+    await captureMcpFeedback(
+      {
+        ...base,
+        bot_detection: {
+          ...base.bot_detection,
+          observed_outcome: "passed",
+        },
+      },
+      {},
+      analytics,
+    );
+    await captureMcpFeedback(
+      {
+        ...base,
+        bot_detection: {
+          ...base.bot_detection,
+          observed_outcome: "passed",
+        },
+        config_registry: {
+          ...base.config_registry,
+          applied_browser: {
+            ...base.config_registry.applied_browser,
+            headless: true,
+          },
+        },
+      },
+      {},
+      analytics,
+    );
+
+    const dedupeKeys = captured.map(
+      ({ properties }) => properties.feedback_dedupe_key,
+    );
+    expect(new Set(dedupeKeys).size).toBe(3);
   });
 
   test("attributes config-registry feedback to the applied configuration", async () => {
@@ -882,6 +1003,7 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
         await enabled.client.listTools()
       ).tools.find(({ name }) => name === "get_more_tools");
       expect(missingCapabilityTool?.annotations?.readOnlyHint).toBe(false);
+      expect(missingCapabilityTool?.annotations?.idempotentHint).toBe(false);
       expect(missingCapabilityTool?.description).toContain(
         "after checking the tool list",
       );

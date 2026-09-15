@@ -128,7 +128,7 @@ export function registerMissingCapabilityTool(
       title: "Get more tools",
       readOnlyHint: false,
       destructiveHint: false,
-      idempotentHint: true,
+      idempotentHint: false,
       openWorldHint: true,
     },
     async (report, extra) => {

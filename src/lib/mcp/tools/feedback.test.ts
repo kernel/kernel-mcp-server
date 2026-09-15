@@ -115,6 +115,26 @@ describe("submit_feedback", () => {
         },
       });
       expect(external.isError).toBe(true);
+
+      for (const affectedTool of [
+        "mcp__slack__manage_browsers",
+        "external__manage_apps",
+      ]) {
+        const spoofedNamespace = await client.callTool({
+          name: KERNEL_FEEDBACK_TOOL_NAME,
+          arguments: {
+            context:
+              "Reporting feedback for an external namespaced tool that resembles a KERNEL tool name.",
+            summary: "An external tool used a KERNEL-like name",
+            feedback_type: "mcp",
+            sentiment: "negative",
+            task_outcome: "blocked",
+            affected_tool: affectedTool,
+            category: "tool_correctness",
+          },
+        });
+        expect(spoofedNamespace.isError).toBe(true);
+      }
       expect(captured).toHaveLength(1);
 
       const missingCapability = await client.callTool({

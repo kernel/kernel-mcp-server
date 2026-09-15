@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isIP } from "node:net";
 import {
   instrument,
   PostHogMCPAnalyticsEvent,
@@ -232,7 +233,6 @@ const INTENT_REDACTIONS: readonly [RegExp, string][] = [
   [/[^\s@]+@[^\s@]+\.[^\s@]+/g, "[email]"],
   [/[a-z][a-z0-9+.-]*:\/\/\S+/gi, "[url]"],
   [/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, "[ip]"],
-  [/\b(?=[A-F0-9:]*[A-F])(?:[A-F0-9]{1,4}:){2,}[A-F0-9:]{1,}\b/gi, "[ip]"],
   [/(?<!\w)(?:~\/|\/)(?:[\w.-]+\/)+[\w.-]+/g, "[path]"],
   [/\b[A-Z]:\\(?:[^\\\s]+\\)*[^\\\s]+/gi, "[path]"],
   [/\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b/gi, "[domain]"],
@@ -319,9 +319,17 @@ function annotateProjectParamUsage(properties: Record<string, unknown>) {
   properties[MCP_USED_PROJECT_PROPERTY] = hasNonEmptyParam(args, "project");
 }
 
+const IPV6_CANDIDATE_PATTERN =
+  /(?<![A-Za-z0-9:])(?:[A-Fa-f0-9]{0,4}:){2,}(?:[A-Fa-f0-9]{0,4}|(?:\d{1,3}\.){3}\d{1,3})(?:%[A-Za-z0-9_.-]+)?(?![A-Za-z0-9:.])/g;
+
 function redactAnalyticsTextWithStatus(text: string) {
   let value = text.trim();
   let redacted = false;
+  const withoutIpv6 = value.replace(IPV6_CANDIDATE_PATTERN, (candidate) =>
+    isIP(candidate) === 6 ? "[ip]" : candidate,
+  );
+  redacted ||= withoutIpv6 !== value;
+  value = withoutIpv6;
   for (const [pattern, replacement] of INTENT_REDACTIONS) {
     const next = value.replace(pattern, replacement);
     redacted ||= next !== value;
@@ -644,17 +652,23 @@ export function captureMcpFeedback(
           : feedback.affected_tool
             ? "mcp_quality"
             : "mcp_unclassified"
-        : feedback.feedback_type === "product" &&
-            feedback.sentiment === "positive"
-          ? "product_praise"
-          : feedback.feedback_type === "product" && !productArea
+        : feedback.feedback_type === "product"
+          ? !productArea
             ? "product_unclassified"
-            : `${feedback.feedback_type}_feedback`;
+            : feedback.sentiment === "positive"
+              ? "product_praise"
+              : "product_feedback"
+          : `${feedback.feedback_type}_feedback`;
+  const appliedConfigKey = configRegistry
+    ? configRegistryAppliedConfigKey(configRegistry)
+    : undefined;
   const dedupeKey = configRegistry
     ? analyticsDedupeKey([
         "config_registry",
         analysisId ?? configRegistry.request_method,
         botDetection?.registrable_domain,
+        appliedConfigKey,
+        botDetection?.observed_outcome,
       ])
     : botDetection
       ? analyticsDedupeKey([
@@ -668,7 +682,7 @@ export function captureMcpFeedback(
           feedback.affected_tool,
           productArea,
           feedback.category,
-          summary.toLowerCase().replace(/[^a-z0-9]+/g, " "),
+          summary.normalize("NFKC").toLowerCase().replace(/\s+/gu, " "),
         ]);
 
   return captureMcpCustomEvent(analytics, extra, MCP_FEEDBACK_SUBMITTED_EVENT, {
@@ -704,9 +718,7 @@ export function captureMcpFeedback(
       configRegistry?.recommendation_evidence.success_rate,
     feedback_config_registry_evidence_last_verified_at:
       configRegistry?.recommendation_evidence.last_verified_at,
-    feedback_config_registry_applied_config_key: configRegistry
-      ? configRegistryAppliedConfigKey(configRegistry)
-      : undefined,
+    feedback_config_registry_applied_config_key: appliedConfigKey,
     feedback_config_registry_browser_stealth:
       configRegistry?.applied_browser.stealth,
     feedback_config_registry_browser_headless:

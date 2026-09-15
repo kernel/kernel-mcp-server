@@ -20,6 +20,7 @@ export const KERNEL_MCP_TOOL_NAMES = [
   "manage_replays",
   "manage_vault_cards",
   "manage_vault_items",
+  "manage_vault_provider_configs",
   "manage_vault_wallets",
   "manage_vaults",
   "open_auth_login",
@@ -38,8 +39,17 @@ export function normalizeKernelMcpToolName(
   value: string,
 ): KernelMcpToolName | undefined {
   let candidate = value.trim().toLowerCase().replace(/-/g, "_");
-  if (candidate.includes("__")) candidate = candidate.split("__").at(-1) ?? "";
-  candidate = candidate.replace(/^(?:mcp_)?kernel_/, "");
+  for (const prefix of [
+    "mcp__kernel__",
+    "kernel__",
+    "mcp_kernel_",
+    "kernel_",
+  ]) {
+    if (candidate.startsWith(prefix)) {
+      candidate = candidate.slice(prefix.length);
+      break;
+    }
+  }
   return kernelMcpToolNameSet.has(candidate)
     ? (candidate as KernelMcpToolName)
     : undefined;
