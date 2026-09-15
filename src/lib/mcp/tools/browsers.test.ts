@@ -49,6 +49,105 @@ type TextResourceResult = {
 };
 
 describe("manage_browsers telemetry", () => {
+  test("preserves WebMCP identity and outcome when compact mode omits input", async () => {
+    const discovery = {
+      seq: 1,
+      event: {
+        ts: 1_700_000_000_000_000,
+        type: "api_call",
+        category: "control",
+        source: { kind: "kernel_api" },
+        data: {
+          request_id: "req_1",
+          operation_id: "GetWebMCPTools",
+          status: 200,
+          duration_ms: 10,
+        },
+      },
+    };
+    const invocation = {
+      seq: 2,
+      event: {
+        ...discovery.event,
+        data: {
+          request_id: "req_2",
+          operation_id: "InvokeWebMCPTool",
+          status: 504,
+          duration_ms: 60000,
+          tool_ref: "wmcp_1",
+          tool_name: "submit_order",
+          tool_source: {
+            window_id: 1,
+            tab_id: 2,
+            page_url: "https://shop.example/cart",
+            frame: { frame_id: 3, url: "https://checkout.example/" },
+          },
+          input: "x".repeat(8192 - "...[truncated]".length) + "...[truncated]",
+          timeout_sec: 60,
+          invocation_status: "outcome_unknown",
+          error_code: "outcome_unknown",
+        },
+      },
+    };
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      telemetryClient([], [discovery, invocation]),
+    );
+    try {
+      const args = {
+        action: "get_telemetry",
+        session_id: "brr_123",
+        categories: ["control"],
+        limit: 2,
+      };
+      const compact = toolResultJSON(
+        await client.callTool({ name: "manage_browsers", arguments: args }),
+      );
+      expect(compact.items[0].data).toEqual(discovery.event.data);
+      const { input, ...identityAndOutcome } = invocation.event.data;
+      expect(compact.items[1].data).toEqual(identityAndOutcome);
+      expect(compact.items[1].omitted_fields).toEqual(["input"]);
+      const raw = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: { ...args, compact: false },
+        }),
+      );
+      expect(raw.items[1].event.data.input).toBe(input);
+      expect(raw.items[1].event.data).not.toHaveProperty("invocation_id");
+    } finally {
+      await close();
+    }
+  });
+
+  test("describes WebMCP capture and semantic outcomes", async () => {
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      { browsers: {} },
+    );
+    try {
+      const tools = await client.listTools();
+      const browserTool = tools.tools.find(
+        ({ name }) => name === "manage_browsers",
+      );
+      const categories = browserTool?.inputSchema.properties?.categories as
+        | { description?: string }
+        | undefined;
+      expect(categories?.description).toContain(
+        "GetWebMCPTools has no parameters",
+      );
+      expect(categories?.description).toContain(
+        "HTTP status 200 is not proof of tool success",
+      );
+      expect(categories?.description).toContain("never retry automatically");
+      expect(categories?.description).toContain(
+        "enclosing ExecutePlaywrightCode event",
+      );
+    } finally {
+      await close();
+    }
+  });
+
   test("re-fetches a cursor page without compaction", async () => {
     const queries: unknown[] = [];
     const { client, close } = await connectTestMcp(
