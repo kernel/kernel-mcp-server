@@ -27,7 +27,7 @@ export function registerVaultItemTools(
 ) {
   server.tool(
     "manage_vault_items",
-    'Inspect payment vault items and immutable audit events. "list" reads items; "get" reads state, public aliases, required user actions, available_operations, and available_expansions. "invoke" fetches the item again and submits only an advertised operation; read its description and obtain explicit user approval first. Provider actions (OAuth, enrollment, MFA, approval) must be completed by the user, not invoked as operations. "events" observes outcomes; use the last event ID as after. "delete" invalidates an item credential; confirm with the user first. Unresolved payments block item and parent deletion. recovery_required is not decline or expiry: stop payment attempts and reconcile with the provider or support; no reset exists. Ready does not mean paid. Requests are never automatically retried. Do not retry failed, timed-out, rejected, or indeterminate payments; inspect state/events instead.',
+    'Inspect credential and payment vault items and immutable audit events. "list" reads items without renewing collection links; "get" reads state, safe field metadata, version, required user actions, available_operations, and available_expansions. MCP omits all stored credential values, even non-sensitive ones. For credentials, present the collection URL only to the intended user, outside the agent-controlled browser; never ask for passwords or TOTP seeds in chat. "collect" reopens the full form without clearing values or changing version; TOTP has no hosted input. wait observes readiness, not edits to ready credentials: compare versions using get without wait. Credential creation and updates require the Kernel API or CLI; use a per-user vault, site-name-only description, and sensitive:false for ordinary usernames/emails. Never store credit card data in credential items. "invoke" fetches the item again and submits only an advertised operation; read its description and obtain explicit user approval first. Provider actions (OAuth, enrollment, MFA, approval) must be completed by the user, not invoked as operations. "events" observes outcomes; use the last event ID as after. "delete" invalidates an item credential; confirm with the user first. Unresolved payments can block item and parent deletion; the API decides whether explicit abandonment is allowed, and deletion never proves a payment did not occur. recovery_required is not decline or expiry: stop payment attempts and reconcile with the provider or support; no reset exists. Credential ready means required values exist, not that login succeeded; payment ready does not mean paid. fill and prepare_checkout require additional inputs and are API-only here; never substitute another operation or retry an uncertain attempt. Requests are never automatically retried. Do not retry failed, timed-out, rejected, or indeterminate payments; inspect state/events instead.',
     vaultToolInput({
       ...vaultItemSchema,
       action: z.enum(["list", "get", "invoke", "events", "delete"]),
@@ -79,7 +79,7 @@ export function registerVaultItemTools(
           params.action !== "events"
         ) {
           return errorResponse(
-            "wait is only supported for get and events; invoke does not wait for authorization.",
+            "wait is only supported for get and events; invoke does not wait for collection or authorization.",
           );
         }
         if (params.action === "list") {
@@ -160,7 +160,7 @@ export function registerVaultItemTools(
               next_after: nextAfter ?? null,
               hints: { observation: vaultObservationHints(target, nextAfter) },
               guidance:
-                "Observing events never retries a payment. Do not retry failed, timed-out, rejected, or indeterminate payments.",
+                "Observing events never retries an operation. For edits to ready credentials, compare item versions without wait; a version change does not identify a specific form submission. Do not replay an uncertain fill or payment.",
             });
           }
           case "delete": {

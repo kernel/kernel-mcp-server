@@ -29,15 +29,16 @@ const paymentMethodFields = {
 // Match the CLI's public projection, including future operation names but never
 // unknown provider fields, free-form metadata, or opaque event data.
 export const vaultItemFields: OutputFields = {
-  ...fields("id key type created_at updated_at expires_at"),
+  ...fields("id key type version created_at updated_at expires_at"),
   available_operations: operationFields,
   available_expansions: operationFields,
-  action: fields("name url"),
+  action: fields("name url expires_at"),
   expanded: { payment_methods: paymentMethodFields },
   spec: {
     ...fields(
-      "provider wallet user_id payment_method_id card_id amount currency merchant merchant_name merchant_url context expires_at",
+      "provider wallet user_id payment_method_id card_id amount currency merchant merchant_name merchant_url context expires_at description",
     ),
+    fields: { "*": fields("type required sensitive") },
     provider_config: fields("id name"),
     authorization: {
       method: null,
@@ -53,6 +54,10 @@ export const vaultItemFields: OutputFields = {
   },
   state: {
     ...fields("provider status status_reason user_id domains"),
+    fields: { "*": fields("has_value") },
+    preparation: fields(
+      "id status browser_id merchant_origin environment created_at expires_at approval_url",
+    ),
     masks: fields("brand last4"),
     aliases: fields("number cvc exp_month exp_year"),
     authorization: fields(
@@ -64,7 +69,7 @@ export const vaultItemFields: OutputFields = {
 export const vaultEventFields: OutputFields = {
   ...fields("id name created_at browser_id"),
   data: fields(
-    "reason status authorization_id vault_session_id request_kind outcome_reason provider_status provider_code provider_request_id provider_payment_status provider_error_type provider_error_code provider_decline_code provider_error_param provider_http_status provider_response_bytes provider_latency_ms payment_intent_id payment_method_id checkout_session_id replay_attempted replay_delivered charged_amount_cents charged_currency charged_kind expected_cents actual_cents currency actual_currency intent_status amount_verified psp_error_code",
+    "reason status authorization_id preparation_id vault_session_id request_kind outcome_reason provider_status provider_code provider_request_id provider_payment_status provider_error_type provider_error_code provider_decline_code provider_error_param provider_http_status provider_response_bytes provider_latency_ms payment_intent_id payment_method_id checkout_session_id replay_attempted replay_delivered charged_amount_cents charged_currency charged_kind expected_cents actual_cents currency actual_currency intent_status amount_verified psp_error_code",
   ),
 };
 
@@ -72,6 +77,7 @@ const urlFields = new Set([
   "url",
   "approval_url",
   "merchant_url",
+  "merchant_origin",
   "image_url",
   "product_url",
 ]);
@@ -120,6 +126,14 @@ export function projectVaultOutput(
   }
   if (typeof value !== "object") {
     throw new Error("Invalid vault response shape");
+  }
+  if (Object.prototype.hasOwnProperty.call(allowed, "*")) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, field]) => [
+        key,
+        projectVaultOutput(field, allowed["*"]),
+      ]),
+    );
   }
   const result: Record<string, unknown> = {};
   for (const [key, children] of Object.entries(allowed)) {
@@ -220,6 +234,11 @@ export function vaultItemResponse(
   secrets: (string | undefined)[] = [],
 ) {
   const projected = projectVaultOutput(item, vaultItemFields);
+  const credential =
+    projected !== null &&
+    typeof projected === "object" &&
+    "type" in projected &&
+    projected.type === "credential";
   const advertised = advertisedOperationsSchema.safeParse(projected);
   const secretValues = secretVariants(secrets);
   const safeHint = (hint: unknown) => !containsVaultSecret(hint, secretValues);
@@ -239,13 +258,22 @@ export function vaultItemResponse(
               .filter(safeHint)
           : [],
       },
-      guidance: [
-        "Ask the user to complete returned provider actions. Never request card data or OAuth codes/tokens in chat; imported grants must come from a trusted backend. Read operation descriptions and obtain explicit user approval before invoking.",
-        "Use returned aliases only in a new browser created with this vault attached, respecting returned permitted domains. Ready does not mean paid.",
-        "Observe get/events for outcomes. Do not retry failed, timed-out, rejected, or indeterminate payments or reconfigure a card to retry them.",
-        "Invocation hints are not approval to execute. Availability may change; invoke rechecks the advertised operations. API-advertised fill and prepare_checkout operations require additional inputs and must use the Kernel API, not this tool.",
-        "recovery_required is an unresolved original outcome, not decline or expiry. Stop payment attempts; reconcile with the provider or support. No reset exists, and deletion may be blocked for this item and its parents.",
-      ],
+      guidance: credential
+        ? [
+            "Present the collection URL only to the intended user in a private surface, outside the agent-controlled browser. It is a bearer credential. Never ask for passwords or TOTP seeds in chat; TOTP seeds require trusted backend provisioning, not hosted collection.",
+            "MCP returns field definitions, has_value, version, and collection expiry, never stored field values. Ready means required values exist, not that login succeeded. Listing does not renew collection links; use get or the advertised collect operation.",
+            "collect reopens the full form without clearing values or changing readiness or version. wait observes readiness, not edits to ready items. Compare versions with get without wait; a change can also come from an API update, so it does not identify a specific form submission.",
+            "Create or update credentials through the Kernel API or CLI. Use a per-user vault, a recognizable site-name-only description, and sensitive:false for usernames/emails. Passwords and TOTP must be sensitive. Updates require the current version; supply expected_item_id when bound to an earlier read. Omitted values remain; null or empty strings clear supported fields, including required text/email/password fields. Hosted forms still require populated required inputs. Do not store payment-card data in credential items.",
+            "Invocation hints are not approval to execute. fill is API-only in this MCP server: bind the vault at browser creation, authorize the destination, and follow the advertised description. Fill does not submit or navigate; real values enter the browser and may be read by an agent with browser access. Never retry an uncertain fill or fall back to aliases.",
+          ]
+        : [
+            "Ask the user to complete returned provider actions. Never request card data or OAuth codes/tokens in chat; imported grants must come from a trusted backend. Read operation descriptions and obtain explicit user approval before invoking.",
+            "Fill is the preferred browser-checkout path when advertised, but requires the Kernel API because this tool does not accept fill inputs. Aliases are an alternative only for explicitly chosen egress-substitution integrations in a browser created with this vault attached, respecting returned permitted domains. Never fall back to aliases after an uncertain fill. Ready does not mean paid.",
+            "Observe get/events for outcomes. Do not retry failed, timed-out, rejected, or indeterminate payments or reconfigure a card to retry them.",
+            "Invocation hints are not approval to execute. Availability may change; invoke rechecks the advertised operations. API-advertised fill and prepare_checkout operations require additional inputs and must use the Kernel API, not this tool.",
+            "For API-only prepare_checkout, deliver the returned approval URL and keep the approval page open. Poll the item until ready_to_submit, then submit native Pay before state.preparation.expires_at. Readiness lasts at most 30 seconds; polling does not extend it. Preparations are single-use even after failure or expiry. Preparation consumed means claimed, not payment success.",
+            "recovery_required is an unresolved original outcome, not decline or expiry. Stop payment attempts; reconcile with the provider or support. No reset exists, and deletion may be blocked for this item and its parents.",
+          ],
     },
     secrets,
   );

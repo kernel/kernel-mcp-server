@@ -1,15 +1,43 @@
 # Vault payments
 
-The vault tools prepare and observe payment credentials. They do **not** submit
+The vault tools prepare and observe payment credentials and read existing non-payment credential items. They do **not** submit
 merchant payments, expose real card values, or complete provider approval actions.
-They use the same vault API as the Kernel CLI.
+They use the same vault API as the Kernel CLI. When advertised, API fill is the
+preferred browser-checkout path. The alias recipes below are for explicitly chosen
+egress-substitution integrations, not fallback after a failed or uncertain fill.
 
 **Assume real payment effects.** Mode comes from the selected provider credentials;
 there is no per-item test flag. AgentCard configuration responses report the
 introspected `test_mode`. A development or staging MCP endpoint does not make a
 card request a test transaction.
 
-Provider configuration support uses the released Node SDK 0.101.0.
+The released Node SDK dependency is pinned in `bun.lock`.
+
+## Credential collection and observation
+
+Use one vault per end user, such as `user-123`. Create credential definitions through
+the Kernel API or CLI: use only the recognizable site name for `description`, and
+set `sensitive: false` explicitly for ordinary usernames/emails. Passwords and TOTP
+seeds must be sensitive. Payment-card data belongs in wallet/card items, not credentials.
+
+`manage_vault_items` can read existing credential items and invoke advertised `collect`.
+It returns field definitions, `has_value`, version, and collection-link expiry, but
+omits all stored values, even non-sensitive ones. Share the bearer collection link
+only with the intended user, outside the agent-controlled browser. Never request a
+password or TOTP seed in chat; hosted collection cannot accept TOTP seeds.
+
+Listing does not renew links; use single-item `get` or advertised `collect`.
+Collection reopens the full form without clearing values or changing version.
+`wait` observes readiness, not edits to ready items. Compare versions using `get`
+without `wait`; API updates can also change the version.
+
+Credential creation/updates, `fill`, and `prepare_checkout` remain API/CLI-only;
+MCP does not accept their write inputs. For API updates, use the current version
+and `expected_item_id` when bound to an earlier read. Clearing supported required
+values returns pending collection; hosted forms still require populated inputs.
+Fill writes real values into the browser without submitting the form. It does not
+isolate them from an agent with browser access. Never retry an uncertain fill or
+fall back to payment aliases.
 
 ## Tools and scope
 
@@ -251,8 +279,16 @@ with `manage_vault_cards`:
 AgentCard uses `merchant`, not Link's `merchant_name`. Optionally inspect wallet
 payment methods and provide a returned `card_id`; otherwise the cardholder selects
 one at approval. AgentCard currently does not advertise `authorize`: authorization
-happens at checkout. Attach the vault to a new browser and use returned aliases.
-Observe the card for its checkout authorization and any approval URL for the user.
+happens at checkout. Eligible unused cards may instead advertise `prepare_checkout`;
+invoke it through the API or CLI with the advertised checkout context. Keep the approval
+page open, poll until `ready_to_submit`, and submit native Pay before
+`state.preparation.expires_at` (at most 30 seconds after readiness). Polling does not
+extend the deadline. Each preparation is single-use even after failure or expiry.
+MCP preserves preparation metadata but does not expose an invocation hint for it.
+
+For an explicitly chosen alias-based integration, attach the vault to a new browser
+and use returned aliases. Observe checkout authorization and approval URLs. Never
+switch to aliases after an uncertain fill or preparation.
 A reusable card remaining `ready` does not establish that the last payment succeeded.
 
 ## Observation, updates, and safety

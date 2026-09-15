@@ -40,7 +40,7 @@ export const vaultWaitSchema = z
   .min(0)
   .max(60)
   .describe(
-    "(get, events) One bounded server-side observation, in seconds (0-60). Not supported for invoke, list, or delete. Pending state is returned as-is; this never retries a payment or guarantees readiness.",
+    "(get, events) One bounded server-side observation, in seconds (0-60). Not supported for invoke, list, or delete. Pending state is returned as-is; this never retries an operation or guarantees readiness. For credentials, wait observes required-value readiness, not edits to an already-ready item; compare version using get without wait.",
   )
   .optional();
 
@@ -236,6 +236,6 @@ export const browserVaultsSchema = z
     "Duplicate vault references are not allowed.",
   )
   .describe(
-    "(create only) Project-owned vaults to attach, each with exactly one id or name; max 20. Bindings are immutable and unavailable for pooled browsers. Use only returned non-secret payment aliases in this browser.",
+    "(create only) Project-owned vaults to attach, each with exactly one id or name; max 20. Bindings are immutable and unavailable for pooled browsers. Use a separate vault per end user. Attaching grants access to all items, including items added later. Credential fill writes real values into the page; it does not isolate them from an agent with browser access. Payment aliases are a separate, explicitly chosen egress path; never fall back to aliases after an uncertain fill.",
   )
   .optional();
