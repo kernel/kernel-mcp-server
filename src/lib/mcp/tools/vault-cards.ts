@@ -9,6 +9,7 @@ import {
   vaultItemSchema,
   vaultKeySchema,
   vaultProviderSchema,
+  vaultToolInput,
 } from "@/lib/mcp/vault-schemas";
 
 export function registerVaultCardTools(
@@ -17,8 +18,8 @@ export function registerVaultCardTools(
 ) {
   server.tool(
     "manage_vault_cards",
-    'Configure requests for live payment cards, not merchant payments. Test-mode creation is unsupported. "create" creates or retrieves an identical card request by immutable key. "update" replaces the ENTIRE spec, removing omitted optional fields, only when the API permits it. Neither implicitly authorizes Link: inspect available_operations with manage_vault_items and obtain explicit user approval before invoking. AgentCard authorizes at checkout. Amounts are integer minor currency units. No card data, OAuth tokens, provider secrets, or domain configuration. Never reconfigure a card to retry a failed, timed-out, rejected, or indeterminate payment. Requests are not automatically retried.',
-    {
+    'Configure payment card requests, not merchant payments. Mode is determined by the wallet credentials, not a per-item test flag; never assume a test transaction. "create" creates or retrieves an identical card request by immutable key. "update" replaces requested-card specs. Pending issuance updates preserve omitted optional fields and clear explicit empty lists, only for provider-supported edits allowed by the API. Wallet/provider binding cannot change after authorization starts. Uncertain updates enter recovery_required; do not retry. Neither implicitly authorizes Link: inspect available_operations with manage_vault_items and obtain explicit user approval before invoking. AgentCard authorizes at checkout. Amounts are integer minor currency units. No card data, OAuth tokens, provider secrets, or domain configuration. Never reconfigure a card to retry a failed, timed-out, rejected, or indeterminate payment. Requests are not automatically retried.',
+    vaultToolInput({
       ...vaultItemSchema,
       key: vaultKeySchema(),
       action: z.enum(["create", "update"]),
@@ -28,7 +29,7 @@ export function registerVaultCardTools(
         .describe(
           "Full provider specification object, not a {type, spec} envelope. Embedded provider must match provider. No defaults or normalization are applied. Integers must be within JavaScript's safe range, including expires_at.",
         ),
-    },
+    }),
     {
       title: "Configure Kernel vault cards",
       readOnlyHint: false,

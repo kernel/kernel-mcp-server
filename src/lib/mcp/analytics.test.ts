@@ -613,12 +613,13 @@ describe("captureMcpFeedback", () => {
     expect(captured).toEqual([
       {
         event: MCP_FEEDBACK_SUBMITTED_EVENT,
-        properties: {
+        properties: expect.objectContaining({
           $groups: { organization: "org_analytics" },
           feedback_summary: "Browser timeout guidance was unclear",
           feedback_type: "product",
           feedback_sentiment: "mixed",
           feedback_product_area: "browsers",
+          feedback_destination: undefined,
           feedback_category: undefined,
           feedback_task_completed: true,
           feedback_tools_used: ["manage_browsers"],
@@ -627,7 +628,161 @@ describe("captureMcpFeedback", () => {
             "Include a retry interval in the response.",
           feedback_user_request: undefined,
           feedback_details: "The error linked to [url] for [email]",
+        }),
+      },
+    ]);
+  });
+
+  test("routes structured bot-detection feedback to config registry prioritization", async () => {
+    const captured: unknown[] = [];
+    const analytics = {
+      capture: async (event: unknown) => {
+        captured.push(event);
+      },
+    } as McpAnalytics;
+
+    await captureMcpFeedback(
+      {
+        summary: "Stealth sessions were consistently blocked",
+        feedback_type: "bot_detection",
+        sentiment: "negative",
+        task_completed: false,
+        tools_used: ["manage_browsers", "execute_playwright_code"],
+        bot_detection: {
+          registrable_domain: "example.com",
+          observed_outcome: "blocked",
+          suspected_vendor: "Akamai Bot Manager",
+          challenge_type: "access_denied",
+          stealth: "enabled",
+          proxy_type: "isp",
+          region: "us-east",
+          browser_version: "152.0.7977.42",
+          browser_image_version: "2026.09.14",
+          reproducibility: "consistent",
+          browser_session_id: "session_123",
         },
+      },
+      {
+        authInfo: {
+          extra: {
+            connectionContext: {
+              scope: { organizationId: "org_analytics" },
+            },
+          },
+        },
+      },
+      analytics,
+    );
+
+    expect(captured).toEqual([
+      {
+        event: MCP_FEEDBACK_SUBMITTED_EVENT,
+        properties: expect.objectContaining({
+          $groups: { organization: "org_analytics" },
+          feedback_type: "bot_detection",
+          feedback_destination: "config_registry_prioritization",
+          feedback_bot_detection_registrable_domain: "example.com",
+          feedback_bot_detection_observed_outcome: "blocked",
+          feedback_bot_detection_suspected_vendor: "Akamai Bot Manager",
+          feedback_bot_detection_challenge_type: "access_denied",
+          feedback_bot_detection_stealth: "enabled",
+          feedback_bot_detection_proxy_type: "isp",
+          feedback_bot_detection_region: "us-east",
+          feedback_bot_detection_browser_version: "152.0.7977.42",
+          feedback_bot_detection_browser_image_version: "2026.09.14",
+          feedback_bot_detection_reproducibility: "consistent",
+          feedback_bot_detection_browser_session_id: "session_123",
+        }),
+      },
+    ]);
+  });
+
+  test("attributes config-registry feedback to the applied configuration", async () => {
+    const captured: unknown[] = [];
+    const analytics = {
+      capture: async (event: unknown) => {
+        captured.push(event);
+      },
+    } as McpAnalytics;
+
+    await captureMcpFeedback(
+      {
+        summary: "The recommended configuration remained blocked",
+        feedback_type: "config_registry",
+        sentiment: "negative",
+        task_completed: false,
+        bot_detection: {
+          registrable_domain: "example.com",
+          observed_outcome: "blocked",
+          challenge_type: "access_denied",
+          reproducibility: "consistent",
+          browser_session_id: "session_456",
+        },
+        config_registry: {
+          request_method: "resolve",
+          analysis_id: "analysis_123",
+          recommendation_match_scope: "exact",
+          recommendation_verification: "verified",
+          recommendation_evidence: {
+            sample_size: 5,
+            success_rate: 1,
+            last_verified_at: "2026-09-13T12:00:00Z",
+          },
+          applied_browser: {
+            stealth: true,
+            headless: false,
+            gpu: false,
+            viewport: { width: 1920, height: 1080, refresh_rate: 25 },
+          },
+          applied_proxy: {
+            mode: "managed",
+            type: "residential",
+            country: "US",
+          },
+        },
+      },
+      {
+        authInfo: {
+          extra: {
+            connectionContext: {
+              scope: { organizationId: "org_analytics" },
+            },
+          },
+        },
+      },
+      analytics,
+    );
+
+    expect(captured).toEqual([
+      {
+        event: MCP_FEEDBACK_SUBMITTED_EVENT,
+        properties: expect.objectContaining({
+          $groups: { organization: "org_analytics" },
+          feedback_type: "config_registry",
+          feedback_destination: "config_registry_quality",
+          feedback_bot_detection_registrable_domain: "example.com",
+          feedback_bot_detection_observed_outcome: "blocked",
+          feedback_config_registry_request_method: "resolve",
+          feedback_config_registry_analysis_id: "analysis_123",
+          feedback_config_registry_recommendation_match_scope: "exact",
+          feedback_config_registry_recommendation_verification: "verified",
+          feedback_config_registry_evidence_sample_size: 5,
+          feedback_config_registry_evidence_success_rate: 1,
+          feedback_config_registry_evidence_last_verified_at:
+            "2026-09-13T12:00:00Z",
+          feedback_config_registry_applied_config_key:
+            "stealth-true|headless-false|gpu-false|viewport-1920x1080@25|proxy-managed-residential-US",
+          feedback_config_registry_browser_stealth: true,
+          feedback_config_registry_browser_headless: false,
+          feedback_config_registry_browser_gpu: false,
+          feedback_config_registry_viewport_width: 1920,
+          feedback_config_registry_viewport_height: 1080,
+          feedback_config_registry_viewport_refresh_rate: 25,
+          feedback_config_registry_proxy_mode: "managed",
+          feedback_config_registry_proxy_type: "residential",
+          feedback_config_registry_proxy_country: "US",
+          feedback_task_completed: false,
+        }),
       },
     ]);
   });
@@ -815,11 +970,17 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       name: KERNEL_FEEDBACK_TOOL_NAME,
       arguments: {
         context:
-          "Reporting that browser timeout guidance did not explain when the caller should retry.",
-        summary: "Browser timeout guidance was unclear",
-        feedback_type: "product",
-        sentiment: "mixed",
-        product_area: "browsers",
+          "Reporting a repeatable site block so the affected domain can be prioritized for a working browser configuration.",
+        summary: "Stealth sessions were consistently blocked",
+        feedback_type: "bot_detection",
+        sentiment: "negative",
+        task_completed: false,
+        bot_detection: {
+          registrable_domain: "example.com",
+          observed_outcome: "blocked",
+          suspected_vendor: "Akamai Bot Manager",
+          reproducibility: "consistent",
+        },
       },
     });
 
@@ -843,13 +1004,18 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       [PostHogMCPAnalyticsProperty.ProtocolVersion]: "2025-03-26",
       [PostHogMCPAnalyticsProperty.ServerName]: "test",
       [PostHogMCPAnalyticsProperty.ServerVersion]: "0.0.0",
-      feedback_summary: "Browser timeout guidance was unclear",
-      feedback_type: "product",
-      feedback_sentiment: "mixed",
-      feedback_product_area: "browsers",
+      feedback_summary: "Stealth sessions were consistently blocked",
+      feedback_type: "bot_detection",
+      feedback_sentiment: "negative",
+      feedback_task_completed: false,
+      feedback_destination: "config_registry_prioritization",
+      feedback_bot_detection_registrable_domain: "example.com",
+      feedback_bot_detection_observed_outcome: "blocked",
+      feedback_bot_detection_suspected_vendor: "Akamai Bot Manager",
+      feedback_bot_detection_reproducibility: "consistent",
     });
     expect(toolCall.properties[PostHogMCPAnalyticsProperty.Intent]).toBe(
-      "Reporting that browser timeout guidance did not explain when the caller should retry.",
+      "Reporting a repeatable site block so the affected domain can be prioritized for a working browser configuration.",
     );
   });
 

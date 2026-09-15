@@ -14,6 +14,9 @@ function fields(names: string): OutputFields {
 }
 
 export const vaultFields = fields("id name created_at updated_at");
+export const vaultProviderConfigFields = fields(
+  "id name provider client_id test_mode created_at updated_at",
+);
 const operationFields = fields("type description");
 const totalFields = fields("type display_text amount");
 const paymentMethodFields = {
@@ -34,7 +37,11 @@ export const vaultItemFields: OutputFields = {
     ...fields(
       "provider wallet user_id payment_method_id card_id amount currency merchant merchant_name merchant_url context expires_at",
     ),
-    authorization: { method: null, client: fields("type") },
+    provider_config: fields("id name"),
+    authorization: {
+      method: null,
+      client: { type: null, provider_config: fields("id name") },
+    },
     totals: totalFields,
     line_items: {
       ...fields(
@@ -128,6 +135,49 @@ export function projectVaultOutput(
   return result;
 }
 
+function secretVariants(secrets: (string | undefined)[]) {
+  return secrets
+    .filter((secret): secret is string => !!secret)
+    .flatMap((secret) => [secret, encodeURIComponent(secret)]);
+}
+
+function containsVaultSecret(value: unknown, secrets: string[]): boolean {
+  if (typeof value === "string")
+    return secrets.some((secret) => value.includes(secret));
+  if (value && typeof value === "object") {
+    return Object.values(value).some((field) =>
+      containsVaultSecret(field, secrets),
+    );
+  }
+  return false;
+}
+
+function redactVaultSecrets(value: unknown, secrets: string[]): unknown {
+  if (typeof value === "string") {
+    let text = value;
+    for (const secret of secrets) text = text.split(secret).join("[redacted]");
+    return text;
+  }
+  if (Array.isArray(value))
+    return value.map((field) => redactVaultSecrets(field, secrets));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, field]) => [
+        key,
+        redactVaultSecrets(field, secrets),
+      ]),
+    );
+  }
+  return value;
+}
+
+export function vaultResponse(
+  value: unknown,
+  secrets: (string | undefined)[] = [],
+) {
+  return jsonResponse(redactVaultSecrets(value, secretVariants(secrets)));
+}
+
 type VaultItemTarget = {
   project?: string;
   vault: string;
@@ -163,28 +213,40 @@ export function vaultObservationHints(target: VaultItemTarget, after?: string) {
   ];
 }
 
-export function vaultItemResponse(item: unknown, target: VaultItemTarget) {
+export function vaultItemResponse(
+  item: unknown,
+  target: VaultItemTarget,
+  secrets: (string | undefined)[] = [],
+) {
   const projected = projectVaultOutput(item, vaultItemFields);
   const advertised = advertisedOperationsSchema.safeParse(projected);
-  return jsonResponse({
-    item: projected,
-    hints: {
-      observation: vaultObservationHints(target),
-      invocation: advertised.success
-        ? advertised.data.available_operations.map(({ type }) => ({
-            tool: "manage_vault_items",
-            arguments: { ...target, action: "invoke", operation: type },
-            requires_user_approval: true,
-          }))
-        : [],
+  const secretValues = secretVariants(secrets);
+  const safeHint = (hint: unknown) => !containsVaultSecret(hint, secretValues);
+  return vaultResponse(
+    {
+      item: projected,
+      hints: {
+        observation: vaultObservationHints(target).filter(safeHint),
+        invocation: advertised.success
+          ? advertised.data.available_operations
+              .map(({ type }) => ({
+                tool: "manage_vault_items",
+                arguments: { ...target, action: "invoke", operation: type },
+                requires_user_approval: true,
+              }))
+              .filter(safeHint)
+          : [],
+      },
+      guidance: [
+        "Ask the user to complete returned provider actions. Never request card data or OAuth codes/tokens in chat; imported grants must come from a trusted backend. Read operation descriptions and obtain explicit user approval before invoking.",
+        "Use returned aliases only in a new browser created with this vault attached, respecting returned permitted domains. Ready does not mean paid.",
+        "Observe get/events for outcomes. Do not retry failed, timed-out, rejected, or indeterminate payments or reconfigure a card to retry them.",
+        "Invocation hints are not approval to execute. Availability may change; invoke rechecks the advertised operations.",
+        "recovery_required is an unresolved original outcome, not decline or expiry. Stop payment attempts; reconcile with the provider or support. No reset exists, and deletion may be blocked for this item and its parents.",
+      ],
     },
-    guidance: [
-      "Ask the user to complete returned provider actions; never send card data or OAuth codes/tokens to MCP. Read operation descriptions and obtain explicit user approval before invoking.",
-      "Use returned aliases only in a new browser created with this vault attached, respecting returned permitted domains. Ready does not mean paid.",
-      "Observe get/events for outcomes. Do not retry failed, timed-out, rejected, or indeterminate payments or reconfigure a card to retry them.",
-      "Invocation hints are not approval to execute. Availability may change; invoke rechecks the advertised operations.",
-    ],
-  });
+    secrets,
+  );
 }
 
 const vaultErrorMessages = new Map([
@@ -192,7 +254,14 @@ const vaultErrorMessages = new Map([
     "invalid_request",
     "Invalid vault request. Check the tool's documented inputs.",
   ],
-  ["not_found", "Vault, item, or project not found or unavailable."],
+  [
+    "not_found",
+    "Vault, item, provider configuration, or project not found or unavailable.",
+  ],
+  [
+    "forbidden",
+    "This credential cannot perform the vault operation. Check connection scope and permissions.",
+  ],
   [
     "conflict",
     "The vault request conflicts with the current configuration or state. Inspect the item and its advertised operations and expansions.",

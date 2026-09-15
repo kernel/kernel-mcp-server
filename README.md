@@ -316,12 +316,13 @@ Call `get_connection_context` before deciding whether to create or select a proj
 - `manage_auth_connections` - Create, list, get, update, delete, login, submit, inspect timelines, and wait for managed-auth connections in every client. Supports health-check and automatic re-auth settings, managed-auth browser configuration, and canonical interaction-bound field/choice submissions. Use domain-filtered `list` for discovery. App-capable clients additionally receive `open_auth_login`; the programmatic actions remain available there too.
 - `manage_credentials` - Create, list, get, update, and delete stored credentials; fetch a current TOTP code for credentials with a configured totp_secret.
 - `manage_credential_providers` - Create, list, get, update, and delete external credential providers (e.g. 1Password); list available items and test the provider connection.
+- `manage_vault_provider_configs` - Create, list, get, rename, rotate secrets, and delete organization-owned Link and AgentCard configurations. Writes require organization scope.
 - `manage_vaults` - Create, list, get, and delete project-owned payment vaults.
-- `manage_vault_wallets` - Connect Link or AgentCard wallets and inspect live payment methods.
-- `manage_vault_cards` - Create card requests or replace their full specification; does not implicitly authorize Link cards.
+- `manage_vault_wallets` - Connect Kernel-managed or configured Link/AgentCard wallets, import Link grants from a trusted backend, and inspect live payment methods.
+- `manage_vault_cards` - Create or update card requests according to the API's lifecycle rules; does not implicitly authorize Link cards.
 - `manage_vault_items` - List, get, invoke advertised operations, observe events, and delete vault items. Provider approvals remain user actions; ready does not mean paid.
 
-See [Vault payments](docs/vault-payments.md) for both provider flows, safety rules, and response shapes. `manage_browsers` accepts creation-only `vaults` references (max 20); existing sessions and pools cannot gain vault bindings. The four vault tools share the `vaults` toolset and prepare/observe credentials rather than submitting merchant payments. They are exposed only when `GET /org/entitlements` reports `features.vaults.enabled: true` for the current credential; missing or unavailable entitlements hide them. Toolset configuration cannot override this access check.
+See [Vault payments](docs/vault-payments.md) for both provider flows, safety rules, and response shapes. `manage_browsers` accepts creation-only `vaults` references (max 20); existing sessions and pools cannot gain vault bindings. The five vault tools share the `vaults` toolset and prepare/observe credentials rather than submitting merchant payments. They are exposed only when `GET /org/entitlements` reports `features.vaults.enabled: true` for the current credential; missing or unavailable entitlements hide them. Toolset configuration cannot override this access check. Provider configuration support uses the released `@onkernel/sdk` 0.101.0.
 
 ### Standalone tools
 
@@ -332,7 +333,7 @@ See [Vault payments](docs/vault-payments.md) for both provider flows, safety rul
 - `webmcp` - List native page tools across every tab and frame in a browser, then synchronously invoke an exact opaque `tool_ref` with structured input.
 - `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
 - `search_docs` - Search Kernel platform documentation and guides.
-- `submit_feedback` - send product, mcp, or documentation feedback directly to the KERNEL team without interrupting the current task.
+- `submit_feedback` - send product, bot-detection, config-registry, mcp, or documentation feedback directly to the KERNEL team without interrupting the current task. Config-registry reports connect the observed site outcome to the browser session, recommendation metadata and evidence, and exact browser and proxy settings applied unchanged; general bot-detection reports remain available for outcomes not tied to a registry recommendation.
 - `open_auth_login` - Open a secure interactive Managed Auth MCP App after user consent. Registered only for clients that declare MCP Apps support; credentials and MFA never enter MCP/model traffic.
 
 ## Resources

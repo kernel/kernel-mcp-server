@@ -164,6 +164,35 @@ const SENT_PROPERTIES = new Set<string>([
   "feedback_type",
   "feedback_sentiment",
   "feedback_product_area",
+  "feedback_destination",
+  "feedback_bot_detection_registrable_domain",
+  "feedback_bot_detection_observed_outcome",
+  "feedback_bot_detection_suspected_vendor",
+  "feedback_bot_detection_challenge_type",
+  "feedback_bot_detection_stealth",
+  "feedback_bot_detection_proxy_type",
+  "feedback_bot_detection_region",
+  "feedback_bot_detection_browser_version",
+  "feedback_bot_detection_browser_image_version",
+  "feedback_bot_detection_reproducibility",
+  "feedback_bot_detection_browser_session_id",
+  "feedback_config_registry_request_method",
+  "feedback_config_registry_analysis_id",
+  "feedback_config_registry_recommendation_match_scope",
+  "feedback_config_registry_recommendation_verification",
+  "feedback_config_registry_evidence_sample_size",
+  "feedback_config_registry_evidence_success_rate",
+  "feedback_config_registry_evidence_last_verified_at",
+  "feedback_config_registry_applied_config_key",
+  "feedback_config_registry_browser_stealth",
+  "feedback_config_registry_browser_headless",
+  "feedback_config_registry_browser_gpu",
+  "feedback_config_registry_viewport_width",
+  "feedback_config_registry_viewport_height",
+  "feedback_config_registry_viewport_refresh_rate",
+  "feedback_config_registry_proxy_mode",
+  "feedback_config_registry_proxy_type",
+  "feedback_config_registry_proxy_country",
   "feedback_category",
   "feedback_task_completed",
   "feedback_tools_used",
@@ -512,11 +541,38 @@ export function captureMcpConnectionScopeFailure(
   }
 }
 
+function configRegistryAppliedConfigKey(
+  configRegistry: NonNullable<KernelFeedback["config_registry"]>,
+) {
+  const browser = configRegistry.applied_browser;
+  const viewport = browser.viewport;
+  const proxy = configRegistry.applied_proxy;
+  const proxyKey =
+    proxy.mode === "direct"
+      ? "direct"
+      : `managed-${proxy.type}-${proxy.country ?? "default"}`;
+  return [
+    `stealth-${browser.stealth}`,
+    `headless-${browser.headless}`,
+    `gpu-${browser.gpu}`,
+    `viewport-${viewport.width}x${viewport.height}@${viewport.refresh_rate ?? "default"}`,
+    `proxy-${proxyKey}`,
+  ].join("|");
+}
+
 export function captureMcpFeedback(
   feedback: KernelFeedback,
   extra: unknown,
   analytics: McpAnalytics,
 ) {
+  const isSiteOutcome =
+    feedback.feedback_type === "bot_detection" ||
+    feedback.feedback_type === "config_registry";
+  const botDetection = isSiteOutcome ? feedback.bot_detection : undefined;
+  const configRegistry =
+    feedback.feedback_type === "config_registry"
+      ? feedback.config_registry
+      : undefined;
   return captureMcpCustomEvent(analytics, extra, MCP_FEEDBACK_SUBMITTED_EVENT, {
     feedback_summary: redactAnalyticsText(feedback.summary),
     feedback_type: feedback.feedback_type,
@@ -524,6 +580,70 @@ export function captureMcpFeedback(
     feedback_product_area: feedback.product_area
       ? redactAnalyticsText(feedback.product_area)
       : undefined,
+    feedback_destination: configRegistry
+      ? "config_registry_quality"
+      : botDetection
+        ? "config_registry_prioritization"
+        : undefined,
+    feedback_bot_detection_registrable_domain: botDetection?.registrable_domain,
+    feedback_bot_detection_observed_outcome: botDetection?.observed_outcome,
+    feedback_bot_detection_suspected_vendor: botDetection?.suspected_vendor
+      ? redactAnalyticsText(botDetection.suspected_vendor)
+      : undefined,
+    feedback_bot_detection_challenge_type: botDetection?.challenge_type,
+    feedback_bot_detection_stealth: botDetection?.stealth,
+    feedback_bot_detection_proxy_type: botDetection?.proxy_type,
+    feedback_bot_detection_region: botDetection?.region
+      ? redactAnalyticsText(botDetection.region)
+      : undefined,
+    feedback_bot_detection_browser_version: botDetection?.browser_version
+      ? redactAnalyticsText(botDetection.browser_version)
+      : undefined,
+    feedback_bot_detection_browser_image_version:
+      botDetection?.browser_image_version
+        ? redactAnalyticsText(botDetection.browser_image_version)
+        : undefined,
+    feedback_bot_detection_reproducibility: botDetection?.reproducibility,
+    feedback_bot_detection_browser_session_id: botDetection?.browser_session_id
+      ? redactAnalyticsText(botDetection.browser_session_id)
+      : undefined,
+    feedback_config_registry_request_method: configRegistry?.request_method,
+    feedback_config_registry_analysis_id: configRegistry?.analysis_id
+      ? redactAnalyticsText(configRegistry.analysis_id)
+      : undefined,
+    feedback_config_registry_recommendation_match_scope:
+      configRegistry?.recommendation_match_scope,
+    feedback_config_registry_recommendation_verification:
+      configRegistry?.recommendation_verification,
+    feedback_config_registry_evidence_sample_size:
+      configRegistry?.recommendation_evidence.sample_size,
+    feedback_config_registry_evidence_success_rate:
+      configRegistry?.recommendation_evidence.success_rate,
+    feedback_config_registry_evidence_last_verified_at:
+      configRegistry?.recommendation_evidence.last_verified_at,
+    feedback_config_registry_applied_config_key: configRegistry
+      ? configRegistryAppliedConfigKey(configRegistry)
+      : undefined,
+    feedback_config_registry_browser_stealth:
+      configRegistry?.applied_browser.stealth,
+    feedback_config_registry_browser_headless:
+      configRegistry?.applied_browser.headless,
+    feedback_config_registry_browser_gpu: configRegistry?.applied_browser.gpu,
+    feedback_config_registry_viewport_width:
+      configRegistry?.applied_browser.viewport.width,
+    feedback_config_registry_viewport_height:
+      configRegistry?.applied_browser.viewport.height,
+    feedback_config_registry_viewport_refresh_rate:
+      configRegistry?.applied_browser.viewport.refresh_rate,
+    feedback_config_registry_proxy_mode: configRegistry?.applied_proxy.mode,
+    feedback_config_registry_proxy_type:
+      configRegistry?.applied_proxy.mode === "managed"
+        ? configRegistry.applied_proxy.type
+        : undefined,
+    feedback_config_registry_proxy_country:
+      configRegistry?.applied_proxy.mode === "managed"
+        ? configRegistry.applied_proxy.country
+        : undefined,
     feedback_category: feedback.category,
     feedback_task_completed: feedback.task_completed,
     feedback_tools_used: feedback.tools_used?.map(redactAnalyticsText),
