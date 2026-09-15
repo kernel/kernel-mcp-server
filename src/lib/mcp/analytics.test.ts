@@ -881,6 +881,7 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       const missingCapabilityTool = (
         await enabled.client.listTools()
       ).tools.find(({ name }) => name === "get_more_tools");
+      expect(missingCapabilityTool?.annotations?.readOnlyHint).toBe(false);
       expect(missingCapabilityTool?.description).toContain(
         "after checking the tool list",
       );

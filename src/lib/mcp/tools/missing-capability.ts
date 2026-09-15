@@ -126,7 +126,7 @@ export function registerMissingCapabilityTool(
     missingCapabilityFields,
     {
       title: "Get more tools",
-      readOnlyHint: true,
+      readOnlyHint: false,
       destructiveHint: false,
       idempotentHint: true,
       openWorldHint: true,
