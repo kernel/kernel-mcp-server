@@ -61,6 +61,96 @@ const completed = {
 const invoke = { ...target, action: "invoke", operation: "fill", fill };
 
 describe("MCP credential flow", () => {
+  test.each(["create", "update"])(
+    "%s preserves non-sensitive values, collection URLs, and hints",
+    async (action) => {
+      const url = `https://vault.example/collect#token=${target.vault}.token`;
+      const response = {
+        ...ready,
+        action: { name: "collect", url },
+        state: {
+          ...ready.state,
+          fields: {
+            username: { has_value: true, value: target.vault },
+            password: { has_value: true, value: "private-password" },
+          },
+        },
+      };
+      const fixture = await connectVaultTest([Response.json(response)]);
+      try {
+        const result = toolResultJSON(
+          await fixture.call("manage_vault_credentials", {
+            ...target,
+            action,
+            ...(action === "update"
+              ? {
+                  version: 2,
+                  spec: { fields: { username: { value: target.vault } } },
+                }
+              : {
+                  spec: {
+                    ...spec,
+                    fields: {
+                      ...spec.fields,
+                      username: {
+                        ...spec.fields.username,
+                        value: target.vault,
+                      },
+                    },
+                  },
+                }),
+          }),
+        );
+        expect(result.item.state.fields.username.value).toBe(target.vault);
+        expect(result.item.action.url).toBe(url);
+        expect(result.hints.observation.length).toBeGreaterThan(0);
+        expect(result.hints.invocation.length).toBeGreaterThan(0);
+        expect(JSON.stringify(result)).not.toContain("private-password");
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test.each([
+    { status: 400, code: "ambiguous_selector", message: "multiple targets" },
+    { status: 403, code: "destination_denied", message: "not authorized" },
+    { status: 404, code: "not_found", message: "not found" },
+    { status: 409, code: "conflict", message: "not ready" },
+    {
+      status: 400,
+      code: "field_unavailable",
+      message: "no usable stored value",
+    },
+    {
+      status: 400,
+      code: "private-unknown-code",
+      message: "Fill request failed",
+    },
+  ])(
+    "preserves meaningful pre-write fill errors ($status $code)",
+    async ({ status, code, message }) => {
+      const fixture = await connectVaultTest([
+        Response.json(ready),
+        Response.json({ code, message: "private-upstream-secret" }, { status }),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", invoke);
+        const text = JSON.stringify(result);
+        expect(result.isError).toBe(true);
+        expect(text).toContain(String(status));
+        expect(text).toContain(message);
+        expect(text).toContain("No fields were written");
+        expect(text).not.toContain("may have been written");
+        expect(text).not.toContain("private-");
+        expect(
+          fixture.requests.filter((request) => request.method === "POST"),
+        ).toHaveLength(1);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
   test("advertises inline credential and fill schemas", async () => {
     const fixture = await connectVaultTest([]);
     try {
@@ -124,11 +214,13 @@ describe("MCP credential flow", () => {
     { provider: "link", page_url: undefined, allowed: false },
     { provider: "agentcard", page_url: "https://example.com", allowed: false },
   ])(
-    "enforces card fill provider and page URL boundaries",
+    "forwards card fill policy decisions to the API",
     async ({ provider, page_url, allowed }) => {
       const fixture = await connectVaultTest([
         Response.json({ ...ready, type: "card", spec: { provider } }),
-        Response.json(completed),
+        allowed
+          ? Response.json(completed)
+          : Response.json({ code: "invalid_request" }, { status: 400 }),
       ]);
       try {
         const result = await fixture.call("manage_vault_items", {
@@ -145,15 +237,18 @@ describe("MCP credential flow", () => {
         expect(result.isError).toBe(!allowed);
         expect(
           fixture.requests.filter((request) => request.method === "POST"),
-        ).toHaveLength(allowed ? 1 : 0);
+        ).toHaveLength(1);
       } finally {
         await fixture.close();
       }
     },
   );
 
-  test("rejects credential format before any operation write", async () => {
-    const fixture = await connectVaultTest([Response.json(ready)]);
+  test("surfaces API credential format validation", async () => {
+    const fixture = await connectVaultTest([
+      Response.json(ready),
+      Response.json({ code: "invalid_request" }, { status: 400 }),
+    ]);
     try {
       const result = await fixture.call("manage_vault_items", {
         ...invoke,
@@ -167,7 +262,9 @@ describe("MCP credential flow", () => {
       expect(result.isError).toBe(true);
       expect(fixture.requests.map((request) => request.method)).toEqual([
         "GET",
+        "POST",
       ]);
+      expect(JSON.stringify(result)).toContain("No fields were written");
     } finally {
       await fixture.close();
     }
@@ -238,7 +335,7 @@ describe("MCP credential flow", () => {
         }),
       );
       expect(observed.item.state.status).toBe("ready");
-      expect(JSON.stringify(observed)).not.toContain("secret-username");
+      expect(observed.item.state.fields.username.value).toBe("secret-username");
       const result = await fixture.call("manage_vault_items", invoke);
       expect(result.isError).toBe(false);
       expect(toolResultJSON(result).result).toEqual(completed);
@@ -386,7 +483,9 @@ describe("MCP credential flow", () => {
           ).toHaveLength(1);
           if (operation === "fill")
             expect(JSON.stringify(result)).toContain(
-              "Never automatically retry",
+              failure === 409
+                ? "No fields were written"
+                : "Never automatically retry",
             );
         } finally {
           await fixture.close();

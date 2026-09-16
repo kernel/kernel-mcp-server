@@ -21,8 +21,9 @@ set `sensitive: false` explicitly for ordinary usernames/emails. Passwords and T
 seeds must be sensitive. Payment-card data belongs in wallet/card items, not credentials.
 
 `manage_vault_items` can read existing credential items and invoke advertised `collect`.
-It returns field definitions, `has_value`, version, and collection-link expiry, but
-omits all stored values, even non-sensitive ones. Share the bearer collection link
+It returns field definitions, `has_value`, version, collection-link expiry, and
+explicitly non-sensitive text/email values. Sensitive values and TOTP seeds are
+omitted. Share the bearer collection link
 only with the intended user, outside the agent-controlled browser. Never request a
 password or TOTP seed in chat; hosted collection cannot accept TOTP seeds.
 
@@ -87,6 +88,11 @@ fall back to payment aliases.
 
    The response has a value-free `result` with ordered field outcomes. `failed` and
    `unknown` are tool errors, not invitations to retry; fields may already be written.
+   API validation errors (400/403/404/409) retain HTTP status and recognized error codes,
+   with actionable explanations and confirmation that this request wrote no fields.
+   Inspect and correct the cause before deciding on a new fill. Transport loss and
+   other uncertain failures retain the no-retry warning. Raw upstream error bodies
+   are never returned.
    Fill does not navigate or submit. Submit separately only after confirming the fill
    completed and submission is authorized. TOTP bindings send only the field name;
    the API generates each current code immediately before writing, never exposing seeds.

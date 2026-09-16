@@ -26,8 +26,8 @@ const paymentMethodFields = {
   capabilities: { single_use_card: fields("eligible reasons") },
 };
 
-// Match the CLI's public projection, including future operation names but never
-// unknown provider fields, free-form metadata, or opaque event data.
+// Allow public metadata, including future operation names, but never unknown
+// provider fields, free-form metadata, or opaque event data.
 export const vaultItemFields: OutputFields = {
   ...fields("id key type version created_at updated_at expires_at"),
   available_operations: operationFields,
@@ -113,6 +113,27 @@ export function isDisplaySafeVaultURL(value: string): boolean {
   }
 }
 
+export function isPublicCredentialField(
+  field: { type?: string; sensitive?: boolean } | undefined,
+): boolean {
+  return (
+    field?.sensitive === false &&
+    (field.type === "text" || field.type === "email")
+  );
+}
+
+const credentialValuesSchema = z.object({
+  type: z.literal("credential"),
+  spec: z.object({
+    fields: z.record(z.object({ type: z.string(), sensitive: z.boolean() })),
+  }),
+  state: z.object({
+    fields: z.record(
+      z.object({ has_value: z.boolean(), value: z.string().optional() }),
+    ),
+  }),
+});
+
 export function projectVaultOutput(
   value: unknown,
   allowed: OutputFields | null,
@@ -146,6 +167,26 @@ export function projectVaultOutput(
       continue;
     }
     result[key] = projectVaultOutput(field, children);
+  }
+  if (allowed === vaultItemFields && result.type === "credential") {
+    const credential = credentialValuesSchema.safeParse(value);
+    if (credential.success) {
+      const { spec, state } = credential.data;
+      result.state = {
+        ...z.record(z.unknown()).parse(result.state),
+        fields: Object.fromEntries(
+          Object.entries(state.fields).map(([name, field]) => [
+            name,
+            {
+              has_value: field.has_value,
+              ...(isPublicCredentialField(spec.fields[name]) &&
+                field.has_value &&
+                field.value !== undefined && { value: field.value }),
+            },
+          ]),
+        ),
+      };
+    }
   }
   return result;
 }
@@ -261,7 +302,7 @@ export function vaultItemResponse(
       guidance: credential
         ? [
             "Present the collection URL only to the intended user in a private surface, outside the agent-controlled browser. It is a bearer credential. Never ask for passwords or TOTP seeds in chat; TOTP seeds require trusted backend provisioning, not hosted collection.",
-            "MCP returns field definitions, has_value, version, and collection expiry, never stored field values. Ready means required values exist, not that login succeeded. Listing does not renew collection links; use get or the advertised collect operation.",
+            "MCP returns field definitions, has_value, version, collection expiry, and explicitly non-sensitive text/email values. Sensitive values and TOTP seeds are never returned. Ready means required values exist, not that login succeeded. Listing does not renew collection links; use get or the advertised collect operation.",
             "collect reopens the full form without clearing values or changing readiness or version. wait observes readiness, not edits to ready items. Compare versions with get without wait; a change can also come from an API update, so it does not identify a specific form submission.",
             "Create or update credentials with manage_vault_credentials. Use a per-user vault, a recognizable site-name-only description, and sensitive:false for usernames/emails. Passwords and TOTP must be sensitive. Updates require the current version; supply expected_item_id when bound to an earlier read. Omitted values remain; null or empty strings clear supported fields, including required text/email/password fields. Hosted forms still require populated required inputs. Do not store payment-card data in credential items.",
             "Invocation hints are not approval to execute. Invoke fill with manage_vault_items using a fill object containing browser_id and ordered fields of field/selector bindings, never values. Bind the vault at browser creation, authorize the destination, and follow the advertised description. Fill does not submit or navigate; real values enter the browser and may be read by an agent with browser access. Never retry an uncertain fill or fall back to aliases.",

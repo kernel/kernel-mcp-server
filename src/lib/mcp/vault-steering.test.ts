@@ -53,6 +53,34 @@ const credential = {
 };
 
 describe("vault OpenAPI steering", () => {
+  test.each([
+    { type: "text", sensitive: false, visible: true },
+    { type: "email", sensitive: false, visible: true },
+    { type: "text", sensitive: true, visible: false },
+    { type: "password", sensitive: false, visible: false },
+    { type: "totp", sensitive: false, visible: false },
+    { type: "text", sensitive: undefined, visible: false },
+  ])(
+    "only exposes explicitly public text/email values",
+    ({ type, sensitive, visible }) => {
+      const result = toolResultJSON(
+        vaultItemResponse(
+          {
+            ...credential,
+            spec: { fields: { field: { type, sensitive } } },
+            state: {
+              status: "ready",
+              fields: { field: { has_value: true, value: "test-value" } },
+            },
+          },
+          target,
+        ),
+      );
+      expect(result.item.state.fields.field.value).toBe(
+        visible ? "test-value" : undefined,
+      );
+    },
+  );
   test("tool discovery exposes credential creation and steers per-user collection", async () => {
     const fixture = await connectVaultTest([]);
     try {
@@ -72,7 +100,7 @@ describe("vault OpenAPI steering", () => {
     }
   });
   test.each(["ready", "pending_collection"])(
-    "preserves %s credential metadata, not values",
+    "preserves %s public credential values, not secrets",
     (status) => {
       const result = toolResultJSON(
         vaultItemResponse(
@@ -90,7 +118,9 @@ describe("vault OpenAPI steering", () => {
       expect(result.item.state.fields.otp).toEqual({ has_value: true });
       expect(result.item.action.expires_at).toBe(credential.action.expires_at);
       expect(result.item.action.url).toBe(credential.action.url);
-      expect(JSON.stringify(result)).not.toContain("private-");
+      expect(result.item.state.fields.username.value).toBe("private-user");
+      expect(JSON.stringify(result)).not.toContain("private-password");
+      expect(JSON.stringify(result)).not.toContain("private-seed");
       expect(
         result.hints.invocation.map(
           (hint: { arguments: { operation: string } }) =>
@@ -127,7 +157,9 @@ describe("vault OpenAPI steering", () => {
       );
       expect(result.item.version).toBe(7);
       expect(result.item.spec.fields.password.sensitive).toBe(true);
-      expect(JSON.stringify(result)).not.toContain("private-");
+      expect(result.item.state.fields.username.value).toBe("private-user");
+      expect(JSON.stringify(result)).not.toContain("private-password");
+      expect(JSON.stringify(result)).not.toContain("private-seed");
       expect(
         fixture.requests.map(({ method, body }) => ({ method, body })),
       ).toEqual([
@@ -151,7 +183,9 @@ describe("vault OpenAPI steering", () => {
       expect(result.items[0].state.fields.password).toEqual({
         has_value: true,
       });
-      expect(JSON.stringify(result)).not.toContain("private-");
+      expect(result.items[0].state.fields.username.value).toBe("private-user");
+      expect(JSON.stringify(result)).not.toContain("private-password");
+      expect(JSON.stringify(result)).not.toContain("private-seed");
       expect(fixture.requests).toHaveLength(1);
       expect(fixture.requests[0].method).toBe("GET");
     } finally {

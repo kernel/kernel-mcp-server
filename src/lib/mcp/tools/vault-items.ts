@@ -4,7 +4,7 @@ import { z } from "zod";
 import {
   vaultFillSchema,
   vaultFillResponse,
-  unconfirmedVaultFillResponse,
+  throwVaultFillError,
 } from "@/lib/mcp/vault-fill";
 import type { McpDependencies } from "@/lib/mcp/dependencies";
 import { projectForOperation } from "@/lib/mcp/project-selection";
@@ -32,7 +32,7 @@ export function registerVaultItemTools(
 ) {
   server.tool(
     "manage_vault_items",
-    'Inspect credential and payment vault items and immutable audit events. "list" reads items without renewing collection links; "get" reads state, safe field metadata, version, required user actions, available_operations, and available_expansions. MCP omits all stored credential values, even non-sensitive ones. For credentials, present the collection URL only to the intended user, outside the agent-controlled browser; never ask for passwords or TOTP seeds in chat. "collect" reopens the full form without clearing values or changing version; TOTP has no hosted input. wait observes readiness, not edits to ready credentials: compare versions using get without wait. Use manage_vault_credentials for credential creation and updates; use a per-user vault, site-name-only description, and sensitive:false for ordinary usernames/emails. Never store credit card data in credential items. "invoke" fetches the item again and submits only an advertised operation; read its description and obtain explicit user approval first. Provider actions (OAuth, enrollment, MFA, approval) must be completed by the user, not invoked as operations. "events" observes outcomes; use the last event ID as after. "delete" invalidates an item credential; confirm with the user first. Unresolved payments can block item and parent deletion; the API decides whether explicit abandonment is allowed, and deletion never proves a payment did not occur. recovery_required is not decline or expiry: stop payment attempts and reconcile with the provider or support; no reset exists. Credential ready means required values exist, not that login succeeded; payment ready does not mean paid. For fill, supply the fill object with browser_id and ordered field/selector bindings; values stay server-side until entering the browser. prepare_checkout remains API-only here; never substitute another operation or retry an uncertain attempt. Requests are never automatically retried. Do not retry failed, timed-out, rejected, or indeterminate payments; inspect state/events instead.',
+    'Inspect credential and payment vault items and immutable audit events. "list" reads items without renewing collection links; "get" reads state, safe field metadata, version, required user actions, available_operations, and available_expansions. MCP returns explicitly non-sensitive text/email values; sensitive values and TOTP seeds are omitted. For credentials, present the collection URL only to the intended user, outside the agent-controlled browser; never ask for passwords or TOTP seeds in chat. "collect" reopens the full form without clearing values or changing version; TOTP has no hosted input. wait observes readiness, not edits to ready credentials: compare versions using get without wait. Use manage_vault_credentials for credential creation and updates; use a per-user vault, site-name-only description, and sensitive:false for ordinary usernames/emails. Never store credit card data in credential items. "invoke" fetches the item again and submits only an advertised operation; read its description and obtain explicit user approval first. Provider actions (OAuth, enrollment, MFA, approval) must be completed by the user, not invoked as operations. "events" observes outcomes; use the last event ID as after. "delete" invalidates an item credential; confirm with the user first. Unresolved payments can block item and parent deletion; the API decides whether explicit abandonment is allowed, and deletion never proves a payment did not occur. recovery_required is not decline or expiry: stop payment attempts and reconcile with the provider or support; no reset exists. Credential ready means required values exist, not that login succeeded; payment ready does not mean paid. For fill, supply the fill object with browser_id and ordered field/selector bindings; values stay server-side until entering the browser. prepare_checkout remains API-only here; never substitute another operation or retry an uncertain attempt. Requests are never automatically retried. Do not retry failed, timed-out, rejected, or indeterminate payments; inspect state/events instead.',
     vaultToolInput({
       ...vaultItemSchema,
       action: z.enum(["list", "get", "invoke", "events", "delete"]),
@@ -82,6 +82,7 @@ export function registerVaultItemTools(
         project,
       );
       const options = { maxRetries: 0, signal: extra.signal };
+      let fillRequested = false;
       try {
         if (
           params.wait !== undefined &&
@@ -146,33 +147,13 @@ export function registerVaultItemTools(
                 "Operation is not advertised in available_operations. Inspect the item before taking further action.",
               );
             if (operation.type === "fill" && params.fill) {
-              if (
-                item.type === "credential" &&
-                params.fill.fields.some((field) => field.format !== undefined)
-              )
-                return errorResponse("Credential fields must omit format.");
-              if (
-                item.type !== "credential" &&
-                (item.type !== "card" ||
-                  item.spec.provider !== "link" ||
-                  !params.fill.page_url ||
-                  new URL(params.fill.page_url).protocol !== "https:" ||
-                  new URL(params.fill.page_url).username ||
-                  new URL(params.fill.page_url).password)
-              )
-                return errorResponse(
-                  "Fill requires a credential or Link card; cards require an HTTPS page_url without credentials.",
-                );
-              try {
-                const result = await client.vaults.items.performOperation(
-                  params.key,
-                  { id_or_name: params.vault, type: "fill", ...params.fill },
-                  options,
-                );
-                return vaultFillResponse(result, params.fill.fields.length);
-              } catch {
-                return unconfirmedVaultFillResponse();
-              }
+              fillRequested = true;
+              const result = await client.vaults.items.performOperation(
+                params.key,
+                { id_or_name: params.vault, type: "fill", ...params.fill },
+                options,
+              );
+              return vaultFillResponse(result, params.fill.fields.length);
             }
             if (vaultOperationRequiresInputs(operation.type)) {
               return errorResponse(
@@ -229,6 +210,7 @@ export function registerVaultItemTools(
           }
         }
       } catch (error) {
+        if (fillRequested) throwVaultFillError(error);
         if (
           params.action === "delete" &&
           error instanceof APIError &&
