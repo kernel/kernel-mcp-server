@@ -343,6 +343,33 @@ describe("sanitizeMcpAnalyticsEvent", () => {
     expect(result?.properties[PostHogMCPAnalyticsProperty.IsError]).toBe(false);
   });
 
+  test("classifies get_more_tools schema rejections as validation errors", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.ToolName]: "get_more_tools",
+      [PostHogMCPAnalyticsProperty.IsError]: true,
+      [PostHogMCPAnalyticsProperty.ErrorType]: "Error",
+      [PostHogMCPAnalyticsProperty.ErrorMessage]:
+        "Input validation error: Invalid arguments for tool get_more_tools",
+    });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    expect(result?.properties[PostHogMCPAnalyticsProperty.ErrorType]).toBe(
+      "validation",
+    );
+
+    const runtimeError = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.ToolName]: "get_more_tools",
+      [PostHogMCPAnalyticsProperty.IsError]: true,
+      [PostHogMCPAnalyticsProperty.ErrorType]: "Error",
+      [PostHogMCPAnalyticsProperty.ErrorMessage]: "handler failed",
+    });
+    const runtimeResult = await sanitizeMcpAnalyticsEvent(runtimeError);
+    expect(
+      runtimeResult?.properties[PostHogMCPAnalyticsProperty.ErrorType],
+    ).toBe("Error");
+  });
+
   test("drops vault specs, aliases, provider actions, and error bodies", async () => {
     const event = toolCallEvent({
       [PostHogMCPAnalyticsProperty.ToolName]: "manage_vault_cards",
@@ -1013,20 +1040,37 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       expect(missingCapabilityTool?.description).toContain(
         "client-side permission restriction",
       );
-      expect(missingCapabilityTool?.inputSchema.required).toEqual([
-        "context",
+      expect(missingCapabilityTool?.inputSchema.required).toEqual(["context"]);
+      const capabilityProperties = missingCapabilityTool?.inputSchema
+        .properties as Record<string, unknown>;
+      for (const field of [
         "gap_reason",
         "capability_area",
         "capability",
         "requested_action",
         "task_outcome",
-      ]);
+      ]) {
+        expect(capabilityProperties[field]).toBeDefined();
+      }
       const disabledMissingCapabilityTool = (
         await disabled.client.listTools()
       ).tools.find(({ name }) => name === "get_more_tools");
       expect(disabledMissingCapabilityTool?.inputSchema).toEqual(
         missingCapabilityTool?.inputSchema,
       );
+
+      const legacyRequest = await enabled.client.callTool({
+        name: "get_more_tools",
+        arguments: {
+          context:
+            "Reporting a capability through the previous contract while refreshing the available tool definitions.",
+        },
+      });
+      expect(legacyRequest.isError).not.toBe(true);
+      expect(toolResultJSON(legacyRequest)).toMatchObject({
+        recorded: false,
+        status: "legacy_schema_refresh_required",
+      });
 
       const unavailableRequest = await disabled.client.callTool({
         name: "get_more_tools",

@@ -76,6 +76,50 @@ describe("get_more_tools", () => {
     }
   });
 
+  test("accepts the previous context-only contract without recording demand", async () => {
+    const captured: MissingCapabilityReport[] = [];
+    const { client, close } = await connectTestMcp(
+      (server) =>
+        registerMissingCapabilityTool(server, (report) => {
+          captured.push(report);
+        }),
+      {},
+    );
+
+    try {
+      const legacy = await client.callTool({
+        name: KERNEL_MISSING_CAPABILITY_TOOL_NAME,
+        arguments: {
+          context:
+            "Reporting a missing capability through the previous context-only contract while the client refreshes its tools.",
+        },
+      });
+      expect(legacy.isError).not.toBe(true);
+      expect(toolResultJSON(legacy)).toMatchObject({
+        recorded: false,
+        status: "legacy_schema_refresh_required",
+      });
+      expect(captured).toHaveLength(0);
+
+      const partial = await client.callTool({
+        name: KERNEL_MISSING_CAPABILITY_TOOL_NAME,
+        arguments: {
+          context:
+            "Reporting a partially structured capability request that must not fall back to the compatibility contract.",
+          gap_reason: "kernel_capability_missing",
+        },
+      });
+      expect(partial.isError).not.toBe(true);
+      expect(toolResultJSON(partial)).toMatchObject({
+        recorded: false,
+        status: "incomplete_structured_report",
+      });
+      expect(captured).toHaveLength(0);
+    } finally {
+      await close();
+    }
+  });
+
   test("reports capture failures without interrupting the task", async () => {
     const { client, close } = await connectTestMcp(
       (server) =>

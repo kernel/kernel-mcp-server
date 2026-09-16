@@ -19,6 +19,7 @@ import {
   registerFeedbackTool,
 } from "@/lib/mcp/tools/feedback";
 import {
+  KERNEL_MISSING_CAPABILITY_TOOL_NAME,
   type MissingCapabilityReport,
   registerMissingCapabilityTool,
 } from "@/lib/mcp/tools/missing-capability";
@@ -360,6 +361,17 @@ export const sanitizeMcpAnalyticsEvent: BeforeSendFn = (event) => {
   enrichMcpAnalyticsEvent(event);
   if (event.event === PostHogMCPAnalyticsEvent.ToolCall) {
     annotateProjectParamUsage(properties);
+    const errorMessage = properties[PostHogMCPAnalyticsProperty.ErrorMessage];
+    if (
+      properties[PostHogMCPAnalyticsProperty.ToolName] ===
+        KERNEL_MISSING_CAPABILITY_TOOL_NAME &&
+      properties[PostHogMCPAnalyticsProperty.IsError] === true &&
+      properties[PostHogMCPAnalyticsProperty.ErrorType] === "Error" &&
+      typeof errorMessage === "string" &&
+      errorMessage.includes("Input validation error")
+    ) {
+      properties[PostHogMCPAnalyticsProperty.ErrorType] = "validation";
+    }
   }
 
   for (const key of Object.keys(properties)) {

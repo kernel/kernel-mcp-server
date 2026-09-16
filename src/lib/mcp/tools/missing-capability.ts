@@ -80,10 +80,10 @@ const missingCapabilityFields = {
       "The missing capability and the user's goal, in 15-25 words and third person. Never include credentials, URLs, domains, account names, file contents, paths, or personal data.",
     ),
   gap_reason: gapReasonSchema.describe(
-    "Why the task could not proceed. Only kernel_capability_missing and external_integration_unavailable are recorded as demand. For an existing tool failure, use submit_feedback instead; transient failures and client restrictions are not capability gaps.",
+    "Required for current reports. Why the task could not proceed. Only kernel_capability_missing and external_integration_unavailable are recorded as demand. For an existing tool failure, use submit_feedback instead; transient failures and client restrictions are not capability gaps.",
   ),
   capability_area: capabilityAreaSchema.describe(
-    "The single KERNEL product area that would own the capability, or external_integration/client_environment when Kernel does not own it.",
+    "Required for current reports. The single KERNEL product area that would own the capability, or external_integration/client_environment when Kernel does not own it.",
   ),
   capability: z
     .string()
@@ -91,13 +91,13 @@ const missingCapabilityFields = {
     .min(1)
     .max(100)
     .describe(
-      'A short generic capability name, such as "browser filesystem upload". Do not include a site, customer, account, domain, path, or payload.',
+      'Required for current reports. A short generic capability name, such as "browser filesystem upload". Do not include a site, customer, account, domain, path, or payload.',
     ),
   requested_action: requestedActionSchema.describe(
-    "The primary operation the missing capability needed to perform.",
+    "Required for current reports. The primary operation the missing capability needed to perform.",
   ),
   task_outcome: taskOutcomeSchema.describe(
-    "Whether the task was completed, completed through a workaround, partially completed, or blocked.",
+    "Required for current reports. Whether the task was completed, completed through a workaround, partially completed, or blocked.",
   ),
   tools_checked: z
     .array(checkedKernelToolSchema)
@@ -108,30 +108,77 @@ const missingCapabilityFields = {
     ),
 };
 
+const structuredMissingCapabilitySchema = z.object(missingCapabilityFields);
+const missingCapabilityInputSchema = z.object({
+  context: missingCapabilityFields.context,
+  gap_reason: missingCapabilityFields.gap_reason.optional(),
+  capability_area: missingCapabilityFields.capability_area.optional(),
+  capability: missingCapabilityFields.capability.optional(),
+  requested_action: missingCapabilityFields.requested_action.optional(),
+  task_outcome: missingCapabilityFields.task_outcome.optional(),
+  tools_checked: missingCapabilityFields.tools_checked,
+});
+
 export type MissingCapabilityReport = z.infer<
-  z.ZodObject<typeof missingCapabilityFields>
+  typeof structuredMissingCapabilitySchema
 >;
+type MissingCapabilityInput = z.infer<typeof missingCapabilityInputSchema>;
 export type MissingCapabilityCapture = (
   report: MissingCapabilityReport,
   extra: unknown,
 ) => void | Promise<void>;
 
+const STRUCTURED_REPORT_FIELDS = [
+  "gap_reason",
+  "capability_area",
+  "capability",
+  "requested_action",
+  "task_outcome",
+] as const;
+
+function hasAnyStructuredReportField(report: MissingCapabilityInput) {
+  return STRUCTURED_REPORT_FIELDS.some((field) => report[field] !== undefined);
+}
+
+function isStructuredMissingCapabilityReport(
+  report: MissingCapabilityInput,
+): report is MissingCapabilityReport {
+  return STRUCTURED_REPORT_FIELDS.every((field) => report[field] !== undefined);
+}
+
 export function registerMissingCapabilityTool(
   server: McpServer,
   capture?: MissingCapabilityCapture,
 ) {
-  server.tool(
+  server.registerTool(
     KERNEL_MISSING_CAPABILITY_TOOL_NAME,
-    "Report a capability that no available KERNEL tool can provide after checking the tool list. Classify disconnected third-party services as external integrations. Do not use this for an existing tool that failed, a transient or capacity failure, or a client-side permission restriction; use submit_feedback for an existing KERNEL tool failure. Reports never replace the original task, so continue with any available workaround.",
-    missingCapabilityFields,
     {
-      title: "Get more tools",
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: true,
+      description:
+        "Report a capability that no available KERNEL tool can provide after checking the tool list. Supply every structured field shown; context-only calls from the previous schema are accepted only to request a tool refresh and are not recorded. Classify disconnected third-party services as external integrations. Do not use this for an existing tool that failed, a transient or capacity failure, or a client-side permission restriction; use submit_feedback for an existing KERNEL tool failure. Reports never replace the original task, so continue with any available workaround.",
+      inputSchema: missingCapabilityInputSchema,
+      annotations: {
+        title: "Get more tools",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    async (report, extra) => {
+    async (input, extra) => {
+      if (!isStructuredMissingCapabilityReport(input)) {
+        const legacy = !hasAnyStructuredReportField(input);
+        return jsonResponse({
+          recorded: false,
+          status: legacy
+            ? "legacy_schema_refresh_required"
+            : "incomplete_structured_report",
+          message: legacy
+            ? "This client used the previous get_more_tools schema. Refresh the available tool definitions, retry with the structured fields, and continue the original task with any available workaround."
+            : "The structured capability report is incomplete. Supply every structured field, retry, and continue the original task with any available workaround.",
+        });
+      }
+
+      const report = input;
       const externalIntegration =
         report.gap_reason === "external_integration_unavailable";
       if (
