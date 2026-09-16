@@ -3,6 +3,7 @@ export const KERNEL_MCP_TOOL_NAMES = [
   "browser_curl",
   "computer_action",
   "exec_command",
+  "execute_browser_repl",
   "execute_playwright_code",
   "get_connection_context",
   "get_more_tools",
