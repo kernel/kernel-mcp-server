@@ -109,6 +109,13 @@ describe("vault OpenAPI steering", () => {
       expect(vaults?.description).toContain("separate vault per end user");
       expect(vaults?.description).toContain("sensitive:false");
       expect(items?.description).toContain("without renewing collection links");
+      expect(items?.description).toContain(
+        'action: "invoke" with operation: "collect"',
+      );
+      expect(
+        tools.find(({ name }) => name === "manage_vault_credentials")
+          ?.description,
+      ).toContain('action: "invoke" and operation: "collect"');
       expect(items?.description).toContain("API-only");
       expect(tools.map(({ name }) => name)).toContain(
         "manage_vault_credentials",
