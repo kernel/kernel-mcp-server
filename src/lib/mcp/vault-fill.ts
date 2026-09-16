@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { APIError } from "@onkernel/sdk";
+import {
+  APIError,
+  APIConnectionError,
+  APIConnectionTimeoutError,
+  APIUserAbortError,
+} from "@onkernel/sdk";
 import {
   jsonResponse,
   errorResponse,
@@ -163,13 +168,17 @@ export function throwVaultFillError(error: unknown): never {
       ),
     );
   }
-  throwToolError(
-    "manage_vault_items",
-    "invoke",
-    new Error(
-      "Fill did not return a confirmed result; browser fields may have been written. Inspect the browser. Never automatically retry or fall back to aliases.",
-    ),
-  );
+  const message =
+    "Fill did not return a confirmed result; browser fields may have been written. Inspect the browser. Never automatically retry or fall back to aliases.";
+  const sanitized =
+    error instanceof APIConnectionTimeoutError
+      ? new APIConnectionTimeoutError({ message })
+      : error instanceof APIUserAbortError
+        ? new APIUserAbortError({ message })
+        : error instanceof APIConnectionError
+          ? new APIConnectionError({ message })
+          : new Error(message);
+  throwToolError("manage_vault_items", "invoke", sanitized);
 }
 
 export function unconfirmedVaultFillResponse() {

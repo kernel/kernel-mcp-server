@@ -53,6 +53,25 @@ const credential = {
 };
 
 describe("vault OpenAPI steering", () => {
+  test("an omitted sensitivity flag does not hide other public values", () => {
+    const result = toolResultJSON(
+      vaultItemResponse(
+        {
+          ...credential,
+          spec: {
+            fields: {
+              username: { type: "text", sensitive: false },
+              password: { type: "password" },
+            },
+          },
+        },
+        target,
+      ),
+    );
+    expect(result.item.state.fields.username.value).toBe("private-user");
+    expect(result.item.state.fields.password.value).toBeUndefined();
+    expect(result.item.state.fields.otp.value).toBeUndefined();
+  });
   test.each([
     { type: "text", sensitive: false, visible: true },
     { type: "email", sensitive: false, visible: true },

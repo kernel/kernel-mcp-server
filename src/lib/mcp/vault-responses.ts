@@ -125,7 +125,9 @@ export function isPublicCredentialField(
 const credentialValuesSchema = z.object({
   type: z.literal("credential"),
   spec: z.object({
-    fields: z.record(z.object({ type: z.string(), sensitive: z.boolean() })),
+    fields: z.record(
+      z.object({ type: z.string(), sensitive: z.boolean().optional() }),
+    ),
   }),
   state: z.object({
     fields: z.record(
