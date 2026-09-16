@@ -126,12 +126,13 @@ describe("advertised vault operations", () => {
         });
         expect(result.isError).toBe(true);
         expect(JSON.stringify(result)).toContain(
-          `${operation} requires additional inputs`,
+          operation === "fill"
+            ? "fill parameters are required"
+            : `${operation} requires additional inputs`,
         );
-        expect(fixture.requests.map((request) => request.method)).toEqual([
-          "GET",
-          "GET",
-        ]);
+        expect(fixture.requests.map((request) => request.method)).toEqual(
+          operation === "fill" ? ["GET"] : ["GET", "GET"],
+        );
       } finally {
         await fixture.close();
       }

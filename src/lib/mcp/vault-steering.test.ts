@@ -53,7 +53,7 @@ const credential = {
 };
 
 describe("vault OpenAPI steering", () => {
-  test("tool discovery steers per-user credential collection without advertising unsupported writes", async () => {
+  test("tool discovery exposes credential creation and steers per-user collection", async () => {
     const fixture = await connectVaultTest([]);
     try {
       const { tools } = await fixture.client.listTools();
@@ -63,7 +63,7 @@ describe("vault OpenAPI steering", () => {
       expect(vaults?.description).toContain("sensitive:false");
       expect(items?.description).toContain("without renewing collection links");
       expect(items?.description).toContain("API-only");
-      expect(tools.map(({ name }) => name)).not.toContain(
+      expect(tools.map(({ name }) => name)).toContain(
         "manage_vault_credentials",
       );
       expect(fixture.requests).toEqual([]);
@@ -104,7 +104,7 @@ describe("vault OpenAPI steering", () => {
         "expected_item_id",
         "site-name-only",
         "wait observes readiness",
-        "API-only",
+        "manage_vault_credentials",
         "Never retry an uncertain fill",
       ])
         expect(guidance).toContain(text);

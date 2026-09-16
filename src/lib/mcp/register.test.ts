@@ -127,6 +127,7 @@ describe("MCP toolset allowlist", () => {
           "manage_vault_provider_configs",
           "manage_vault_wallets",
           "manage_vault_cards",
+          "manage_vault_credentials",
           "manage_vault_items",
           "manage_vaults",
         ]);
@@ -193,6 +194,7 @@ describe("project selection registration", () => {
     "manage_vaults",
     "manage_vault_wallets",
     "manage_vault_cards",
+    "manage_vault_credentials",
     "manage_vault_items",
     "open_auth_login",
     "begin_auth_login",

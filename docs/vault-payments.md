@@ -1,8 +1,8 @@
 # Vault payments
 
-The vault tools prepare and observe payment credentials and read existing non-payment credential items. They do **not** submit
+The vault tools prepare and observe payment credentials and manage non-payment credential items. They do **not** submit
 merchant payments, expose real card values, or complete provider approval actions.
-They use the same vault API as the Kernel CLI. When advertised, API fill is the
+They use the same vault API as the Kernel CLI. When advertised, fill is the
 preferred browser-checkout path. The alias recipes below are for explicitly chosen
 egress-substitution integrations, not fallback after a failed or uncertain fill.
 
@@ -15,8 +15,8 @@ The released Node SDK dependency is pinned in `bun.lock`.
 
 ## Credential collection and observation
 
-Use one vault per end user, such as `user-123`. Create credential definitions through
-the Kernel API or CLI: use only the recognizable site name for `description`, and
+Use one vault per end user, such as `user-123`. Create credential definitions with
+`manage_vault_credentials`: use only the recognizable site name for `description`, and
 set `sensitive: false` explicitly for ordinary usernames/emails. Passwords and TOTP
 seeds must be sensitive. Payment-card data belongs in wallet/card items, not credentials.
 
@@ -31,17 +31,75 @@ Collection reopens the full form without clearing values or changing version.
 `wait` observes readiness, not edits to ready items. Compare versions using `get`
 without `wait`; API updates can also change the version.
 
-Credential creation/updates, `fill`, and `prepare_checkout` remain API/CLI-only;
-MCP does not accept their write inputs. For API updates, use the current version
+For `manage_vault_credentials` updates, use the current `version`
 and `expected_item_id` when bound to an earlier read. Clearing supported required
 values returns pending collection; hosted forms still require populated inputs.
 Fill writes real values into the browser without submitting the form. It does not
 isolate them from an agent with browser access. Never retry an uncertain fill or
 fall back to payment aliases.
 
+### MCP credential flow
+
+1. Create the user's vault with `manage_vaults` (`action: "create"`, `name: "user-123"`).
+   Create a browser with `manage_browsers` and `vaults: [{"name":"user-123"}]`.
+   Vault bindings cannot be changed later. Navigate to the intended login page and inspect its inputs.
+2. Call `manage_vault_credentials` with:
+
+   ```json
+   {
+     "action": "create",
+     "vault": "user-123",
+     "key": "login",
+     "spec": {
+       "description": "Example",
+       "fields": {
+         "username": { "type": "text", "required": true, "sensitive": false },
+         "password": { "type": "password", "required": true, "sensitive": true }
+       }
+     }
+   }
+   ```
+
+   Give `item.action.url` only to the intended user. To reopen the full form later,
+   use `manage_vault_items` with `action: "invoke"` and `operation: "collect"`.
+
+3. Observe readiness with `manage_vault_items` using `action: "get"`, the same vault/key,
+   and `wait: 60`. A pending response is not permission to fill; stop until ready.
+4. Invoke `manage_vault_items` with the actual browser session ID and selectors
+   verified on that page:
+
+   ```json
+   {
+     "action": "invoke",
+     "vault": "user-123",
+     "key": "login",
+     "operation": "fill",
+     "fill": {
+       "browser_id": "browser-session-id",
+       "page_url": "https://example.com/login",
+       "fields": [
+         { "field": "username", "selector": "#username" },
+         { "field": "password", "selector": "#password" }
+       ]
+     }
+   }
+   ```
+
+   The response has a value-free `result` with ordered field outcomes. `failed` and
+   `unknown` are tool errors, not invitations to retry; fields may already be written.
+   Fill does not navigate or submit. Submit separately only after confirming the fill
+   completed and submission is authorized. TOTP bindings send only the field name;
+   the API generates each current code immediately before writing, never exposing seeds.
+
+Updates use `action: "update"`, `version`, optional `expected_item_id`, and a `spec`
+containing `description` and/or `fields: {"username":{"value":"new-name"}}`.
+Definitions cannot be changed. Never solicit secret replacement values in chat;
+prefer `collect` for human edits. Requests are not automatically retried.
+`prepare_checkout` remains API/CLI-only.
+
 ## Tools and scope
 
-The five vault tools are exposed only when the current credential's
+The six vault tools are exposed only when the current credential's
 `GET /org/entitlements` response reports `features.vaults.enabled: true`.
 Access is rechecked on every authenticated MCP request, including tool calls,
 without caching grants across requests or connections. A missing field, malformed
@@ -55,13 +113,14 @@ The `vaults` toolset configuration can further restrict access, never grant it.
 | `manage_vaults`                 | `create`, `list`, `get`, `delete`           |
 | `manage_vault_wallets`          | `create`, `payment_methods`                 |
 | `manage_vault_cards`            | `create`, `update`                          |
+| `manage_vault_credentials`      | `create`, `update`                          |
 | `manage_vault_items`            | `list`, `get`, `invoke`, `events`, `delete` |
 
 Provider configurations are organization-owned and do not accept a project
 selector. Reads are available to project-scoped credentials; writes require an
 organization-scoped connection. The API remains the authorization authority.
 
-The other four tools accept an optional `project` name or ID. Vaults are project-owned;
+The other five tools accept an optional `project` name or ID. Vaults are project-owned;
 omitting `project` uses the API's effective default project, **not** all projects.
 Project-scoped connections cannot switch projects. Use `get_connection_context`
 to inspect the connection's scope.

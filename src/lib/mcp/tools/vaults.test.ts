@@ -19,6 +19,7 @@ describe("vault SDK request contracts", () => {
       const { tools } = await fixture.client.listTools();
       expect(tools.map((tool) => tool.name).sort()).toEqual([
         "manage_vault_cards",
+        "manage_vault_credentials",
         "manage_vault_items",
         "manage_vault_provider_configs",
         "manage_vault_wallets",

@@ -22,6 +22,7 @@ import {
   vaultSelectorSchema,
   vaultToolInput,
 } from "@/lib/mcp/vault-schemas";
+import { registerVaultCredentialTools } from "@/lib/mcp/tools/vault-credentials";
 import { registerVaultWalletTools } from "@/lib/mcp/tools/vault-wallets";
 import { registerVaultCardTools } from "@/lib/mcp/tools/vault-cards";
 import { registerVaultItemTools } from "@/lib/mcp/tools/vault-items";
@@ -34,11 +35,12 @@ export function registerVaultCapabilities(
   registerVaultProviderConfigTools(server, dependencies);
   registerVaultWalletTools(server, dependencies);
   registerVaultCardTools(server, dependencies);
+  registerVaultCredentialTools(server, dependencies);
   registerVaultItemTools(server, dependencies);
 
   server.tool(
     "manage_vaults",
-    'Manage project-owned vaults for end-user credentials and payment items. Use a separate vault per end user, with an immutable name such as user-123; do not mix unrelated users. Vaults store credentials, not authenticated browser sessions, and do not submit website forms or merchant payments. "create" creates or retrieves a vault by immutable name; "list" lists the effective project only; "get" reads one; "delete" invalidates the vault and every item credential. Confirm deletion with the user first; unresolved payment operations block deletion and require provider/support reconciliation. Connect a payment wallet with manage_vault_wallets, configure a card with manage_vault_cards, and inspect credentials or payment items with manage_vault_items. Credential creation and updates use the Kernel API or CLI, not the wallet/card tools. For credentials, use only the recognizable site name as description and set sensitive:false explicitly for ordinary usernames/emails; passwords and TOTP seeds must be sensitive. Never put credit card data in credential items. Attach vaults when creating a browser; bindings cannot change later. Requests are not automatically retried.',
+    'Manage project-owned vaults for end-user credentials and payment items. Use a separate vault per end user, with an immutable name such as user-123; do not mix unrelated users. Vaults store credentials, not authenticated browser sessions, and do not submit website forms or merchant payments. "create" creates or retrieves a vault by immutable name; "list" lists the effective project only; "get" reads one; "delete" invalidates the vault and every item credential. Confirm deletion with the user first; unresolved payment operations block deletion and require provider/support reconciliation. Connect a payment wallet with manage_vault_wallets, configure a card with manage_vault_cards, and inspect credentials or payment items with manage_vault_items. Use manage_vault_credentials to create definitions or update values, then manage_vault_items to collect, observe readiness, and invoke fill with value-free bindings. For credentials, use only the recognizable site name as description and set sensitive:false explicitly for ordinary usernames/emails; passwords and TOTP seeds must be sensitive. Never put credit card data in credential items. Attach vaults when creating a browser; bindings cannot change later. Requests are not automatically retried.',
     vaultToolInput({
       ...vaultProjectSchema,
       action: z.enum(["create", "list", "get", "delete"]),

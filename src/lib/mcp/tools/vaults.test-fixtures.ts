@@ -5,6 +5,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Kernel } from "@onkernel/sdk";
 import { projectScopedAuthInfo } from "@/lib/mcp/auth-context.test-fixtures";
 import { registerVaultCapabilities } from "@/lib/mcp/tools/vaults";
+import { registerBrowserCapabilities } from "@/lib/mcp/tools/browsers";
+import type { McpDependencies } from "@/lib/mcp/dependencies";
 
 export const vault = {
   id: "vlt_123",
@@ -51,12 +53,13 @@ type RequestRecord = {
 };
 
 export async function connectVaultTest(
-  replies: Response[],
+  replies: Array<Response | Error>,
   authInfo: AuthInfo | null = projectScopedAuthInfo(),
+  includeBrowsers = false,
 ) {
   const requests: RequestRecord[] = [];
   const server = new McpServer({ name: "vault-test", version: "0.0.0" });
-  registerVaultCapabilities(server, {
+  const dependencies: McpDependencies = {
     createKernelClient: (token, project) =>
       new Kernel({
         apiKey: token,
@@ -72,8 +75,10 @@ export async function connectVaultTest(
             headers: request.headers,
             ...(text && { body: JSON.parse(text) }),
           });
+          const reply = replies.shift();
+          if (reply instanceof Error) throw reply;
           return (
-            replies.shift() ??
+            reply ??
             Response.json(
               { message: "Unexpected extra request" },
               { status: 500 },
@@ -81,7 +86,9 @@ export async function connectVaultTest(
           );
         },
       }),
-  });
+  };
+  registerVaultCapabilities(server, dependencies);
+  if (includeBrowsers) registerBrowserCapabilities(server, dependencies);
   const client = new Client({ name: "vault-test-client", version: "0.0.0" });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();

@@ -1,0 +1,480 @@
+import { describe, expect, test } from "bun:test";
+import { toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
+import { connectVaultTest, vault } from "./vaults.test-fixtures";
+
+const target = { vault: "user-123", key: "login" };
+const spec = {
+  description: "Example",
+  fields: {
+    username: { type: "text", required: true, sensitive: false },
+    password: { type: "password", required: true, sensitive: true },
+  },
+};
+const pending = {
+  id: "item-1",
+  key: "login",
+  type: "credential",
+  version: 1,
+  spec,
+  state: {
+    status: "pending_collection",
+    fields: { username: { has_value: false }, password: { has_value: false } },
+  },
+  action: {
+    name: "collect",
+    url: "https://vault.example/collect#token=capability",
+  },
+  available_operations: [{ type: "collect", description: "Reopen form" }],
+  available_expansions: [],
+};
+const ready = {
+  ...pending,
+  version: 2,
+  state: {
+    status: "ready",
+    fields: {
+      username: { has_value: true, value: "secret-username" },
+      password: { has_value: true },
+    },
+  },
+  available_operations: [
+    { type: "collect", description: "Reopen form" },
+    { type: "fill", description: "Fill browser" },
+  ],
+};
+const fill = {
+  browser_id: "browser-1",
+  page_url: "https://example.com/login",
+  fields: [
+    { field: "username", selector: "#username" },
+    { field: "password", selector: "#password" },
+  ],
+};
+const completed = {
+  type: "fill",
+  status: "completed",
+  fields: [
+    { index: 0, status: "filled" },
+    { index: 1, status: "filled" },
+  ],
+};
+const invoke = { ...target, action: "invoke", operation: "fill", fill };
+
+describe("MCP credential flow", () => {
+  test("advertises inline credential and fill schemas", async () => {
+    const fixture = await connectVaultTest([]);
+    try {
+      const { tools } = await fixture.client.listTools();
+      const credentials = tools.find(
+        (tool) => tool.name === "manage_vault_credentials",
+      );
+      const items = tools.find((tool) => tool.name === "manage_vault_items");
+      expect(credentials?.inputSchema.properties).toHaveProperty("spec");
+      expect(credentials?.inputSchema.properties).toHaveProperty(
+        "expected_item_id",
+      );
+      expect(items?.inputSchema.properties).toHaveProperty("fill");
+      expect(
+        JSON.stringify([credentials?.inputSchema, items?.inputSchema]),
+      ).not.toContain('"$ref"');
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("fills TOTP by field name without a value or explicit page URL", async () => {
+    const fixture = await connectVaultTest([
+      Response.json({
+        ...ready,
+        spec: {
+          fields: { otp: { type: "totp", required: true, sensitive: true } },
+        },
+        state: { status: "ready", fields: { otp: { has_value: true } } },
+      }),
+      Response.json({
+        type: "fill",
+        status: "completed",
+        fields: [{ index: 0, status: "filled" }],
+      }),
+    ]);
+    try {
+      const parameters = {
+        browser_id: "browser-1",
+        fields: [{ field: "otp", selector: "#otp" }],
+      };
+      const result = await fixture.call("manage_vault_items", {
+        ...invoke,
+        fill: parameters,
+      });
+      expect(result.isError).toBe(false);
+      expect(fixture.requests[1].body).toEqual({ type: "fill", ...parameters });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    { provider: "link", page_url: "https://example.com", allowed: true },
+    { provider: "link", page_url: "http://example.com", allowed: false },
+    {
+      provider: "link",
+      page_url: "https://user:password@example.com",
+      allowed: false,
+    },
+    { provider: "link", page_url: undefined, allowed: false },
+    { provider: "agentcard", page_url: "https://example.com", allowed: false },
+  ])(
+    "enforces card fill provider and page URL boundaries",
+    async ({ provider, page_url, allowed }) => {
+      const fixture = await connectVaultTest([
+        Response.json({ ...ready, type: "card", spec: { provider } }),
+        Response.json(completed),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          ...invoke,
+          fill: {
+            ...fill,
+            page_url,
+            fields: [
+              { field: "number", selector: "#number" },
+              { field: "cvc", selector: "#cvc" },
+            ],
+          },
+        });
+        expect(result.isError).toBe(!allowed);
+        expect(
+          fixture.requests.filter((request) => request.method === "POST"),
+        ).toHaveLength(allowed ? 1 : 0);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test("rejects credential format before any operation write", async () => {
+    const fixture = await connectVaultTest([Response.json(ready)]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        ...invoke,
+        fill: {
+          ...fill,
+          fields: [
+            { field: "password", selector: "#password", format: "MM/YY" },
+          ],
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(fixture.requests.map((request) => request.method)).toEqual([
+        "GET",
+      ]);
+    } finally {
+      await fixture.close();
+    }
+  });
+  test("creates a vault and credential, collects, waits for readiness, and fills without exposing values", async () => {
+    const fixture = await connectVaultTest(
+      [
+        Response.json(vault),
+        Response.json({ session_id: "browser-1" }),
+        Response.json(pending),
+        Response.json(pending),
+        Response.json(pending),
+        Response.json(ready),
+        Response.json(ready),
+        Response.json({
+          ...completed,
+          value: "secret-password",
+          fields: completed.fields.map((field) => ({
+            ...field,
+            value: "secret-password",
+          })),
+        }),
+      ],
+      undefined,
+      true,
+    );
+    try {
+      expect(
+        (
+          await fixture.call("manage_vaults", {
+            action: "create",
+            name: target.vault,
+          })
+        ).isError,
+      ).toBeUndefined();
+      const browser = await fixture.call("manage_browsers", {
+        action: "create",
+        vaults: [{ name: target.vault }],
+        headless: false,
+      });
+      expect(browser.isError).toBeUndefined();
+      expect(fixture.requests[1].body).toMatchObject({
+        vaults: [{ name: target.vault }],
+      });
+      const created = toolResultJSON(
+        await fixture.call("manage_vault_credentials", {
+          ...target,
+          action: "create",
+          spec,
+        }),
+      );
+      expect(created.item.action.url).toBe(pending.action.url);
+      expect(created.item.spec.fields).toEqual(spec.fields);
+      expect(
+        (
+          await fixture.call("manage_vault_items", {
+            ...target,
+            action: "invoke",
+            operation: "collect",
+          })
+        ).isError,
+      ).toBeUndefined();
+      const observed = toolResultJSON(
+        await fixture.call("manage_vault_items", {
+          ...target,
+          action: "get",
+          wait: 60,
+        }),
+      );
+      expect(observed.item.state.status).toBe("ready");
+      expect(JSON.stringify(observed)).not.toContain("secret-username");
+      const result = await fixture.call("manage_vault_items", invoke);
+      expect(result.isError).toBe(false);
+      expect(toolResultJSON(result).result).toEqual(completed);
+      expect(JSON.stringify(result)).not.toContain("secret-password");
+      expect(fixture.requests.map(({ method }) => method)).toEqual([
+        "POST",
+        "POST",
+        "PUT",
+        "GET",
+        "POST",
+        "GET",
+        "GET",
+        "POST",
+      ]);
+      expect(fixture.requests[2].body).toEqual({ type: "credential", spec });
+      expect(fixture.requests.at(-1)?.body).toEqual({ type: "fill", ...fill });
+      expect(fixture.requests[5].path).toContain("wait=60");
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("updates with version and immutable identity, preserving null/empty clearing", async () => {
+    const fixture = await connectVaultTest([Response.json(pending)]);
+    try {
+      const update = {
+        description: "Example",
+        fields: { username: { value: "" }, password: { value: null } },
+      };
+      const result = await fixture.call("manage_vault_credentials", {
+        ...target,
+        action: "update",
+        version: 2,
+        expected_item_id: "item-1",
+        spec: update,
+      });
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[0].method).toBe("PATCH");
+      expect(fixture.requests[0].body).toEqual({
+        type: "credential",
+        version: 2,
+        expected_item_id: "item-1",
+        spec: update,
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("redacts supplied initial values even if echoed in metadata", async () => {
+    const secret = "private-password-value";
+    const fixture = await connectVaultTest([
+      Response.json({ ...pending, spec: { ...spec, description: secret } }),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_credentials", {
+        ...target,
+        action: "create",
+        spec: {
+          ...spec,
+          fields: {
+            password: { type: "password", sensitive: true, value: secret },
+          },
+        },
+      });
+      expect(result.isError).toBeUndefined();
+      expect(JSON.stringify(result)).not.toContain(secret);
+      expect(fixture.requests[0].body).toHaveProperty(
+        "spec.fields.password.value",
+        secret,
+      );
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    { action: "update", spec: { description: "Example" } },
+    { action: "create", version: 1, spec },
+    { action: "create", expected_item_id: "item-1", spec },
+    { action: "create", spec: { fields: {} } },
+    {
+      action: "create",
+      spec: { fields: { password: { type: "password", sensitive: false } } },
+    },
+    {
+      action: "create",
+      spec: {
+        fields: { username: { type: "text", private_key: "secret-value" } },
+      },
+    },
+    {
+      action: "update",
+      version: 1,
+      spec: { fields: { username: { type: "text", value: "secret-value" } } },
+    },
+    { action: "update", version: 1, spec: {} },
+  ])(
+    "rejects invalid credential writes without HTTP requests",
+    async (args) => {
+      const fixture = await connectVaultTest([]);
+      try {
+        const result = await fixture.call("manage_vault_credentials", {
+          ...target,
+          ...args,
+        });
+        expect(result.isError).toBe(true);
+        expect(JSON.stringify(result)).not.toContain("secret-value");
+        expect(fixture.requests).toHaveLength(0);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  for (const operation of ["create", "update", "fill"] as const) {
+    test.each([409, 429, 500, "transport"])(
+      `${operation} does not retry %s`,
+      async (failure) => {
+        const reply =
+          failure === "transport"
+            ? new Error("private-transport-error")
+            : Response.json(
+                { message: "private-upstream-error" },
+                { status: Number(failure) },
+              );
+        const fixture = await connectVaultTest(
+          operation === "fill" ? [Response.json(ready), reply] : [reply],
+        );
+        try {
+          const result =
+            operation === "fill"
+              ? await fixture.call("manage_vault_items", invoke)
+              : await fixture.call("manage_vault_credentials", {
+                  ...target,
+                  action: operation,
+                  ...(operation === "update"
+                    ? { version: 2, spec: { description: "Example" } }
+                    : { spec }),
+                });
+          expect(result.isError).toBe(true);
+          expect(JSON.stringify(result)).not.toContain("private-");
+          expect(
+            fixture.requests.filter(({ method }) => method !== "GET"),
+          ).toHaveLength(1);
+          if (operation === "fill")
+            expect(JSON.stringify(result)).toContain(
+              "Never automatically retry",
+            );
+        } finally {
+          await fixture.close();
+        }
+      },
+    );
+  }
+
+  test.each(["failed", "unknown"])(
+    "preserves ordered %s fill outcomes without retry",
+    async (status) => {
+      const outcome = {
+        type: "fill",
+        status,
+        fields: [
+          { index: 0, status: "filled" },
+          { index: 1, status, error_code: "timeout", value: "secret-value" },
+        ],
+      };
+      const fixture = await connectVaultTest([
+        Response.json(ready),
+        Response.json(outcome),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", invoke);
+        expect(result.isError).toBe(true);
+        expect(toolResultJSON(result).result.status).toBe(status);
+        expect(toolResultJSON(result).result.fields[0]).toEqual({
+          index: 0,
+          status: "filled",
+        });
+        expect(JSON.stringify(result)).not.toContain("secret-value");
+        expect(fixture.requests).toHaveLength(2);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test("checks current availability before fill", async () => {
+    const fixture = await connectVaultTest([Response.json(pending)]);
+    try {
+      expect((await fixture.call("manage_vault_items", invoke)).isError).toBe(
+        true,
+      );
+      expect(fixture.requests.map(({ method }) => method)).toEqual(["GET"]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    { ...fill, fields: [] },
+    {
+      ...fill,
+      fields: [
+        { field: "password", selector: "#password", value: "secret-value" },
+      ],
+    },
+    { ...fill, frame_id: "frame-1" },
+    { ...fill, timeout_ms: 30001 },
+  ])("rejects invalid fill inputs before requests", async (parameters) => {
+    const fixture = await connectVaultTest([]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        ...invoke,
+        fill: parameters,
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("secret-value");
+      expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("does not treat a malformed fill response as a successful item", async () => {
+    const fixture = await connectVaultTest([
+      Response.json(ready),
+      Response.json(ready),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", invoke);
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain("may have been written");
+      expect(JSON.stringify(result)).not.toContain("secret-username");
+    } finally {
+      await fixture.close();
+    }
+  });
+});
