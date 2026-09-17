@@ -75,6 +75,24 @@ describe("vault OpenAPI steering", () => {
     expect(result.item.state.fields.password.value).toBeUndefined();
     expect(result.item.state.fields.otp.value).toBeUndefined();
   });
+  test("fails closed on duplicate credential definitions", () => {
+    const result = toolResultJSON(
+      vaultItemResponse(
+        {
+          ...credential,
+          spec: {
+            fields: [
+              { name: "username", type: "text", sensitive: false },
+              { name: "username", type: "password", sensitive: true },
+            ],
+          },
+        },
+        target,
+      ),
+    );
+    expect(result.item.state.fields.username).toEqual({ has_value: true });
+    expect(JSON.stringify(result)).not.toContain("private-user");
+  });
   test.each([
     { type: "text", sensitive: false, visible: true },
     { type: "email", sensitive: false, visible: true },

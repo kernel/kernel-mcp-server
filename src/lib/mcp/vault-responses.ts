@@ -122,23 +122,29 @@ export function isPublicCredentialField(
   );
 }
 
-const credentialValuesSchema = z.object({
-  type: z.literal("credential"),
-  spec: z.object({
-    fields: z.array(
-      z.object({
-        name: z.string(),
-        type: z.string(),
-        sensitive: z.boolean().optional(),
-      }),
-    ),
-  }),
-  state: z.object({
-    fields: z.record(
-      z.object({ has_value: z.boolean(), value: z.string().optional() }),
-    ),
-  }),
-});
+const credentialValuesSchema = z
+  .object({
+    type: z.literal("credential"),
+    spec: z.object({
+      fields: z.array(
+        z.object({
+          name: z.string(),
+          type: z.string(),
+          sensitive: z.boolean().optional(),
+        }),
+      ),
+    }),
+    state: z.object({
+      fields: z.record(
+        z.object({ has_value: z.boolean(), value: z.string().optional() }),
+      ),
+    }),
+  })
+  .refine(
+    ({ spec }) =>
+      new Set(spec.fields.map((field) => field.name)).size ===
+      spec.fields.length,
+  );
 
 export function projectVaultOutput(
   value: unknown,
