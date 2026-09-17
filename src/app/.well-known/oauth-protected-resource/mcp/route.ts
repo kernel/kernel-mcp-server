@@ -1,5 +1,6 @@
 import { protectedResourceHandlerClerk } from "@clerk/mcp-tools/next";
 import { NextRequest } from "next/server";
+import { oauthResourceMetadata } from "@/lib/oauth-discovery";
 
 const handler = async (request: NextRequest) => {
   const clerkResponse = await protectedResourceHandlerClerk({
@@ -8,20 +9,11 @@ const handler = async (request: NextRequest) => {
 
   const clerkMetadata = await clerkResponse.json();
 
-  const baseUrl = `${request.nextUrl.protocol}//${request.nextUrl.host}`;
-
-  const modifiedMetadata: Record<string, unknown> = {
-    ...clerkMetadata,
-    resource: baseUrl,
-    authorization_servers: [baseUrl],
-    authorization_endpoint: `${baseUrl}/authorize`,
-    token_endpoint: `${baseUrl}/token`,
-    registration_endpoint: `${baseUrl}/register`,
-    scopes_supported: ["openid"],
-  };
+  const modifiedMetadata = oauthResourceMetadata(request, clerkMetadata);
 
   return Response.json(modifiedMetadata, {
     headers: {
+      "Cache-Control": "no-store",
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type, Authorization",
