@@ -5,10 +5,20 @@ import { connectVaultTest, vault } from "./vaults.test-fixtures";
 const target = { vault: "user-123", key: "login" };
 const spec = {
   description: "Example",
-  fields: {
-    username: { type: "text", required: true, sensitive: false },
-    password: { type: "password", required: true, sensitive: true },
-  },
+  fields: [
+    {
+      name: "username",
+      type: "text",
+      required: true,
+      sensitive: false,
+    },
+    {
+      name: "password",
+      type: "password",
+      required: true,
+      sensitive: true,
+    },
+  ],
 };
 const pending = {
   id: "item-1",
@@ -90,13 +100,11 @@ describe("MCP credential flow", () => {
               : {
                   spec: {
                     ...spec,
-                    fields: {
-                      ...spec.fields,
-                      username: {
-                        ...spec.fields.username,
-                        value: target.vault,
-                      },
-                    },
+                    fields: spec.fields.map((field) =>
+                      field.name === "username"
+                        ? { ...field, value: target.vault }
+                        : field,
+                    ),
                   },
                 }),
           }),
@@ -177,7 +185,14 @@ describe("MCP credential flow", () => {
       Response.json({
         ...ready,
         spec: {
-          fields: { otp: { type: "totp", required: true, sensitive: true } },
+          fields: [
+            {
+              name: "otp",
+              type: "totp",
+              required: true,
+              sensitive: true,
+            },
+          ],
         },
         state: { status: "ready", fields: { otp: { has_value: true } } },
       }),
@@ -396,15 +411,20 @@ describe("MCP credential flow", () => {
         action: "create",
         spec: {
           ...spec,
-          fields: {
-            password: { type: "password", sensitive: true, value: secret },
-          },
+          fields: [
+            {
+              name: "password",
+              type: "password",
+              sensitive: true,
+              value: secret,
+            },
+          ],
         },
       });
       expect(result.isError).toBeUndefined();
       expect(JSON.stringify(result)).not.toContain(secret);
       expect(fixture.requests[0].body).toHaveProperty(
-        "spec.fields.password.value",
+        "spec.fields.0.value",
         secret,
       );
     } finally {
@@ -416,15 +436,28 @@ describe("MCP credential flow", () => {
     { action: "update", spec: { description: "Example" } },
     { action: "create", version: 1, spec },
     { action: "create", expected_item_id: "item-1", spec },
-    { action: "create", spec: { fields: {} } },
+    { action: "create", spec: { fields: [] } },
     {
       action: "create",
-      spec: { fields: { password: { type: "password", sensitive: false } } },
+      spec: {
+        fields: [{ name: "password", type: "password", sensitive: false }],
+      },
     },
     {
       action: "create",
       spec: {
-        fields: { username: { type: "text", private_key: "secret-value" } },
+        fields: [
+          { name: "username", type: "text", private_key: "secret-value" },
+        ],
+      },
+    },
+    {
+      action: "create",
+      spec: {
+        fields: [
+          { name: "username", type: "text" },
+          { name: "username", type: "password" },
+        ],
       },
     },
     {
