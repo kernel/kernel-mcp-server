@@ -432,6 +432,59 @@ describe("MCP credential flow", () => {
     }
   });
 
+  test.each(["create", "update"] as const)(
+    "%s redacts supplied values when the API returns duplicate definitions",
+    async (action) => {
+      const secret = "private-duplicate-value";
+      const fixture = await connectVaultTest([
+        Response.json({
+          ...pending,
+          spec: {
+            description: secret,
+            fields: [
+              { name: "username", type: "text", sensitive: false },
+              { name: "username", type: "password", sensitive: true },
+            ],
+          },
+          state: {
+            status: "ready",
+            fields: {
+              username: { has_value: true, value: secret },
+            },
+          },
+        }),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_credentials", {
+          ...target,
+          action,
+          ...(action === "create"
+            ? {
+                spec: {
+                  fields: [
+                    {
+                      name: "username",
+                      type: "text",
+                      sensitive: false,
+                      value: secret,
+                    },
+                  ],
+                },
+              }
+            : {
+                version: 2,
+                spec: { fields: { username: { value: secret } } },
+              }),
+        });
+        expect(result.isError).toBeUndefined();
+        expect(JSON.stringify(result)).not.toContain(secret);
+        expect(JSON.stringify(fixture.requests[0].body)).toContain(secret);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
   test.each([
     { action: "update", spec: { description: "Example" } },
     { action: "create", version: 1, spec },

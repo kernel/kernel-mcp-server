@@ -63,6 +63,18 @@ const createSpec = z
       ),
   })
   .strict();
+function publicCredentialFieldNames(item: VaultItem): Set<string> {
+  if (item.type !== "credential") return new Set();
+  const names = new Set<string>();
+  const publicNames = new Set<string>();
+  for (const field of item.spec.fields) {
+    if (names.has(field.name)) return new Set();
+    names.add(field.name);
+    if (isPublicCredentialField(field)) publicNames.add(field.name);
+  }
+  return publicNames;
+}
+
 const updateSpec = z
   .object({
     description: text()
@@ -150,16 +162,9 @@ export function registerVaultCredentialTools(
             },
             options,
           );
+          const publicNames = publicCredentialFieldNames(item);
           writtenValues = spec.fields
-            .filter(
-              (field) =>
-                item.type !== "credential" ||
-                !isPublicCredentialField(
-                  item.spec.fields.find(
-                    (definition) => definition.name === field.name,
-                  ),
-                ),
-            )
+            .filter((field) => !publicNames.has(field.name))
             .map((field) => field.value);
         } else {
           if (params.version === undefined)
@@ -178,16 +183,9 @@ export function registerVaultCredentialTools(
             },
             options,
           );
+          const publicNames = publicCredentialFieldNames(item);
           writtenValues = Object.entries(spec.fields ?? {})
-            .filter(
-              ([name]) =>
-                item.type !== "credential" ||
-                !isPublicCredentialField(
-                  item.spec.fields.find(
-                    (definition) => definition.name === name,
-                  ),
-                ),
-            )
+            .filter(([name]) => !publicNames.has(name))
             .map(([, field]) => field.value ?? undefined);
         }
         return vaultItemResponse(
