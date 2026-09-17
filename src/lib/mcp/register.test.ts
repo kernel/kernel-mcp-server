@@ -8,6 +8,7 @@ const NON_AUTH_TOOLSETS = [
   "profiles",
   "docs",
   "browsers",
+  "config_registry",
   "projects",
   "api_keys",
   "browser_pools",
@@ -180,6 +181,7 @@ describe("project selection registration", () => {
   const projectScopedTools = [
     "manage_profiles",
     "manage_browsers",
+    "resolve_browser_config",
     "manage_browser_pools",
     "browser_curl",
     "manage_proxies",

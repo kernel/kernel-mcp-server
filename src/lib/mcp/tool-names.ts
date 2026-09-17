@@ -25,6 +25,7 @@ export const KERNEL_MCP_TOOL_NAMES = [
   "manage_vault_wallets",
   "manage_vaults",
   "open_auth_login",
+  "resolve_browser_config",
   "search_docs",
   "submit_feedback",
   "webmcp",

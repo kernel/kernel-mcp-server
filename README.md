@@ -328,6 +328,7 @@ See [Vault payments](docs/vault-payments.md) for both provider flows, safety rul
 ### Standalone tools
 
 - `get_connection_context` - Inspect the authenticated principal, organization, credential scope, and effective project scope.
+- `resolve_browser_config` - Look up cached Config Registry browser and proxy recommendations, start a missing background analysis, and poll an analysis by ID before creating a browser.
 - `computer_action` - Mouse, keyboard, clipboard, and screenshot controls for browser sessions (click, type, press_key, scroll, move, get_position, read_clipboard, write_clipboard, screenshot).
 - `browser_curl` - Send HTTP requests through an existing browser session's Chrome network stack.
 - `execute_playwright_code` - Execute Playwright/TypeScript code and browser-wide WebMCP helpers against an existing browser session. Does not create or delete browsers - use `manage_browsers` for session lifecycle.

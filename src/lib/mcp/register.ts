@@ -13,6 +13,7 @@ import { registerBrowserCurlTool } from "@/lib/mcp/tools/browser-curl";
 import { registerBrowserCapabilities } from "@/lib/mcp/tools/browsers";
 import { registerComputerActionTool } from "@/lib/mcp/tools/computer-action";
 import { registerConnectionContextTool } from "@/lib/mcp/tools/connection-context";
+import { registerConfigRegistryTool } from "@/lib/mcp/tools/config-registry";
 import { registerCredentialProviderTools } from "@/lib/mcp/tools/credential-providers";
 import { registerCredentialTools } from "@/lib/mcp/tools/credentials";
 import { registerDocsTools } from "@/lib/mcp/tools/docs";
@@ -41,6 +42,7 @@ const mcpToolRegistrations = [
   ["profiles", registerProfileCapabilities],
   ["docs", registerDocsTools],
   ["browsers", registerBrowserCapabilities],
+  ["config_registry", registerConfigRegistryTool],
   ["projects", registerProjectCapabilities],
   ["api_keys", registerAPIKeyCapabilities],
   ["browser_pools", registerBrowserPoolCapabilities],
