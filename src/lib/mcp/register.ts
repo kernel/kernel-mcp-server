@@ -73,6 +73,7 @@ const standaloneToolsetAliases: Partial<Record<string, McpToolset>> = {
   exec_command: "shell",
   browser_utilities: "browser_curl",
   open_auth_login: "auth_connections",
+  resolve_browser_config: "config_registry",
 };
 
 function isMcpToolset(value: string): value is McpToolset {

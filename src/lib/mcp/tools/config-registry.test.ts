@@ -187,6 +187,15 @@ describe("resolve_browser_config", () => {
       expect(JSON.stringify(result.content)).toContain(
         "analysis_id is required",
       );
+
+      const empty = await client.callTool({
+        name: "resolve_browser_config",
+        arguments: { action: "get_analysis", analysis_id: "" },
+      });
+      expect(empty.isError).toBe(true);
+      expect(JSON.stringify(empty.content)).toContain(
+        "String must contain at least 1 character",
+      );
     } finally {
       await close();
     }

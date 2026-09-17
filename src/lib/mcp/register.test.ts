@@ -147,6 +147,26 @@ describe("MCP toolset allowlist", () => {
     },
   );
 
+  test("accepts the config registry standalone tool alias", () => {
+    const previousEnabled = process.env.KERNEL_MCP_ENABLED_TOOLSETS;
+    const previousDisabled = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+    process.env.KERNEL_MCP_ENABLED_TOOLSETS = "resolve_browser_config";
+    delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+    try {
+      expect(captureRegistration(false).legacyTools).toEqual([
+        "get_connection_context",
+        "resolve_browser_config",
+      ]);
+    } finally {
+      if (previousEnabled === undefined)
+        delete process.env.KERNEL_MCP_ENABLED_TOOLSETS;
+      else process.env.KERNEL_MCP_ENABLED_TOOLSETS = previousEnabled;
+      if (previousDisabled === undefined)
+        delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+      else process.env.KERNEL_MCP_DISABLED_TOOLSETS = previousDisabled;
+    }
+  });
+
   test("keeps connection context and only the selected browser controls", () => {
     const previousEnabled = process.env.KERNEL_MCP_ENABLED_TOOLSETS;
     const previousDisabled = process.env.KERNEL_MCP_DISABLED_TOOLSETS;

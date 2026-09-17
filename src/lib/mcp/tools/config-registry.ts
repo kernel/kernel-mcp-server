@@ -57,6 +57,7 @@ export function registerConfigRegistryTool(
         .optional(),
       analysis_id: z
         .string()
+        .min(1)
         .describe("(get_analysis) Analysis ID returned by resolve.")
         .optional(),
     },
