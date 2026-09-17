@@ -283,6 +283,20 @@ export function vaultItemResponse(
     "type" in projected &&
     projected.type === "credential";
   const advertised = advertisedOperationsSchema.safeParse(projected);
+  const payment = z
+    .object({
+      type: z.enum(["card", "wallet"]),
+      spec: z.object({ provider: z.enum(["link", "agentcard"]) }),
+    })
+    .safeParse(projected);
+  const cardProvider =
+    payment.success && payment.data.type === "card"
+      ? payment.data.spec.provider
+      : undefined;
+  const canFill =
+    cardProvider !== undefined &&
+    advertised.success &&
+    advertised.data.available_operations.some(({ type }) => type === "fill");
   const secretValues = secretVariants(secrets);
   const safeHint = (hint: unknown) => !containsVaultSecret(hint, secretValues);
   return vaultResponse(
@@ -311,10 +325,30 @@ export function vaultItemResponse(
           ]
         : [
             "Ask the user to complete returned provider actions. Never request card data or OAuth codes/tokens in chat; imported grants must come from a trusted backend. Read operation descriptions and obtain explicit user approval before invoking.",
-            "Fill is the preferred browser-checkout path when advertised: use manage_vault_items invoke with operation fill and a fill object containing browser_id, exact HTTPS page_url, and ordered field/selector bindings. Aliases are an alternative only for explicitly chosen egress-substitution integrations in a browser created with this vault attached, respecting returned permitted domains. Never fall back to aliases after an uncertain fill. Ready does not mean paid.",
+            "Invocation hints are not approval to execute. Availability may change; invoke rechecks the advertised operations. Ready does not mean paid.",
+            ...(payment.success && payment.data.type === "wallet"
+              ? [
+                  "Wallets connect a payment provider; they are not fillable cards. Use manage_vault_cards to configure a purchase request, then inspect that card's state and advertised operations.",
+                ]
+              : []),
+            ...(cardProvider === "link"
+              ? [
+                  "Link cards use fill for browser checkout, only when advertised. Link does not expose aliases or support egress substitution; do not use aliases from older responses, which fail closed on supported payment shapes. The browser must retain this vault attachment in the same project. The exact current HTTPS top-level page URL must have the origin of spec.merchant_url. The card must remain ready and unexpired with stored card material and a non-deleted parent wallet; lifecycle and destination checks still apply.",
+                ]
+              : []),
+            ...(canFill
+              ? [
+                  "Use manage_vault_items with action invoke, operation fill, and a nested fill object containing browser_id, exact current top-level page_url (including path, query, and fragment), and ordered fields of field/selector bindings, never values. For a combined expiration field, include format MM/YY or MM/YYYY on that binding; fill.timeout_ms is optional. Attach the vault at browser creation. No ready-to-run fill hint is emitted because bindings are caller-chosen.",
+                  "Fill writes real values into the browser without returning them in the API response or explicitly submitting checkout. An agent with browser or CDP access may read those values; input/change events can trigger site behavior. Inspect the value-free result and ordered field outcomes. Failed or unknown fills may leave partial writes without rollback. Never automatically retry a failed or unknown fill or fall back to aliases. Completed means fields were filled, not payment or merchant acceptance; submit separately only after confirming completion and user authorization.",
+                ]
+              : []),
+            ...(cardProvider === "agentcard"
+              ? [
+                  "AgentCard aliases remain supported for explicitly chosen egress-substitution integrations: use only returned state.aliases in a browser created with this vault attached, respecting returned permitted domains. Checkout hold, approval, and replay remain supported; observe checkout authorization and approval URLs. Never fall back to aliases after an uncertain fill or preparation.",
+                  "For API-only prepare_checkout, deliver the returned approval URL and keep the approval page open. Poll the item until ready_to_submit, then submit native Pay before state.preparation.expires_at. Readiness lasts at most 30 seconds; polling does not extend it. Preparations are single-use even after failure or expiry. Preparation consumed means claimed, not payment success.",
+                ]
+              : []),
             "Observe get/events for outcomes. Do not retry failed, timed-out, rejected, or indeterminate payments or reconfigure a card to retry them.",
-            "Invocation hints are not approval to execute. Availability may change; invoke rechecks the advertised operations. Fill requires caller-chosen bindings in the fill object, so no ready-to-run invocation hint is emitted. prepare_checkout still requires the Kernel API.",
-            "For API-only prepare_checkout, deliver the returned approval URL and keep the approval page open. Poll the item until ready_to_submit, then submit native Pay before state.preparation.expires_at. Readiness lasts at most 30 seconds; polling does not extend it. Preparations are single-use even after failure or expiry. Preparation consumed means claimed, not payment success.",
             "recovery_required is an unresolved original outcome, not decline or expiry. Stop payment attempts; reconcile with the provider or support. No reset exists, and deletion may be blocked for this item and its parents.",
           ],
     },

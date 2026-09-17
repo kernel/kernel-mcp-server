@@ -233,6 +233,7 @@ describe("vault OpenAPI steering", () => {
       vaultItemResponse(
         {
           ...item,
+          spec: { ...item.spec, provider: "agentcard" },
           state: {
             provider: "agentcard",
             status: "ready_to_submit",

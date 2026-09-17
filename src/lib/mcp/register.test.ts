@@ -11,6 +11,7 @@ const NON_AUTH_TOOLSETS = [
   "projects",
   "api_keys",
   "browser_pools",
+  "config_registry",
   "browser_curl",
   "proxies",
   "extensions",
@@ -184,6 +185,7 @@ describe("MCP toolset allowlist", () => {
 describe("project selection registration", () => {
   const projectScopedTools = [
     "manage_profiles",
+    "manage_config_registry",
     "manage_browsers",
     "manage_browser_pools",
     "browser_curl",

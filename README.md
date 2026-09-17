@@ -309,6 +309,7 @@ Call `get_connection_context` before deciding whether to create or select a proj
 - `manage_projects` - Create, list, get, update, and delete organization projects. Inspect and update per-project resource limits.
 - `manage_api_keys` - Create, list, get, update, and delete org-wide or project-scoped API keys. Create returns the plaintext key once.
 - `manage_browser_pools` - Create, list, get, delete, and flush pools of pre-warmed browsers. Acquire and release browsers from pools.
+- `manage_config_registry` - Look up current browser and proxy recommendations, start and inspect analyses, request cancellation, and list project configurations or analysis history.
 - `manage_proxies` - Create, list, get, check, and delete proxy configurations (datacenter, ISP, residential, mobile, custom).
 - `manage_replays` - Start, stop, and list MP4 video replay recordings for a browser session. Session-scoped: start once, run your automation, then stop. Requires a paid Kernel plan.
 - `manage_extensions` - List and delete uploaded browser extensions.
