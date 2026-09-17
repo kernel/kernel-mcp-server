@@ -161,6 +161,20 @@ async function oauthErrorCode(response: NextResponse): Promise<OAuthErrorCode> {
   return response.status >= 500 ? "server_error" : "invalid_grant";
 }
 
+// The provider's own error code is the only thing that separates an expired
+// code from a redirect mismatch or a revoked client. Record the code, never the
+// free-text description that accompanies it.
+async function readProviderErrorCode(
+  response: Response,
+): Promise<string | undefined> {
+  try {
+    const body = (await response.json()) as { error?: unknown };
+    return typeof body.error === "string" ? body.error.slice(0, 64) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function tokenRequest(
   request: NextRequest,
   dependencies: TokenDependencies = tokenDependencies,
@@ -172,6 +186,9 @@ export async function tokenRequest(
     "unknown";
   let accessScopeForAnalytics: OAuthTokenExchangeAnalytics["accessScope"] =
     "unknown";
+  let clientIdForAnalytics: string | undefined;
+  let providerStatusCode: number | undefined;
+  let providerErrorCode: string | undefined;
   let stage: OAuthTokenExchangeAnalytics["stage"] = "request_validation";
 
   const finish = (
@@ -182,10 +199,13 @@ export async function tokenRequest(
       dependencies.recordExchange?.({
         grantType: grantTypeForAnalytics,
         clientType: clientTypeForAnalytics,
+        ...(clientIdForAnalytics ? { clientId: clientIdForAnalytics } : {}),
         accessScope: accessScopeForAnalytics,
         stage,
         outcome: response.ok ? "success" : "error",
         ...(errorCode ? { errorCode } : {}),
+        ...(providerStatusCode ? { providerStatusCode } : {}),
+        ...(providerErrorCode ? { providerErrorCode } : {}),
         statusCode: response.status,
         durationMs: Date.now() - startedAt,
       });
@@ -229,6 +249,7 @@ export async function tokenRequest(
   grantTypeForAnalytics = normalizedGrantType(grantType);
   const { clientId } = clientCredentials(request, body, params);
   clientTypeForAnalytics = clientType(clientId);
+  clientIdForAnalytics = clientId || undefined;
   if (!clientId) {
     return fail("invalid_request", "Missing required parameter: client_id");
   }
@@ -296,6 +317,8 @@ export async function tokenRequest(
       },
     );
     if (!clerkResponse.ok) {
+      providerStatusCode = clerkResponse.status;
+      providerErrorCode = await readProviderErrorCode(clerkResponse);
       return fail(
         "invalid_grant",
         grantType === "refresh_token"
