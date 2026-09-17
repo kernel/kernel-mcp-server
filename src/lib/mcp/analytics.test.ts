@@ -343,33 +343,6 @@ describe("sanitizeMcpAnalyticsEvent", () => {
     expect(result?.properties[PostHogMCPAnalyticsProperty.IsError]).toBe(false);
   });
 
-  test("classifies get_more_tools schema rejections as validation errors", async () => {
-    const event = toolCallEvent({
-      [PostHogMCPAnalyticsProperty.ToolName]: "get_more_tools",
-      [PostHogMCPAnalyticsProperty.IsError]: true,
-      [PostHogMCPAnalyticsProperty.ErrorType]: "Error",
-      [PostHogMCPAnalyticsProperty.ErrorMessage]:
-        "Input validation error: Invalid arguments for tool get_more_tools",
-    });
-
-    const result = await sanitizeMcpAnalyticsEvent(event);
-
-    expect(result?.properties[PostHogMCPAnalyticsProperty.ErrorType]).toBe(
-      "validation",
-    );
-
-    const runtimeError = toolCallEvent({
-      [PostHogMCPAnalyticsProperty.ToolName]: "get_more_tools",
-      [PostHogMCPAnalyticsProperty.IsError]: true,
-      [PostHogMCPAnalyticsProperty.ErrorType]: "Error",
-      [PostHogMCPAnalyticsProperty.ErrorMessage]: "handler failed",
-    });
-    const runtimeResult = await sanitizeMcpAnalyticsEvent(runtimeError);
-    expect(
-      runtimeResult?.properties[PostHogMCPAnalyticsProperty.ErrorType],
-    ).toBe("Error");
-  });
-
   test("drops vault specs, aliases, provider actions, and error bodies", async () => {
     const event = toolCallEvent({
       [PostHogMCPAnalyticsProperty.ToolName]: "manage_vault_cards",
@@ -1040,18 +1013,14 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       expect(missingCapabilityTool?.description).toContain(
         "client-side permission restriction",
       );
-      expect(missingCapabilityTool?.inputSchema.required).toEqual(["context"]);
-      const capabilityProperties = missingCapabilityTool?.inputSchema
-        .properties as Record<string, unknown>;
-      for (const field of [
+      expect(missingCapabilityTool?.inputSchema.required).toEqual([
+        "context",
         "gap_reason",
         "capability_area",
         "capability",
         "requested_action",
         "task_outcome",
-      ]) {
-        expect(capabilityProperties[field]).toBeDefined();
-      }
+      ]);
       const disabledMissingCapabilityTool = (
         await disabled.client.listTools()
       ).tools.find(({ name }) => name === "get_more_tools");
@@ -1227,6 +1196,36 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
 
     // identify stays unwired, so no $identify event is ever published.
     expect(byEvent.has("$identify")).toBe(false);
+  });
+
+  test("classifies rejected capability input through instrumentation", async () => {
+    const captured: { event?: string }[] = [];
+
+    const result = (await simulateRequest(captured, "tools/call", {
+      name: "get_more_tools",
+      arguments: {
+        context:
+          "Reporting a malformed structured capability request to verify validation telemetry.",
+        gap_reason: "not_a_gap_reason",
+        capability_area: "browser_files",
+        capability: "browser filesystem upload",
+        requested_action: "transfer",
+        task_outcome: "blocked",
+      },
+    })) as { isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    const toolCall = captured.find(
+      ({ event }) => event === PostHogMCPAnalyticsEvent.ToolCall,
+    ) as { properties: Record<string, unknown> };
+    expect(toolCall.properties).toMatchObject({
+      [PostHogMCPAnalyticsProperty.ToolName]: "get_more_tools",
+      [PostHogMCPAnalyticsProperty.IsError]: true,
+      [PostHogMCPAnalyticsProperty.ErrorType]: "validation",
+    });
+    expect(
+      toolCall.properties[PostHogMCPAnalyticsProperty.ErrorMessage],
+    ).toBeUndefined();
   });
 
   test("captures only structured capability demand", async () => {

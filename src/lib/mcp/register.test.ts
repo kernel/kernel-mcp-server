@@ -35,6 +35,11 @@ function captureRegistration(
   const resources: string[] = [];
   const schemas = new Map<string, Record<string, unknown>>();
   const server = {
+    server: {
+      _requestHandlers: new Map([
+        ["tools/call", async () => ({ content: [] })],
+      ]),
+    },
     prompt() {},
     resource() {},
     tool(name: string, _description: string, inputSchema: object) {

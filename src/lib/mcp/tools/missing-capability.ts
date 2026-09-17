@@ -80,10 +80,10 @@ const missingCapabilityFields = {
       "The missing capability and the user's goal, in 15-25 words and third person. Never include credentials, URLs, domains, account names, file contents, paths, or personal data.",
     ),
   gap_reason: gapReasonSchema.describe(
-    "Required for current reports. Why the task could not proceed. Only kernel_capability_missing and external_integration_unavailable are recorded as demand. For an existing tool failure, use submit_feedback instead; transient failures and client restrictions are not capability gaps.",
+    "Why the task could not proceed. Only kernel_capability_missing and external_integration_unavailable are recorded as demand. For an existing tool failure, use submit_feedback instead; transient failures and client restrictions are not capability gaps.",
   ),
   capability_area: capabilityAreaSchema.describe(
-    "Required for current reports. The single KERNEL product area that would own the capability, or external_integration/client_environment when Kernel does not own it.",
+    "The single KERNEL product area that would own the capability, or external_integration/client_environment when Kernel does not own it.",
   ),
   capability: z
     .string()
@@ -91,13 +91,13 @@ const missingCapabilityFields = {
     .min(1)
     .max(100)
     .describe(
-      'Required for current reports. A short generic capability name, such as "browser filesystem upload". Do not include a site, customer, account, domain, path, or payload.',
+      'A short generic capability name, such as "browser filesystem upload". Do not include a site, customer, account, domain, path, or payload.',
     ),
   requested_action: requestedActionSchema.describe(
-    "Required for current reports. The primary operation the missing capability needed to perform.",
+    "The primary operation the missing capability needed to perform.",
   ),
   task_outcome: taskOutcomeSchema.describe(
-    "Required for current reports. Whether the task was completed, completed through a workaround, partially completed, or blocked.",
+    "Whether the task was completed, completed through a workaround, partially completed, or blocked.",
   ),
   tools_checked: z
     .array(checkedKernelToolSchema)
@@ -109,41 +109,60 @@ const missingCapabilityFields = {
 };
 
 const structuredMissingCapabilitySchema = z.object(missingCapabilityFields);
-const missingCapabilityInputSchema = z.object({
-  context: missingCapabilityFields.context,
-  gap_reason: missingCapabilityFields.gap_reason.optional(),
-  capability_area: missingCapabilityFields.capability_area.optional(),
-  capability: missingCapabilityFields.capability.optional(),
-  requested_action: missingCapabilityFields.requested_action.optional(),
-  task_outcome: missingCapabilityFields.task_outcome.optional(),
-  tools_checked: missingCapabilityFields.tools_checked,
-});
 
 export type MissingCapabilityReport = z.infer<
   typeof structuredMissingCapabilitySchema
 >;
-type MissingCapabilityInput = z.infer<typeof missingCapabilityInputSchema>;
 export type MissingCapabilityCapture = (
   report: MissingCapabilityReport,
   extra: unknown,
 ) => void | Promise<void>;
 
-const STRUCTURED_REPORT_FIELDS = [
-  "gap_reason",
-  "capability_area",
-  "capability",
-  "requested_action",
-  "task_outcome",
-] as const;
+type ToolCallRequest = {
+  params?: { name?: unknown; arguments?: unknown };
+};
+type ToolCallHandler = (
+  request: ToolCallRequest,
+  extra: unknown,
+) => Promise<unknown>;
 
-function hasAnyStructuredReportField(report: MissingCapabilityInput) {
-  return STRUCTURED_REPORT_FIELDS.some((field) => report[field] !== undefined);
+function legacySchemaResponse() {
+  return jsonResponse({
+    recorded: false,
+    status: "legacy_schema_refresh_required",
+    message:
+      "This client used the previous get_more_tools schema. Refresh the available tool definitions, retry with the structured fields, and continue the original task with any available workaround.",
+  });
 }
 
-function isStructuredMissingCapabilityReport(
-  report: MissingCapabilityInput,
-): report is MissingCapabilityReport {
-  return STRUCTURED_REPORT_FIELDS.every((field) => report[field] !== undefined);
+function isLegacyContextOnlyCall(request: ToolCallRequest) {
+  if (request.params?.name !== KERNEL_MISSING_CAPABILITY_TOOL_NAME)
+    return false;
+  const args = request.params.arguments;
+  if (!args || typeof args !== "object" || Array.isArray(args)) return false;
+  const entries = Object.entries(args);
+  return (
+    entries.length === 1 &&
+    entries[0]?.[0] === "context" &&
+    typeof entries[0][1] === "string"
+  );
+}
+
+function acceptLegacyContextOnlyCalls(server: McpServer) {
+  // The SDK validates before invoking the tool callback, so handle only the exact old
+  // payload here while leaving the advertised structured schema unchanged.
+  const handlers = (
+    server.server as unknown as {
+      _requestHandlers: Map<string, ToolCallHandler>;
+    }
+  )._requestHandlers;
+  const handler = handlers.get("tools/call");
+  if (!handler) throw new Error("tools/call handler is not registered");
+
+  handlers.set("tools/call", async (request, extra) => {
+    if (isLegacyContextOnlyCall(request)) return legacySchemaResponse();
+    return handler(request, extra);
+  });
 }
 
 export function registerMissingCapabilityTool(
@@ -154,8 +173,8 @@ export function registerMissingCapabilityTool(
     KERNEL_MISSING_CAPABILITY_TOOL_NAME,
     {
       description:
-        "Report a capability that no available KERNEL tool can provide after checking the tool list. Supply every structured field shown; context-only calls from the previous schema are accepted only to request a tool refresh and are not recorded. Classify disconnected third-party services as external integrations. Do not use this for an existing tool that failed, a transient or capacity failure, or a client-side permission restriction; use submit_feedback for an existing KERNEL tool failure. Reports never replace the original task, so continue with any available workaround.",
-      inputSchema: missingCapabilityInputSchema,
+        "Report a capability that no available KERNEL tool can provide after checking the tool list. Classify disconnected third-party services as external integrations. Do not use this for an existing tool that failed, a transient or capacity failure, or a client-side permission restriction; use submit_feedback for an existing KERNEL tool failure. Reports never replace the original task, so continue with any available workaround.",
+      inputSchema: structuredMissingCapabilitySchema,
       annotations: {
         title: "Get more tools",
         readOnlyHint: false,
@@ -164,21 +183,7 @@ export function registerMissingCapabilityTool(
         openWorldHint: true,
       },
     },
-    async (input, extra) => {
-      if (!isStructuredMissingCapabilityReport(input)) {
-        const legacy = !hasAnyStructuredReportField(input);
-        return jsonResponse({
-          recorded: false,
-          status: legacy
-            ? "legacy_schema_refresh_required"
-            : "incomplete_structured_report",
-          message: legacy
-            ? "This client used the previous get_more_tools schema. Refresh the available tool definitions, retry with the structured fields, and continue the original task with any available workaround."
-            : "The structured capability report is incomplete. Supply every structured field, retry, and continue the original task with any available workaround.",
-        });
-      }
-
-      const report = input;
+    async (report, extra) => {
       const externalIntegration =
         report.gap_reason === "external_integration_unavailable";
       if (
@@ -235,4 +240,5 @@ export function registerMissingCapabilityTool(
       });
     },
   );
+  acceptLegacyContextOnlyCalls(server);
 }

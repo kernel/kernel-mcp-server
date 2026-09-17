@@ -109,11 +109,7 @@ describe("get_more_tools", () => {
           gap_reason: "kernel_capability_missing",
         },
       });
-      expect(partial.isError).not.toBe(true);
-      expect(toolResultJSON(partial)).toMatchObject({
-        recorded: false,
-        status: "incomplete_structured_report",
-      });
+      expect(partial.isError).toBe(true);
       expect(captured).toHaveLength(0);
     } finally {
       await close();
