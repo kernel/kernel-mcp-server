@@ -48,6 +48,29 @@ describe("OAuth protected-resource discovery", () => {
     ]);
   });
 
+  it("uses the public Host for non-production discovery behind Next", () => {
+    for (const host of [
+      "mcp-staging.onkernel.com",
+      "preview.example",
+      "localhost:3002",
+    ]) {
+      const metadata = oauthResourceMetadata(
+        new Request(
+          "https://localhost:3000/.well-known/oauth-protected-resource/mcp",
+          {
+            headers: { Host: host, "X-Forwarded-Host": "mcp.onkernel.com" },
+          },
+        ),
+        {},
+      );
+      expect(metadata.resource).toBe(`https://${host}`);
+      expect(metadata.authorization_servers).toEqual([`https://${host}`]);
+      expect(metadata.authorization_endpoint).toBe(`https://${host}/authorize`);
+      expect(metadata.token_endpoint).toBe(`https://${host}/token`);
+      expect(metadata.registration_endpoint).toBe(`https://${host}/register`);
+    }
+  });
+
   it("does not send local, staging, or preview clients to production OAuth", () => {
     for (const origin of [
       "http://localhost:3002",

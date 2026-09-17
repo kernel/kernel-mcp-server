@@ -6,8 +6,12 @@ export function oauthResourceMetadata(
   clerkMetadata: Record<string, unknown>,
 ): Record<string, unknown> {
   const url = new URL(request.url);
-  const host = request.headers.get("host") ?? url.host;
-  const isProduction = host === "mcp.onkernel.com";
+  const host = request.headers.get("host");
+  if (host) {
+    url.port = "";
+    url.host = host;
+  }
+  const isProduction = url.host === "mcp.onkernel.com";
   const resource = isProduction ? MCP_ORIGIN : url.origin;
   const authorizationServer = isProduction ? OAUTH_ORIGIN : url.origin;
 
