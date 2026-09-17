@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
   "name": "com.onkernel/kernel-mcp-server",
   "title": "Kernel MCP Server",
-  "description": "Use websites and web apps on a user's behalf when no API or direct integration can do the job.",
+  "description": "Use any website on a user's behalf in a cloud browser: navigate, sign in, fill forms, buy, download.",
   "status": "active",
   "websiteUrl": "https://www.kernel.sh/docs/reference/mcp-server",
   "homepage_url": "https://www.kernel.sh",
