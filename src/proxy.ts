@@ -5,6 +5,8 @@ import { isValidJwtFormat } from "@/lib/auth-utils";
 const isPublicRoute = createRouteMatcher([
   "/",
   "/(.well-known)(.*)",
+  // The MCP route validates bearer tokens and returns OAuth discovery challenges.
+  "/mcp",
   "/register",
   "/authorize",
   "/oauth-consent",

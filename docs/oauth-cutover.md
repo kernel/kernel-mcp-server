@@ -13,7 +13,8 @@ approval.
 - `/.well-known/oauth-protected-resource/mcp` advertises
   `authorization_servers: ["https://auth.onkernel.com"]` and canonical
   `/authorize`, `/token`, and `/register` endpoints. Responses use `no-store`.
-  Unauthenticated MCP requests include this path-specific URL in the
+  Unauthenticated MCP requests reach the route's bearer-token validation rather
+  than Clerk's page protection and include this path-specific URL in the
   `WWW-Authenticate` challenge's `resource_metadata` parameter. The root
   `/.well-known/oauth-protected-resource` endpoint is not provided; it is not
   the discovery URL for the `/mcp` resource.
@@ -96,8 +97,9 @@ clients from an auth DNS change.
    `MCP_ORIGIN`, and updates its test. Deploy that change first; verify the served
    protected-resource JSON advertises only the legacy origin again. Retain
    `no-store`, the corrected `/mcp` resource identity, and all existing routes.
-   Change only the authorization-server selection, not the resource or challenge. Do not reset main,
-   revert unrelated commits, or promote an old whole MCP deployment.
+   Change only the authorization-server selection, not the resource or challenge.
+   Do not reset main, revert unrelated commits, or promote an old whole MCP
+   deployment.
 2. Keep auth DNS on Go while accounting for cached canonical registrations and
    in-flight Go authorizations/codes. Metadata rollback affects future discovery;
    it cannot erase cached issuers or registrations. The old TypeScript token
