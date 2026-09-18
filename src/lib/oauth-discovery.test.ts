@@ -1,8 +1,45 @@
 import { describe, expect, it } from "bun:test";
-import { oauthResourceMetadata } from "./oauth-discovery";
+import {
+  oauthResourceMetadata,
+  oauthResourceMetadataUrl,
+} from "./oauth-discovery";
 
 describe("OAuth protected-resource discovery", () => {
-  it("advertises canonical OAuth without changing the MCP resource identity", () => {
+  it.each([
+    ["https://mcp.onkernel.com", undefined, "https://mcp.onkernel.com"],
+    ["http://localhost:3002", "mcp.onkernel.com", "https://mcp.onkernel.com"],
+    ["http://localhost:3002", undefined, "http://localhost:3002"],
+    [
+      "https://localhost:3000",
+      "mcp-staging.onkernel.com",
+      "https://mcp-staging.onkernel.com",
+    ],
+    ["https://preview.example", undefined, "https://preview.example"],
+  ])(
+    "binds RFC 9728 path discovery to the resource at %s (Host: %s)",
+    (requestOrigin, host, publicOrigin) => {
+      const resource = new URL(`${publicOrigin}/mcp`);
+      const expectedMetadataUrl = new URL(resource);
+      expectedMetadataUrl.pathname = `/.well-known/oauth-protected-resource${resource.pathname}`;
+      const headers = host ? { Host: host } : undefined;
+      const endpointRequest = new Request(`${requestOrigin}/mcp`, { headers });
+      expect(oauthResourceMetadataUrl(endpointRequest)).toBe(
+        expectedMetadataUrl.href,
+      );
+
+      const metadataRequest = new Request(
+        `${requestOrigin}${expectedMetadataUrl.pathname}`,
+        { headers },
+      );
+      const metadata = oauthResourceMetadata(metadataRequest, {
+        resource: publicOrigin,
+      });
+      expect(metadata.resource).toBe(resource.href);
+      expect(metadata.resource).not.toBe(resource.origin);
+    },
+  );
+
+  it("advertises canonical OAuth for the exact MCP endpoint", () => {
     expect(
       oauthResourceMetadata(
         new Request(
@@ -18,7 +55,7 @@ describe("OAuth protected-resource discovery", () => {
         },
       ),
     ).toEqual({
-      resource: "https://mcp.onkernel.com",
+      resource: "https://mcp.onkernel.com/mcp",
       authorization_servers: ["https://auth.onkernel.com"],
       authorization_endpoint: "https://auth.onkernel.com/authorize",
       token_endpoint: "https://auth.onkernel.com/token",
@@ -42,7 +79,7 @@ describe("OAuth protected-resource discovery", () => {
       ),
       {},
     );
-    expect(metadata.resource).toBe("https://mcp.onkernel.com");
+    expect(metadata.resource).toBe("https://mcp.onkernel.com/mcp");
     expect(metadata.authorization_servers).toEqual([
       "https://auth.onkernel.com",
     ]);
@@ -63,7 +100,7 @@ describe("OAuth protected-resource discovery", () => {
         ),
         {},
       );
-      expect(metadata.resource).toBe(`https://${host}`);
+      expect(metadata.resource).toBe(`https://${host}/mcp`);
       expect(metadata.authorization_servers).toEqual([`https://${host}`]);
       expect(metadata.authorization_endpoint).toBe(`https://${host}/authorize`);
       expect(metadata.token_endpoint).toBe(`https://${host}/token`);
@@ -78,8 +115,11 @@ describe("OAuth protected-resource discovery", () => {
       "https://preview.example",
       "https://mcp.onkernel.com.evil.example",
     ]) {
-      const metadata = oauthResourceMetadata(new Request(`${origin}/mcp`), {});
-      expect(metadata.resource).toBe(origin);
+      const metadata = oauthResourceMetadata(
+        new Request(`${origin}/.well-known/oauth-protected-resource/mcp`),
+        {},
+      );
+      expect(metadata.resource).toBe(`${origin}/mcp`);
       expect(metadata.authorization_servers).toEqual([origin]);
       expect(metadata.authorization_endpoint).toBe(`${origin}/authorize`);
     }

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Kernel } from "@onkernel/sdk";
 import type { McpConnectionScopeFailureAnalytics } from "@/lib/mcp/analytics";
 import { defaultMcpDependencies } from "@/lib/mcp/dependencies";
+import { oauthResourceMetadata } from "@/lib/oauth-discovery";
 
 process.env.CLERK_SECRET_KEY ??= "test-clerk-secret";
 
@@ -28,7 +29,7 @@ mock.module("@/lib/mcp/analytics", () => ({
 }));
 
 const originalCreateKernelClient = defaultMcpDependencies.createKernelClient;
-const { POST, connectionScopeFailureResponse } = await import("./route");
+const { GET, POST, connectionScopeFailureResponse } = await import("./route");
 
 function initializeRequest(token = "sk_opaque_key") {
   return new Request("https://mcp.example.test/sse", {
@@ -70,6 +71,46 @@ beforeEach(() => {
 
 afterEach(() => {
   defaultMcpDependencies.createKernelClient = originalCreateKernelClient;
+});
+
+describe("unauthenticated discovery", () => {
+  for (const method of ["GET", "POST"]) {
+    test.each([
+      [
+        "https://mcp.onkernel.com",
+        "mcp.onkernel.com",
+        "https://mcp.onkernel.com",
+      ],
+      ["http://localhost:3002", "mcp.onkernel.com", "https://mcp.onkernel.com"],
+      ["http://localhost:3002", "localhost:3002", "http://localhost:3002"],
+      [
+        "https://localhost:3000",
+        "mcp-staging.onkernel.com",
+        "https://mcp-staging.onkernel.com",
+      ],
+    ])(
+      `${method} challenges point to path-specific discovery at %s (Host: %s)`,
+      async (origin, host, publicOrigin) => {
+        const req = new nextServer.NextRequest(`${origin}/mcp`, {
+          method,
+          headers: { Host: host, "X-Forwarded-Host": "ignored.example" },
+        });
+        const response = await (method === "GET" ? GET : POST)(req);
+        expect(response.status).toBe(401);
+        const challenge = response.headers.get("WWW-Authenticate");
+        expect(challenge).toContain('Bearer realm="OAuth"');
+        expect(challenge).toContain('error="invalid_token"');
+        const metadataUrl = challenge?.match(
+          /resource_metadata="([^"]+)"/,
+        )?.[1];
+        expect(metadataUrl).toBe(
+          `${publicOrigin}/.well-known/oauth-protected-resource/mcp`,
+        );
+        const metadata = oauthResourceMetadata(new Request(metadataUrl!), {});
+        expect(metadata.resource).toBe(`${publicOrigin}/mcp`);
+      },
+    );
+  }
 });
 
 describe("connection scope failures through the handler", () => {
@@ -243,10 +284,13 @@ describe("vault entitlement routing", () => {
 
 describe("connectionScopeFailureResponse", () => {
   test("names an inactive project instead of blaming the credential", async () => {
-    const response = connectionScopeFailureResponse({
-      status: "rejected",
-      statusCode: 404,
-    });
+    const response = connectionScopeFailureResponse(
+      new Request("https://mcp.example.test/mcp"),
+      {
+        status: "rejected",
+        statusCode: 404,
+      },
+    );
 
     expect(response.status).toBe(404);
     expect(response.headers.get("WWW-Authenticate")).toBeNull();
@@ -258,10 +302,16 @@ describe("connectionScopeFailureResponse", () => {
   });
 
   test("challenges a refused credential so clients re-authenticate", () => {
-    const response = connectionScopeFailureResponse({
-      status: "rejected",
-      statusCode: 401,
-    });
+    const response = connectionScopeFailureResponse(
+      new Request("https://mcp.example.test/mcp"),
+      {
+        status: "rejected",
+        statusCode: 401,
+      },
+    );
+    expect(response.headers.get("WWW-Authenticate")).toContain(
+      'resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource/mcp"',
+    );
 
     expect(response.headers.get("WWW-Authenticate")).toContain(
       'error="invalid_token"',
