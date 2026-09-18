@@ -10,7 +10,7 @@
         "@clerk/themes": "^2.4.19",
         "@modelcontextprotocol/sdk": "1.26.0",
         "@onkernel/managed-auth-react": "0.5.3",
-        "@onkernel/sdk": "github:kernel/kernel-node-sdk#555797f46b7b77f2d7c9f45fe663a4f7e8ffe981",
+        "@onkernel/sdk": "^0.110.0",
         "@posthog/mcp": "0.10.1",
         "@types/jsonwebtoken": "^9.0.10",
         "@types/redis": "^4.0.11",
@@ -154,7 +154,7 @@
 
     "@onkernel/managed-auth-react": ["@onkernel/managed-auth-react@0.5.3", "", { "dependencies": { "clsx": "^2.1.1" }, "peerDependencies": { "react": ">=18", "react-dom": ">=18" } }, "sha512-5Ps7h7HknAxL4ZLnJCzsLhW8MLRr0SH1P8+eALBZXCmnx/K+g5ra2ar3iLoWFQ8vf/EvpuDF1LigIT6tDjRKdA=="],
 
-    "@onkernel/sdk": ["@onkernel/sdk@github:kernel/kernel-node-sdk#555797f", {}, "kernel-kernel-node-sdk-555797f", "sha512-ZTebOkfkqk9ZvFTytCNW+2QwHqDhPFP6+RlgYFz6zp6Cr83nbgl+inpa2RSSaFSpIXpoMs0Mdv4IRyhSXgufbg=="],
+    "@onkernel/sdk": ["@onkernel/sdk@0.110.0", "", {}, "sha512-lUMXEcp8FsQkcVV8AzGU+dkrA9f5ucaaYMIDA6Y2N9oHCtcBENiUKFJpxZTA/+Oc9by8Zj+3H10qajCsWUgDiw=="],
 
     "@oven/bun-darwin-aarch64": ["@oven/bun-darwin-aarch64@1.3.3", "", { "os": "darwin", "cpu": "arm64" }, "sha512-eJopQrUk0WR7jViYDC29+Rp50xGvs4GtWOXBeqCoFMzutkkO3CZvHehA4JqnjfWMTSS8toqvRhCSOpOz62Wf9w=="],
 
