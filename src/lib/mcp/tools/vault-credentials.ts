@@ -33,7 +33,7 @@ const definition = z
     label: fieldLabel()
       .optional()
       .describe(
-        "Optional non-secret display text for users. The form falls back to name. Labels never affect updates or browser fills.",
+        "Optional non-secret display text for users. Must be nonempty, have no leading or trailing whitespace, be at most 128 UTF-8 bytes, and contain no control, formatting, or line-separator characters. The form falls back to name. Labels never affect updates or browser fills.",
       ),
     type: z.enum(["text", "email", "password", "totp"]),
     required: z.boolean().optional(),

@@ -170,6 +170,9 @@ describe("MCP credential flow", () => {
       const items = tools.find((tool) => tool.name === "manage_vault_items");
       expect(credentials?.inputSchema.properties).toHaveProperty("spec");
       expect(JSON.stringify(credentials?.inputSchema)).toContain('"label"');
+      expect(JSON.stringify(credentials?.inputSchema)).toContain(
+        "128 UTF-8 bytes",
+      );
       expect(credentials?.inputSchema.properties).toHaveProperty(
         "expected_item_id",
       );
