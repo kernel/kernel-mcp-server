@@ -20,6 +20,21 @@ export interface BenchmarkMetrics {
   end?: number;
 }
 
+export interface BenchmarkPhase {
+  startedAt?: string;
+  finishedAt?: string;
+  start?: number;
+  end?: number;
+  durationMs?: number;
+}
+
+export interface BenchmarkBrowserLifecycle {
+  timeoutSeconds?: number;
+  start?: number;
+  end?: number;
+  deletionVerified?: boolean;
+}
+
 export interface BenchmarkTrial {
   arm: string;
   id: string;
@@ -35,6 +50,14 @@ export interface BenchmarkTrial {
   error?: string;
   errorClass?: "infra";
   metrics: BenchmarkMetrics;
+  phases: {
+    environmentSetup?: BenchmarkPhase;
+    agentSetup?: BenchmarkPhase;
+    agentExecution?: BenchmarkPhase;
+    verifier?: BenchmarkPhase;
+  };
+  browser?: BenchmarkBrowserLifecycle;
+  expectedBrowserSessionId?: string;
   kernelMcpSha?: string;
   clawbenchSha?: string;
   trajectoryPath?: string;
@@ -154,6 +177,20 @@ function durationMs(
   return Number.isFinite(duration) && duration >= 0 ? duration : undefined;
 }
 
+function phase(value: unknown): BenchmarkPhase | undefined {
+  const timing = object(value);
+  const startedAt = string(timing.started_at);
+  const finishedAt = string(timing.finished_at);
+  if (!startedAt && !finishedAt) return undefined;
+  return {
+    startedAt,
+    finishedAt,
+    start: isoSeconds(startedAt),
+    end: isoSeconds(finishedAt),
+    durationMs: durationMs(startedAt, finishedAt),
+  };
+}
+
 function sumStepMetric(
   stepResults: unknown[],
   key: string,
@@ -224,21 +261,40 @@ function parseTrial(arm: string, trialDir: string): BenchmarkTrial {
   const agentInfo = object(result.agent_info);
   const modelInfo = object(agentInfo.model_info);
   const steps = array(result.step_results);
-  const exception = result.exception_info;
+  const rewards = trialRewards(result, trialDir);
   const exceptionFile = join(trialDir, "exception.txt");
+  const stepException =
+    Object.keys(rewards).length === 0
+      ? steps.map((step) => object(step).exception_info).find(Boolean)
+      : undefined;
   const error = errorText(
-    exception ??
+    result.exception_info ??
+      stepException ??
       (existsSync(exceptionFile)
         ? readFileSync(exceptionFile, "utf8")
         : undefined),
   );
-  const rewards = trialRewards(result, trialDir);
   const startedAt = string(result.started_at);
   const finishedAt = string(result.finished_at);
   const trajectoryPath = join(trialDir, "steps/run/agent/trajectory.json");
   const runManifest = readJsonIfPresent(
     join(trialDir, "steps/run/verifier/kernel-mcp/run-manifest.json"),
   );
+  const kernelMcpResult = readJsonIfPresent(
+    join(trialDir, "steps/run/verifier/kernel-mcp-result.json"),
+  );
+  const browserLifecycle = readJsonIfPresent(
+    join(trialDir, "steps/run/verifier/data/kernel-browser-lifecycle.json"),
+  );
+  const browserEvents = array(browserLifecycle.events).map(object);
+  const browserCreated = browserEvents.find(
+    (event) => event.event === "browser_created",
+  );
+  const browserDeleted = browserEvents.find(
+    (event) => event.event === "browser_deleted",
+  );
+  const browserStart = number(browserCreated?.ts);
+  const browserEnd = number(browserDeleted?.ts);
 
   return {
     arm,
@@ -274,6 +330,25 @@ function parseTrial(arm: string, trialDir: string): BenchmarkTrial {
       end: isoSeconds(finishedAt),
       ...trajectoryMetrics(trajectoryPath),
     },
+    phases: {
+      environmentSetup: phase(result.environment_setup),
+      agentSetup: phase(result.agent_setup),
+      agentExecution: phase(object(steps.at(-1)).agent_execution),
+      verifier: phase(object(steps.at(-1)).verifier),
+    },
+    browser:
+      browserStart === undefined && browserEnd === undefined
+        ? undefined
+        : {
+            timeoutSeconds: number(browserLifecycle.timeout_seconds),
+            start: browserStart,
+            end: browserEnd,
+            deletionVerified:
+              typeof browserLifecycle.deletion_verified === "boolean"
+                ? browserLifecycle.deletion_verified
+                : undefined,
+          },
+    expectedBrowserSessionId: string(kernelMcpResult.expected_session_id),
     kernelMcpSha: string(runManifest.kernel_mcp_server_sha),
     clawbenchSha: string(runManifest.clawbench_source_sha),
     trajectoryPath: existsSync(trajectoryPath) ? trajectoryPath : undefined,
