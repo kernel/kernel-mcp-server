@@ -38,7 +38,7 @@ export const vaultItemFields: OutputFields = {
     ...fields(
       "provider wallet user_id payment_method_id card_id amount currency merchant merchant_name merchant_url context expires_at description",
     ),
-    fields: fields("name type required sensitive"),
+    fields: fields("name label type required sensitive"),
     provider_config: fields("id name"),
     authorization: {
       method: null,
@@ -129,6 +129,7 @@ const credentialValuesSchema = z
       fields: z.array(
         z.object({
           name: z.string(),
+          label: z.string().optional(),
           type: z.string(),
           sensitive: z.boolean().optional(),
         }),
@@ -332,7 +333,7 @@ export function vaultItemResponse(
             "Present the collection URL only to the intended user in a private surface, outside the agent-controlled browser. It is a bearer credential. Never ask for passwords or TOTP seeds in chat; TOTP seeds require trusted backend provisioning, not hosted collection.",
             "MCP returns field definitions, has_value, version, collection expiry, and explicitly non-sensitive text/email values. Sensitive values and TOTP seeds are never returned. Ready means required values exist, not that login succeeded. Listing does not renew collection links; use get or the advertised collect operation.",
             'Use manage_vault_items with action: "invoke" and operation: "collect" to reopen the full form without clearing values or changing readiness or version. wait observes readiness, not edits to ready items. Compare versions with get without wait; a change can also come from an API update, so it does not identify a specific form submission.',
-            "Create or update credentials with manage_vault_credentials. On create, inspect the website and list the named field definitions in its natural top-to-bottom order; that array order directly controls the user-facing collection form. Use a per-user vault, a recognizable site-name-only description, and sensitive:false for usernames/emails. Passwords and TOTP must be sensitive. Updates require the current version; supply expected_item_id when bound to an earlier read. Omitted values remain; null or empty strings clear supported fields, including required text/email/password fields. Hosted forms still require populated required inputs. Do not store payment-card data in credential items.",
+            "Create or update credentials with manage_vault_credentials. On create, inspect the website and list the named field definitions in its natural top-to-bottom order; that array order directly controls the user-facing collection form. Use optional non-secret labels for human-readable text; stable names remain authoritative for state, updates, and fill. Use a per-user vault, a recognizable site-name-only description, and sensitive:false for usernames/emails. Passwords and TOTP must be sensitive. Updates require the current version; supply expected_item_id when bound to an earlier read. Omitted values remain; null or empty strings clear supported fields, including required text/email/password fields. Hosted forms still require populated required inputs. Do not store payment-card data in credential items.",
             "Invocation hints are not approval to execute. Invoke fill with manage_vault_items using a fill object containing browser_id and ordered fields of field/selector bindings, never values. Bind the vault at browser creation, authorize the destination, and follow the advertised description. Fill does not submit or navigate; real values enter the browser and may be read by an agent with browser access. Never retry an uncertain fill or fall back to aliases.",
           ]
         : [

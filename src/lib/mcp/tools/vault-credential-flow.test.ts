@@ -8,6 +8,7 @@ const spec = {
   fields: [
     {
       name: "username",
+      label: "Membership Number or Username",
       type: "text",
       required: true,
       sensitive: false,
@@ -168,6 +169,7 @@ describe("MCP credential flow", () => {
       );
       const items = tools.find((tool) => tool.name === "manage_vault_items");
       expect(credentials?.inputSchema.properties).toHaveProperty("spec");
+      expect(JSON.stringify(credentials?.inputSchema)).toContain('"label"');
       expect(credentials?.inputSchema.properties).toHaveProperty(
         "expected_item_id",
       );
@@ -333,6 +335,9 @@ describe("MCP credential flow", () => {
       );
       expect(created.item.action.url).toBe(pending.action.url);
       expect(created.item.spec.fields).toEqual(spec.fields);
+      expect(created.item.spec.fields[0].label).toBe(
+        "Membership Number or Username",
+      );
       expect(
         (
           await fixture.call("manage_vault_items", {
@@ -496,6 +501,17 @@ describe("MCP credential flow", () => {
         fields: [{ name: "password", type: "password", sensitive: false }],
       },
     },
+    ...[
+      "",
+      " Username",
+      "Username ",
+      "User\nname",
+      "User\u200bname",
+      "x".repeat(129),
+    ].map((label) => ({
+      action: "create",
+      spec: { fields: [{ name: "username", label, type: "text" }] },
+    })),
     {
       action: "create",
       spec: {

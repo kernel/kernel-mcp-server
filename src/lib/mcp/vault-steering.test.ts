@@ -14,6 +14,7 @@ const credential = {
     fields: [
       {
         name: "username",
+        label: "Membership Number or Username",
         type: "text",
         required: true,
         sensitive: false,
@@ -162,6 +163,7 @@ describe("vault OpenAPI steering", () => {
       expect(result.item.spec.description).toBe("Hacker News");
       expect(result.item.spec.fields[0]).toEqual({
         name: "username",
+        label: "Membership Number or Username",
         type: "text",
         required: true,
         sensitive: false,
@@ -287,7 +289,12 @@ describe("vault OpenAPI steering", () => {
           spec: {
             ...credential.spec,
             fields: [
-              { name: "password", type: "password", value: "private-value" },
+              {
+                name: "password",
+                label: "Account Password",
+                type: "password",
+                value: "private-value",
+              },
               { name: "username", type: "text", sensitive: false },
             ],
           },
@@ -296,7 +303,7 @@ describe("vault OpenAPI steering", () => {
       ),
     );
     expect(result.item.spec.fields).toEqual([
-      { name: "password", type: "password" },
+      { name: "password", label: "Account Password", type: "password" },
       { name: "username", type: "text", sensitive: false },
     ]);
     expect(JSON.stringify(result)).not.toContain("private-value");

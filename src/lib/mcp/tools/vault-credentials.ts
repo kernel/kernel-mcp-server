@@ -18,11 +18,23 @@ import {
 const text = () =>
   z.string().refine((value) => Buffer.byteLength(value, "utf8") <= 16384);
 const fieldName = () => z.string().regex(/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/);
+const fieldLabel = () =>
+  z
+    .string()
+    .min(1)
+    .refine((label) => label === label.trim())
+    .refine((label) => Buffer.byteLength(label, "utf8") <= 128)
+    .refine((label) => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(label));
 const definition = z
   .object({
     name: fieldName().describe(
       "Stable field name used for updates and browser fills.",
     ),
+    label: fieldLabel()
+      .optional()
+      .describe(
+        "Optional non-secret display text for users. The form falls back to name. Labels never affect updates or browser fills.",
+      ),
     type: z.enum(["text", "email", "password", "totp"]),
     required: z.boolean().optional(),
     sensitive: z
@@ -101,7 +113,7 @@ export function registerVaultCredentialTools(
 ) {
   server.tool(
     "manage_vault_credentials",
-    'Create or update credential items in a per-end-user vault. Use only the recognizable site name as description; explicitly set sensitive:false for ordinary usernames/emails. Passwords and TOTP seeds must be sensitive. Never store payment-card data here. For human collection, omit values and present the returned bearer collection URL privately to the intended user, outside the agent-controlled browser. Never ask for passwords or TOTP seeds in chat. TOTP seeds require trusted provisioning and have no hosted input. On create, fields is an ordered array of named definitions: inspect the website and list fields in its natural top-to-bottom order because this directly controls the user-facing collection form. Update fields remain keyed by name and contain only value. Updates require the latest version and optionally expected_item_id from an earlier read; definitions are immutable. Omitted values are preserved; null or empty strings clear supported values. Clearing required TOTP is unsupported. Hosted forms require populated required inputs. To reopen collection, use manage_vault_items with action: "invoke" and operation: "collect". Use manage_vault_items get with wait for readiness, then invoke fill with fill parameters. For edits to already-ready items compare versions without wait. Explicitly non-sensitive text/email values are returned; sensitive values and TOTP seeds are omitted. Writes are never automatically retried; reconcile conflicts or uncertain outcomes before any further write.',
+    'Create or update credential items in a per-end-user vault. Use only the recognizable site name as description; explicitly set sensitive:false for ordinary usernames/emails. Each field may include an optional non-secret human-readable label; name remains the stable key for updates and browser fills. Passwords and TOTP seeds must be sensitive. Never store payment-card data here. For human collection, omit values and present the returned bearer collection URL privately to the intended user, outside the agent-controlled browser. Never ask for passwords or TOTP seeds in chat. TOTP seeds require trusted provisioning and have no hosted input. On create, fields is an ordered array of named definitions: inspect the website and list fields in its natural top-to-bottom order because this directly controls the user-facing collection form. Update fields remain keyed by name and contain only value. Updates require the latest version and optionally expected_item_id from an earlier read; definitions are immutable. Omitted values are preserved; null or empty strings clear supported values. Clearing required TOTP is unsupported. Hosted forms require populated required inputs. To reopen collection, use manage_vault_items with action: "invoke" and operation: "collect". Use manage_vault_items get with wait for readiness, then invoke fill with fill parameters. For edits to already-ready items compare versions without wait. Explicitly non-sensitive text/email values are returned; sensitive values and TOTP seeds are omitted. Writes are never automatically retried; reconcile conflicts or uncertain outcomes before any further write.',
     vaultToolInput({
       ...vaultItemSchema,
       key: vaultKeySchema(),
