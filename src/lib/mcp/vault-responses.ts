@@ -129,7 +129,6 @@ const credentialValuesSchema = z
       fields: z.array(
         z.object({
           name: z.string(),
-          label: z.string().optional(),
           type: z.string(),
           sensitive: z.boolean().optional(),
         }),

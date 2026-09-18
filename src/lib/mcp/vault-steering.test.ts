@@ -64,7 +64,12 @@ describe("vault OpenAPI steering", () => {
           ...credential,
           spec: {
             fields: [
-              { name: "username", type: "text", sensitive: false },
+              {
+                name: "username",
+                label: null,
+                type: "text",
+                sensitive: false,
+              },
               { name: "password", type: "password" },
             ],
           },
