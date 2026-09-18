@@ -396,7 +396,7 @@ describe("POST /token", () => {
     expect(missingRefresh.calls.persisted).toHaveLength(0);
   });
 
-  test("records the client and the provider's reason when the exchange is rejected", async () => {
+  test("records the client and a bounded provider error code on rejection", async () => {
     const deps = dependencies({
       clerkStatus: 400,
       clerkTokens: {
@@ -425,6 +425,28 @@ describe("POST /token", () => {
     });
     // The description can carry anything, so it is deliberately not recorded.
     expect(JSON.stringify(deps.calls.outcomes[0])).not.toContain("redeemed");
+  });
+
+  test("records an unrecognized provider error code as unknown", async () => {
+    const deps = dependencies({
+      clerkStatus: 400,
+      clerkTokens: { error: "user_42_is_rate_limited_until_2026" },
+    });
+
+    await tokenRequest(
+      request({
+        grant_type: "authorization_code",
+        client_id: "client_1",
+        code: "rejected",
+        code_verifier: "verifier_1",
+      }),
+      deps.value,
+    );
+
+    expect(deps.calls.outcomes[0]).toMatchObject({
+      providerErrorCode: "unknown",
+    });
+    expect(JSON.stringify(deps.calls.outcomes[0])).not.toContain("user_42");
   });
 
   test("records the client on a successful exchange and no provider failure fields", async () => {

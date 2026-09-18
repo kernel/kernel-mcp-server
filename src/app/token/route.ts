@@ -161,15 +161,28 @@ async function oauthErrorCode(response: NextResponse): Promise<OAuthErrorCode> {
   return response.status >= 500 ? "server_error" : "invalid_grant";
 }
 
-// The provider's own error code is the only thing that separates an expired
-// code from a redirect mismatch or a revoked client. Record the code, never the
-// free-text description that accompanies it.
+// RFC 6749 section 5.2 token endpoint error codes. The provider's code is a
+// coarse signal: `invalid_grant` alone covers expired, revoked, redirect-
+// mismatched and wrong-client grants, so it narrows a failure rather than
+// identifying it. Anything outside this set is recorded as `unknown`, because
+// the field is untrusted input and must not carry free text, PII or unbounded
+// cardinality into logs and analytics. The description is never recorded.
+const PROVIDER_ERROR_CODES = new Set([
+  "invalid_request",
+  "invalid_client",
+  "invalid_grant",
+  "unauthorized_client",
+  "unsupported_grant_type",
+  "invalid_scope",
+]);
+
 async function readProviderErrorCode(
   response: Response,
 ): Promise<string | undefined> {
   try {
     const body = (await response.json()) as { error?: unknown };
-    return typeof body.error === "string" ? body.error.slice(0, 64) : undefined;
+    if (typeof body.error !== "string") return undefined;
+    return PROVIDER_ERROR_CODES.has(body.error) ? body.error : "unknown";
   } catch {
     return undefined;
   }

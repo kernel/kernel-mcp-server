@@ -560,6 +560,37 @@ describe("captureOAuthTokenExchange", () => {
     expect(JSON.stringify(captured)).not.toContain("refresh_token_hash");
     expect(JSON.stringify(captured)).not.toContain("code_verifier");
   });
+
+  test("maps client and provider failure fields onto their PostHog keys", () => {
+    const captured: unknown[] = [];
+    const fakePosthog = {
+      capture: (event: unknown) => captured.push(event),
+    } as unknown as PostHog;
+
+    captureOAuthTokenExchange(
+      {
+        grantType: "authorization_code",
+        clientType: "registered_client",
+        clientId: "client_1",
+        accessScope: "organization",
+        stage: "provider_exchange",
+        outcome: "error",
+        errorCode: "invalid_grant",
+        providerStatusCode: 400,
+        providerErrorCode: "invalid_grant",
+        statusCode: 400,
+        durationMs: 17,
+      },
+      fakePosthog,
+    );
+
+    const properties = (captured[0] as { properties: Record<string, unknown> })
+      .properties;
+
+    expect(properties.oauth_client_id).toBe("client_1");
+    expect(properties.oauth_provider_status_code).toBe(400);
+    expect(properties.oauth_provider_error_code).toBe("invalid_grant");
+  });
 });
 
 describe("captureMcpConnectionScopeFailure", () => {

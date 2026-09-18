@@ -58,8 +58,8 @@ export type OAuthTokenExchangeAnalytics = {
     | "server_error";
   /** Upstream status when the provider rejected the exchange. */
   providerStatusCode?: number;
-  /** Upstream OAuth error code, which is the only thing distinguishing an expired
-   * code from a redirect mismatch or a revoked client. */
+  /** Coarse RFC 6749 section 5.2 error code from the provider, or `unknown`
+   * for anything outside that set. Narrows a failure; does not identify it. */
   providerErrorCode?: string;
   statusCode: number;
   durationMs: number;
