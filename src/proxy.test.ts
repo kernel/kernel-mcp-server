@@ -28,6 +28,33 @@ describe("MCP discovery through middleware", () => {
     },
   );
 
+  test("lets API keys reach the MCP route's credential validation", async () => {
+    const protect = mock(async () => {});
+    await handleRequest(
+      { protect },
+      new NextRequest("https://mcp.example.test/mcp", {
+        method: "POST",
+        headers: { Authorization: "Bearer sk_test_key" },
+      }),
+    );
+    expect(protect).not.toHaveBeenCalled();
+  });
+
+  test.each(["GET", "POST", "OPTIONS"])(
+    "does not bypass Clerk for %s on other /mcp-prefixed paths",
+    async (method) => {
+      const protect = mock(async () => {});
+      await handleRequest(
+        { protect },
+        new NextRequest("https://mcp.example.test/mcp-other", {
+          method,
+          headers: { Authorization: "Bearer sk_test_key" },
+        }),
+      );
+      expect(protect).toHaveBeenCalledTimes(1);
+    },
+  );
+
   test("keeps organization selection protected by Clerk", async () => {
     const protect = mock(async () => {});
     await handleRequest(
