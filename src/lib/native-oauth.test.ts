@@ -7,7 +7,7 @@ import {
   type NativeOAuthConfig,
 } from "./native-oauth";
 
-async function fixture() {
+async function fixture(clockOffsetSeconds = 0) {
   const keys = await generateKeyPair("RS256");
   const jwk = {
     ...(await exportJWK(keys.publicKey)),
@@ -24,7 +24,7 @@ async function fixture() {
     clientSecret: "test-secret",
     keys: { keys: [jwk] },
   };
-  const now = Math.floor(Date.now() / 1000);
+  const now = Math.floor(Date.now() / 1000) + clockOffsetSeconds;
   const claims = {
     iss: config.issuer,
     aud: [config.audience],
@@ -86,6 +86,18 @@ describe("native OAuth MCP consumer", () => {
       expect(result.scopes).toEqual(["browsers:read"]);
     }
     expect(f.calls.length).toBe(4);
+  });
+  test("bounds the lease by relative lifetime despite issuer clock skew", async () => {
+    const f = await fixture(20);
+    const started = Date.now();
+    const result = await exchangeNativeOAuth(
+      f.token,
+      new AbortController().signal,
+      f.config,
+      f.request,
+    );
+    expect(result.deadline).toBeGreaterThan(started + 44000);
+    expect(result.deadline).toBeLessThanOrEqual(Date.now() + 45000);
   });
   test("rejects wrong audiences and epochs before network access", async () => {
     const f = await fixture();

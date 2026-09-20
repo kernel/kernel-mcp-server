@@ -95,6 +95,7 @@ export async function exchangeNativeOAuth(
     issuer: config.issuer,
     audience: config.audience,
     algorithms: ["RS256"],
+    clockTolerance: 30,
     requiredClaims: [
       "sub",
       "jti",
@@ -166,9 +167,10 @@ export async function exchangeNativeOAuth(
     status.client_id !== verified.payload.client_id ||
     status.scope !== verified.payload.scope ||
     status.exp !== verified.payload.exp ||
-    status.exp * 1000 <= Date.now()
+    status.exp * 1000 + 30000 <= Date.now()
   )
     throw new NativeCredentialRejected();
+  const exchangeStartedAt = Date.now();
   const exchanged = exchangeSchema.parse(
     await post(
       "/token",
@@ -189,7 +191,15 @@ export async function exchangeNativeOAuth(
       issuer: config.issuer,
       audience: config.apiAudience,
       algorithms: ["RS256"],
-      requiredClaims: ["exp", "sub", "client_id", "scope", "issuer_epoch"],
+      clockTolerance: 30,
+      requiredClaims: [
+        "iat",
+        "exp",
+        "sub",
+        "client_id",
+        "scope",
+        "issuer_epoch",
+      ],
     },
   );
   if (
@@ -204,7 +214,9 @@ export async function exchangeNativeOAuth(
     derived.payload.aud.length !== 1 ||
     typeof derived.payload.exp !== "number" ||
     derived.payload.exp > status.exp ||
-    derived.payload.exp * 1000 > Date.now() + 60000 ||
+    typeof derived.payload.iat !== "number" ||
+    derived.payload.exp - derived.payload.iat > 60 ||
+    derived.payload.exp <= derived.payload.iat ||
     exchanged.scope
       .split(" ")
       .some((scope) => !status.scope.split(" ").includes(scope))
@@ -214,7 +226,13 @@ export async function exchangeNativeOAuth(
     token: exchanged.access_token,
     subject: status.sub,
     scopes: exchanged.scope.split(" "),
-    deadline: derived.payload.exp * 1000,
+    deadline:
+      exchangeStartedAt +
+      Math.min(
+        exchanged.expires_in,
+        derived.payload.exp - derived.payload.iat,
+      ) *
+        1000,
   };
 }
 
