@@ -4,6 +4,7 @@ import {
   exchangeNativeOAuth,
   isNativeOAuthCredential,
   leaseNativeResponse,
+  NativeScopeRejected,
   type NativeOAuthConfig,
 } from "./native-oauth";
 
@@ -140,6 +141,23 @@ describe("native OAuth MCP consumer", () => {
     expect(isNativeOAuthCredential(f.token)).toBe(true);
     expect(isNativeOAuthCredential("krn_rt1_invalid")).toBe(true);
     expect(isNativeOAuthCredential("kernel_api_key")).toBe(false);
+  });
+  test("treats issuer scope and target rejection as permanent scope failures", async () => {
+    for (const error of ["invalid_scope", "invalid_target"]) {
+      const f = await fixture();
+      const request = async (url: string, init: RequestInit) =>
+        url.endsWith("/token")
+          ? Response.json({ error }, { status: 400 })
+          : f.request(url, init);
+      await expect(
+        exchangeNativeOAuth(
+          f.token,
+          new AbortController().signal,
+          f.config,
+          request,
+        ),
+      ).rejects.toBeInstanceOf(NativeScopeRejected);
+    }
   });
   test("closes a stream when its short authorization lease ends", async () => {
     let cancelled = false;

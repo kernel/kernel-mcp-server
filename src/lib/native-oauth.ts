@@ -49,6 +49,12 @@ export class NativeCredentialRejected extends Error {
   }
 }
 
+export class NativeScopeRejected extends Error {
+  constructor() {
+    super("native scope or resource rejected");
+  }
+}
+
 export type NativeOAuthConfig = {
   issuer: string;
   audience: string;
@@ -147,6 +153,12 @@ export async function exchangeNativeOAuth(
         failure.data.error === "invalid_grant"
       )
         throw new NativeCredentialRejected();
+      if (
+        response.status === 400 &&
+        failure.success &&
+        ["invalid_scope", "invalid_target"].includes(failure.data.error)
+      )
+        throw new NativeScopeRejected();
       throw new Error("native OAuth authority request failed");
     }
     return body;

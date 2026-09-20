@@ -13,6 +13,7 @@ import {
   exchangeNativeOAuth,
   leaseNativeResponse,
   NativeCredentialRejected,
+  NativeScopeRejected,
 } from "@/lib/native-oauth";
 import {
   OAUTH_RESOURCE_METADATA_PATH,
@@ -239,12 +240,21 @@ async function handleAuthenticatedRequest(
       if (!config) throw new NativeCredentialRejected();
       native = await exchangeNativeOAuth(token, req.signal, config);
     } catch (error) {
-      const rejected = error instanceof NativeCredentialRejected;
+      const insufficient = error instanceof NativeScopeRejected;
+      const rejected =
+        insufficient || error instanceof NativeCredentialRejected;
       recordOAuthCompatibility({
         surface: "verification",
         provider: "kernel",
         outcome: rejected ? "rejected" : "unavailable",
       });
+      if (insufficient)
+        return errorResponse(
+          403,
+          "insufficient_scope",
+          "This credential cannot access the requested resource",
+          { "WWW-Authenticate": 'Bearer error="insufficient_scope"' },
+        );
       return rejected
         ? createAuthErrorResponse(req)
         : errorResponse(

@@ -133,6 +133,25 @@ describe("native failure classification", () => {
       exchangeSpy.mockRestore();
     }
   });
+  test("a permanent scope mismatch is 403 rather than a retryable outage", async () => {
+    const configSpy = spyOn(nativeOAuth, "nativeOAuthConfig").mockReturnValue(
+      config,
+    );
+    const exchangeSpy = spyOn(
+      nativeOAuth,
+      "exchangeNativeOAuth",
+    ).mockRejectedValue(new nativeOAuth.NativeScopeRejected());
+    try {
+      const response = await GET(request());
+      expect(response.status).toBe(403);
+      expect(response.headers.get("WWW-Authenticate")).toContain(
+        "insufficient_scope",
+      );
+    } finally {
+      configSpy.mockRestore();
+      exchangeSpy.mockRestore();
+    }
+  });
   test("post-authentication bugs propagate without recording a second auth result", async () => {
     const configSpy = spyOn(nativeOAuth, "nativeOAuthConfig").mockReturnValue(
       config,
