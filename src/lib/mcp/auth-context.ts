@@ -1,11 +1,16 @@
 import { APIConnectionError, APIUserAbortError } from "@onkernel/sdk";
-import type { AuthContext } from "@onkernel/sdk/resources/auth/context";
+import type { AuthContext as SDKAuthContext } from "@onkernel/sdk/resources/auth/context";
 import { createHash } from "crypto";
 import { z } from "zod";
 import {
   defaultMcpDependencies,
   type McpDependencies,
 } from "@/lib/mcp/dependencies";
+
+// The additive service principal lands before the generated SDK release.
+export type AuthContext = Omit<SDKAuthContext, "principal"> & {
+  principal: { type: "api_key" | "user" | "service"; id: string };
+};
 
 const authContextSchema: z.ZodType<AuthContext> = z.object({
   authentication: z.object({
@@ -14,7 +19,7 @@ const authContextSchema: z.ZodType<AuthContext> = z.object({
     credential_id: z.string().nullable(),
   }),
   principal: z.object({
-    type: z.enum(["api_key", "user"]),
+    type: z.enum(["api_key", "user", "service"]),
     id: z.string().min(1),
   }),
   organization: z.object({

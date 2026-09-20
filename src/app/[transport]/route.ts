@@ -6,6 +6,13 @@ import {
 import { verifyToken } from "@clerk/nextjs/server";
 import { after, NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
+import { recordOAuthCompatibility } from "@/lib/oauth-compatibility";
+import {
+  isNativeOAuthCredential,
+  nativeOAuthConfig,
+  exchangeNativeOAuth,
+  leaseNativeResponse,
+} from "@/lib/native-oauth";
 import {
   OAUTH_RESOURCE_METADATA_PATH,
   oauthResourceMetadataUrl,
@@ -224,6 +231,48 @@ async function handleAuthenticatedRequest(
     );
   }
 
+  if (isNativeOAuthCredential(token)) {
+    const abort = new AbortController();
+    try {
+      const config = nativeOAuthConfig();
+      if (!config) return createAuthErrorResponse(req);
+      const native = await exchangeNativeOAuth(token, req.signal, config);
+      recordOAuthCompatibility({
+        surface: "verification",
+        provider: "kernel",
+        outcome: "verified",
+      });
+      const signal = AbortSignal.any([
+        req.signal,
+        abort.signal,
+        AbortSignal.timeout(Math.max(1, native.deadline - Date.now())),
+      ]);
+      const response = await handleMcpRequestWithIdentity({
+        req: new NextRequest(req, { signal }),
+        token: native.token,
+        authSubject: `native:${native.subject}`,
+        scopes: native.scopes,
+        authInfoExtra: { userId: null, clerkToken: null },
+        credentialType: "oauth",
+        transportSessionId,
+        observeConnection,
+      });
+      return leaseNativeResponse(response, native.deadline, abort);
+    } catch {
+      abort.abort();
+      recordOAuthCompatibility({
+        surface: "verification",
+        provider: "kernel",
+        outcome: "rejected",
+      });
+      return createAuthErrorResponse(
+        req,
+        "invalid_token",
+        "Native credential could not be verified",
+      );
+    }
+  }
+
   if (!isValidJwtFormat(token)) {
     // Opaque API keys are authenticated by the Kernel API rather than Clerk.
     // Do not cache their context: /auth/context must revalidate the credential
@@ -253,7 +302,17 @@ async function handleAuthenticatedRequest(
       );
     }
     userId = payload.sub;
+    recordOAuthCompatibility({
+      surface: "verification",
+      provider: "clerk",
+      outcome: "verified",
+    });
   } catch (authError) {
+    recordOAuthCompatibility({
+      surface: "verification",
+      provider: "clerk",
+      outcome: "rejected",
+    });
     return createAuthErrorResponse(
       req,
       "invalid_token",
