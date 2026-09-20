@@ -12,6 +12,7 @@ import {
   nativeOAuthConfig,
   exchangeNativeOAuth,
   leaseNativeResponse,
+  NativeCredentialRejected,
 } from "@/lib/native-oauth";
 import {
   OAUTH_RESOURCE_METADATA_PATH,
@@ -232,21 +233,39 @@ async function handleAuthenticatedRequest(
   }
 
   if (isNativeOAuthCredential(token)) {
-    const abort = new AbortController();
+    let native: Awaited<ReturnType<typeof exchangeNativeOAuth>>;
     try {
       const config = nativeOAuthConfig();
-      if (!config) return createAuthErrorResponse(req);
-      const native = await exchangeNativeOAuth(token, req.signal, config);
+      if (!config) throw new NativeCredentialRejected();
+      native = await exchangeNativeOAuth(token, req.signal, config);
+    } catch (error) {
+      const rejected = error instanceof NativeCredentialRejected;
       recordOAuthCompatibility({
         surface: "verification",
         provider: "kernel",
-        outcome: "verified",
+        outcome: rejected ? "rejected" : "unavailable",
       });
-      const signal = AbortSignal.any([
-        req.signal,
-        abort.signal,
-        AbortSignal.timeout(Math.max(1, native.deadline - Date.now())),
-      ]);
+      return rejected
+        ? createAuthErrorResponse(req)
+        : errorResponse(
+            503,
+            "temporarily_unavailable",
+            "Native authorization is unavailable",
+            { "Retry-After": "1" },
+          );
+    }
+    recordOAuthCompatibility({
+      surface: "verification",
+      provider: "kernel",
+      outcome: "verified",
+    });
+    const abort = new AbortController();
+    const signal = AbortSignal.any([
+      req.signal,
+      abort.signal,
+      AbortSignal.timeout(Math.max(1, native.deadline - Date.now())),
+    ]);
+    try {
       const response = await handleMcpRequestWithIdentity({
         req: new NextRequest(req, { signal }),
         token: native.token,
@@ -258,18 +277,9 @@ async function handleAuthenticatedRequest(
         observeConnection,
       });
       return leaseNativeResponse(response, native.deadline, abort);
-    } catch {
+    } catch (error) {
       abort.abort();
-      recordOAuthCompatibility({
-        surface: "verification",
-        provider: "kernel",
-        outcome: "rejected",
-      });
-      return createAuthErrorResponse(
-        req,
-        "invalid_token",
-        "Native credential could not be verified",
-      );
+      throw error;
     }
   }
 

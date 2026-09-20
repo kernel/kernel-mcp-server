@@ -43,6 +43,12 @@ export function isNativeOAuthCredential(token: string): boolean {
   }
 }
 
+export class NativeCredentialRejected extends Error {
+  constructor() {
+    super("native credential rejected");
+  }
+}
+
 export type NativeOAuthConfig = {
   issuer: string;
   audience: string;
@@ -84,7 +90,7 @@ export async function exchangeNativeOAuth(
   config: NativeOAuthConfig,
   request: (url: string, init: RequestInit) => Promise<Response> = fetch,
 ) {
-  if (token.length > 4096) throw new Error("invalid native credential");
+  if (token.length > 4096) throw new NativeCredentialRejected();
   const verified = await jwtVerify(token, createLocalJWKSet(config.keys), {
     issuer: config.issuer,
     audience: config.audience,
@@ -98,6 +104,8 @@ export async function exchangeNativeOAuth(
       "issuer_epoch",
       "scope",
     ],
+  }).catch(() => {
+    throw new NativeCredentialRejected();
   });
   if (
     !["at+jwt", "application/at+jwt"].includes(
@@ -111,7 +119,7 @@ export async function exchangeNativeOAuth(
     verified.payload.exp - verified.payload.iat > 600 ||
     verified.payload.act
   )
-    throw new Error("invalid native credential");
+    throw new NativeCredentialRejected();
   const authorization = `Basic ${Buffer.from(`${encodeURIComponent(config.clientId)}:${encodeURIComponent(config.clientSecret)}`).toString("base64")}`;
   const post = async (path: string, form: URLSearchParams) => {
     const response = await request(`${config.issuer}${path}`, {
@@ -125,17 +133,30 @@ export async function exchangeNativeOAuth(
       redirect: "error",
       signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
     });
-    if (!response.ok)
-      throw new Error(
-        "native OAuth authority unavailable or credential rejected",
-      );
+    if (response.status >= 500)
+      throw new Error("native OAuth authority unavailable");
     const text = await response.text();
     if (text.length > 16384) throw new Error("invalid native OAuth response");
-    return JSON.parse(text) as unknown;
+    const body: unknown = JSON.parse(text);
+    if (!response.ok) {
+      const failure = z.object({ error: z.string() }).safeParse(body);
+      if (
+        response.status === 400 &&
+        failure.success &&
+        failure.data.error === "invalid_grant"
+      )
+        throw new NativeCredentialRejected();
+      throw new Error("native OAuth authority request failed");
+    }
+    return body;
   };
-  const status = claimsSchema.parse(
-    await post("/oauth/native/introspect", new URLSearchParams({ token })),
+  const introspection = await post(
+    "/oauth/native/introspect",
+    new URLSearchParams({ token }),
   );
+  if (z.object({ active: z.literal(false) }).safeParse(introspection).success)
+    throw new NativeCredentialRejected();
+  const status = claimsSchema.parse(introspection);
   if (
     status.iss !== config.issuer ||
     status.aud[0] !== config.audience ||
@@ -147,7 +168,7 @@ export async function exchangeNativeOAuth(
     status.exp !== verified.payload.exp ||
     status.exp * 1000 <= Date.now()
   )
-    throw new Error("inactive native credential");
+    throw new NativeCredentialRejected();
   const exchanged = exchangeSchema.parse(
     await post(
       "/token",
@@ -175,6 +196,12 @@ export async function exchangeNativeOAuth(
     derived.payload.sub !== status.sub ||
     derived.payload.client_id !== config.clientId ||
     derived.payload.issuer_epoch !== config.epoch ||
+    derived.payload.scope !== exchanged.scope ||
+    !["at+jwt", "application/at+jwt"].includes(
+      derived.protectedHeader.typ ?? "",
+    ) ||
+    !Array.isArray(derived.payload.aud) ||
+    derived.payload.aud.length !== 1 ||
     typeof derived.payload.exp !== "number" ||
     derived.payload.exp > status.exp ||
     derived.payload.exp * 1000 > Date.now() + 60000 ||

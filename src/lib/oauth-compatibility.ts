@@ -1,7 +1,7 @@
 type CompatibilityEvent = {
   surface: "verification" | "token" | "authorize" | "register";
   provider: "clerk" | "kernel";
-  outcome: "verified" | "rejected" | "success" | "error";
+  outcome: "verified" | "rejected" | "success" | "error" | "unavailable";
 };
 
 // Categorical events deliberately exclude identities, tokens, URLs and request bodies.
