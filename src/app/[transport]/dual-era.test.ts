@@ -480,6 +480,55 @@ for (const era of ["legacy", "modern"] as const) {
   });
 }
 
+test.each(["2025-03-26", "2025-06-18"])(
+  "serves earlier Streamable HTTP revision %s",
+  async (protocolVersion) => {
+    const headers = new Headers({
+      Authorization: "Bearer sk_valid",
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      "MCP-Protocol-Version": protocolVersion,
+    });
+    async function call(method: string, params: object) {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      });
+      expect(response.status).toBe(200);
+      const session = response.headers.get("mcp-session-id");
+      if (session) headers.set("mcp-session-id", session);
+      const text = await response.text();
+      const data = text.split("\n").find((line) => line.startsWith("data: "));
+      const result = JSON.parse(data ? data.slice(6) : text).result;
+      expect(result.resultType).toBeUndefined();
+      return result;
+    }
+    expect(
+      (
+        await call("initialize", {
+          protocolVersion,
+          capabilities: {},
+          clientInfo: { name: "legacy-http", version: "1" },
+        })
+      ).protocolVersion,
+    ).toBe(protocolVersion);
+    expect(
+      (await call("tools/list", {})).tools.map(
+        (tool: { name: string }) => tool.name,
+      ),
+    ).toContain("get_connection_context");
+    expect(
+      parsedResult(
+        await call("tools/call", {
+          name: "get_connection_context",
+          arguments: {},
+        }),
+      ).organization.id,
+    ).toBe("org_test");
+  },
+);
+
 test("modern requests cannot reuse a legacy Apps session to bypass per-request capabilities", async () => {
   const legacy = connection("legacy", { token: "sk_valid", apps: true });
   try {
