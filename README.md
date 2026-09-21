@@ -1,7 +1,7 @@
 # Kernel MCP Server
 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/Node.js-18%2B-green.svg)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-20%2B-green.svg)](https://nodejs.org/)
 [![Next.js](https://img.shields.io/badge/Next.js-15.3%2B-black.svg)](https://nextjs.org/)
 [![smithery badge](https://smithery.ai/badge/kernel)](https://smithery.ai/server/kernel)
 
@@ -38,6 +38,23 @@ For a deeper dive into why and how we built this server, see our blog post: [Int
 Use the streamable HTTP endpoint where supported for increased reliability. If your client does not support remote MCP, use `mcp-remote` over stdio.
 
 Kernel's server is a centrally hosted, authenticated remote MCP using OAuth 2.1 with dynamic client registration.
+
+### Protocol compatibility
+
+The same `/mcp` endpoint serves SDK v1 / 2025-era Streamable HTTP clients and
+protocol revision `2026-07-28` clients through the SDK v2 stateless handler.
+Legacy clients still initialize normally. Modern clients use per-request metadata
+and do not initialize or receive an MCP session ID. Both use the same tools and
+authentication checks; MCP Apps capabilities are read per request for modern clients.
+
+Legacy clients should handle both JSON-RPC errors and `isError` tool results.
+Unknown tools now produce JSON-RPC error `-32602`; ordinary tool failures still
+return `isError`. Validation-error text and generated tool schemas can differ from
+SDK v1. No byte-preserving compatibility layer or Tasks extension is installed.
+
+Run `bun test 'src/app/[transport]/dual-era.test.ts'` to exercise both SDK client
+generations over HTTP, including OAuth authorization and refresh with local upstream
+service fixtures. The v1 SDK is retained only as a test dependency.
 
 ## Quick Setup with Kernel CLI
 

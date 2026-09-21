@@ -6,7 +6,7 @@ const DEV_OAUTH_ORIGIN = "https://auth.dev.onkernel.com";
 export const OAUTH_RESOURCE_METADATA_PATH =
   "/.well-known/oauth-protected-resource/mcp";
 
-function mcpOrigin(request: Request): string {
+export function oauthRequestOrigin(request: Request): string {
   const url = new URL(request.url);
   const host = request.headers.get("host");
   if (host) {
@@ -19,14 +19,14 @@ function mcpOrigin(request: Request): string {
 }
 
 export function oauthResourceMetadataUrl(request: Request): string {
-  return `${mcpOrigin(request)}${OAUTH_RESOURCE_METADATA_PATH}`;
+  return `${oauthRequestOrigin(request)}${OAUTH_RESOURCE_METADATA_PATH}`;
 }
 
 export function oauthResourceMetadata(
   request: Request,
   clerkMetadata: Record<string, unknown>,
 ): Record<string, unknown> {
-  const origin = mcpOrigin(request);
+  const origin = oauthRequestOrigin(request);
   let authorizationServer = origin;
   if (origin === MCP_ORIGIN) authorizationServer = OAUTH_ORIGIN;
   if (origin === DEV_MCP_ORIGIN) authorizationServer = DEV_OAUTH_ORIGIN;

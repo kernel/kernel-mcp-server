@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { oauthRequestOrigin } from "@/lib/oauth-discovery";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -20,7 +21,7 @@ export async function GET(request: NextRequest): Promise<Response> {
     );
   }
 
-  const baseUrl = `${request.nextUrl.protocol}//${request.nextUrl.host}`;
+  const baseUrl = oauthRequestOrigin(request);
 
   const metadata = {
     issuer: baseUrl,
