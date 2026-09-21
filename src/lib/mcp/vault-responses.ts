@@ -136,6 +136,7 @@ const credentialValuesSchema = z
     }),
     state: z.object({
       fields: z.record(
+        z.string(),
         z.object({ has_value: z.boolean(), value: z.string().optional() }),
       ),
     }),
@@ -185,7 +186,7 @@ export function projectVaultOutput(
     if (credential.success) {
       const { spec, state } = credential.data;
       result.state = {
-        ...z.record(z.unknown()).parse(result.state),
+        ...z.record(z.string(), z.unknown()).parse(result.state),
         fields: Object.fromEntries(
           Object.entries(state.fields).map(([name, field]) => [
             name,

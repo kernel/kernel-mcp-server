@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
   defaultMcpDependencies,
@@ -67,16 +67,16 @@ export function registerWebMcpTool(
         openWorldHint: true,
       },
     },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
       if ("project_id" in params) {
         return errorResponse(
           "Error: project_id is not supported by webmcp; use project.",
         );
       }
       const client = dependencies.createKernelClient(
-        extra.authInfo.token,
-        projectForOperation(extra.authInfo, { project: params.project }),
+        ctx.http.authInfo.token,
+        projectForOperation(ctx.http.authInfo, { project: params.project }),
       );
 
       try {

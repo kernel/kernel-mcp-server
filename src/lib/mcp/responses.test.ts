@@ -1,8 +1,7 @@
 /// <reference types="bun-types" />
+import { Client } from "@modelcontextprotocol/client";
+import { McpServer, InMemoryTransport } from "@modelcontextprotocol/server";
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
   APIConnectionError,
   APIConnectionTimeoutError,
@@ -12,6 +11,7 @@ import {
 import { describe, expect, test } from "bun:test";
 
 import { errorResponse, throwToolError } from "@/lib/mcp/responses";
+import { z } from "zod";
 
 function apiError(status: number, message: string) {
   return APIError.generate(status, undefined, message, new Headers());
@@ -104,28 +104,39 @@ describe("what the client receives", () => {
   async function callTool(name: string) {
     const server = new McpServer({ name: "test", version: "0.0.0" });
 
-    server.tool("api_failure", {}, async () => {
-      throwToolError(
-        "manage_browsers",
-        "get",
-        apiError(404, "browser session not found"),
-      );
-    });
+    server.registerTool(
+      "api_failure",
+      { inputSchema: z.object({}) },
+      async () => {
+        throwToolError(
+          "manage_browsers",
+          "get",
+          apiError(404, "browser session not found"),
+        );
+      },
+    );
 
-    server.tool("coded_api_failure", {}, async () => {
-      throwToolError(
-        "manage_projects",
-        "delete",
-        codedApiError(
-          409,
-          "project_not_empty",
-          "Project still contains resources",
-        ),
-      );
-    });
+    server.registerTool(
+      "coded_api_failure",
+      { inputSchema: z.object({}) },
+      async () => {
+        throwToolError(
+          "manage_projects",
+          "delete",
+          codedApiError(
+            409,
+            "project_not_empty",
+            "Project still contains resources",
+          ),
+        );
+      },
+    );
 
-    server.tool("input_guard", {}, async () =>
-      errorResponse("Error: session_id is required for get action."),
+    server.registerTool(
+      "input_guard",
+      { inputSchema: z.object({}) },
+      async () =>
+        errorResponse("Error: session_id is required for get action."),
     );
 
     const client = new Client({ name: "test-client", version: "0.0.0" });

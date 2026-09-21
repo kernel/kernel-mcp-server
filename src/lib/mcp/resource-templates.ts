@@ -1,8 +1,5 @@
-import {
-  ResourceTemplate,
-  type McpServer,
-} from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
+import { ResourceTemplate } from "@modelcontextprotocol/server";
+import type { McpServer, AuthInfo } from "@modelcontextprotocol/server";
 import {
   defaultMcpDependencies,
   type McpDependencies,
@@ -68,15 +65,16 @@ export function registerJsonResourceCollection(
   options: JsonResourceCollectionOptions,
   dependencies: McpDependencies = defaultMcpDependencies,
 ) {
-  server.resource(
+  server.registerResource(
     options.name,
     new ResourceTemplate(options.uriTemplate, { list: undefined }),
-    async (uri, variables, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+    {},
+    async (uri, variables, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
       const client = projectScopedClient(
         uri,
         variables,
-        extra.authInfo,
+        ctx.http.authInfo,
         dependencies,
       );
       const resources = await options.read(client);
@@ -101,11 +99,12 @@ export function registerJsonResourceTemplate(
   options: JsonResourceTemplateOptions,
   dependencies: McpDependencies = defaultMcpDependencies,
 ) {
-  server.resource(
+  server.registerResource(
     options.name,
     new ResourceTemplate(options.uriTemplate, { list: undefined }),
-    async (uri, variables, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+    {},
+    async (uri, variables, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
 
       const identifier = templateVariableValue(variables, options.variableName);
       if (!identifier) {
@@ -115,7 +114,7 @@ export function registerJsonResourceTemplate(
       const client = projectScopedClient(
         uri,
         variables,
-        extra.authInfo,
+        ctx.http.authInfo,
         dependencies,
       );
       const resource = await options.read(client, identifier);

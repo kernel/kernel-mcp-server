@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
@@ -35,238 +35,244 @@ function safeJsonResponse(value: unknown) {
 
 export function registerAuthConnectionTools(server: McpServer) {
   // manage_auth_connections -- Manage Kernel managed auth connections
-  server.tool(
+  server.registerTool(
     "manage_auth_connections",
-    'Manage reusable authenticated profiles for third-party websites. Before a browser task that needs a user account, call "list" with the exact domain_filter and inspect every page. If one relevant connection is AUTHENTICATED, create the browser with its profile_name. If multiple relevant accounts exist, ask the user which one to use. If authentication is needed and open_auth_login is available, prefer that secure App so credentials and MFA never enter chat: a direct user request to log in is already consent; if login is only discovered incidentally, ask first. For a new App login, choose a concise stable profile name derived from the service unless the user specified one. The programmatic actions remain available for every client: "create" or "update" a connection, "login" to start a hosted flow, "submit" fields or choices, "get" status, inspect the "timeline", "delete", or "wait" for completion. Prefer interaction_id with canonical field_values or selected_choice_id when the connection returns fields or choices. After authentication, resume the original task with manage_browsers using the verified profile_name.',
     {
-      ...projectSelectionInputSchema(),
-      action: z
-        .enum([
-          "create",
-          "list",
-          "get",
-          "update",
-          "delete",
-          "login",
-          "submit",
-          "timeline",
-          "wait",
-        ])
-        .describe("Operation to perform."),
-      id: z
-        .string()
-        .describe(
-          "Auth connection ID. Required for get, update, delete, login, submit, and timeline.",
-        )
-        .optional(),
-      domain: z
-        .string()
-        .describe("(create) Target domain (e.g. 'netflix.com').")
-        .optional(),
-      profile_name: z
-        .string()
-        .describe(
-          "(create) Profile to manage auth for. (list) Filter by profile_name.",
-        )
-        .optional(),
-      allowed_domains: z
-        .array(z.string())
-        .describe(
-          "(create, update) Additional hostname roots valid for credential entry. Exact hostnames and their subdomains are allowed; leading www. and *. are normalized away. An omitted or empty list leaves credential entry unrestricted.",
-        )
-        .optional(),
-      credential_name: z
-        .string()
-        .describe(
-          "(create, update) Name of a pre-stored Kernel credential to use for automatic login.",
-        )
-        .optional(),
-      credential_provider: z
-        .string()
-        .describe(
-          "(create, update) External credential provider name (e.g. '1password'). Use with credential_path or credential_auto.",
-        )
-        .optional(),
-      credential_path: z
-        .string()
-        .describe(
-          "(create, update) Provider-specific item path (e.g. 'VaultName/ItemName').",
-        )
-        .optional(),
-      credential_auto: z
-        .boolean()
-        .describe(
-          "(create, update) If true, the provider auto-looks up credentials by domain.",
-        )
-        .optional(),
-      login_url: z
-        .string()
-        .describe(
-          "(create, update) Optional explicit login page URL to skip discovery. On update, use an empty string to clear it.",
-        )
-        .optional(),
-      health_check_interval: z
-        .number()
-        .int()
-        .min(300)
-        .max(86400)
-        .describe(
-          "(create, update) Seconds between automatic health checks. Plan-dependent minimum, max 86400.",
-        )
-        .optional(),
-      health_checks: z
-        .boolean()
-        .describe(
-          "(create, update) Enable scheduled authentication health checks. Defaults to true on create.",
-        )
-        .optional(),
-      auto_reauth: z
-        .boolean()
-        .describe(
-          "(create, update) Permit automatic re-authentication after a scheduled health check detects an expired session. Defaults to true on create and has no effect when health_checks is false.",
-        )
-        .optional(),
-      save_credentials: z
-        .boolean()
-        .describe(
-          "(create, update) Save credentials after each successful login. Defaults to true on create.",
-        )
-        .optional(),
-      record_session: z
-        .boolean()
-        .describe(
-          "(create, update) Set the connection default for recording replay video of future login, reauth, and health-check browser sessions. (login) Override that default for this login only. Omitted preserves the API default or inherited value.",
-        )
-        .optional(),
-      browser_telemetry: managedAuthBrowserTelemetrySchema
-        .describe(
-          "(create, update) Set the connection default for browser telemetry. (login) Override it for this login only. Use { enabled: true } for the default operational categories (control, connection, system, captcha); browser category settings can opt into console, network, page, interaction, screenshot, or platform capture, tune control CDP exclusions, and configure OTLP export. Omitted preserves the API default or inherited value.",
-        )
-        .optional(),
-      browser_region: z
-        .enum(["us-east", "eu-west", "ap-southeast"])
-        .describe(
-          "(create, update) Set the region for future managed-auth browser sessions. (login) Override the region for this login only. Defaults to us-east on create; omitted on update or login preserves or inherits the connection setting.",
-        )
-        .optional(),
-      browser_stealth: z
-        .boolean()
-        .describe(
-          "(create, update, login) Whether managed-auth browser sessions use stealth mode. Defaults to true on create; omitted on update or login preserves or inherits the connection setting.",
-        )
-        .optional(),
-      proxy_id: z
-        .string()
-        .min(1)
-        .describe(
-          "(create, update, login) Proxy ID to route managed-auth browser sessions through.",
-        )
-        .optional(),
-      proxy_name: z
-        .string()
-        .min(1)
-        .describe(
-          "(create, update, login) Proxy name to route managed-auth browser sessions through.",
-        )
-        .optional(),
-      proxy_mode: z
-        .enum(["direct", "default"])
-        .describe(
-          "(create, update, login) Proxy mode. direct disables proxy egress; default restores the stealth-derived default. Cannot be combined with proxy_id or proxy_name.",
-        )
-        .optional(),
-      domain_filter: z.string().describe("(list) Filter by domain.").optional(),
-      query: z
-        .string()
-        .describe("(list) Search by connection ID, domain, or profile name.")
-        .optional(),
-      ...paginationParams,
-      interaction_id: z
-        .string()
-        .min(1)
-        .describe(
-          "(submit) Opaque interaction ID returned with canonical fields and choices. Required with field_values or selected_choice_id.",
-        )
-        .optional(),
-      field_values: z
-        .record(z.string(), z.string())
-        .describe(
-          "(submit) Canonical map of field ID to value. Use with interaction_id when `get` returns fields.",
-        )
-        .optional(),
-      selected_choice_id: z
-        .string()
-        .min(1)
-        .describe(
-          "(submit) Canonical choice ID. Use with interaction_id when `get` returns choices.",
-        )
-        .optional(),
-      fields: z
-        .record(z.string(), z.string())
-        .describe(
-          "(submit, legacy) Map of discovered field name to value. Prefer interaction_id and field_values when canonical fields are present.",
-        )
-        .optional(),
-      mfa_option_id: z
-        .string()
-        .describe(
-          "(submit) ID of the MFA option to use, from mfa_options on the connection.",
-        )
-        .optional(),
-      sign_in_option_id: z
-        .string()
-        .min(1)
-        .describe(
-          "(submit, legacy) Sign-in option ID from sign_in_options. Prefer selected_choice_id when canonical choices are present.",
-        )
-        .optional(),
-      sso_button_selector: z
-        .string()
-        .describe(
-          "(submit, legacy) XPath of an ODA SSO button. Cannot be combined with sso_provider.",
-        )
-        .optional(),
-      sso_provider: z
-        .string()
-        .describe(
-          "(submit, legacy) Provider from pending_sso_buttons for a CUA SSO choice. Cannot be combined with sso_button_selector.",
-        )
-        .optional(),
-      timeline_type: z
-        .enum(["login", "reauth", "health_check"])
-        .describe("(timeline) Filter events by type.")
-        .optional(),
-      wait_seconds: z
-        .number()
-        .int()
-        .min(1)
-        .max(30)
-        .describe("(wait) Long-poll duration. Defaults to 25 seconds.")
-        .optional(),
-      required_flow_type: z
-        .enum(["LOGIN", "REAUTH"])
-        .describe("(wait) Require this newly completed flow type.")
-        .optional(),
-      flow_checkpoint: z
-        .string()
-        .min(1)
-        .describe(
-          "(wait) Signed flow checkpoint supplied by open_auth_login or begin_auth_login; forward it unchanged.",
-        )
-        .optional(),
+      description:
+        'Manage reusable authenticated profiles for third-party websites. Before a browser task that needs a user account, call "list" with the exact domain_filter and inspect every page. If one relevant connection is AUTHENTICATED, create the browser with its profile_name. If multiple relevant accounts exist, ask the user which one to use. If authentication is needed and open_auth_login is available, prefer that secure App so credentials and MFA never enter chat: a direct user request to log in is already consent; if login is only discovered incidentally, ask first. For a new App login, choose a concise stable profile name derived from the service unless the user specified one. The programmatic actions remain available for every client: "create" or "update" a connection, "login" to start a hosted flow, "submit" fields or choices, "get" status, inspect the "timeline", "delete", or "wait" for completion. Prefer interaction_id with canonical field_values or selected_choice_id when the connection returns fields or choices. After authentication, resume the original task with manage_browsers using the verified profile_name.',
+      inputSchema: z.object({
+        ...projectSelectionInputSchema(),
+        action: z
+          .enum([
+            "create",
+            "list",
+            "get",
+            "update",
+            "delete",
+            "login",
+            "submit",
+            "timeline",
+            "wait",
+          ])
+          .describe("Operation to perform."),
+        id: z
+          .string()
+          .describe(
+            "Auth connection ID. Required for get, update, delete, login, submit, and timeline.",
+          )
+          .optional(),
+        domain: z
+          .string()
+          .describe("(create) Target domain (e.g. 'netflix.com').")
+          .optional(),
+        profile_name: z
+          .string()
+          .describe(
+            "(create) Profile to manage auth for. (list) Filter by profile_name.",
+          )
+          .optional(),
+        allowed_domains: z
+          .array(z.string())
+          .describe(
+            "(create, update) Additional hostname roots valid for credential entry. Exact hostnames and their subdomains are allowed; leading www. and *. are normalized away. An omitted or empty list leaves credential entry unrestricted.",
+          )
+          .optional(),
+        credential_name: z
+          .string()
+          .describe(
+            "(create, update) Name of a pre-stored Kernel credential to use for automatic login.",
+          )
+          .optional(),
+        credential_provider: z
+          .string()
+          .describe(
+            "(create, update) External credential provider name (e.g. '1password'). Use with credential_path or credential_auto.",
+          )
+          .optional(),
+        credential_path: z
+          .string()
+          .describe(
+            "(create, update) Provider-specific item path (e.g. 'VaultName/ItemName').",
+          )
+          .optional(),
+        credential_auto: z
+          .boolean()
+          .describe(
+            "(create, update) If true, the provider auto-looks up credentials by domain.",
+          )
+          .optional(),
+        login_url: z
+          .string()
+          .describe(
+            "(create, update) Optional explicit login page URL to skip discovery. On update, use an empty string to clear it.",
+          )
+          .optional(),
+        health_check_interval: z
+          .number()
+          .int()
+          .min(300)
+          .max(86400)
+          .describe(
+            "(create, update) Seconds between automatic health checks. Plan-dependent minimum, max 86400.",
+          )
+          .optional(),
+        health_checks: z
+          .boolean()
+          .describe(
+            "(create, update) Enable scheduled authentication health checks. Defaults to true on create.",
+          )
+          .optional(),
+        auto_reauth: z
+          .boolean()
+          .describe(
+            "(create, update) Permit automatic re-authentication after a scheduled health check detects an expired session. Defaults to true on create and has no effect when health_checks is false.",
+          )
+          .optional(),
+        save_credentials: z
+          .boolean()
+          .describe(
+            "(create, update) Save credentials after each successful login. Defaults to true on create.",
+          )
+          .optional(),
+        record_session: z
+          .boolean()
+          .describe(
+            "(create, update) Set the connection default for recording replay video of future login, reauth, and health-check browser sessions. (login) Override that default for this login only. Omitted preserves the API default or inherited value.",
+          )
+          .optional(),
+        browser_telemetry: managedAuthBrowserTelemetrySchema
+          .describe(
+            "(create, update) Set the connection default for browser telemetry. (login) Override it for this login only. Use { enabled: true } for the default operational categories (control, connection, system, captcha); browser category settings can opt into console, network, page, interaction, screenshot, or platform capture, tune control CDP exclusions, and configure OTLP export. Omitted preserves the API default or inherited value.",
+          )
+          .optional(),
+        browser_region: z
+          .enum(["us-east", "eu-west", "ap-southeast"])
+          .describe(
+            "(create, update) Set the region for future managed-auth browser sessions. (login) Override the region for this login only. Defaults to us-east on create; omitted on update or login preserves or inherits the connection setting.",
+          )
+          .optional(),
+        browser_stealth: z
+          .boolean()
+          .describe(
+            "(create, update, login) Whether managed-auth browser sessions use stealth mode. Defaults to true on create; omitted on update or login preserves or inherits the connection setting.",
+          )
+          .optional(),
+        proxy_id: z
+          .string()
+          .min(1)
+          .describe(
+            "(create, update, login) Proxy ID to route managed-auth browser sessions through.",
+          )
+          .optional(),
+        proxy_name: z
+          .string()
+          .min(1)
+          .describe(
+            "(create, update, login) Proxy name to route managed-auth browser sessions through.",
+          )
+          .optional(),
+        proxy_mode: z
+          .enum(["direct", "default"])
+          .describe(
+            "(create, update, login) Proxy mode. direct disables proxy egress; default restores the stealth-derived default. Cannot be combined with proxy_id or proxy_name.",
+          )
+          .optional(),
+        domain_filter: z
+          .string()
+          .describe("(list) Filter by domain.")
+          .optional(),
+        query: z
+          .string()
+          .describe("(list) Search by connection ID, domain, or profile name.")
+          .optional(),
+        ...paginationParams,
+        interaction_id: z
+          .string()
+          .min(1)
+          .describe(
+            "(submit) Opaque interaction ID returned with canonical fields and choices. Required with field_values or selected_choice_id.",
+          )
+          .optional(),
+        field_values: z
+          .record(z.string(), z.string())
+          .describe(
+            "(submit) Canonical map of field ID to value. Use with interaction_id when `get` returns fields.",
+          )
+          .optional(),
+        selected_choice_id: z
+          .string()
+          .min(1)
+          .describe(
+            "(submit) Canonical choice ID. Use with interaction_id when `get` returns choices.",
+          )
+          .optional(),
+        fields: z
+          .record(z.string(), z.string())
+          .describe(
+            "(submit, legacy) Map of discovered field name to value. Prefer interaction_id and field_values when canonical fields are present.",
+          )
+          .optional(),
+        mfa_option_id: z
+          .string()
+          .describe(
+            "(submit) ID of the MFA option to use, from mfa_options on the connection.",
+          )
+          .optional(),
+        sign_in_option_id: z
+          .string()
+          .min(1)
+          .describe(
+            "(submit, legacy) Sign-in option ID from sign_in_options. Prefer selected_choice_id when canonical choices are present.",
+          )
+          .optional(),
+        sso_button_selector: z
+          .string()
+          .describe(
+            "(submit, legacy) XPath of an ODA SSO button. Cannot be combined with sso_provider.",
+          )
+          .optional(),
+        sso_provider: z
+          .string()
+          .describe(
+            "(submit, legacy) Provider from pending_sso_buttons for a CUA SSO choice. Cannot be combined with sso_button_selector.",
+          )
+          .optional(),
+        timeline_type: z
+          .enum(["login", "reauth", "health_check"])
+          .describe("(timeline) Filter events by type.")
+          .optional(),
+        wait_seconds: z
+          .number()
+          .int()
+          .min(1)
+          .max(30)
+          .describe("(wait) Long-poll duration. Defaults to 25 seconds.")
+          .optional(),
+        required_flow_type: z
+          .enum(["LOGIN", "REAUTH"])
+          .describe("(wait) Require this newly completed flow type.")
+          .optional(),
+        flow_checkpoint: z
+          .string()
+          .min(1)
+          .describe(
+            "(wait) Signed flow checkpoint supplied by open_auth_login or begin_auth_login; forward it unchanged.",
+          )
+          .optional(),
+      }),
+      annotations: {
+        title: "Manage Kernel managed auth connections",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    {
-      title: "Manage Kernel managed auth connections",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(
-        extra.authInfo.token,
-        projectForOperation(extra.authInfo, params),
+        ctx.http.authInfo.token,
+        projectForOperation(ctx.http.authInfo, params),
       );
 
       const proxySelectors = [
@@ -605,7 +611,7 @@ export function registerAuthConnectionTools(server: McpServer) {
               },
               {
                 timeoutMs: (params.wait_seconds ?? 25) * 1_000,
-                signal: extra.signal,
+                signal: ctx.mcpReq.signal,
               },
             );
             return safeJsonResponse({

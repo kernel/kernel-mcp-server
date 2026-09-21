@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { APIError } from "@onkernel/sdk";
 import { z } from "zod";
 import {
@@ -37,78 +37,81 @@ export function registerConfigRegistryTools(
   server: McpServer,
   dependencies: McpDependencies = defaultMcpDependencies,
 ) {
-  server.tool(
+  server.registerTool(
     "manage_config_registry",
-    'Find browser and proxy configurations for bot-protected sites. Use "lookup" for a side-effect-free read of current knowledge, "resolve" to start or retry a background analysis, "get_analysis" to poll one analysis, "cancel_analysis" to request cancellation, "list_configs" to list targets and their latest recommendations, or "list_analyses" to list analysis history.',
     {
-      ...projectSelectionInputSchema(),
-      action: z
-        .enum([
-          "lookup",
-          "resolve",
-          "get_analysis",
-          "cancel_analysis",
-          "list_configs",
-          "list_analyses",
-        ])
-        .describe("Operation to perform."),
-      url: httpUrlSchema
-        .describe("(lookup, resolve) Public HTTP(S) target URL.")
-        .optional(),
-      allowed_proxy_countries: z
-        .array(z.string().length(2))
-        .describe(
-          "(lookup, resolve) ISO 3166 country codes Kernel may use for proxy configurations.",
-        )
-        .optional(),
-      intent: z
-        .string()
-        .min(1)
-        .describe(
-          "(resolve) Plain-language workload to exercise during analysis. HTTPS targets only.",
-        )
-        .optional(),
-      analysis_id: z
-        .string()
-        .min(1)
-        .describe(
-          "(get_analysis, cancel_analysis) Analysis ID returned by resolve or list actions.",
-        )
-        .optional(),
-      search: z
-        .string()
-        .describe(
-          "(list_configs, list_analyses) Case-insensitive target URL search.",
-        )
-        .optional(),
-      sort_by: z
-        .enum([
-          "target",
-          "analysis_status",
-          "recommended_config",
-          "last_requested_at",
-          "success_rate",
-        ])
-        .describe("(list_configs) Field used to sort results.")
-        .optional(),
-      sort_order: z
-        .enum(["asc", "desc"])
-        .describe("(list_configs) Sort direction.")
-        .optional(),
-      ...paginationParams,
+      description:
+        'Find browser and proxy configurations for bot-protected sites. Use "lookup" for a side-effect-free read of current knowledge, "resolve" to start or retry a background analysis, "get_analysis" to poll one analysis, "cancel_analysis" to request cancellation, "list_configs" to list targets and their latest recommendations, or "list_analyses" to list analysis history.',
+      inputSchema: z.object({
+        ...projectSelectionInputSchema(),
+        action: z
+          .enum([
+            "lookup",
+            "resolve",
+            "get_analysis",
+            "cancel_analysis",
+            "list_configs",
+            "list_analyses",
+          ])
+          .describe("Operation to perform."),
+        url: httpUrlSchema
+          .describe("(lookup, resolve) Public HTTP(S) target URL.")
+          .optional(),
+        allowed_proxy_countries: z
+          .array(z.string().length(2))
+          .describe(
+            "(lookup, resolve) ISO 3166 country codes Kernel may use for proxy configurations.",
+          )
+          .optional(),
+        intent: z
+          .string()
+          .min(1)
+          .describe(
+            "(resolve) Plain-language workload to exercise during analysis. HTTPS targets only.",
+          )
+          .optional(),
+        analysis_id: z
+          .string()
+          .min(1)
+          .describe(
+            "(get_analysis, cancel_analysis) Analysis ID returned by resolve or list actions.",
+          )
+          .optional(),
+        search: z
+          .string()
+          .describe(
+            "(list_configs, list_analyses) Case-insensitive target URL search.",
+          )
+          .optional(),
+        sort_by: z
+          .enum([
+            "target",
+            "analysis_status",
+            "recommended_config",
+            "last_requested_at",
+            "success_rate",
+          ])
+          .describe("(list_configs) Field used to sort results.")
+          .optional(),
+        sort_order: z
+          .enum(["asc", "desc"])
+          .describe("(list_configs) Sort direction.")
+          .optional(),
+        ...paginationParams,
+      }),
+      annotations: {
+        title: "Manage Kernel config registry",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    {
-      title: "Manage Kernel config registry",
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
       const client = dependencies.createKernelClient(
-        extra.authInfo.token,
-        projectForOperation(extra.authInfo, params),
+        ctx.http.authInfo.token,
+        projectForOperation(ctx.http.authInfo, params),
       );
 
       try {
@@ -137,7 +140,7 @@ export function registerConfigRegistryTools(
                 }),
                 ...(params.intent !== undefined && { intent: params.intent }),
               },
-              { maxRetries: 0, signal: extra.signal },
+              { maxRetries: 0, signal: ctx.mcpReq.signal },
             );
             return jsonResponse(result);
           }

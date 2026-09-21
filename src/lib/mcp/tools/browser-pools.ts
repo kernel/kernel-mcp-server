@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
   buildBrowserCreateConfig,
@@ -241,175 +241,180 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
   });
 
   // manage_browser_pools -- Create, update, list, get, delete, flush, acquire, and release browser pools
-  server.tool(
+  server.registerTool(
     "manage_browser_pools",
-    'Manage pre-warmed browser pools when an agent needs fast browser acquisition or reusable session capacity. Use "list" for a compact pool inventory, "get" for full details, "acquire" before controlling a pooled browser, and "release" when the browser should return to the pool.',
     {
-      ...projectSelectionInputSchema(),
-      action: z
-        .enum([
-          "create",
-          "update",
-          "list",
-          "get",
-          "delete",
-          "flush",
-          "acquire",
-          "release",
-        ])
-        .describe("Operation to perform."),
-      id_or_name: z
-        .string()
-        .describe(
-          "Pool ID or name. Required for update/get/delete/flush/acquire/release.",
-        )
-        .optional(),
-      size: z
-        .number()
-        .int()
-        .min(1)
-        .describe(
-          "(create, update) Number of browsers to maintain in the pool.",
-        )
-        .optional(),
-      name: z
-        .string()
-        .describe("(create, update) Unique pool name.")
-        .optional(),
-      headless: z
-        .boolean()
-        .describe("(create, update) Headless mode for pool browsers.")
-        .optional(),
-      stealth: z
-        .boolean()
-        .describe("(create, update) Stealth mode for pool browsers.")
-        .optional(),
-      timeout_seconds: browserPoolTimeoutSchema
-        .describe(
-          "(create, update) Idle timeout for acquired browsers. Default 600.",
-        )
-        .optional(),
-      profile_name: z
-        .string()
-        .describe(
-          "(create, update) Profile name to load into pool browsers. Cannot use with profile_id.",
-        )
-        .optional(),
-      profile_id: z
-        .string()
-        .describe(
-          "(create, update) Profile ID to load into pool browsers. Cannot use with profile_name.",
-        )
-        .optional(),
-      clear_profile: z
-        .boolean()
-        .describe(
-          "(update) Remove the profile from the pool. Cannot use with profile_id or profile_name.",
-        )
-        .optional(),
-      proxy_id: z
-        .string()
-        .describe(
-          "(create, update) Proxy for pool browsers. On update, an empty string clears the proxy.",
-        )
-        .optional(),
-      fill_rate_per_minute: browserPoolFillRateSchema
-        .describe(
-          "(create, update) Pool fill rate percentage per minute. Default 25%.",
-        )
-        .optional(),
-      start_url: z
-        .union([z.literal(""), z.string().url()])
-        .describe(
-          "(create, update) URL to open when a browser is warmed into the pool. On update, an empty string clears it. Navigation is best-effort.",
-        )
-        .optional(),
-      chrome_policy: z
-        .record(z.string(), z.unknown())
-        .describe(
-          "(create, update) Chrome enterprise policy overrides for all browsers in the pool. On update, an empty object clears the policy. Kernel-managed policies such as extensions, proxy, CDP, and automation are blocked by the API.",
-        )
-        .optional(),
-      kiosk_mode: z
-        .boolean()
-        .describe("(create, update) Hide address bar/tabs in live view.")
-        .optional(),
-      extension_id: z
-        .string()
-        .describe("(create, update) Extension ID to load.")
-        .optional(),
-      extension_name: z
-        .string()
-        .describe("(create, update) Extension name to load.")
-        .optional(),
-      clear_extensions: z
-        .boolean()
-        .describe(
-          "(update) Remove all extensions from the pool. Cannot use with extension_id or extension_name.",
-        )
-        .optional(),
-      viewport_width: z
-        .number()
-        .int()
-        .min(1)
-        .describe(
-          "(create, update) Window width in pixels. Must pair with viewport_height.",
-        )
-        .optional(),
-      viewport_height: z
-        .number()
-        .int()
-        .min(1)
-        .describe(
-          "(create, update) Window height in pixels. Must pair with viewport_width.",
-        )
-        .optional(),
-      viewport_refresh_rate: z
-        .number()
-        .int()
-        .min(1)
-        .describe("(create, update) Display refresh rate in Hz.")
-        .optional(),
-      discard_all_idle: z
-        .boolean()
-        .describe(
-          "(update) Discard idle browsers and rebuild the pool immediately.",
-        )
-        .optional(),
-      force: z
-        .boolean()
-        .describe("(delete) Force delete even if browsers are leased.")
-        .optional(),
-      acquire_timeout_seconds: z
-        .number()
-        .int()
-        .min(0)
-        .describe("(acquire) Max seconds to wait for a browser.")
-        .optional(),
-      session_id: z
-        .string()
-        .describe(
-          "(release) Session ID of the browser to release. Must be the ID, not the session name.",
-        )
-        .optional(),
-      reuse: z
-        .boolean()
-        .describe("(release) Reuse browser instance or recreate. Default true.")
-        .optional(),
-      ...paginationParams,
+      description:
+        'Manage pre-warmed browser pools when an agent needs fast browser acquisition or reusable session capacity. Use "list" for a compact pool inventory, "get" for full details, "acquire" before controlling a pooled browser, and "release" when the browser should return to the pool.',
+      inputSchema: z.object({
+        ...projectSelectionInputSchema(),
+        action: z
+          .enum([
+            "create",
+            "update",
+            "list",
+            "get",
+            "delete",
+            "flush",
+            "acquire",
+            "release",
+          ])
+          .describe("Operation to perform."),
+        id_or_name: z
+          .string()
+          .describe(
+            "Pool ID or name. Required for update/get/delete/flush/acquire/release.",
+          )
+          .optional(),
+        size: z
+          .number()
+          .int()
+          .min(1)
+          .describe(
+            "(create, update) Number of browsers to maintain in the pool.",
+          )
+          .optional(),
+        name: z
+          .string()
+          .describe("(create, update) Unique pool name.")
+          .optional(),
+        headless: z
+          .boolean()
+          .describe("(create, update) Headless mode for pool browsers.")
+          .optional(),
+        stealth: z
+          .boolean()
+          .describe("(create, update) Stealth mode for pool browsers.")
+          .optional(),
+        timeout_seconds: browserPoolTimeoutSchema
+          .describe(
+            "(create, update) Idle timeout for acquired browsers. Default 600.",
+          )
+          .optional(),
+        profile_name: z
+          .string()
+          .describe(
+            "(create, update) Profile name to load into pool browsers. Cannot use with profile_id.",
+          )
+          .optional(),
+        profile_id: z
+          .string()
+          .describe(
+            "(create, update) Profile ID to load into pool browsers. Cannot use with profile_name.",
+          )
+          .optional(),
+        clear_profile: z
+          .boolean()
+          .describe(
+            "(update) Remove the profile from the pool. Cannot use with profile_id or profile_name.",
+          )
+          .optional(),
+        proxy_id: z
+          .string()
+          .describe(
+            "(create, update) Proxy for pool browsers. On update, an empty string clears the proxy.",
+          )
+          .optional(),
+        fill_rate_per_minute: browserPoolFillRateSchema
+          .describe(
+            "(create, update) Pool fill rate percentage per minute. Default 25%.",
+          )
+          .optional(),
+        start_url: z
+          .union([z.literal(""), z.string().url()])
+          .describe(
+            "(create, update) URL to open when a browser is warmed into the pool. On update, an empty string clears it. Navigation is best-effort.",
+          )
+          .optional(),
+        chrome_policy: z
+          .record(z.string(), z.unknown())
+          .describe(
+            "(create, update) Chrome enterprise policy overrides for all browsers in the pool. On update, an empty object clears the policy. Kernel-managed policies such as extensions, proxy, CDP, and automation are blocked by the API.",
+          )
+          .optional(),
+        kiosk_mode: z
+          .boolean()
+          .describe("(create, update) Hide address bar/tabs in live view.")
+          .optional(),
+        extension_id: z
+          .string()
+          .describe("(create, update) Extension ID to load.")
+          .optional(),
+        extension_name: z
+          .string()
+          .describe("(create, update) Extension name to load.")
+          .optional(),
+        clear_extensions: z
+          .boolean()
+          .describe(
+            "(update) Remove all extensions from the pool. Cannot use with extension_id or extension_name.",
+          )
+          .optional(),
+        viewport_width: z
+          .number()
+          .int()
+          .min(1)
+          .describe(
+            "(create, update) Window width in pixels. Must pair with viewport_height.",
+          )
+          .optional(),
+        viewport_height: z
+          .number()
+          .int()
+          .min(1)
+          .describe(
+            "(create, update) Window height in pixels. Must pair with viewport_width.",
+          )
+          .optional(),
+        viewport_refresh_rate: z
+          .number()
+          .int()
+          .min(1)
+          .describe("(create, update) Display refresh rate in Hz.")
+          .optional(),
+        discard_all_idle: z
+          .boolean()
+          .describe(
+            "(update) Discard idle browsers and rebuild the pool immediately.",
+          )
+          .optional(),
+        force: z
+          .boolean()
+          .describe("(delete) Force delete even if browsers are leased.")
+          .optional(),
+        acquire_timeout_seconds: z
+          .number()
+          .int()
+          .min(0)
+          .describe("(acquire) Max seconds to wait for a browser.")
+          .optional(),
+        session_id: z
+          .string()
+          .describe(
+            "(release) Session ID of the browser to release. Must be the ID, not the session name.",
+          )
+          .optional(),
+        reuse: z
+          .boolean()
+          .describe(
+            "(release) Reuse browser instance or recreate. Default true.",
+          )
+          .optional(),
+        ...paginationParams,
+      }),
+      annotations: {
+        title: "Manage Kernel browser pools",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
     },
-    {
-      title: "Manage Kernel browser pools",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(
-        extra.authInfo.token,
-        projectForOperation(extra.authInfo, params),
+        ctx.http.authInfo.token,
+        projectForOperation(ctx.http.authInfo, params),
       );
 
       try {

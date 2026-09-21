@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { encodeSessionId } from "@posthog/mcp";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { MANAGED_AUTH_APP_HTML } from "@/lib/mcp/apps/generated/managed-auth-app";
 import { projectScopedExtra } from "@/lib/mcp/auth-context.test-fixtures";
@@ -124,15 +124,13 @@ describe("managed-auth MCP App registration", () => {
       "open_auth_login",
     ]);
     expect(
-      tools.get("open_auth_login")!.config.inputSchema.text_only,
+      tools.get("open_auth_login")!.config.inputSchema.shape.text_only,
     ).toBeUndefined();
   });
 
   test("app-only tool schema rejects an empty connection identifier", () => {
     const { tools } = captureRegistration();
-    const beginSchema = z.object(
-      tools.get("begin_auth_login")!.config.inputSchema,
-    );
+    const beginSchema = tools.get("begin_auth_login")!.config.inputSchema;
     expect(
       beginSchema.safeParse({ mode: "reauth", connection_id: "" }).success,
     ).toBe(false);
@@ -146,7 +144,7 @@ describe("managed-auth MCP App registration", () => {
       profile_name: "work",
     };
     for (const name of ["open_auth_login", "begin_auth_login"]) {
-      const schema = z.object(tools.get(name)!.config.inputSchema);
+      const schema = tools.get(name)!.config.inputSchema;
       expect(schema.safeParse({ ...base, proxy_id: "" }).success).toBe(false);
       expect(schema.safeParse({ ...base, proxy_name: "" }).success).toBe(false);
       expect(schema.safeParse({ ...base, proxy_id: "proxy_1" }).success).toBe(
@@ -260,14 +258,18 @@ describe("managed-auth MCP App registration", () => {
       const { tools } = captureRegistration({ appsSupport: false });
       const result = await tools.get("begin_auth_login")!.handler(
         { mode: "reauth", connection_id: "conn_1" },
+
         {
           ...projectScopedExtra("proj_test", "unused-api-key"),
-          requestInfo: {
-            headers: {
-              "mcp-session-id": encodeSessionId({
-                sessionId: "mcp_session_apps",
-              }),
-            },
+          http: {
+            ...projectScopedExtra("proj_test", "unused-api-key").http,
+            req: new Request("https://mcp.example.test/mcp", {
+              headers: {
+                "mcp-session-id": encodeSessionId({
+                  sessionId: "mcp_session_apps",
+                }),
+              },
+            }),
           },
         },
       );

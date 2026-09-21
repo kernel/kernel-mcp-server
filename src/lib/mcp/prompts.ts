@@ -1,18 +1,21 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { TELEMETRY_EVENT_CATALOG } from "@/lib/mcp/telemetry";
 
 export function registerKernelPrompts(server: McpServer) {
   // MCP Prompt explaining Kernel concepts
-  server.prompt(
+  server.registerPrompt(
     "kernel-concepts",
-    "Explain Kernel's core concepts and capabilities for AI agents working with web automation",
     {
-      concept: z
-        .enum(["browsers", "apps", "overview"])
-        .describe(
-          "The specific concept to explain: browsers (sessions), apps (code execution), profiles (browser auth), or overview (all concepts)",
-        ),
+      description:
+        "Explain Kernel's core concepts and capabilities for AI agents working with web automation",
+      argsSchema: z.object({
+        concept: z
+          .enum(["browsers", "apps", "overview"])
+          .describe(
+            "The specific concept to explain: browsers (sessions), apps (code execution), profiles (browser auth), or overview (all concepts)",
+          ),
+      }),
     },
     async ({ concept }) => {
       const explanations = {
@@ -91,20 +94,23 @@ Production-ready platform for deploying and hosting browser automation code. Han
   );
 
   // Debug Browser Session Prompt
-  server.prompt(
+  server.registerPrompt(
     "debug-browser-session",
-    "Comprehensive debugging guide for troubleshooting Kernel browser sessions. Provides a systematic approach to diagnose VM issues, network problems, Chrome errors, and more.",
     {
-      session_id: z
-        .string()
-        .describe(
-          "The browser session ID or name to debug (e.g., 'abc123example456xyz' or 'checkout-flow'). A name resolves only a live session; if the session was deleted, pass its ID so telemetry can still be read.",
-        ),
-      issue_description: z
-        .string()
-        .describe(
-          "Description of the issue you're experiencing (e.g., 'ERR_HTTP2_PROTOCOL_ERROR when navigating to a specific site', 'browser not responding', 'page not loading')",
-        ),
+      description:
+        "Comprehensive debugging guide for troubleshooting Kernel browser sessions. Provides a systematic approach to diagnose VM issues, network problems, Chrome errors, and more.",
+      argsSchema: z.object({
+        session_id: z
+          .string()
+          .describe(
+            "The browser session ID or name to debug (e.g., 'abc123example456xyz' or 'checkout-flow'). A name resolves only a live session; if the session was deleted, pass its ID so telemetry can still be read.",
+          ),
+        issue_description: z
+          .string()
+          .describe(
+            "Description of the issue you're experiencing (e.g., 'ERR_HTTP2_PROTOCOL_ERROR when navigating to a specific site', 'browser not responding', 'page not loading')",
+          ),
+      }),
     },
     async ({ session_id, issue_description }) => {
       const debugGuide = `# 🔍 Browser Session Debugging Guide

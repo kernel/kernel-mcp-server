@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { jsonResponse } from "@/lib/mcp/responses";
 import {
@@ -183,7 +183,7 @@ export function registerMissingCapabilityTool(
         openWorldHint: true,
       },
     },
-    async (report, extra) => {
+    async (report, ctx) => {
       const externalIntegration =
         report.gap_reason === "external_integration_unavailable";
       if (
@@ -218,7 +218,7 @@ export function registerMissingCapabilityTool(
       let status: "recorded" | "unavailable" | "failed" = "unavailable";
       if (capture) {
         try {
-          await capture(report, extra);
+          await capture(report, ctx);
           status = "recorded";
         } catch (error) {
           status = "failed";

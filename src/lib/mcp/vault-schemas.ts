@@ -60,31 +60,24 @@ export function providerConfigReferenceSchema() {
     );
 }
 
-// MCP serializes Zod issues before the tool callback runs. Validate each input
-// field without exposing rejected values or nested keys, retaining its schema
-// for tools/list and its normal parsed output for the callback.
+// Preserve the advertised schema and parsed values, but never serialize rejected
+// vault values or nested keys into MCP validation errors.
 export function vaultToolInput<Shape extends z.ZodRawShape>(shape: Shape) {
-  return Object.fromEntries(
-    Object.entries(shape).map(([key, schema]) => [
-      key,
-      z.preprocess((value, context) => {
-        if (!schema.safeParse(value).success) {
-          context.addIssue({
-            code: z.ZodIssueCode.custom,
+  const schema = z.object(shape);
+  return {
+    "~standard": {
+      ...schema["~standard"],
+      validate(value: unknown) {
+        const result = schema.safeParse(value);
+        if (result.success) return { value: result.data };
+        return {
+          issues: result.error.issues.map((issue) => ({
             message: "Invalid vault tool input. Check the documented schema.",
-            fatal: true,
-          });
-          return z.NEVER;
-        }
-        return value;
-      }, schema),
-    ]),
-  ) as {
-    [Key in keyof Shape]: z.ZodEffects<
-      Shape[Key],
-      z.output<Shape[Key]>,
-      unknown
-    >;
+            path: issue.path.slice(0, 1),
+          })),
+        };
+      },
+    },
   };
 }
 
@@ -193,7 +186,7 @@ export const linkCardSpecSchema = z
     context: z.string().min(100),
     line_items: z.array(linkLineItemSchema).optional(),
     totals: z.array(linkTotalSchema()).optional(),
-    metadata: z.record(z.string()).optional(),
+    metadata: z.record(z.string(), z.string()).optional(),
     expires_at: integer().optional(),
   })
   .strict();

@@ -1,6 +1,5 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { InMemoryTransport, McpServer } from "@modelcontextprotocol/server";
+import { Client } from "@modelcontextprotocol/client";
 import { projectScopedAuthInfo } from "@/lib/mcp/auth-context.test-fixtures";
 import type { McpDependencies } from "@/lib/mcp/dependencies";
 import type { KernelClient } from "@/lib/mcp/kernel-client";

@@ -1,8 +1,14 @@
 import { decodeSessionId, MCP_SESSION_HEADER } from "@posthog/mcp";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  CLIENT_CAPABILITIES_META_KEY,
+  PROTOCOL_VERSION_META_KEY,
+  type McpServer,
+  type ServerContext,
+} from "@modelcontextprotocol/server";
 import {
   clientDeclaresExtension,
   initializeClientCapabilities,
+  isRecord,
   MCP_APPS_EXTENSION,
 } from "@/lib/mcp/client-capabilities";
 import { hasMcpAppsClient } from "@/lib/redis";
@@ -32,6 +38,9 @@ export function initializeDeclaresMcpApps(body: unknown): boolean {
  * capability per authenticated subject and signed transport session.
  */
 export function mcpTransportSessionId(headers: unknown): string | null {
+  if (headers instanceof Headers) {
+    return decodeSessionId(headers.get(MCP_SESSION_HEADER))?.sessionId ?? null;
+  }
   if (!headers || typeof headers !== "object") return null;
   const record = headers as Record<string, unknown>;
   const key = Object.keys(record).find(
@@ -46,7 +55,15 @@ export async function clientSupportsMcpApps(
   server: McpServer,
   authSubject: string,
   transportSessionId: string | null,
+  ctx?: ServerContext,
 ): Promise<boolean> {
+  const envelope = ctx?.mcpReq.envelope;
+  if (isRecord(envelope) && envelope[PROTOCOL_VERSION_META_KEY]) {
+    return clientDeclaresExtension(
+      envelope[CLIENT_CAPABILITIES_META_KEY],
+      MCP_APPS_EXTENSION,
+    );
+  }
   const capabilities = server.server.getClientCapabilities();
   if (clientDeclaresExtension(capabilities, MCP_APPS_EXTENSION)) return true;
   if (!transportSessionId) return false;
@@ -71,8 +88,11 @@ export async function mcpAppsGateError(
   authSubject: string,
   transportSessionId: string | null,
   deniedMessage: string,
+  ctx?: ServerContext,
 ): Promise<string | null> {
-  if (await clientSupportsMcpApps(server, authSubject, transportSessionId)) {
+  if (
+    await clientSupportsMcpApps(server, authSubject, transportSessionId, ctx)
+  ) {
     return null;
   }
   return deniedMessage;

@@ -1,15 +1,8 @@
-import { protectedResourceHandlerClerk } from "@clerk/mcp-tools/next";
 import { NextRequest } from "next/server";
 import { oauthResourceMetadata } from "@/lib/oauth-discovery";
 
 const handler = async (request: NextRequest) => {
-  const clerkResponse = await protectedResourceHandlerClerk({
-    scopes_supported: ["openid"],
-  })(request);
-
-  const clerkMetadata = await clerkResponse.json();
-
-  const modifiedMetadata = oauthResourceMetadata(request, clerkMetadata);
+  const modifiedMetadata = oauthResourceMetadata(request, {});
 
   return Response.json(modifiedMetadata, {
     headers: {
