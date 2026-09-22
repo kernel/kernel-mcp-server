@@ -178,7 +178,7 @@ async function handleMcpRequestWithIdentity({
     resolveMcpVaultAccess({ token, signal: req.signal }),
     mcpToolsetEnabledByConfig("search")
       ? resolveMcpSearchAccess({ token, signal: req.signal })
-      : Promise.resolve(false),
+      : false,
   ]);
   const connectionContext = connection.context;
   const connectionAnalytics =
