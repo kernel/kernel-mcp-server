@@ -38,7 +38,7 @@ describe("MCP search access", () => {
     { body: {}, enabled: false },
     { body: null, enabled: false },
     { body: { enabled: true }, enabled: false },
-    { body: [{ slug: "brave" }], enabled: false },
+    { body: [{ slug: "brave" }], enabled: true },
   ])(
     "requires successful, valid provider discovery",
     async ({ body, enabled }) => {

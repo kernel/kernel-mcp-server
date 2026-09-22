@@ -33,6 +33,18 @@ async function fixture(status = 200) {
 }
 
 describe("manage_search", () => {
+  test("advertises inline schemas", async () => {
+    const f = await fixture();
+    try {
+      const listed = await f.client.listTools();
+      const tool = listed.tools.find(({ name }) => name === "manage_search");
+      expect(tool).toBeDefined();
+      expect(JSON.stringify(tool?.inputSchema)).not.toContain('"$ref"');
+    } finally {
+      await f.close();
+    }
+  });
+
   test("forwards search options and preserves the API response without retrying", async () => {
     const f = await fixture();
     const request = {
@@ -94,6 +106,13 @@ describe("manage_search", () => {
     { action: "providers", project: "proj_other" },
     { action: "create", request: { query: "" } },
     { action: "create", request: { query: "test", max_results: 101 } },
+    {
+      action: "create",
+      request: {
+        query: "test",
+        content: { browser: { browser_id: "" } },
+      },
+    },
     {
       action: "create",
       request: { query: "test", strategy: { type: "pinned" } },

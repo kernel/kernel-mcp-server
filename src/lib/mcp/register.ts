@@ -176,6 +176,14 @@ function toolsetEnabled(
   );
 }
 
+export function mcpToolsetEnabledByConfig(toolset: McpToolset) {
+  return toolsetEnabled(
+    enabledMcpToolsetsFromEnv(),
+    disabledMcpToolsetsFromEnv(),
+    toolset,
+  );
+}
+
 export function registerMcpCapabilities(
   server: McpServer,
   {

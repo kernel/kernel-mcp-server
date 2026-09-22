@@ -25,7 +25,10 @@ import {
   createMcpTransportSession,
   verifyMcpTransportSession,
 } from "@/lib/mcp-transport-session";
-import { registerMcpCapabilities } from "@/lib/mcp/register";
+import {
+  mcpToolsetEnabledByConfig,
+  registerMcpCapabilities,
+} from "@/lib/mcp/register";
 import { resolveMcpVaultAccess } from "@/lib/mcp/entitlements";
 import { resolveMcpSearchAccess } from "@/lib/mcp/search-access";
 import { name, version } from "../../../server.json";
@@ -173,7 +176,9 @@ async function handleMcpRequestWithIdentity({
   // Recheck with the current credential on every request, including tools/call.
   const [vaults, search] = await Promise.all([
     resolveMcpVaultAccess({ token, signal: req.signal }),
-    resolveMcpSearchAccess({ token, signal: req.signal }),
+    mcpToolsetEnabledByConfig("search")
+      ? resolveMcpSearchAccess({ token, signal: req.signal })
+      : Promise.resolve(false),
   ]);
   const connectionContext = connection.context;
   const connectionAnalytics =

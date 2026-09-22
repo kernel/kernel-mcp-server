@@ -6,18 +6,7 @@ import {
 
 const providersSchema = z.array(
   z.object({
-    slug: z.string(),
-    max_results_cap: z.number().int().positive(),
-    params: z.record(z.unknown()),
-    content: z.object({
-      inline: z.boolean(),
-      post_hoc: z.boolean(),
-      freshness_control: z.boolean(),
-    }),
-    provider_options: z.object({
-      schema_ref: z.string(),
-      schema: z.record(z.unknown()),
-    }),
+    slug: z.string().min(1),
   }),
 );
 

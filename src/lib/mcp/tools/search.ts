@@ -14,28 +14,25 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 
-const providerSlug = z.enum([
-  "brave",
-  "exa",
-  "perplexity",
-  "context",
-  "parallel",
-  "valyu",
-  "octen",
-  "you",
-  "tavily",
-  "serpapi",
-]);
-const providerTarget = z
-  .object({
-    provider: providerSlug,
-    options: z
-      .record(z.unknown())
-      .optional()
-      .describe("Native options matching the schema returned by providers."),
-  })
-  .strict();
-const fallbackOn = z.array(z.enum(["error", "timeout", "empty"])).optional();
+function providerSlug() {
+  return z.string().min(1);
+}
+
+function providerTarget() {
+  return z
+    .object({
+      provider: providerSlug(),
+      options: z
+        .record(z.unknown())
+        .optional()
+        .describe("Native options matching the schema returned by providers."),
+    })
+    .strict();
+}
+
+function fallbackOn() {
+  return z.array(z.enum(["error", "timeout", "empty"])).optional();
+}
 const searchRequest = z
   .object({
     query: z.string().min(1).max(2048),
@@ -44,18 +41,18 @@ const searchRequest = z
         z
           .object({
             type: z.literal("auto"),
-            provider_options: z.array(providerTarget).max(10).optional(),
-            fallback_on: fallbackOn,
+            provider_options: z.array(providerTarget()).max(10).optional(),
+            fallback_on: fallbackOn(),
           })
           .strict(),
         z
-          .object({ type: z.literal("pinned"), provider: providerTarget })
+          .object({ type: z.literal("pinned"), provider: providerTarget() })
           .strict(),
         z
           .object({
             type: z.literal("fallback"),
-            providers: z.array(providerTarget).min(1).max(8),
-            fallback_on: fallbackOn,
+            providers: z.array(providerTarget()).min(1).max(8),
+            fallback_on: fallbackOn(),
           })
           .strict(),
       ])
@@ -84,7 +81,7 @@ const searchRequest = z
             browser: z
               .object({
                 mode: z.enum(["curl", "render"]).optional(),
-                browser_id: z.string().optional(),
+                browser_id: z.string().min(1).optional(),
               })
               .strict()
               .optional(),
@@ -111,7 +108,7 @@ export function registerSearchTools(
       action: z.enum(["create", "get", "providers"]),
       request: searchRequest.optional().describe("Required for create."),
       search_id: z.string().min(1).optional().describe("Required for get."),
-      slug: providerSlug
+      slug: providerSlug()
         .optional()
         .describe("Optional provider filter for providers."),
     },
@@ -138,7 +135,7 @@ export function registerSearchTools(
                 body: params.request,
                 signal: extra.signal,
                 maxRetries: 0,
-                timeout: (params.request.timeout_ms ?? 30000) + 5000,
+                timeout: (params.request.timeout_ms ?? 30000) + 10000,
               }),
             );
           case "get":
