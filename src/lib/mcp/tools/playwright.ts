@@ -25,7 +25,7 @@ export function registerPlaywrightTool(
   // execute_playwright_code -- Run Playwright/TypeScript code against a browser
   server.tool(
     "execute_playwright_code",
-    "Execute Playwright/TypeScript automation or browser-wide WebMCP helpers against an existing Kernel browser session. Does not create or delete browsers -- use manage_browsers to manage session lifecycle.",
+    "Drive a page through the DOM, using Playwright/TypeScript automation or browser-wide WebMCP helpers, against an existing Kernel browser session. Use this when a site exposes no WebMCP tools of its own, and fall back to computer_action only when the DOM cannot drive the page. Does not create or delete browsers -- use manage_browsers to manage session lifecycle.",
     {
       ...projectSelectionInputSchema(),
       code: z
