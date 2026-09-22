@@ -17,6 +17,7 @@ const { GET, OPTIONS } = await import(
 describe("/.well-known/oauth-protected-resource/mcp", () => {
   test.each([
     ["https://mcp.onkernel.com", "https://auth.onkernel.com"],
+    ["https://mcp.dev.onkernel.com", "https://auth.dev.onkernel.com"],
     ["http://localhost:3002", "http://localhost:3002"],
     ["https://mcp-staging.onkernel.com", "https://mcp-staging.onkernel.com"],
   ])("serves uncached metadata bound to %s/mcp", async (origin, issuer) => {
