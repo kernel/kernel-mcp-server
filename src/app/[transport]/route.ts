@@ -27,6 +27,7 @@ import {
 } from "@/lib/mcp-transport-session";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
 import { resolveMcpVaultAccess } from "@/lib/mcp/entitlements";
+import { resolveMcpSearchAccess } from "@/lib/mcp/search-access";
 import { name, version } from "../../../server.json";
 
 export async function OPTIONS(_req: NextRequest): Promise<Response> {
@@ -114,6 +115,7 @@ const handler = createMcpHandler(({ authInfo }) => {
   registerMcpCapabilities(server, {
     mcpApps: authInfo?.extra?.mcpApps === true,
     vaults: authInfo?.extra?.vaults === true,
+    search: authInfo?.extra?.search === true,
   });
   return server;
 });
@@ -169,7 +171,10 @@ async function handleMcpRequestWithIdentity({
     return connectionScopeFailureResponse(req, connection);
   }
   // Recheck with the current credential on every request, including tools/call.
-  const vaults = await resolveMcpVaultAccess({ token, signal: req.signal });
+  const [vaults, search] = await Promise.all([
+    resolveMcpVaultAccess({ token, signal: req.signal }),
+    resolveMcpSearchAccess({ token, signal: req.signal }),
+  ]);
   const connectionContext = connection.context;
   const connectionAnalytics =
     observeConnection && isMcpAnalyticsEnabled()
@@ -184,6 +189,7 @@ async function handleMcpRequestWithIdentity({
         ...authInfoExtra,
         mcpApps,
         vaults,
+        search,
         connectionContext,
         connectionAnalytics,
       },

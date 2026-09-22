@@ -179,8 +179,12 @@ describe("connection scope failures through the handler", () => {
   });
 });
 
-describe("vault entitlement routing", () => {
-  function installKernelResponses(entitlements: (token: string) => Response) {
+describe("capability routing", () => {
+  function installKernelResponses(
+    entitlements: (token: string) => Response,
+    search: (token: string) => Response = () =>
+      Response.json({}, { status: 404 }),
+  ) {
     const paths: string[] = [];
     defaultMcpDependencies.createKernelClient = (token) =>
       new Kernel({
@@ -205,6 +209,7 @@ describe("vault entitlement routing", () => {
               },
             });
           if (path === "/org/entitlements") return entitlements(token);
+          if (path === "/search/providers") return search(token);
           throw new Error(`Unexpected API request: ${path}`);
         },
       });
@@ -258,12 +263,74 @@ describe("vault entitlement routing", () => {
     expect(paths).toEqual([
       "/auth/context",
       "/org/entitlements",
+      "/search/providers",
       "/auth/context",
       "/org/entitlements",
+      "/search/providers",
       "/auth/context",
       "/org/entitlements",
+      "/search/providers",
     ]);
   });
+
+  test("gates search discovery and direct calls per caller, including revocation", async () => {
+    let enabled = true;
+    const paths = installKernelResponses(
+      () => Response.json({ features: { vaults: { enabled: true } } }),
+      (token) =>
+        token === "sk_allowed" && enabled
+          ? Response.json([])
+          : Response.json({ code: "search_disabled" }, { status: 404 }),
+    );
+    const allowed = await call("tools/list");
+    expect(
+      allowed.result.tools.map((tool: { name: string }) => tool.name),
+    ).toContain("manage_search");
+    const permittedCall = await call("tools/call", "sk_allowed", {
+      name: "manage_search",
+      arguments: { action: "providers" },
+    });
+    expect(permittedCall.result.isError).not.toBe(true);
+    expect(JSON.parse(permittedCall.result.content[0].text)).toEqual([]);
+    const denied = await call("tools/list", "sk_denied");
+    expect(
+      denied.result.tools.map((tool: { name: string }) => tool.name),
+    ).not.toContain("manage_search");
+    expect(
+      denied.result.tools.map((tool: { name: string }) => tool.name),
+    ).toContain("manage_vaults");
+    const deniedCall = await call("tools/call", "sk_denied", {
+      name: "manage_search",
+      arguments: { action: "create", request: { query: "test" } },
+    });
+    expect(JSON.stringify(deniedCall)).toContain("not found");
+    enabled = false;
+    const revoked = await call("tools/call", "sk_allowed", {
+      name: "manage_search",
+      arguments: { action: "create", request: { query: "test" } },
+    });
+    expect(JSON.stringify(revoked)).toContain("not found");
+    expect(paths.filter((path) => path === "/search/providers")).toHaveLength(
+      6,
+    );
+    expect(paths).not.toContain("/search");
+  });
+
+  test.each([200, 401, 403, 404, 429, 500, 503])(
+    "search fails closed without hiding unrelated tools (HTTP %s)",
+    async (status) => {
+      installKernelResponses(
+        () => Response.json({ features: {} }),
+        () => Response.json({}, { status }),
+      );
+      const result = await call("tools/list");
+      const names = result.result.tools.map(
+        (tool: { name: string }) => tool.name,
+      );
+      expect(names).not.toContain("manage_search");
+      expect(names).toContain("manage_browsers");
+    },
+  );
 
   test.each([200, 404, 503])(
     "keeps other tools available when entitlements are absent or fail (HTTP %s)",

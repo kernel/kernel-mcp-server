@@ -31,9 +31,10 @@ async function captureRegistration(
   mcpApps: boolean,
   vaults = false,
   analytics = false,
+  search = false,
 ) {
   const mcp = await connectTestMcp((server) => {
-    registerMcpCapabilities(server, { mcpApps, vaults });
+    registerMcpCapabilities(server, { mcpApps, vaults, search });
     if (analytics) instrumentMcpAnalytics(server, null);
   }, {});
   try {
@@ -109,6 +110,34 @@ describe("MCP Apps additive registration", () => {
 });
 
 describe("MCP toolset allowlist", () => {
+  test.each([false, true])(
+    "requires search access with an allowlist (MCP Apps: %s)",
+    async (mcpApps) => {
+      const previousEnabled = process.env.KERNEL_MCP_ENABLED_TOOLSETS;
+      const previousDisabled = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+      process.env.KERNEL_MCP_ENABLED_TOOLSETS = "search";
+      delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+      try {
+        expect((await captureRegistration(mcpApps)).legacyTools).toEqual([
+          "get_connection_context",
+        ]);
+        expect(
+          (await captureRegistration(mcpApps, false, false, true)).legacyTools,
+        ).toContain("manage_search");
+        process.env.KERNEL_MCP_DISABLED_TOOLSETS = "search";
+        expect(
+          (await captureRegistration(mcpApps, false, false, true)).legacyTools,
+        ).toEqual(["get_connection_context"]);
+      } finally {
+        if (previousEnabled === undefined)
+          delete process.env.KERNEL_MCP_ENABLED_TOOLSETS;
+        else process.env.KERNEL_MCP_ENABLED_TOOLSETS = previousEnabled;
+        if (previousDisabled === undefined)
+          delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+        else process.env.KERNEL_MCP_DISABLED_TOOLSETS = previousDisabled;
+      }
+    },
+  );
   test.each([false, true])(
     "requires vault access even with an allowlist (MCP Apps: %s)",
     async (mcpApps) => {

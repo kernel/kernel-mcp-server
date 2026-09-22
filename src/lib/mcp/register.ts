@@ -24,6 +24,7 @@ import { registerProfileCapabilities } from "@/lib/mcp/tools/profiles";
 import { registerProjectCapabilities } from "@/lib/mcp/tools/projects";
 import { registerProxyTools } from "@/lib/mcp/tools/proxies";
 import { registerReplayTools } from "@/lib/mcp/tools/replays";
+import { registerSearchTools } from "@/lib/mcp/tools/search";
 import { registerShellTool } from "@/lib/mcp/tools/shell";
 import { registerWebMcpTool } from "@/lib/mcp/tools/webmcp";
 import { registerVaultCapabilities } from "@/lib/mcp/tools/vaults";
@@ -31,6 +32,7 @@ type McpToolOptions = McpDependencies;
 type McpRegistrationOptions = {
   mcpApps?: boolean;
   vaults?: boolean;
+  search?: boolean;
   dependencies?: McpDependencies;
 };
 type RegisterMcpToolset = (server: McpServer, options: McpToolOptions) => void;
@@ -61,6 +63,7 @@ const mcpToolRegistrations = [
   ["credentials", registerCredentialTools],
   ["credential_providers", registerCredentialProviderTools],
   ["vaults", registerVaultCapabilities],
+  ["search", registerSearchTools],
 ] as const satisfies readonly (readonly [string, RegisterMcpToolset])[];
 
 type McpToolset = (typeof mcpToolRegistrations)[number][0];
@@ -178,6 +181,7 @@ export function registerMcpCapabilities(
   {
     mcpApps = false,
     vaults = false,
+    search = false,
     dependencies = defaultMcpDependencies,
   }: McpRegistrationOptions = {},
 ) {
@@ -192,6 +196,7 @@ export function registerMcpCapabilities(
   for (const [toolset, registerToolset] of mcpToolRegistrations) {
     if (
       (toolset !== "vaults" || vaults) &&
+      (toolset !== "search" || search) &&
       toolsetEnabled(enabledToolsets, disabledToolsets, toolset)
     ) {
       registerToolset(server, dependencies);
