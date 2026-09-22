@@ -23,7 +23,7 @@ export const BROWSER_REPL_TOOL_DESCRIPTION = `Execute JavaScript in a persistent
 LANGUAGE AND OUTPUT
 - JavaScript only. Top-level await and dynamic import() work. TypeScript, static imports/exports, and top-level return do not; CommonJS require is not preloaded.
 - Expression values are ignored. Emit agent-visible output explicitly with repl.write(value), captured console methods, or await repl.emitImage(input). A successful cell may produce no output.
-- repl.write does not add a newline. Prefer compact JSON for structured observations: repl.write(JSON.stringify(value)).
+- repl.write does not add a newline. Prefer compact JSON for structured observations: repl.write(JSON.stringify(value)). After navigation or interaction, emit focused current page state: filter accessibilitySnapshot().nodes to relevant roles/names before writing, or use a region-scoped Playwright ariaSnapshot() (for example, pwPage.locator("main").ariaSnapshot()). For targeted reads, return a compact value or object. Do not dump the full DOM, innerHTML, document.body text, or an unfiltered accessibility snapshot.
 - The response preserves ordered text metadata and emits image output as MCP image content. captureScreenshot() only writes a VM-local file; call await repl.emitImage({ path }) to return it.
 
 STATE AND FAILURE SEMANTICS
@@ -93,7 +93,7 @@ var rawEvaluation = await cdp("Runtime.evaluate", {
 repl.write(JSON.stringify(rawEvaluation.result.value));`;
 
 const CODE_DESCRIPTION =
-  "One JavaScript cell to evaluate. The cell may use top-level await and persistent bindings. It may be empty only when reset=true. Expression values are ignored, so call repl.write(...), console methods, or repl.emitImage(...) for output. Read the tool description before generating a cell, and call repl.help() when a helper contract is uncertain.";
+  "One JavaScript cell to evaluate. The cell may use top-level await and persistent bindings. It may be empty only when reset=true. Expression values are ignored: emit focused current page state after navigation or interaction with repl.write(...), console methods, or repl.emitImage(...). Filter accessibilitySnapshot().nodes or use a region-scoped Playwright ariaSnapshot(); return compact values for targeted reads. Never dump the full DOM, innerHTML, document.body text, or an unfiltered accessibility snapshot. Read the tool description before generating a cell, and call repl.help() when a helper contract is uncertain.";
 
 type ReplToolContent =
   | { type: "text"; text: string }

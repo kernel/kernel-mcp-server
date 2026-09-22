@@ -206,6 +206,11 @@ test("execute_browser_repl advertises persistent semantics and complete Playwrig
     expect(tool?.description).toContain("persistent Node.js Browser REPL");
     expect(tool?.description).toContain("JavaScript only");
     expect(tool?.description).toContain("Expression values are ignored");
+    expect(tool?.description).toContain("filter accessibilitySnapshot().nodes");
+    expect(tool?.description).toContain(
+      'pwPage.locator("main").ariaSnapshot()',
+    );
+    expect(tool?.description).toContain("Do not dump the full DOM");
     expect(tool?.description).toContain('repl.help("click")');
     expect(tool?.description).toContain(
       'var playwright = await import("patchright")',
@@ -217,9 +222,17 @@ test("execute_browser_repl advertises persistent semantics and complete Playwrig
     const schema = tool?.inputSchema as {
       properties: Record<
         string,
-        { default?: unknown; minimum?: number; maximum?: number }
+        {
+          default?: unknown;
+          minimum?: number;
+          maximum?: number;
+          description?: string;
+        }
       >;
     };
+    expect(schema.properties.code.description).toContain(
+      "region-scoped Playwright ariaSnapshot()",
+    );
     expect(schema.properties.code.default).toBe("");
     expect(schema.properties.reset.default).toBe(false);
     expect(schema.properties.timeout_sec).toMatchObject({
