@@ -1,9 +1,11 @@
 # Vault payments
 
 The vault tools prepare and observe payment credentials and manage non-payment credential items. They do **not** submit
-merchant payments, expose real card values, or complete provider approval actions.
-They use the same vault API as the Kernel CLI. When advertised, fill is the
-preferred browser-checkout path. The alias recipes below are for explicitly chosen
+merchant payments, return real card values in API responses, or complete provider approval actions.
+They use the same vault API as the Kernel CLI. Link cards use the advertised `fill`
+operation for browser checkout: real values enter the browser and may be read by
+an agent with browser or CDP access. Link does not expose aliases or support proxy
+substitution. The AgentCard alias recipe below is for explicitly chosen
 egress-substitution integrations, not fallback after a failed or uncertain fill.
 
 **Assume real payment effects.** Mode comes from the selected provider credentials;
@@ -289,9 +291,9 @@ credentials. A reused `user_id` must belong to the same organization and config.
    ```
 
    The tool fetches the item again and submits only a currently advertised
-   operation. The current API accepts only `{"type":"authorize"}`; there are no
-   operation parameters. New parameterless operation names can be forwarded when
-   the API advertises them. Follow any returned provider action and observe state.
+   operation. `authorize` has no additional parameters: its API body is
+   `{"type":"authorize"}`. This does not apply to `fill`, which requires the nested
+   MCP parameters below. Follow any returned provider action and observe state.
    OAuth, enrollment, MFA, and approval actions are for the user, not operation names.
 
 6. When ready, create a new browser with `manage_browsers`:
@@ -303,9 +305,65 @@ credentials. A reused `user_id` must belong to the same organization and config.
    }
    ```
 
-   Use only returned `item.state.aliases` through the browser tools in **that
-   browser**, respecting returned permitted domains. Merchant checkout submission
-   is a separate browser action and requires the user's authorization.
+   Keep this vault attached throughout checkout; attachments cannot be added to
+   an existing browser. Browser and vault must be in the same project. Navigate
+   to the approved merchant checkout and inspect its inputs. The current top-level
+   HTTPS page must have the origin of `item.spec.merchant_url`; supplying a URL
+   does not authorize a different destination. The card must remain ready and
+   unexpired with stored card material, and its parent wallet must not be deleted.
+
+7. Only when the card advertises `fill`, invoke `manage_vault_items` with the
+   actual browser session ID, exact current top-level page URL (including path,
+   query, and fragment), and selectors verified on that page:
+
+   ```json
+   {
+     "action": "invoke",
+     "vault": "checkout",
+     "key": "order-1",
+     "operation": "fill",
+     "fill": {
+       "browser_id": "browser-session-id",
+       "page_url": "https://shop.example/checkout",
+       "fields": [
+         { "field": "number", "selector": "#card-number" },
+         { "field": "expiration", "selector": "#expiry", "format": "MM/YY" },
+         { "field": "cvc", "selector": "#security-code" }
+       ],
+       "timeout_ms": 10000
+     }
+   }
+   ```
+
+   `fill` is a nested MCP input object, not a top-level set of API parameters.
+   `fields` contains bindings, never card values. Each selector must resolve to
+   one unique editable target across all frames. For separate expiration inputs,
+   use `exp_month` (MM) and `exp_year` (YYYY) without `format`. Only combined
+   `expiration` requires `format` (`MM/YY` or `MM/YYYY`). Optional `timeout_ms`
+   is the total operation deadline (1–30000 milliseconds; default 10000).
+   Request only needed billing fields from the advertised description; a missing
+   requested billing value returns `field_unavailable` before any writes.
+
+8. Inspect the value-free `result`: `status` is `completed`, `failed`, or `unknown`,
+   with ordered field outcomes `filled`, `failed`, `unknown`, or `not_attempted`.
+   Filling stops at the first failure; prior writes are not rolled back. Failed
+   and unknown results are tool errors, not invitations to retry. Transport loss
+   can also leave partial writes. Inspect the browser before further action; never
+   automatically retry a failed or uncertain fill or fall back to aliases.
+   Pre-write validation errors confirm that this request wrote no fields; correct
+   the cause before deciding on a new fill.
+
+   Fill puts real values into the browser without returning them in the API
+   response. It does not isolate them from browser/CDP access. It does not navigate,
+   click Pay, or explicitly submit checkout, though input/change events may trigger
+   site behavior. `completed` means fields were filled, not merchant acceptance or
+   payment success. Submit separately only after confirming completion and the
+   user's authorization; reconcile uncertain payment outcomes instead of retrying.
+
+Link wallets, provider approval, issuance, and encrypted card material remain
+supported. Link no longer issues or exposes `item.state.aliases`, and proxy swapping
+is removed. Do not use aliases from older Link responses: they fail closed on
+supported payment shapes.
 
 ## AgentCard flow
 
@@ -352,14 +410,16 @@ extend the deadline. Each preparation is single-use even after failure or expiry
 MCP preserves preparation metadata but does not expose an invocation hint for it.
 
 For an explicitly chosen alias-based integration, attach the vault to a new browser
-and use returned aliases. Observe checkout authorization and approval URLs. Never
+and use returned `item.state.aliases`, respecting returned permitted domains.
+AgentCard checkout hold, approval, and replay remain supported. Observe checkout
+authorization and approval URLs. Never
 switch to aliases after an uncertain fill or preparation.
 A reusable card remaining `ready` does not establish that the last payment succeeded.
 
 ## Observation, updates, and safety
 
 - Single-item responses are JSON text containing `{item, hints, guidance}`. They preserve
-  public state, non-secret aliases, masks, safe action/approval URLs, advertised
+  public state, supported AgentCard aliases, masks, safe action/approval URLs, advertised
   operations/expansions, and payment outcomes. Unknown provider fields, opaque
   event data, free-form metadata, and URLs carrying OAuth codes/tokens are omitted.
   API errors retain the HTTP status but use curated messages for recognized error

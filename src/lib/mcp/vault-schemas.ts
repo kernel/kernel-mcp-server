@@ -236,6 +236,6 @@ export const browserVaultsSchema = z
     "Duplicate vault references are not allowed.",
   )
   .describe(
-    "(create only) Project-owned vaults to attach, each with exactly one id or name; max 20. Bindings are immutable and unavailable for pooled browsers. Use a separate vault per end user. Attaching grants access to all items, including items added later. Credential fill writes real values into the page; it does not isolate them from an agent with browser access. Payment aliases are a separate, explicitly chosen egress path; never fall back to aliases after an uncertain fill.",
+    "(create only) Project-owned vaults to attach, each with exactly one id or name; max 20. Bindings are immutable and unavailable for pooled browsers. Use a separate vault per end user. Attaching grants access to all items, including items added later. Credential fill writes real values into the page; it does not isolate them from an agent with browser access. Link cards use fill, not aliases or egress substitution. AgentCard aliases remain a separate, explicitly chosen egress path; never fall back to aliases after an uncertain fill.",
   )
   .optional();

@@ -1028,6 +1028,19 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
         missingCapabilityTool?.inputSchema,
       );
 
+      const legacyRequest = await enabled.client.callTool({
+        name: "get_more_tools",
+        arguments: {
+          context:
+            "Reporting a capability through the previous contract while refreshing the available tool definitions.",
+        },
+      });
+      expect(legacyRequest.isError).not.toBe(true);
+      expect(toolResultJSON(legacyRequest)).toMatchObject({
+        recorded: false,
+        status: "legacy_schema_refresh_required",
+      });
+
       const unavailableRequest = await disabled.client.callTool({
         name: "get_more_tools",
         arguments: {
@@ -1183,6 +1196,36 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
 
     // identify stays unwired, so no $identify event is ever published.
     expect(byEvent.has("$identify")).toBe(false);
+  });
+
+  test("classifies rejected capability input through instrumentation", async () => {
+    const captured: { event?: string }[] = [];
+
+    const result = (await simulateRequest(captured, "tools/call", {
+      name: "get_more_tools",
+      arguments: {
+        context:
+          "Reporting a malformed structured capability request to verify validation telemetry.",
+        gap_reason: "not_a_gap_reason",
+        capability_area: "browser_files",
+        capability: "browser filesystem upload",
+        requested_action: "transfer",
+        task_outcome: "blocked",
+      },
+    })) as { isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    const toolCall = captured.find(
+      ({ event }) => event === PostHogMCPAnalyticsEvent.ToolCall,
+    ) as { properties: Record<string, unknown> };
+    expect(toolCall.properties).toMatchObject({
+      [PostHogMCPAnalyticsProperty.ToolName]: "get_more_tools",
+      [PostHogMCPAnalyticsProperty.IsError]: true,
+      [PostHogMCPAnalyticsProperty.ErrorType]: "validation",
+    });
+    expect(
+      toolCall.properties[PostHogMCPAnalyticsProperty.ErrorMessage],
+    ).toBeUndefined();
   });
 
   test("captures only structured capability demand", async () => {

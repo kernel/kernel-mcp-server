@@ -11,6 +11,7 @@ const NON_AUTH_TOOLSETS = [
   "projects",
   "api_keys",
   "browser_pools",
+  "config_registry",
   "browser_curl",
   "proxies",
   "extensions",
@@ -36,6 +37,11 @@ function captureRegistration(
   const resources: string[] = [];
   const schemas = new Map<string, Record<string, unknown>>();
   const server = {
+    server: {
+      _requestHandlers: new Map([
+        ["tools/call", async () => ({ content: [] })],
+      ]),
+    },
     prompt() {},
     resource() {},
     tool(name: string, _description: string, inputSchema: object) {
@@ -181,6 +187,7 @@ describe("MCP toolset allowlist", () => {
 describe("project selection registration", () => {
   const projectScopedTools = [
     "manage_profiles",
+    "manage_config_registry",
     "manage_browsers",
     "manage_browser_pools",
     "browser_curl",

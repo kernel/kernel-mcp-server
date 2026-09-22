@@ -19,6 +19,7 @@ import {
   registerFeedbackTool,
 } from "@/lib/mcp/tools/feedback";
 import {
+  KERNEL_MISSING_CAPABILITY_TOOL_NAME,
   type MissingCapabilityReport,
   registerMissingCapabilityTool,
 } from "@/lib/mcp/tools/missing-capability";
@@ -360,6 +361,17 @@ export const sanitizeMcpAnalyticsEvent: BeforeSendFn = (event) => {
   enrichMcpAnalyticsEvent(event);
   if (event.event === PostHogMCPAnalyticsEvent.ToolCall) {
     annotateProjectParamUsage(properties);
+    const errorMessage = properties[PostHogMCPAnalyticsProperty.ErrorMessage];
+    if (
+      properties[PostHogMCPAnalyticsProperty.ToolName] ===
+        KERNEL_MISSING_CAPABILITY_TOOL_NAME &&
+      properties[PostHogMCPAnalyticsProperty.IsError] === true &&
+      properties[PostHogMCPAnalyticsProperty.ErrorType] === "Error" &&
+      typeof errorMessage === "string" &&
+      errorMessage.includes("Input validation error")
+    ) {
+      properties[PostHogMCPAnalyticsProperty.ErrorType] = "validation";
+    }
   }
 
   for (const key of Object.keys(properties)) {
@@ -763,7 +775,13 @@ export function instrumentMcpAnalytics(
     return;
   }
 
-  const analytics = instrument(server, client, {
+  // Register first so analytics wraps the legacy dispatch shim and records those calls.
+  let analytics: McpAnalytics;
+  registerMissingCapabilityTool(server, (report, extra) =>
+    captureMissingCapabilityReport(report, extra, analytics),
+  );
+
+  analytics = instrument(server, client, {
     // The first-class get_more_tools handler validates and captures structured demand itself.
     // Point the SDK's name-based interception at an unadvertised name so calls to the real
     // tool reach its registered schema and callback even while reportMissing is disabled.
@@ -812,9 +830,6 @@ export function instrumentMcpAnalytics(
     beforeSend: sanitizeMcpAnalyticsEvent,
   });
 
-  registerMissingCapabilityTool(server, (report, extra) =>
-    captureMissingCapabilityReport(report, extra, analytics),
-  );
   registerFeedbackTool(server, (feedback, extra) =>
     captureMcpFeedback(feedback, extra, analytics),
   );

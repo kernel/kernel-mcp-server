@@ -7,6 +7,10 @@ import { verifyToken } from "@clerk/nextjs/server";
 import { after, NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
 import {
+  OAUTH_RESOURCE_METADATA_PATH,
+  oauthResourceMetadataUrl,
+} from "@/lib/oauth-discovery";
+import {
   captureMcpConnectionScopeFailure,
   flushMcpAnalytics,
   instrumentMcpAnalytics,
@@ -60,15 +64,17 @@ function errorResponse(
 
 // Helper function to create authentication error response
 function createAuthErrorResponse(
+  req: Request,
   error: string = "invalid_token",
   description: string = "Missing or invalid access token",
 ): Response {
   return errorResponse(401, error, description, {
-    "WWW-Authenticate": `Bearer realm="OAuth", error="${error}", error_description="${description}"`,
+    "WWW-Authenticate": `Bearer realm="OAuth", error="${error}", error_description="${description}", resource_metadata="${oauthResourceMetadataUrl(req)}"`,
   });
 }
 
 export function connectionScopeFailureResponse(
+  req: Request,
   failure: Exclude<McpConnectionContextFailure, { status: "invalid" }>,
 ): Response {
   if (failure.status === "rejected") {
@@ -90,6 +96,7 @@ export function connectionScopeFailureResponse(
         );
       case 401:
         return createAuthErrorResponse(
+          req,
           "invalid_token",
           "The Kernel API rejected this credential",
         );
@@ -169,7 +176,7 @@ async function handleMcpRequestWithIdentity({
     if (connection.status === "invalid") {
       throw new Error("Unable to resolve Kernel connection scope");
     }
-    return connectionScopeFailureResponse(connection);
+    return connectionScopeFailureResponse(req, connection);
   }
   // Recheck with the current credential on every request, including tools/call.
   const vaults = await resolveMcpVaultAccess({ token, signal: req.signal });
@@ -194,7 +201,7 @@ async function handleMcpRequestWithIdentity({
     }),
     {
       required: true,
-      resourceMetadataPath: "/.well-known/oauth-protected-resource/mcp",
+      resourceMetadataPath: OAUTH_RESOURCE_METADATA_PATH,
     },
   );
   return await authHandler(req);
@@ -211,6 +218,7 @@ async function handleAuthenticatedRequest(
     : null;
   if (!token) {
     return createAuthErrorResponse(
+      req,
       "invalid_token",
       "Missing or invalid access token",
     );
@@ -239,6 +247,7 @@ async function handleAuthenticatedRequest(
     });
     if (!payload.sub) {
       return createAuthErrorResponse(
+        req,
         "invalid_token",
         "Invalid token: No user ID found in token payload",
       );
@@ -246,6 +255,7 @@ async function handleAuthenticatedRequest(
     userId = payload.sub;
   } catch (authError) {
     return createAuthErrorResponse(
+      req,
       "invalid_token",
       `Invalid token: ${authError instanceof Error ? authError.message : "Authentication failed"}`,
     );

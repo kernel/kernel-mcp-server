@@ -108,28 +108,80 @@ const missingCapabilityFields = {
     ),
 };
 
+const structuredMissingCapabilitySchema = z.object(missingCapabilityFields);
+
 export type MissingCapabilityReport = z.infer<
-  z.ZodObject<typeof missingCapabilityFields>
+  typeof structuredMissingCapabilitySchema
 >;
 export type MissingCapabilityCapture = (
   report: MissingCapabilityReport,
   extra: unknown,
 ) => void | Promise<void>;
 
+type ToolCallRequest = {
+  params?: { name?: unknown; arguments?: unknown };
+};
+type ToolCallHandler = (
+  request: ToolCallRequest,
+  extra: unknown,
+) => Promise<unknown>;
+
+function legacySchemaResponse() {
+  return jsonResponse({
+    recorded: false,
+    status: "legacy_schema_refresh_required",
+    message:
+      "This client used the previous get_more_tools schema. Refresh the available tool definitions, retry with the structured fields, and continue the original task with any available workaround.",
+  });
+}
+
+function isLegacyContextOnlyCall(request: ToolCallRequest) {
+  if (request.params?.name !== KERNEL_MISSING_CAPABILITY_TOOL_NAME)
+    return false;
+  const args = request.params.arguments;
+  if (!args || typeof args !== "object" || Array.isArray(args)) return false;
+  const entries = Object.entries(args);
+  return (
+    entries.length === 1 &&
+    entries[0]?.[0] === "context" &&
+    typeof entries[0][1] === "string"
+  );
+}
+
+function acceptLegacyContextOnlyCalls(server: McpServer) {
+  // The SDK validates before invoking the tool callback, so handle only the exact old
+  // payload here while leaving the advertised structured schema unchanged.
+  const handlers = (
+    server.server as unknown as {
+      _requestHandlers: Map<string, ToolCallHandler>;
+    }
+  )._requestHandlers;
+  const handler = handlers.get("tools/call");
+  if (!handler) throw new Error("tools/call handler is not registered");
+
+  handlers.set("tools/call", async (request, extra) => {
+    if (isLegacyContextOnlyCall(request)) return legacySchemaResponse();
+    return handler(request, extra);
+  });
+}
+
 export function registerMissingCapabilityTool(
   server: McpServer,
   capture?: MissingCapabilityCapture,
 ) {
-  server.tool(
+  server.registerTool(
     KERNEL_MISSING_CAPABILITY_TOOL_NAME,
-    "Report a capability that no available KERNEL tool can provide after checking the tool list. Classify disconnected third-party services as external integrations. Do not use this for an existing tool that failed, a transient or capacity failure, or a client-side permission restriction; use submit_feedback for an existing KERNEL tool failure. Reports never replace the original task, so continue with any available workaround.",
-    missingCapabilityFields,
     {
-      title: "Get more tools",
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: true,
+      description:
+        "Report a capability that no available KERNEL tool can provide after checking the tool list. Classify disconnected third-party services as external integrations. Do not use this for an existing tool that failed, a transient or capacity failure, or a client-side permission restriction; use submit_feedback for an existing KERNEL tool failure. Reports never replace the original task, so continue with any available workaround.",
+      inputSchema: structuredMissingCapabilitySchema,
+      annotations: {
+        title: "Get more tools",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
     async (report, extra) => {
       const externalIntegration =
@@ -188,4 +240,5 @@ export function registerMissingCapabilityTool(
       });
     },
   );
+  acceptLegacyContextOnlyCalls(server);
 }

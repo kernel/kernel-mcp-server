@@ -5,10 +5,21 @@ import { connectVaultTest, vault } from "./vaults.test-fixtures";
 const target = { vault: "user-123", key: "login" };
 const spec = {
   description: "Example",
-  fields: {
-    username: { type: "text", required: true, sensitive: false },
-    password: { type: "password", required: true, sensitive: true },
-  },
+  fields: [
+    {
+      name: "username",
+      label: "Membership Number or Username",
+      type: "text",
+      required: true,
+      sensitive: false,
+    },
+    {
+      name: "password",
+      type: "password",
+      required: true,
+      sensitive: true,
+    },
+  ],
 };
 const pending = {
   id: "item-1",
@@ -90,13 +101,11 @@ describe("MCP credential flow", () => {
               : {
                   spec: {
                     ...spec,
-                    fields: {
-                      ...spec.fields,
-                      username: {
-                        ...spec.fields.username,
-                        value: target.vault,
-                      },
-                    },
+                    fields: spec.fields.map((field) =>
+                      field.name === "username"
+                        ? { ...field, value: target.vault }
+                        : field,
+                    ),
                   },
                 }),
           }),
@@ -160,6 +169,10 @@ describe("MCP credential flow", () => {
       );
       const items = tools.find((tool) => tool.name === "manage_vault_items");
       expect(credentials?.inputSchema.properties).toHaveProperty("spec");
+      expect(JSON.stringify(credentials?.inputSchema)).toContain('"label"');
+      expect(JSON.stringify(credentials?.inputSchema)).toContain(
+        "128 UTF-8 bytes",
+      );
       expect(credentials?.inputSchema.properties).toHaveProperty(
         "expected_item_id",
       );
@@ -177,7 +190,14 @@ describe("MCP credential flow", () => {
       Response.json({
         ...ready,
         spec: {
-          fields: { otp: { type: "totp", required: true, sensitive: true } },
+          fields: [
+            {
+              name: "otp",
+              type: "totp",
+              required: true,
+              sensitive: true,
+            },
+          ],
         },
         state: { status: "ready", fields: { otp: { has_value: true } } },
       }),
@@ -318,6 +338,9 @@ describe("MCP credential flow", () => {
       );
       expect(created.item.action.url).toBe(pending.action.url);
       expect(created.item.spec.fields).toEqual(spec.fields);
+      expect(created.item.spec.fields[0].label).toBe(
+        "Membership Number or Username",
+      );
       expect(
         (
           await fixture.call("manage_vault_items", {
@@ -396,15 +419,20 @@ describe("MCP credential flow", () => {
         action: "create",
         spec: {
           ...spec,
-          fields: {
-            password: { type: "password", sensitive: true, value: secret },
-          },
+          fields: [
+            {
+              name: "password",
+              type: "password",
+              sensitive: true,
+              value: secret,
+            },
+          ],
         },
       });
       expect(result.isError).toBeUndefined();
       expect(JSON.stringify(result)).not.toContain(secret);
       expect(fixture.requests[0].body).toHaveProperty(
-        "spec.fields.password.value",
+        "spec.fields.0.value",
         secret,
       );
     } finally {
@@ -412,19 +440,96 @@ describe("MCP credential flow", () => {
     }
   });
 
+  test.each(["create", "update"] as const)(
+    "%s redacts supplied values when the API returns duplicate definitions",
+    async (action) => {
+      const secret = "private-duplicate-value";
+      const fixture = await connectVaultTest([
+        Response.json({
+          ...pending,
+          spec: {
+            description: secret,
+            fields: [
+              { name: "username", type: "text", sensitive: false },
+              { name: "username", type: "password", sensitive: true },
+            ],
+          },
+          state: {
+            status: "ready",
+            fields: {
+              username: { has_value: true, value: secret },
+            },
+          },
+        }),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_credentials", {
+          ...target,
+          action,
+          ...(action === "create"
+            ? {
+                spec: {
+                  fields: [
+                    {
+                      name: "username",
+                      type: "text",
+                      sensitive: false,
+                      value: secret,
+                    },
+                  ],
+                },
+              }
+            : {
+                version: 2,
+                spec: { fields: { username: { value: secret } } },
+              }),
+        });
+        expect(result.isError).toBeUndefined();
+        expect(JSON.stringify(result)).not.toContain(secret);
+        expect(JSON.stringify(fixture.requests[0].body)).toContain(secret);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
   test.each([
     { action: "update", spec: { description: "Example" } },
     { action: "create", version: 1, spec },
     { action: "create", expected_item_id: "item-1", spec },
-    { action: "create", spec: { fields: {} } },
+    { action: "create", spec: { fields: [] } },
     {
       action: "create",
-      spec: { fields: { password: { type: "password", sensitive: false } } },
+      spec: {
+        fields: [{ name: "password", type: "password", sensitive: false }],
+      },
+    },
+    ...[
+      "",
+      " Username",
+      "Username ",
+      "User\nname",
+      "User\u200bname",
+      "x".repeat(129),
+    ].map((label) => ({
+      action: "create",
+      spec: { fields: [{ name: "username", label, type: "text" }] },
+    })),
+    {
+      action: "create",
+      spec: {
+        fields: [
+          { name: "username", type: "text", private_key: "secret-value" },
+        ],
+      },
     },
     {
       action: "create",
       spec: {
-        fields: { username: { type: "text", private_key: "secret-value" } },
+        fields: [
+          { name: "username", type: "text" },
+          { name: "username", type: "password" },
+        ],
       },
     },
     {

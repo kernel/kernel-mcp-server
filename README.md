@@ -310,6 +310,7 @@ Call `get_connection_context` before deciding whether to create or select a proj
 - `manage_projects` - Create, list, get, update, and delete organization projects. Inspect and update per-project resource limits.
 - `manage_api_keys` - Create, list, get, update, and delete org-wide or project-scoped API keys. Create returns the plaintext key once.
 - `manage_browser_pools` - Create, list, get, delete, and flush pools of pre-warmed browsers. Acquire and release browsers from pools.
+- `manage_config_registry` - Look up current browser and proxy recommendations, start and inspect analyses, request cancellation, and list project configurations or analysis history.
 - `manage_proxies` - Create, list, get, check, and delete proxy configurations (datacenter, ISP, residential, mobile, custom).
 - `manage_replays` - Start, stop, and list MP4 video replay recordings for a browser session. Session-scoped: start once, run your automation, then stop. Requires a paid Kernel plan.
 - `manage_extensions` - List and delete uploaded browser extensions.
@@ -336,7 +337,7 @@ See [Vault payments](docs/vault-payments.md) for both provider flows, safety rul
 - `webmcp` - List native page tools across every tab and frame in a browser, then synchronously invoke an exact opaque `tool_ref` with structured input.
 - `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
 - `search_docs` - Search Kernel platform documentation and guides.
-- `get_more_tools` - Report a structured KERNEL capability or external-integration gap after checking the available tools. Existing-tool failures, transient capacity errors, and client permission restrictions are rejected from capability-demand analytics. Accepted requests emit `mcp_capability_requested`; historical unstructured requests remain under `$mcp_missing_capability`.
+- `get_more_tools` - Report a structured KERNEL capability or external-integration gap after checking the available tools. Existing-tool failures, transient capacity errors, and client permission restrictions are rejected from capability-demand analytics. Accepted requests emit `mcp_capability_requested`; clients using the previous context-only schema receive a non-recording refresh response instead of a tool error.
 - `submit_feedback` - Send product, bot-detection, config-registry, MCP, or documentation feedback directly to the KERNEL team without interrupting the current task. Reports include a normalized task outcome; MCP reports identify one KERNEL-owned tool. Config-registry reports connect exactly one observed outcome to the browser session, recommendation metadata and evidence, and unchanged browser and proxy settings.
 - `open_auth_login` - Open a secure interactive Managed Auth MCP App after user consent. Registered only for clients that declare MCP Apps support; credentials and MFA never enter MCP/model traffic.
 
