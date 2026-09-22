@@ -72,6 +72,7 @@ export function createFixture(contract: OAuthClientConformanceContract) {
         clientSecret: null,
       };
     },
+    saveClientMetadata: async () => {},
   };
 
   const authorizeDependencies: AuthorizeDependencies = {
