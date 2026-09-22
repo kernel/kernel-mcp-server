@@ -1,13 +1,14 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
   "name": "com.onkernel/kernel-mcp-server",
   "title": "Kernel MCP Server",
-  "description": "Access Kernel's cloud-based browsers and app actions via MCP (remote HTTP + OAuth).",
+  "description": "use any website on a user's behalf in a cloud browser: navigate, sign in, fill forms, buy, download.",
   "status": "active",
-  "homepage_url": "https://onkernel.com",
-  "documentation_url": "https://onkernel.com/docs/reference/mcp-server",
+  "websiteUrl": "https://www.kernel.sh/docs/reference/mcp-server",
+  "homepage_url": "https://www.kernel.sh",
+  "documentation_url": "https://www.kernel.sh/docs/reference/mcp-server",
   "repository": {
-    "url": "https://github.com/onkernel/kernel-mcp-server",
+    "url": "https://github.com/kernel/kernel-mcp-server",
     "source": "github"
   },
   "license": "MIT",

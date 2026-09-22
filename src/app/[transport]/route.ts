@@ -27,6 +27,7 @@ import {
   createMcpTransportSession,
   verifyMcpTransportSession,
 } from "@/lib/mcp-transport-session";
+import { MCP_SERVER_INSTRUCTIONS } from "@/lib/mcp/instructions";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
 import { resolveMcpVaultAccess } from "@/lib/mcp/entitlements";
 import { name, version } from "../../../server.json";
@@ -112,7 +113,10 @@ export function connectionScopeFailureResponse(
 
 // Handler variants keep per-connection capabilities out of tools/list unless
 // the authenticated connection can use them.
-const serverInfo = { serverInfo: { name, version } };
+const serverInfo = {
+  serverInfo: { name, version },
+  instructions: MCP_SERVER_INSTRUCTIONS,
+};
 function createHandler({
   mcpApps = false,
   vaults = false,
