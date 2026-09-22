@@ -18,7 +18,7 @@ const DEFAULT_TIMEOUT_SEC = 60;
 // outlast that plus transport headroom in one MCP call.
 const MAX_TIMEOUT_SEC = 150;
 
-export const BROWSER_REPL_TOOL_DESCRIPTION = `Execute JavaScript in a persistent Node.js Browser REPL inside an existing Kernel browser VM. Use manage_browsers for session lifecycle. Use this tool when later calls benefit from persistent state, native browser helpers, or raw CDP; use execute_playwright_code for one isolated TypeScript/Playwright call whose return value should be returned directly. This tool is stateful: top-level var, let, const, function, class, closure, mutation, timer, and dynamically imported module state survives across calls until reset or process replacement. Start unfamiliar work with repl.help(); use repl.help("click"), repl.help("cdp"), or another method name for exact signatures and examples.
+export const BROWSER_REPL_TOOL_DESCRIPTION = `Execute JavaScript in a persistent Node.js Browser REPL inside an existing Kernel browser VM. Use manage_browsers for session lifecycle. Top-level var, let, const, function, class, closure, mutation, timer, and dynamically imported module state survives across calls until reset or process replacement. Start unfamiliar work with repl.help(); use repl.help("click"), repl.help("cdp"), or another method name for exact signatures and examples.
 
 LANGUAGE AND OUTPUT
 - JavaScript only. Top-level await and dynamic import() work. TypeScript, static imports/exports, and top-level return do not; CommonJS require is not preloaded.

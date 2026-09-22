@@ -204,6 +204,7 @@ test("execute_browser_repl advertises persistent semantics and complete Playwrig
     );
     expect(tool).toBeDefined();
     expect(tool?.description).toContain("persistent Node.js Browser REPL");
+    expect(tool?.description).not.toContain("execute_playwright_code");
     expect(tool?.description).toContain("JavaScript only");
     expect(tool?.description).toContain("Expression values are ignored");
     expect(tool?.description).toContain("filter accessibilitySnapshot().nodes");
