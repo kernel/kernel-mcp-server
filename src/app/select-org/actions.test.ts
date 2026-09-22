@@ -114,4 +114,26 @@ describe("saveOAuthAttribution", () => {
       },
     });
   });
+
+  it("omits the redirect origin when it does not match the registered client", async () => {
+    const result = await saveOAuthAttribution({
+      firstDiscoverySource: "ai_answer",
+      connectorTrigger: "claude_suggestion",
+      oauthClientId: "client_1",
+      oauthRedirectUri: "https://attacker.example/callback",
+    });
+
+    expect(result).toEqual({ success: true });
+    expect(updateUserMetadata).toHaveBeenCalledWith("user_1", {
+      publicMetadata: {
+        firstDiscoverySource: "ai_answer",
+        connectorTrigger: "claude_suggestion",
+        signupPath: "oauth_picker",
+        oauthClientId: "client_1",
+        oauthClientName: "Claude",
+        oauthClientUri: "https://claude.ai",
+        oauthClientType: "dynamically_registered",
+      },
+    });
+  });
 });

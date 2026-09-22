@@ -1,6 +1,7 @@
 "use server";
 
 import { auth, clerkClient } from "@clerk/nextjs/server";
+import { expandLocalhostUris } from "@/lib/auth-utils";
 import { getOAuthClientMetadata } from "@/lib/oauth-client-metadata";
 import {
   parseOAuthAttribution,
@@ -17,7 +18,6 @@ export async function saveOAuthAttribution(
   if (!userId) return { success: false };
 
   const oauthClientId = boundedString(input.oauthClientId, 256);
-  const oauthRedirectOrigin = urlOrigin(input.oauthRedirectUri);
   let clientMetadata = null;
   if (oauthClientId) {
     try {
@@ -26,6 +26,16 @@ export async function saveOAuthAttribution(
       console.error("Failed to load OAuth client metadata:", error);
     }
   }
+
+  // For dynamically registered clients, only trust the query-string redirect
+  // URI when it matches one registered for that client.
+  const redirectUri = boundedString(input.oauthRedirectUri, 2048);
+  const redirectUriMatchesClient =
+    !clientMetadata ||
+    expandLocalhostUris(clientMetadata.redirectUris).includes(redirectUri);
+  const oauthRedirectOrigin = redirectUriMatchesClient
+    ? urlOrigin(redirectUri)
+    : undefined;
 
   const clerk = await clerkClient();
   await clerk.users.updateUserMetadata(userId, {
