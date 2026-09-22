@@ -32,12 +32,12 @@ async function fixture(status = 200) {
   return { ...mcp, requests, response, projects };
 }
 
-describe("manage_search", () => {
+describe("web_search", () => {
   test("advertises inline schemas", async () => {
     const f = await fixture();
     try {
       const listed = await f.client.listTools();
-      const tool = listed.tools.find(({ name }) => name === "manage_search");
+      const tool = listed.tools.find(({ name }) => name === "web_search");
       expect(tool).toBeDefined();
       expect(JSON.stringify(tool?.inputSchema)).not.toContain('"$ref"');
     } finally {
@@ -60,7 +60,7 @@ describe("manage_search", () => {
     };
     try {
       const result = await f.client.callTool({
-        name: "manage_search",
+        name: "web_search",
         arguments: { action: "create", request },
       });
       expect(result.isError).not.toBe(true);
@@ -89,7 +89,7 @@ describe("manage_search", () => {
     const f = await fixture();
     try {
       const result = await f.client.callTool({
-        name: "manage_search",
+        name: "web_search",
         arguments: args,
       });
       expect(result.isError).not.toBe(true);
@@ -121,7 +121,7 @@ describe("manage_search", () => {
     const f = await fixture();
     try {
       const result = await f.client.callTool({
-        name: "manage_search",
+        name: "web_search",
         arguments: args,
       });
       expect(result.isError).toBe(true);
@@ -135,7 +135,7 @@ describe("manage_search", () => {
     const f = await fixture(503);
     try {
       const result = await f.client.callTool({
-        name: "manage_search",
+        name: "web_search",
         arguments: { action: "create", request: { query: "test" } },
       });
       expect(result.isError).toBe(true);

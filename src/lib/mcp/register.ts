@@ -74,6 +74,7 @@ const mcpToolsetSet: ReadonlySet<string> = new Set(mcpToolsets);
 const standaloneToolsetAliases: Partial<Record<string, McpToolset>> = {
   computer_action: "computer",
   search_docs: "docs",
+  web_search: "search",
   execute_playwright_code: "playwright",
   browser_repl: "repl",
   exec_command: "shell",

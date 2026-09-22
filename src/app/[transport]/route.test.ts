@@ -285,9 +285,9 @@ describe("capability routing", () => {
     const allowed = await call("tools/list");
     expect(
       allowed.result.tools.map((tool: { name: string }) => tool.name),
-    ).toContain("manage_search");
+    ).toContain("web_search");
     const permittedCall = await call("tools/call", "sk_allowed", {
-      name: "manage_search",
+      name: "web_search",
       arguments: { action: "providers" },
     });
     expect(permittedCall.result.isError).not.toBe(true);
@@ -295,18 +295,18 @@ describe("capability routing", () => {
     const denied = await call("tools/list", "sk_denied");
     expect(
       denied.result.tools.map((tool: { name: string }) => tool.name),
-    ).not.toContain("manage_search");
+    ).not.toContain("web_search");
     expect(
       denied.result.tools.map((tool: { name: string }) => tool.name),
     ).toContain("manage_vaults");
     const deniedCall = await call("tools/call", "sk_denied", {
-      name: "manage_search",
+      name: "web_search",
       arguments: { action: "create", request: { query: "test" } },
     });
     expect(JSON.stringify(deniedCall)).toContain("not found");
     enabled = false;
     const revoked = await call("tools/call", "sk_allowed", {
-      name: "manage_search",
+      name: "web_search",
       arguments: { action: "create", request: { query: "test" } },
     });
     expect(JSON.stringify(revoked)).toContain("not found");
@@ -327,7 +327,7 @@ describe("capability routing", () => {
       const names = result.result.tools.map(
         (tool: { name: string }) => tool.name,
       );
-      expect(names).not.toContain("manage_search");
+      expect(names).not.toContain("web_search");
       expect(names).toContain("manage_browsers");
     },
   );

@@ -115,7 +115,7 @@ describe("MCP toolset allowlist", () => {
     async (mcpApps) => {
       const previousEnabled = process.env.KERNEL_MCP_ENABLED_TOOLSETS;
       const previousDisabled = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
-      process.env.KERNEL_MCP_ENABLED_TOOLSETS = "search";
+      process.env.KERNEL_MCP_ENABLED_TOOLSETS = "web_search";
       delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
       try {
         expect((await captureRegistration(mcpApps)).legacyTools).toEqual([
@@ -123,8 +123,8 @@ describe("MCP toolset allowlist", () => {
         ]);
         expect(
           (await captureRegistration(mcpApps, false, false, true)).legacyTools,
-        ).toContain("manage_search");
-        process.env.KERNEL_MCP_DISABLED_TOOLSETS = "search";
+        ).toEqual(["get_connection_context", "web_search"]);
+        process.env.KERNEL_MCP_DISABLED_TOOLSETS = "web_search";
         expect(
           (await captureRegistration(mcpApps, false, false, true)).legacyTools,
         ).toEqual(["get_connection_context"]);
