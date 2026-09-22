@@ -72,7 +72,7 @@ const standaloneToolsetAliases: Partial<Record<string, McpToolset>> = {
   computer_action: "computer",
   search_docs: "docs",
   execute_playwright_code: "playwright",
-  execute_browser_repl: "repl",
+  browser_repl: "repl",
   exec_command: "shell",
   browser_utilities: "browser_curl",
   open_auth_login: "auth_connections",

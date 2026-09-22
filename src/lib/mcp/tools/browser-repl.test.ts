@@ -35,7 +35,7 @@ function browserReplClient(
   };
 }
 
-test("execute_browser_repl sends one cell with aligned execution and transport deadlines", async () => {
+test("browser_repl sends one cell with aligned execution and transport deadlines", async () => {
   const calls: ReplCall[] = [];
   const { client, close } = await connectTestMcp(
     registerBrowserReplTool,
@@ -44,7 +44,7 @@ test("execute_browser_repl sends one cell with aligned execution and transport d
 
   try {
     await client.callTool({
-      name: "execute_browser_repl",
+      name: "browser_repl",
       arguments: {
         session_id: "browser-name",
         code: 'repl.write("ready")',
@@ -70,7 +70,7 @@ test("execute_browser_repl sends one cell with aligned execution and transport d
   });
 });
 
-test("execute_browser_repl returns structured ordered output and MCP images", async () => {
+test("browser_repl returns structured ordered output and MCP images", async () => {
   const { client, close } = await connectTestMcp(
     registerBrowserReplTool,
     browserReplClient([], () => ({
@@ -96,7 +96,7 @@ test("execute_browser_repl returns structured ordered output and MCP images", as
 
   try {
     const result = await client.callTool({
-      name: "execute_browser_repl",
+      name: "browser_repl",
       arguments: { session_id: "ses_1", code: "run()" },
     });
     const content = result.content as Array<
@@ -130,7 +130,7 @@ test("execute_browser_repl returns structured ordered output and MCP images", as
   }
 });
 
-test("execute_browser_repl keeps JavaScript failures structured instead of turning them into transport errors", async () => {
+test("browser_repl keeps JavaScript failures structured instead of turning them into transport errors", async () => {
   const { client, close } = await connectTestMcp(
     registerBrowserReplTool,
     browserReplClient([], () => ({
@@ -144,7 +144,7 @@ test("execute_browser_repl keeps JavaScript failures structured instead of turni
 
   try {
     const result = await client.callTool({
-      name: "execute_browser_repl",
+      name: "browser_repl",
       arguments: { session_id: "ses_1", code: 'throw new Error("boom")' },
     });
     expect(result.isError).not.toBe(true);
@@ -162,7 +162,7 @@ test("execute_browser_repl keeps JavaScript failures structured instead of turni
   }
 });
 
-test("execute_browser_repl allows reset without code and rejects an empty normal cell", async () => {
+test("browser_repl allows reset without code and rejects an empty normal cell", async () => {
   const calls: ReplCall[] = [];
   const { client, close } = await connectTestMcp(
     registerBrowserReplTool,
@@ -171,7 +171,7 @@ test("execute_browser_repl allows reset without code and rejects an empty normal
 
   try {
     await client.callTool({
-      name: "execute_browser_repl",
+      name: "browser_repl",
       arguments: { session_id: "ses_1", reset: true },
     });
     expect(calls[0].body).toEqual({
@@ -181,7 +181,7 @@ test("execute_browser_repl allows reset without code and rejects an empty normal
     });
 
     const rejected = await client.callTool({
-      name: "execute_browser_repl",
+      name: "browser_repl",
       arguments: { session_id: "ses_1" },
     });
     expect(rejected.isError).toBe(true);
@@ -191,7 +191,7 @@ test("execute_browser_repl allows reset without code and rejects an empty normal
   }
 });
 
-test("execute_browser_repl advertises persistent semantics and complete Playwright and CDP examples", async () => {
+test("browser_repl advertises persistent semantics and native, CDP, and Playwright examples", async () => {
   const { client, close } = await connectTestMcp(
     registerBrowserReplTool,
     browserReplClient([]),
@@ -199,9 +199,7 @@ test("execute_browser_repl advertises persistent semantics and complete Playwrig
 
   try {
     const { tools } = await client.listTools();
-    const tool = tools.find(
-      (candidate) => candidate.name === "execute_browser_repl",
-    );
+    const tool = tools.find((candidate) => candidate.name === "browser_repl");
     expect(tool).toBeDefined();
     expect(tool?.description).toContain("persistent Node.js Browser REPL");
     expect(tool?.description).not.toContain("execute_playwright_code");
@@ -213,6 +211,18 @@ test("execute_browser_repl advertises persistent semantics and complete Playwrig
     );
     expect(tool?.description).toContain("Do not dump the full DOM");
     expect(tool?.description).toContain('repl.help("click")');
+    const description = tool?.description ?? "";
+    expect(description).toContain('await gotoUrl("https://example.com")');
+    expect(description).toContain('await waitForElement("h1"');
+    expect(description).toContain(
+      "await repl.emitImage({ path: await captureScreenshot(",
+    );
+    expect(
+      description.indexOf("FULL NATIVE BROWSER REPL EXAMPLE"),
+    ).toBeLessThan(description.indexOf("FULL RAW CDP-ONLY EXAMPLE"));
+    expect(description.indexOf("FULL RAW CDP-ONLY EXAMPLE")).toBeLessThan(
+      description.indexOf("FULL PATCHRIGHT/PLAYWRIGHT EXAMPLE"),
+    );
     expect(tool?.description).toContain(
       'var playwright = await import("patchright")',
     );
@@ -246,7 +256,7 @@ test("execute_browser_repl advertises persistent semantics and complete Playwrig
   }
 });
 
-test("execute_browser_repl reports transport failures through the shared classifier", async () => {
+test("browser_repl reports transport failures through the shared classifier", async () => {
   const { client, close } = await connectTestMcp(registerBrowserReplTool, {
     browsers: {
       repl: async () => {
@@ -257,12 +267,12 @@ test("execute_browser_repl reports transport failures through the shared classif
 
   try {
     const result = await client.callTool({
-      name: "execute_browser_repl",
+      name: "browser_repl",
       arguments: { session_id: "ses_1", code: "sideEffect()" },
     });
     expect(result.isError).toBe(true);
     const text = (result.content as Array<{ text: string }>)[0].text;
-    expect(text).toStartWith("Error in execute_browser_repl (execute):");
+    expect(text).toStartWith("Error in browser_repl (execute):");
   } finally {
     await close();
   }

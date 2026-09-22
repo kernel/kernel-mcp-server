@@ -305,7 +305,7 @@ Call `get_connection_context` before deciding whether to create or select a proj
 
 ### manage\_\* tools
 
-- `manage_browsers` - Create, update, list, get, and delete browser sessions, and read archived telemetry for active or deleted sessions. Supports headless/stealth modes, profiles, proxies, viewports, extensions, names and tags, and SSH tunneling. The browser tools (`manage_browsers`, `computer_action`, `execute_playwright_code`, `execute_browser_repl`, `exec_command`, `browser_curl`, `manage_replays`, `webmcp`) accept a live session's name in place of its `session_id`; deleted sessions, and `manage_browser_pools` release, take the ID only.
+- `manage_browsers` - Create, update, list, get, and delete browser sessions, and read archived telemetry for active or deleted sessions. Supports headless/stealth modes, profiles, proxies, viewports, extensions, names and tags, and SSH tunneling. The browser tools (`manage_browsers`, `computer_action`, `execute_playwright_code`, `browser_repl`, `exec_command`, `browser_curl`, `manage_replays`, `webmcp`) accept a live session's name in place of its `session_id`; deleted sessions, and `manage_browser_pools` release, take the ID only.
 - `manage_profiles` - Setup (with guided live browser session), search/list with pagination, get, and delete browser profiles for persisting cookies and logins.
 - `manage_projects` - Create, list, get, update, and delete organization projects. Inspect and update per-project resource limits.
 - `manage_api_keys` - Create, list, get, update, and delete org-wide or project-scoped API keys. Create returns the plaintext key once.
@@ -333,7 +333,7 @@ See [Vault payments](docs/vault-payments.md) for both provider flows, safety rul
 - `computer_action` - Mouse, keyboard, clipboard, and screenshot controls for browser sessions (click, type, press_key, scroll, move, get_position, read_clipboard, write_clipboard, screenshot).
 - `browser_curl` - Send HTTP requests through an existing browser session's Chrome network stack.
 - `execute_playwright_code` - Execute isolated Playwright/TypeScript code and browser-wide WebMCP helpers against an existing browser session. Does not create or delete browsers - use `manage_browsers` for session lifecycle.
-- `execute_browser_repl` - Execute JavaScript in a persistent Node.js runtime inside an existing browser VM. Top-level bindings survive across calls and can use native browser helpers, WebMCP, Patchright, Playwright, raw CDP, Node built-ins, files, processes, and the network. The tool description includes complete Patchright/Playwright and raw-CDP examples; call `repl.help()` inside a cell for the runtime method reference. This is unrestricted VM code execution, not a sandbox. See the [complete Browser REPL reference](https://github.com/kernel/kernel-images/blob/main/server/docs/repl.md).
+- `browser_repl` - Execute JavaScript in a persistent Node.js runtime inside an existing browser VM. Top-level bindings survive across calls and can use native browser helpers, WebMCP, Patchright, Playwright, raw CDP, Node built-ins, files, processes, and the network. The tool description includes native-helper, raw-CDP, and Patchright/Playwright examples; call `repl.help()` inside a cell for the runtime method reference. This is unrestricted VM code execution, not a sandbox. See the [complete Browser REPL reference](https://github.com/kernel/kernel-images/blob/main/server/docs/repl.md).
 - `webmcp` - List native page tools across every tab and frame in a browser, then synchronously invoke an exact opaque `tool_ref` with structured input.
 - `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
 - `search_docs` - Search Kernel platform documentation and guides.
@@ -386,10 +386,10 @@ Returns: { success: true, result: "Example Domain" }
 
 ```
 Human: Inspect example.com, keep the browser connection for follow-up steps, and show me the page.
-Assistant: I'll create a browser session and initialize a persistent Patchright connection inside its Browser REPL.
+Assistant: I'll create a browser session and use its Browser REPL to inspect the page.
 [Uses manage_browsers with action: "create" to get a session_id]
-[Uses execute_browser_repl with code that imports patchright as playwright, connects over process.env.CDP_ENDPOINT, navigates, writes a compact JSON observation, and emits a screenshot]
-Returns: the REPL ID, ordered text output, and screenshot. Later execute_browser_repl calls reuse the same top-level bindings while the repl_id remains unchanged.
+[Uses browser_repl with native helpers to navigate, wait for a heading, write a compact JSON observation, and emit a screenshot]
+Returns: the REPL ID, ordered text output, and screenshot. Later browser_repl calls reuse the same top-level bindings while the repl_id remains unchanged.
 ```
 
 ### Use managed authentication for a protected site
