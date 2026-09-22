@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  spyOn,
+  test,
+} from "bun:test";
+import * as nativeOAuth from "@/lib/native-oauth";
 import { Kernel } from "@onkernel/sdk";
 import type { McpConnectionScopeFailureAnalytics } from "@/lib/mcp/analytics";
 import { defaultMcpDependencies } from "@/lib/mcp/dependencies";
@@ -71,6 +80,108 @@ beforeEach(() => {
 
 afterEach(() => {
   defaultMcpDependencies.createKernelClient = originalCreateKernelClient;
+});
+
+describe("native failure classification", () => {
+  const config = {
+    issuer: "https://issuer.example",
+    audience: "https://mcp.example",
+    apiAudience: "https://api.example/",
+    epoch: 1,
+    clientId: "test-client",
+    clientSecret: "test-secret",
+    keys: { keys: [] },
+  };
+  const request = () =>
+    new nextServer.NextRequest("https://mcp.example/mcp", {
+      headers: { Authorization: "Bearer krn_invalid" },
+    });
+  test("configuration and authority failures return retryable 503", async () => {
+    const configSpy = spyOn(nativeOAuth, "nativeOAuthConfig").mockReturnValue(
+      config,
+    );
+    const exchangeSpy = spyOn(
+      nativeOAuth,
+      "exchangeNativeOAuth",
+    ).mockRejectedValue(new Error("authority unavailable"));
+    try {
+      let response = await GET(request());
+      expect(response.status).toBe(503);
+      expect(response.headers.get("Retry-After")).toBe("1");
+      configSpy.mockImplementation(() => {
+        throw new Error("configuration unavailable");
+      });
+      response = await GET(request());
+      expect(response.status).toBe(503);
+    } finally {
+      configSpy.mockRestore();
+      exchangeSpy.mockRestore();
+    }
+  });
+  test("credential rejection remains 401", async () => {
+    const configSpy = spyOn(nativeOAuth, "nativeOAuthConfig").mockReturnValue(
+      config,
+    );
+    const exchangeSpy = spyOn(
+      nativeOAuth,
+      "exchangeNativeOAuth",
+    ).mockRejectedValue(new nativeOAuth.NativeCredentialRejected());
+    try {
+      expect((await GET(request())).status).toBe(401);
+    } finally {
+      configSpy.mockRestore();
+      exchangeSpy.mockRestore();
+    }
+  });
+  test("a permanent scope mismatch is 403 rather than a retryable outage", async () => {
+    const configSpy = spyOn(nativeOAuth, "nativeOAuthConfig").mockReturnValue(
+      config,
+    );
+    const exchangeSpy = spyOn(
+      nativeOAuth,
+      "exchangeNativeOAuth",
+    ).mockRejectedValue(new nativeOAuth.NativeScopeRejected());
+    try {
+      const response = await GET(request());
+      expect(response.status).toBe(403);
+      expect(response.headers.get("WWW-Authenticate")).toContain(
+        "insufficient_scope",
+      );
+    } finally {
+      configSpy.mockRestore();
+      exchangeSpy.mockRestore();
+    }
+  });
+  test("post-authentication bugs propagate without recording a second auth result", async () => {
+    const configSpy = spyOn(nativeOAuth, "nativeOAuthConfig").mockReturnValue(
+      config,
+    );
+    const exchangeSpy = spyOn(
+      nativeOAuth,
+      "exchangeNativeOAuth",
+    ).mockResolvedValue({
+      token: "derived-test",
+      subject: "subject",
+      scopes: ["browsers:read"],
+      deadline: Date.now() + 30000,
+    });
+    const info = spyOn(console, "info").mockImplementation(() => {});
+    failingAuthContext(new Error("unaccountable"));
+    try {
+      await expect(GET(request())).rejects.toThrow(
+        "Unable to resolve Kernel connection scope",
+      );
+      const events = info.mock.calls
+        .map((call) => String(call[0]))
+        .filter((value) => value.includes('"event":"oauth_compatibility"'));
+      expect(events).toHaveLength(1);
+      expect(events[0]).toContain('"outcome":"verified"');
+    } finally {
+      configSpy.mockRestore();
+      exchangeSpy.mockRestore();
+      info.mockRestore();
+    }
+  });
 });
 
 describe("unauthenticated discovery", () => {

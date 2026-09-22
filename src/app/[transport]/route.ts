@@ -6,6 +6,15 @@ import {
 import { verifyToken } from "@clerk/nextjs/server";
 import { after, NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
+import { recordOAuthCompatibility } from "@/lib/oauth-compatibility";
+import {
+  isNativeOAuthCredential,
+  nativeOAuthConfig,
+  exchangeNativeOAuth,
+  leaseNativeResponse,
+  NativeCredentialRejected,
+  NativeScopeRejected,
+} from "@/lib/native-oauth";
 import {
   OAUTH_RESOURCE_METADATA_PATH,
   oauthResourceMetadataUrl,
@@ -224,6 +233,66 @@ async function handleAuthenticatedRequest(
     );
   }
 
+  if (isNativeOAuthCredential(token)) {
+    let native: Awaited<ReturnType<typeof exchangeNativeOAuth>>;
+    try {
+      const config = nativeOAuthConfig();
+      if (!config) throw new NativeCredentialRejected();
+      native = await exchangeNativeOAuth(token, req.signal, config);
+    } catch (error) {
+      const insufficient = error instanceof NativeScopeRejected;
+      const rejected =
+        insufficient || error instanceof NativeCredentialRejected;
+      recordOAuthCompatibility({
+        surface: "verification",
+        provider: "kernel",
+        outcome: rejected ? "rejected" : "unavailable",
+      });
+      if (insufficient)
+        return errorResponse(
+          403,
+          "insufficient_scope",
+          "This credential cannot access the requested resource",
+          { "WWW-Authenticate": 'Bearer error="insufficient_scope"' },
+        );
+      return rejected
+        ? createAuthErrorResponse(req)
+        : errorResponse(
+            503,
+            "temporarily_unavailable",
+            "Native authorization is unavailable",
+            { "Retry-After": "1" },
+          );
+    }
+    recordOAuthCompatibility({
+      surface: "verification",
+      provider: "kernel",
+      outcome: "verified",
+    });
+    const abort = new AbortController();
+    const signal = AbortSignal.any([
+      req.signal,
+      abort.signal,
+      AbortSignal.timeout(Math.max(1, native.deadline - Date.now())),
+    ]);
+    try {
+      const response = await handleMcpRequestWithIdentity({
+        req: new NextRequest(req, { signal }),
+        token: native.token,
+        authSubject: `native:${native.subject}`,
+        scopes: native.scopes,
+        authInfoExtra: { userId: null, clerkToken: null },
+        credentialType: "oauth",
+        transportSessionId,
+        observeConnection,
+      });
+      return leaseNativeResponse(response, native.deadline, abort);
+    } catch (error) {
+      abort.abort();
+      throw error;
+    }
+  }
+
   if (!isValidJwtFormat(token)) {
     // Opaque API keys are authenticated by the Kernel API rather than Clerk.
     // Do not cache their context: /auth/context must revalidate the credential
@@ -253,7 +322,17 @@ async function handleAuthenticatedRequest(
       );
     }
     userId = payload.sub;
+    recordOAuthCompatibility({
+      surface: "verification",
+      provider: "clerk",
+      outcome: "verified",
+    });
   } catch (authError) {
+    recordOAuthCompatibility({
+      surface: "verification",
+      provider: "clerk",
+      outcome: "rejected",
+    });
     return createAuthErrorResponse(
       req,
       "invalid_token",

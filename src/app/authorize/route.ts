@@ -1,4 +1,5 @@
 import { auth } from "@clerk/nextjs/server";
+import { recordOAuthCompatibility } from "@/lib/oauth-compatibility";
 import { NextRequest, NextResponse } from "next/server";
 import {
   setAuthorizationContextForClientId,
@@ -255,5 +256,16 @@ export async function authorizeRequest(
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
-  return authorizeRequest(request);
+  if (request.nextUrl.searchParams.get("client_id")?.startsWith("kn_client_"))
+    return errorResponse(
+      "invalid_request",
+      "Native clients are not accepted by the legacy issuer",
+    );
+  const response = await authorizeRequest(request);
+  recordOAuthCompatibility({
+    surface: "authorize",
+    provider: "clerk",
+    outcome: response.status < 400 ? "success" : "error",
+  });
+  return response;
 }

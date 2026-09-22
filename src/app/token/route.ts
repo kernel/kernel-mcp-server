@@ -1,4 +1,5 @@
 import { clerkClient, verifyToken } from "@clerk/nextjs/server";
+import { recordOAuthCompatibility } from "@/lib/oauth-compatibility";
 import { after, NextRequest, NextResponse } from "next/server";
 import { persistOAuthTokenContexts } from "@/lib/redis";
 import { resolveAuthorizationContext } from "@/lib/org-utils";
@@ -425,7 +426,28 @@ export async function tokenRequest(
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const raw = await request.clone().text();
+  if (raw.length > 16384)
+    return createErrorResponse("invalid_request", "Request exceeds limit", 400);
+  const form = new URLSearchParams(raw);
+  const native =
+    form.get("client_id")?.startsWith("kn_client_") ||
+    form.get("code")?.startsWith("krn_ac1_") ||
+    form.get("refresh_token")?.startsWith("krn_rt1_") ||
+    form.get("grant_type") ===
+      "urn:ietf:params:oauth:grant-type:token-exchange";
+  if (native)
+    return createErrorResponse(
+      "invalid_grant",
+      "Native credentials are not accepted by the legacy issuer",
+      400,
+    );
   const response = await tokenRequest(request);
+  recordOAuthCompatibility({
+    surface: "token",
+    provider: "clerk",
+    outcome: response.ok ? "success" : "error",
+  });
   after(flushMcpAnalytics);
   return response;
 }
