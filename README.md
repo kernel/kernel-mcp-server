@@ -20,6 +20,7 @@ The Kernel MCP Server bridges AI assistants (like Claude, Cursor, fx, or other M
 - 📊 Monitor deployments and track invocations
 - 🔍 Search Kernel documentation and inject context
 - 💻 Execute arbitrary Playwright code against live browsers
+- 🧠 Run persistent JavaScript Browser REPL cells with native helpers, Patchright, Playwright, and raw CDP
 - 🎥 Record MP4 video replays of browser automation
 
 **Open-source & fully-managed** — the complete codebase is available here, and we run the production instance so you don't need to deploy anything.
@@ -315,13 +316,13 @@ Each Kernel feature has a single `manage_*` tool with an `action` parameter, kee
 
 One additional Managed Auth helper (`begin_auth_login`) is marked app-only (`_meta.ui.visibility: ["app"]`); it refuses to execute on hosts that do not declare MCP Apps support. The App forwards the server-issued signed flow checkpoint to the shared `manage_auth_connections` `wait` action, so flow identity and terminal-state decisions stay on the server.
 
-Self-hosted deployments can select tool families with `KERNEL_MCP_ENABLED_TOOLSETS` or hide them with `KERNEL_MCP_DISABLED_TOOLSETS`. Both accept comma- or space-separated toolset names and standalone aliases. For example, `KERNEL_MCP_ENABLED_TOOLSETS="playwright computer"` exposes browser-control tools without browser lifecycle or managed-auth tools, while `KERNEL_MCP_DISABLED_TOOLSETS=api_keys` only removes `manage_api_keys`. `get_connection_context` remains available in either mode.
+Self-hosted deployments can select tool families with `KERNEL_MCP_ENABLED_TOOLSETS` or hide them with `KERNEL_MCP_DISABLED_TOOLSETS`. Both accept comma- or space-separated toolset names and standalone aliases. For example, `KERNEL_MCP_ENABLED_TOOLSETS="playwright repl computer"` exposes browser-control tools without browser lifecycle or managed-auth tools, while `KERNEL_MCP_DISABLED_TOOLSETS=api_keys` only removes `manage_api_keys`. `get_connection_context` remains available in either mode.
 
 Call `get_connection_context` before deciding whether to create or select a project. Its canonical `connection_scope` reports whether the connection is organization-wide or fixed to a project. Project-scoped tools advertise an optional `project` (name or ID) and a deprecated `project_id`: organization-wide connections may omit them to preserve organization-wide reads and API default-project behavior, while fixed-project connections may omit them or pass the matching project. Project resources use project-qualified `kernel://orgs/{organizationId}/projects/{projectId}/...` URIs. Authorization remains enforced by the Kernel API; selecting a project never grants access to it.
 
 ### manage\_\* tools
 
-- `manage_browsers` - Create, update, list, get, and delete browser sessions, and read archived telemetry for active or deleted sessions. Supports headless/stealth modes, profiles, proxies, viewports, extensions, names and tags, and SSH tunneling. The browser tools (`manage_browsers`, `computer_action`, `execute_playwright_code`, `execute_shell_command`, `browser_curl`, `manage_replays`, `webmcp`) accept a live session's name in place of its `session_id`; deleted sessions, and `manage_browser_pools` release, take the ID only.
+- `manage_browsers` - Create, update, list, get, and delete browser sessions, and read archived telemetry for active or deleted sessions. Supports headless/stealth modes, profiles, proxies, viewports, extensions, names and tags, and SSH tunneling. The browser tools (`manage_browsers`, `computer_action`, `execute_playwright_code`, `browser_repl`, `exec_command`, `browser_curl`, `manage_replays`, `webmcp`) accept a live session's name in place of its `session_id`; deleted sessions, and `manage_browser_pools` release, take the ID only.
 - `manage_profiles` - Setup (with guided live browser session), search/list with pagination, get, and delete browser profiles for persisting cookies and logins.
 - `manage_projects` - Create, list, get, update, and delete organization projects. Inspect and update per-project resource limits.
 - `manage_api_keys` - Create, list, get, update, and delete org-wide or project-scoped API keys. Create returns the plaintext key once.
@@ -348,7 +349,8 @@ See [Vault payments](docs/vault-payments.md) for both provider flows, safety rul
 - `get_connection_context` - Inspect the authenticated principal, organization, credential scope, and effective project scope.
 - `computer_action` - Mouse, keyboard, clipboard, and screenshot controls for browser sessions (click, type, press_key, scroll, move, get_position, read_clipboard, write_clipboard, screenshot).
 - `browser_curl` - Send HTTP requests through an existing browser session's Chrome network stack.
-- `execute_playwright_code` - Execute Playwright/TypeScript code and browser-wide WebMCP helpers against an existing browser session. Does not create or delete browsers - use `manage_browsers` for session lifecycle.
+- `execute_playwright_code` - Execute isolated Playwright/TypeScript code and browser-wide WebMCP helpers against an existing browser session. Does not create or delete browsers - use `manage_browsers` for session lifecycle.
+- `browser_repl` - Execute JavaScript in a persistent Node.js runtime inside an existing browser VM. Top-level bindings survive across calls and can use native browser helpers, WebMCP, Patchright, Playwright, raw CDP, Node built-ins, files, processes, and the network. The tool description includes native-helper, raw-CDP, and Patchright/Playwright examples; call `repl.help()` inside a cell for the runtime method reference. This is unrestricted VM code execution, not a sandbox. See the [complete Browser REPL reference](https://github.com/kernel/kernel-images/blob/main/server/docs/repl.md).
 - `webmcp` - List native page tools across every tab and frame in a browser, then synchronously invoke an exact opaque `tool_ref` with structured input.
 - `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
 - `search_docs` - Search Kernel platform documentation and guides.
@@ -395,6 +397,16 @@ Assistant: I'll create a browser session, then execute Playwright code against i
 [Uses manage_browsers tool with action: "create" to get a session_id]
 [Uses execute_playwright_code tool with session_id and code: "await page.goto('https://example.com'); return await page.title();"]
 Returns: { success: true, result: "Example Domain" }
+```
+
+### Use the persistent Browser REPL
+
+```
+Human: Inspect example.com, keep the browser connection for follow-up steps, and show me the page.
+Assistant: I'll create a browser session and use its Browser REPL to inspect the page.
+[Uses manage_browsers with action: "create" to get a session_id]
+[Uses browser_repl with native helpers to navigate, wait for a heading, write a compact JSON observation, and emit a screenshot]
+Returns: the REPL ID, ordered text output, and screenshot. Later browser_repl calls reuse the same top-level bindings while the repl_id remains unchanged.
 ```
 
 ### Use managed authentication for a protected site

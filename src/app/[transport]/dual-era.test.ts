@@ -203,6 +203,7 @@ for (const era of ["legacy", "modern"] as const) {
         await connect();
         const { tools } = await client.listTools();
         expect(tools.map((tool) => tool.name)).toContain("manage_projects");
+        expect(tools.map((tool) => tool.name)).toContain("browser_repl");
         expect(tools.map((tool) => tool.name)).toContain(
           "manage_vault_credentials",
         );
