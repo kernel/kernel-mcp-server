@@ -423,18 +423,19 @@ export function throwVaultError(
       typeof body.code === "string"
         ? body.code
         : undefined;
+    const providerReason = z
+      .object({
+        inner_error: z.object({
+          code: z.literal("provider_rejection_reason"),
+          message: z.string().min(1),
+        }),
+      })
+      .safeParse(body);
     if (
       exposeProviderMessage &&
-      (code === "provider_error" ||
-        code === "provider_rate_limited" ||
-        code === "spend_request_rate_limited") &&
       error.status >= 400 &&
       error.status < 500 &&
-      body &&
-      typeof body === "object" &&
-      "message" in body &&
-      typeof body.message === "string" &&
-      body.message.length > 0
+      providerReason.success
     ) {
       throwToolError(
         tool,
@@ -442,8 +443,9 @@ export function throwVaultError(
         APIError.generate(
           error.status,
           {
-            message: body.message,
-            ...(code !== undefined && vaultErrorMessages.has(code) && { code }),
+            message: providerReason.data.inner_error.message,
+            ...(code !== undefined &&
+              /^[a-zA-Z0-9_.-]{1,128}$/.test(code) && { code }),
           },
           undefined,
           new Headers(),

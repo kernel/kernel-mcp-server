@@ -277,7 +277,12 @@ describe("advertised vault operations", () => {
       const fixture = await connectVaultTest([
         Response.json(item),
         Response.json(
-          { code: "provider_error", message: reason, opaque: "hidden" },
+          {
+            code: "invalid_spend_request",
+            message: `Payment provider rejected card authorization: ${reason}`,
+            inner_error: { code: "provider_rejection_reason", message: reason },
+            opaque: "hidden",
+          },
           { status },
         ),
       ]);
@@ -291,7 +296,7 @@ describe("advertised vault operations", () => {
         const text = JSON.stringify(result);
         expect(result.isError).toBe(true);
         expect(text).toContain(reason);
-        expect(text).toContain("[code: provider_error]");
+        expect(text).toContain("[code: invalid_spend_request]");
         expect(text).not.toContain("hidden");
         expect(text).not.toContain(
           "The payment provider could not complete the vault request.",
@@ -306,14 +311,48 @@ describe("advertised vault operations", () => {
     },
   );
 
-  test("keeps non-provider operation errors curated", async () => {
+  test("uses the API rejection marker rather than an operation-name check", async () => {
     const fixture = await connectVaultTest([
       Response.json({
         ...item,
         available_operations: [{ type: "future_operation", description: "" }],
       }),
       Response.json(
-        { code: "invalid_request", message: "access_token=hidden" },
+        {
+          code: "future_decline",
+          message: "Public error wrapper",
+          inner_error: {
+            code: "provider_rejection_reason",
+            message: "Provider declined the request.",
+          },
+        },
+        { status: 400 },
+      ),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "invoke",
+        vault: "checkout",
+        key: "order-1",
+        operation: "future_operation",
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain(
+        "Provider declined the request.",
+      );
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("keeps unmarked provider errors curated for other operations", async () => {
+    const fixture = await connectVaultTest([
+      Response.json({
+        ...item,
+        available_operations: [{ type: "future_operation", description: "" }],
+      }),
+      Response.json(
+        { code: "provider_error", message: "access_token=hidden" },
         { status: 400 },
       ),
     ]);
