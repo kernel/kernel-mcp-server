@@ -184,6 +184,39 @@ describe("advertised vault operations", () => {
     }
   });
 
+  test("does not select a response type from input field names", async () => {
+    const fixture = await connectVaultTest([
+      Response.json({
+        ...item,
+        available_operations: [
+          { type: "future_operation", description: "Do work." },
+        ],
+      }),
+      Response.json({
+        type: "future_operation",
+        status: "pending",
+        opaque: "hidden",
+      }),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "invoke",
+        vault: "checkout",
+        key: "order-1",
+        operation: "future_operation",
+        inputs: { fields: [{ name: "example" }] },
+      });
+      expect(result.isError).toBeUndefined();
+      expect(toolResultJSON(result).result).toEqual({
+        type: "future_operation",
+        status: "pending",
+      });
+      expect(JSON.stringify(result)).not.toContain("hidden");
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test("projects unknown operation results without exposing opaque fields", async () => {
     const fixture = await connectVaultTest([
       Response.json({
@@ -216,6 +249,26 @@ describe("advertised vault operations", () => {
         "GET",
         "POST",
       ]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("does not report an unrecognized operation response as success", async () => {
+    const fixture = await connectVaultTest([
+      Response.json(item),
+      Response.json({ opaque: "hidden" }),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "invoke",
+        vault: "checkout",
+        key: "order-1",
+        operation: "authorize",
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain("unrecognized response");
+      expect(JSON.stringify(result)).not.toContain("hidden");
     } finally {
       await fixture.close();
     }

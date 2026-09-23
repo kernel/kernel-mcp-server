@@ -4,9 +4,9 @@ import {
   APIConnectionTimeoutError,
   APIUserAbortError,
 } from "@onkernel/sdk";
-import { throwVaultFillError } from "@/lib/mcp/vault-fill";
+import { throwVaultError } from "@/lib/mcp/vault-responses";
 
-describe("fill transport error classification", () => {
+describe("vault operation transport errors", () => {
   test.each([
     {
       error: new APIConnectionError({ message: "private-cause" }),
@@ -23,13 +23,13 @@ describe("fill transport error classification", () => {
   ])("retains $name without exposing transport details", ({ error, name }) => {
     let caught: unknown;
     try {
-      throwVaultFillError(error);
+      throwVaultError("manage_vault_items", "invoke", error, true);
     } catch (result) {
       caught = result;
     }
     expect(caught).toMatchObject({
       name,
-      message: expect.stringContaining("may have been written"),
+      message: expect.stringContaining("may have partially completed"),
     });
     expect(String(caught)).not.toContain("private-cause");
   });

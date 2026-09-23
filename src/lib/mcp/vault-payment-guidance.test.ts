@@ -196,7 +196,7 @@ describe("provider-specific vault payment guidance", () => {
         operation: "fill",
         inputs: fill,
       });
-      expect(result.isError).toBe(false);
+      expect(result.isError).toBeUndefined();
       expect(toolResultJSON(result).result).toEqual(outcome);
       expect(
         fixture.requests.map(({ method, body }) => ({ method, body })),

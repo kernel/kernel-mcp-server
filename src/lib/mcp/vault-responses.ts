@@ -405,13 +405,16 @@ export function throwVaultError(
   tool: string,
   action: string,
   error: unknown,
-  exposeProviderMessage = false,
+  operationSubmitted = false,
 ): never {
+  const guidance = operationSubmitted
+    ? "The operation may have partially completed. Inspect item state, events, and browser before acting. Do not retry automatically."
+    : vaultErrorGuidance;
   if (error instanceof z.ZodError) {
     throwToolError(
       tool,
       action,
-      new Error("spec must match the selected action's documented schema"),
+      new Error("Vault request must match the documented schema."),
     );
   }
   if (error instanceof APIError && typeof error.status === "number") {
@@ -432,7 +435,7 @@ export function throwVaultError(
       })
       .safeParse(body);
     if (
-      exposeProviderMessage &&
+      operationSubmitted &&
       error.status >= 400 &&
       error.status < 500 &&
       providerReason.success
@@ -460,7 +463,7 @@ export function throwVaultError(
       APIError.generate(
         error.status,
         {
-          message: `${message ?? "Vault request failed."} ${vaultErrorGuidance}`,
+          message: `${message ?? "Vault request failed."} ${guidance}`,
           ...(message !== undefined && { code }),
         },
         undefined,
@@ -469,26 +472,17 @@ export function throwVaultError(
     );
   }
   if (error instanceof APIConnectionTimeoutError) {
-    throwToolError(tool, action, new APIConnectionTimeoutError());
-  }
-  if (error instanceof APIUserAbortError) {
-    throwToolError(tool, action, new APIUserAbortError());
-  }
-  if (error instanceof APIConnectionError) {
     throwToolError(
       tool,
       action,
-      new APIConnectionError({
-        message:
-          "Vault connection failed; inspect item state/events before taking further action. Do not replay a payment.",
-      }),
+      new APIConnectionTimeoutError({ message: guidance }),
     );
   }
-  throwToolError(
-    tool,
-    action,
-    new Error(
-      "Vault request failed; inspect item state/events before taking further action. Do not replay a payment.",
-    ),
-  );
+  if (error instanceof APIUserAbortError) {
+    throwToolError(tool, action, new APIUserAbortError({ message: guidance }));
+  }
+  if (error instanceof APIConnectionError) {
+    throwToolError(tool, action, new APIConnectionError({ message: guidance }));
+  }
+  throwToolError(tool, action, new Error(`Vault request failed; ${guidance}`));
 }

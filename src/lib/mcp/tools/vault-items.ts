@@ -1,7 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { APIError } from "@onkernel/sdk";
 import { z } from "zod";
-import { vaultFillResponse, throwVaultFillError } from "@/lib/mcp/vault-fill";
 import type { McpDependencies } from "@/lib/mcp/dependencies";
 import { projectForOperation } from "@/lib/mcp/project-selection";
 import { longOperationOptions } from "@/lib/mcp/request-options";
@@ -88,7 +87,6 @@ export function registerVaultItemTools(
         project,
       );
       const options = { maxRetries: 0, signal: ctx.mcpReq.signal };
-      let fieldWriteRequested = false;
       let operationSubmitted = false;
       try {
         if (
@@ -142,10 +140,6 @@ export function registerVaultItemTools(
               return errorResponse(
                 "Operation is not advertised in available_operations. Inspect the item before taking further action.",
               );
-            const fieldCount = Array.isArray(params.inputs?.fields)
-              ? params.inputs.fields.length
-              : undefined;
-            fieldWriteRequested = fieldCount !== undefined;
             operationSubmitted = true;
             // The generated SDK union is closed; the API advertises types at runtime.
             const result = await client.vaults.items.performOperation(
@@ -157,14 +151,25 @@ export function registerVaultItemTools(
               } as Parameters<typeof client.vaults.items.performOperation>[1],
               options,
             );
-            if (fieldCount !== undefined)
-              return vaultFillResponse(result, fieldCount, operation.type);
+            if (!result || typeof result !== "object" || Array.isArray(result))
+              return errorResponse(
+                "Operation returned an unrecognized response. Inspect item state and events before acting; do not retry automatically.",
+              );
             if ("available_operations" in result)
               return vaultItemResponse(result, target);
             const projected = projectVaultOutput(
               result,
               vaultOperationResultFields,
             );
+            if (
+              !projected ||
+              typeof projected !== "object" ||
+              !("type" in projected) ||
+              typeof projected.type !== "string"
+            )
+              return errorResponse(
+                "Operation returned an unrecognized response. Inspect item state and events before acting; do not retry automatically.",
+              );
             return {
               ...jsonResponse({
                 result: projected,
@@ -220,7 +225,6 @@ export function registerVaultItemTools(
           }
         }
       } catch (error) {
-        if (fieldWriteRequested) throwVaultFillError(error);
         if (
           params.action === "delete" &&
           error instanceof APIError &&
