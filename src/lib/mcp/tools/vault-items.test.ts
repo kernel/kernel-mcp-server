@@ -80,8 +80,8 @@ describe("advertised vault operations", () => {
     },
   );
 
-  test.each(["fill", "prepare_checkout"])(
-    "rejects advertised %s without submitting an incomplete operation",
+  test.each(["prepare_checkout", "future_operation"])(
+    "discovers and invokes advertised %s with operation-specific inputs",
     async (operation) => {
       const advertisedItem = {
         ...item,
@@ -90,9 +90,16 @@ describe("advertised vault operations", () => {
           { type: operation, description: "Requires additional inputs." },
         ],
       };
+      const inputs = {
+        checkout: {
+          browser_id: "browser-1",
+          merchant_origin: "https://shop.example",
+        },
+      };
       const fixture = await connectVaultTest([
         Response.json(advertisedItem),
         Response.json(advertisedItem),
+        Response.json({ ...item, available_operations: [] }),
       ]);
       try {
         const observed = toolResultJSON(
@@ -105,34 +112,130 @@ describe("advertised vault operations", () => {
         expect(observed.item.available_operations).toEqual(
           advertisedItem.available_operations,
         );
-        expect(observed.hints.invocation).toEqual([
-          {
-            tool: "manage_vault_items",
-            arguments: {
-              project: "proj_test",
-              vault: "checkout",
-              key: "order-1",
-              action: "invoke",
-              operation: "authorize",
-            },
-            requires_user_approval: true,
-          },
-        ]);
+        expect(
+          observed.hints.invocation.map(
+            (hint: { arguments: { operation: string } }) =>
+              hint.arguments.operation,
+          ),
+        ).toEqual(["authorize", operation]);
         const result = await fixture.call("manage_vault_items", {
           action: "invoke",
           vault: "checkout",
           key: "order-1",
           operation,
+          inputs,
+        });
+        expect(result.isError).toBeUndefined();
+        expect(fixture.requests.map((request) => request.method)).toEqual([
+          "GET",
+          "GET",
+          "POST",
+        ]);
+        expect(fixture.requests[2].body).toEqual({
+          type: operation,
+          ...inputs,
+        });
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test("handles field results for newly advertised operation types", async () => {
+    const inputs = {
+      browser_id: "browser-1",
+      fields: [{ field: "username", selector: "#username" }],
+    };
+    const fixture = await connectVaultTest([
+      Response.json({
+        ...item,
+        available_operations: [
+          { type: "future_operation", description: "Write fields." },
+        ],
+      }),
+      Response.json({
+        type: "future_operation",
+        status: "completed",
+        fields: [{ index: 0, status: "filled" }],
+        opaque: "hidden",
+      }),
+    ]);
+    try {
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_items", {
+          action: "invoke",
+          vault: "checkout",
+          key: "order-1",
+          operation: "future_operation",
+          inputs,
+        }),
+      );
+      expect(result.result).toMatchObject({
+        type: "future_operation",
+        status: "completed",
+      });
+      expect(JSON.stringify(result)).not.toContain("hidden");
+      expect(fixture.requests[1].body).toEqual({
+        type: "future_operation",
+        ...inputs,
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("projects unknown operation results without exposing opaque fields", async () => {
+    const fixture = await connectVaultTest([
+      Response.json({
+        ...item,
+        available_operations: [
+          { type: "future_operation", description: "Run it." },
+        ],
+      }),
+      Response.json({
+        type: "future_operation",
+        status: "pending",
+        opaque: "hidden",
+      }),
+    ]);
+    try {
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_items", {
+          action: "invoke",
+          vault: "checkout",
+          key: "order-1",
+          operation: "future_operation",
+        }),
+      );
+      expect(result.result).toEqual({
+        type: "future_operation",
+        status: "pending",
+      });
+      expect(JSON.stringify(result)).not.toContain("hidden");
+      expect(fixture.requests.map((request) => request.method)).toEqual([
+        "GET",
+        "POST",
+      ]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each(["type", "id_or_name"])(
+    "does not let invocation inputs override %s",
+    async (field) => {
+      const fixture = await connectVaultTest([]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          action: "invoke",
+          vault: "checkout",
+          key: "order-1",
+          operation: "authorize",
+          inputs: { [field]: "hidden" },
         });
         expect(result.isError).toBe(true);
-        expect(JSON.stringify(result)).toContain(
-          operation === "fill"
-            ? "fill parameters are required"
-            : `${operation} requires additional inputs`,
-        );
-        expect(fixture.requests.map((request) => request.method)).toEqual(
-          operation === "fill" ? ["GET"] : ["GET", "GET"],
-        );
+        expect(JSON.stringify(result)).not.toContain("hidden");
+        expect(fixture.requests).toHaveLength(0);
       } finally {
         await fixture.close();
       }
@@ -203,14 +306,14 @@ describe("advertised vault operations", () => {
     },
   );
 
-  test("keeps non-authorization provider errors curated", async () => {
+  test("keeps non-provider operation errors curated", async () => {
     const fixture = await connectVaultTest([
       Response.json({
         ...item,
         available_operations: [{ type: "future_operation", description: "" }],
       }),
       Response.json(
-        { code: "provider_error", message: "access_token=hidden" },
+        { code: "invalid_request", message: "access_token=hidden" },
         { status: 400 },
       ),
     ]);

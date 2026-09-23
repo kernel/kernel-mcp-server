@@ -69,7 +69,7 @@ const completed = {
     { index: 1, status: "filled" },
   ],
 };
-const invoke = { ...target, action: "invoke", operation: "fill", fill };
+const invoke = { ...target, action: "invoke", operation: "fill", inputs: fill };
 
 describe("MCP credential flow", () => {
   test.each(["create", "update"])(
@@ -176,7 +176,7 @@ describe("MCP credential flow", () => {
       expect(credentials?.inputSchema.properties).toHaveProperty(
         "expected_item_id",
       );
-      expect(items?.inputSchema.properties).toHaveProperty("fill");
+      expect(items?.inputSchema.properties).toHaveProperty("inputs");
       expect(
         JSON.stringify([credentials?.inputSchema, items?.inputSchema]),
       ).not.toContain('"$ref"');
@@ -214,7 +214,7 @@ describe("MCP credential flow", () => {
       };
       const result = await fixture.call("manage_vault_items", {
         ...invoke,
-        fill: parameters,
+        inputs: parameters,
       });
       expect(result.isError).toBe(false);
       expect(fixture.requests[1].body).toEqual({ type: "fill", ...parameters });
@@ -245,7 +245,7 @@ describe("MCP credential flow", () => {
       try {
         const result = await fixture.call("manage_vault_items", {
           ...invoke,
-          fill: {
+          inputs: {
             ...fill,
             page_url,
             fields: [
@@ -272,7 +272,7 @@ describe("MCP credential flow", () => {
     try {
       const result = await fixture.call("manage_vault_items", {
         ...invoke,
-        fill: {
+        inputs: {
           ...fill,
           fields: [
             { field: "password", selector: "#password", format: "MM/YY" },
@@ -652,20 +652,29 @@ describe("MCP credential flow", () => {
     },
     { ...fill, frame_id: "frame-1" },
     { ...fill, timeout_ms: 30001 },
-  ])("rejects invalid fill inputs before requests", async (parameters) => {
-    const fixture = await connectVaultTest([]);
-    try {
-      const result = await fixture.call("manage_vault_items", {
-        ...invoke,
-        fill: parameters,
-      });
-      expect(result.isError).toBe(true);
-      expect(JSON.stringify(result)).not.toContain("secret-value");
-      expect(fixture.requests).toHaveLength(0);
-    } finally {
-      await fixture.close();
-    }
-  });
+  ])(
+    "delegates operation-specific input validation to the API",
+    async (parameters) => {
+      const fixture = await connectVaultTest([
+        Response.json(ready),
+        Response.json({ code: "invalid_request" }, { status: 400 }),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          ...invoke,
+          inputs: parameters,
+        });
+        expect(result.isError).toBe(true);
+        expect(JSON.stringify(result)).not.toContain("secret-value");
+        expect(fixture.requests.map(({ method }) => method)).toEqual([
+          "GET",
+          "POST",
+        ]);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
 
   test("does not treat a malformed fill response as a successful item", async () => {
     const fixture = await connectVaultTest([

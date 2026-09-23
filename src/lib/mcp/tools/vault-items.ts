@@ -1,11 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { APIError } from "@onkernel/sdk";
 import { z } from "zod";
-import {
-  vaultFillSchema,
-  vaultFillResponse,
-  throwVaultFillError,
-} from "@/lib/mcp/vault-fill";
+import { vaultFillResponse, throwVaultFillError } from "@/lib/mcp/vault-fill";
 import type { McpDependencies } from "@/lib/mcp/dependencies";
 import { projectForOperation } from "@/lib/mcp/project-selection";
 import { longOperationOptions } from "@/lib/mcp/request-options";
@@ -13,6 +9,7 @@ import { errorResponse, jsonResponse } from "@/lib/mcp/responses";
 import {
   projectVaultOutput,
   throwVaultError,
+  vaultOperationResultFields,
   vaultEventFields,
   vaultItemFields,
   vaultItemResponse,
@@ -21,7 +18,6 @@ import {
 import {
   vaultItemSchema,
   vaultKeySchema,
-  vaultOperationRequiresInputs,
   vaultWaitSchema,
   vaultToolInput,
 } from "@/lib/mcp/vault-schemas";
@@ -34,7 +30,7 @@ export function registerVaultItemTools(
     "manage_vault_items",
     {
       description:
-        'Inspect credential and payment vault items and immutable audit events. "list" reads items without renewing collection links; "get" reads state, safe field metadata, version, required user actions, available_operations, and available_expansions. MCP returns explicitly non-sensitive text/email values; sensitive values and TOTP seeds are omitted. For credentials, present the collection URL only to the intended user, outside the agent-controlled browser; never ask for passwords or TOTP seeds in chat. Use action: "invoke" with operation: "collect" to reopen the full form without clearing values or changing version; TOTP has no hosted input. wait observes readiness, not edits to ready credentials: compare versions using get without wait. Use manage_vault_credentials for credential creation and updates; use a per-user vault, site-name-only description, and sensitive:false for ordinary usernames/emails. Never store credit card data in credential items. "invoke" fetches the item again and submits only an advertised operation; read its description and obtain explicit user approval first. Provider actions (OAuth, enrollment, MFA, approval) must be completed by the user, not invoked as operations. "events" observes outcomes; use the last event ID as after. "delete" invalidates an item credential; confirm with the user first. Unresolved payments can block item and parent deletion; the API decides whether explicit abandonment is allowed, and deletion never proves a payment did not occur. recovery_required is not decline or expiry: stop payment attempts and reconcile with the provider or support; no reset exists. Credential ready means required values exist, not that login succeeded; payment ready does not mean paid. For fill, supply the fill object with browser_id and ordered field/selector bindings; values stay server-side until entering the browser. Link cards use advertised fill, not aliases or egress substitution: fill.page_url must be the exact current HTTPS top-level page URL at the approved merchant origin, and the browser must retain its vault attachment. Fill returns no card values but does not isolate them from browser/CDP access or explicitly submit checkout; failed or unknown fills may leave partial writes. Never automatically retry or fall back to aliases. AgentCard aliases and checkout hold/approval/replay remain supported. prepare_checkout remains API-only here; never substitute another operation or retry an uncertain attempt. Requests are never automatically retried. Do not retry failed, timed-out, rejected, or indeterminate payments; inspect state/events instead.',
+        'Inspect credential and payment vault items and immutable audit events. "list" reads items without renewing collection links; "get" reads state, safe field metadata, version, required user actions, available_operations, and available_expansions. MCP returns explicitly non-sensitive text/email values; sensitive values and TOTP seeds are omitted. For credentials, present the collection URL only to the intended user, outside the agent-controlled browser; never ask for passwords or TOTP seeds in chat. Reopen collection using its advertised operation when available; TOTP has no hosted input. wait observes readiness, not edits to ready credentials: compare versions using get without wait. Use manage_vault_credentials for credential creation and updates; use a per-user vault, site-name-only description, and sensitive:false for ordinary usernames/emails. Never store credit card data in credential items. "invoke" fetches the item again and submits only an advertised operation; read its description and obtain explicit user approval first. Provider actions (OAuth, enrollment, MFA, approval) must be completed by the user, not invoked as operations. "events" observes outcomes; use the last event ID as after. "delete" invalidates an item credential; confirm with the user first. Unresolved payments can block item and parent deletion; the API decides whether explicit abandonment is allowed, and deletion never proves a payment did not occur. recovery_required is not decline or expiry: stop payment attempts and reconcile with the provider or support; no reset exists. Credential ready means required values exist, not that login succeeded; payment ready does not mean paid. For browser field writes, supply operation-specific inputs with browser_id and ordered field/selector bindings; values stay server-side until entering the browser. Link cards use the advertised browser field-writing operation, not aliases or egress substitution: inputs.page_url must be the exact current HTTPS top-level page URL at the approved merchant origin, and the browser must retain its vault attachment. Browser field writes return no card values but do not isolate them from browser/CDP access or explicitly submit checkout; failed or unknown writes may leave partial changes. Never automatically retry or fall back to aliases. AgentCard aliases and checkout hold/approval/replay remain supported. Follow each advertised operation\'s API contract for inputs and outcome handling; never substitute another operation or retry an uncertain attempt. Requests are never automatically retried. Do not retry failed, timed-out, rejected, or indeterminate payments; inspect state/events instead.',
       inputSchema: vaultToolInput({
         ...vaultItemSchema,
         action: z.enum(["list", "get", "invoke", "events", "delete"]),
@@ -46,13 +42,20 @@ export function registerVaultItemTools(
           .min(1)
           .refine((value) => value.trim().length > 0)
           .describe(
-            "(invoke) Type advertised in available_operations. For fill, supply the fill object. prepare_checkout still requires the Kernel API. Availability is API-controlled, not inferred from provider or state.",
+            "(invoke) Type advertised in available_operations. Availability and required inputs are API-controlled, not inferred from provider or state.",
           )
           .optional(),
-        fill: vaultFillSchema
+        inputs: z
+          .record(z.string(), z.unknown())
+          .refine(
+            (value) =>
+              !("type" in value) &&
+              !("id_or_name" in value) &&
+              Buffer.byteLength(JSON.stringify(value), "utf8") <= 128 * 1024,
+          )
           .optional()
           .describe(
-            "(invoke fill only) Value-free field bindings. Authorize the destination; each selector must resolve uniquely across all frames. Credentials forbid format; cards require HTTPS page_url. No navigation, submission, rollback, or automatic retry.",
+            "(invoke) Optional operation-specific request body fields. Read available_operations and the API contract for required inputs. Do not include type or id_or_name; the tool sets those. Never supply secret values in chat.",
           ),
         expand: z
           .array(z.enum(["payment_methods"]))
@@ -85,8 +88,8 @@ export function registerVaultItemTools(
         project,
       );
       const options = { maxRetries: 0, signal: ctx.mcpReq.signal };
-      let fillRequested = false;
-      let authorizeRequested = false;
+      let fieldWriteRequested = false;
+      let operationSubmitted = false;
       try {
         if (
           params.wait !== undefined &&
@@ -94,22 +97,11 @@ export function registerVaultItemTools(
           params.action !== "events"
         ) {
           return errorResponse(
-            "wait is only supported for get and events; invoke does not wait for collection or authorization.",
+            "wait is only supported for get and events; invoke does not wait for operation outcomes.",
           );
         }
-        if (
-          params.fill !== undefined &&
-          (params.action !== "invoke" || params.operation !== "fill")
-        )
-          return errorResponse(
-            "fill parameters are only supported for invoke fill.",
-          );
-        if (
-          params.action === "invoke" &&
-          params.operation === "fill" &&
-          params.fill === undefined
-        )
-          return errorResponse("fill parameters are required for invoke fill.");
+        if (params.inputs !== undefined && params.action !== "invoke")
+          return errorResponse("inputs are only supported for invoke.");
         if (params.action === "list") {
           const items = await client.vaults.items.list(params.vault, options);
           return jsonResponse({
@@ -150,30 +142,43 @@ export function registerVaultItemTools(
               return errorResponse(
                 "Operation is not advertised in available_operations. Inspect the item before taking further action.",
               );
-            if (operation.type === "fill" && params.fill) {
-              fillRequested = true;
-              const result = await client.vaults.items.performOperation(
-                params.key,
-                { id_or_name: params.vault, type: "fill", ...params.fill },
-                options,
-              );
-              return vaultFillResponse(result, params.fill.fields.length);
-            }
-            if (vaultOperationRequiresInputs(operation.type)) {
-              return errorResponse(
-                `${operation.type} requires additional inputs not supported by this tool. Use the Kernel API for this operation.`,
-              );
-            }
-            authorizeRequested = operation.type === "authorize";
-            const updated = await client.vaults.items.performOperation(
+            const fieldCount = Array.isArray(params.inputs?.fields)
+              ? params.inputs.fields.length
+              : undefined;
+            fieldWriteRequested = fieldCount !== undefined;
+            operationSubmitted = true;
+            // The generated SDK union is closed; the API advertises types at runtime.
+            const result = await client.vaults.items.performOperation(
               params.key,
               {
                 id_or_name: params.vault,
                 type: operation.type,
-              },
+                ...params.inputs,
+              } as Parameters<typeof client.vaults.items.performOperation>[1],
               options,
             );
-            return vaultItemResponse(updated, target);
+            if (fieldCount !== undefined)
+              return vaultFillResponse(result, fieldCount, operation.type);
+            if ("available_operations" in result)
+              return vaultItemResponse(result, target);
+            const projected = projectVaultOutput(
+              result,
+              vaultOperationResultFields,
+            );
+            return {
+              ...jsonResponse({
+                result: projected,
+                guidance:
+                  "Inspect item state and events for the outcome. Do not automatically retry an uncertain operation.",
+              }),
+              ...(typeof projected === "object" &&
+                projected !== null &&
+                "status" in projected &&
+                (projected.status === "failed" ||
+                  projected.status === "unknown") && {
+                  isError: true as const,
+                }),
+            };
           }
           case "events": {
             const events = await client.vaults.items.events(
@@ -215,7 +220,7 @@ export function registerVaultItemTools(
           }
         }
       } catch (error) {
-        if (fillRequested) throwVaultFillError(error);
+        if (fieldWriteRequested) throwVaultFillError(error);
         if (
           params.action === "delete" &&
           error instanceof APIError &&
@@ -231,7 +236,7 @@ export function registerVaultItemTools(
           "manage_vault_items",
           params.action,
           error,
-          authorizeRequested,
+          operationSubmitted,
         );
       }
     },

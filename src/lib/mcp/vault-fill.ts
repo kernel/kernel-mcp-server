@@ -11,61 +11,8 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 
-export const vaultFillSchema = z
-  .object({
-    browser_id: z
-      .string()
-      .min(1)
-      .describe(
-        "Browser session ID, not a reusable name. The vault must already be attached.",
-      ),
-    page_url: z
-      .string()
-      .url()
-      .regex(/^\S+$/)
-      .optional()
-      .describe(
-        "Exact existing top-level page URL; never navigates. Optional only for credentials with exactly one open page.",
-      ),
-    fields: z
-      .array(
-        z
-          .object({
-            field: z
-              .string()
-              .min(1)
-              .describe(
-                "Declared credential field name or supported card field, not a value.",
-              ),
-            selector: z.string().min(1),
-            format: z
-              .enum(["MM/YY", "MM/YYYY"])
-              .optional()
-              .describe(
-                "Only for a card's combined expiration field. Forbidden for credential fields.",
-              ),
-          })
-          .strict(),
-      )
-      .min(1)
-      .max(32),
-    timeout_ms: z
-      .number()
-      .int()
-      .min(1)
-      .max(30000)
-      .optional()
-      .describe(
-        "Total operation deadline in milliseconds, not per field. Default 10000.",
-      ),
-  })
-  .strict()
-  .refine(
-    (fill) => Buffer.byteLength(JSON.stringify(fill), "utf8") <= 128 * 1024,
-  );
-
 const resultSchema = z.object({
-  type: z.literal("fill"),
+  type: z.string().min(1),
   status: z.enum(["completed", "failed", "unknown"]),
   fields: z.array(
     z.object({
@@ -187,10 +134,15 @@ export function unconfirmedVaultFillResponse() {
   );
 }
 
-export function vaultFillResponse(value: unknown, count: number) {
+export function vaultFillResponse(
+  value: unknown,
+  count: number,
+  operation: string,
+) {
   const parsed = resultSchema.safeParse(value);
   if (
     !parsed.success ||
+    parsed.data.type !== operation ||
     parsed.data.fields.length !== count ||
     parsed.data.fields.some((field, index) => field.index !== index) ||
     (parsed.data.status === "completed" &&
