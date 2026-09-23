@@ -1,5 +1,5 @@
-import { getSupportedElicitationModes } from "@modelcontextprotocol/sdk/client/index.js";
-import type { ClientCapabilities } from "@modelcontextprotocol/sdk/types.js";
+import { getSupportedElicitationModes } from "@modelcontextprotocol/client";
+import type { ClientCapabilities } from "@modelcontextprotocol/client";
 
 export const MCP_APPS_EXTENSION = "io.modelcontextprotocol/ui";
 export const MCP_TASKS_EXTENSION = "io.modelcontextprotocol/tasks";
@@ -45,8 +45,8 @@ export function clientElicitationModes(capabilities: unknown) {
 
   const raw = capabilities.elicitation;
   const normalized: NonNullable<ClientCapabilities["elicitation"]> = {};
-  if (isRecord(raw.form)) normalized.form = raw.form;
-  if (isRecord(raw.url)) normalized.url = raw.url;
+  if (isRecord(raw.form)) normalized.form = {};
+  if (isRecord(raw.url)) normalized.url = {};
 
   const hasInvalidMode =
     (Object.prototype.hasOwnProperty.call(raw, "form") &&

@@ -1,23 +1,27 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { connectionContextFromAuthInfo } from "@/lib/mcp/project-selection";
 import { jsonResponse } from "@/lib/mcp/responses";
+import { z } from "zod";
 
 export function registerConnectionContextTool(server: McpServer) {
-  server.tool(
+  server.registerTool(
     "get_connection_context",
-    "Inspect the authenticated Kernel connection before a project-scoped operation. connection_scope.kind=organization may omit project for organization-wide reads and default-project creates, or pass a project name or ID to select a project. connection_scope.kind=project is fixed to connection_scope.project_id; omit project or pass that project.",
-    {},
     {
-      title: "Get Kernel connection context",
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
+      description:
+        "Inspect the authenticated Kernel connection before a project-scoped operation. connection_scope.kind=organization may omit project for organization-wide reads and default-project creates, or pass a project name or ID to select a project. connection_scope.kind=project is fixed to connection_scope.project_id; omit project or pass that project.",
+      inputSchema: z.object({}),
+      annotations: {
+        title: "Get Kernel connection context",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
-    async (_params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+    async (_params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
       const { authContext, scope } = connectionContextFromAuthInfo(
-        extra.authInfo,
+        ctx.http.authInfo,
       );
       return jsonResponse({
         ...authContext,

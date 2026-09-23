@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
@@ -15,49 +15,52 @@ import {
 
 export function registerReplayTools(server: McpServer) {
   // manage_replays -- Start, stop, and list video replay recordings for a session
-  server.tool(
+  server.registerTool(
     "manage_replays",
-    'Manage video replay recordings for a browser session. Use "start" to begin recording a session (returns a replay_id and a viewable URL), "stop" to end a recording and persist the video, or "list" to see all replays for a session with their view URLs. Recording is session-scoped: start once, run your automation, then stop -- rather than recording each action separately. Requires a paid Kernel plan; not available on the free tier.',
     {
-      ...projectSelectionInputSchema(),
-      action: z
-        .enum(["start", "stop", "list"])
-        .describe("Operation to perform."),
-      session_id: z.string().describe("Browser session ID or name."),
-      replay_id: z.string().describe("(stop) Replay ID to stop.").optional(),
-      framerate: z
-        .number()
-        .int()
-        .min(1)
-        .describe(
-          "(start) Recording framerate in fps. Values above 20 require GPU to be enabled on the session.",
-        )
-        .optional(),
-      max_duration_in_seconds: z
-        .number()
-        .int()
-        .min(1)
-        .describe("(start) Maximum recording duration in seconds.")
-        .optional(),
-      record_audio: z
-        .boolean()
-        .describe(
-          "(start) Record audio in addition to video. Defaults to video-only.",
-        )
-        .optional(),
+      description:
+        'Manage video replay recordings for a browser session. Use "start" to begin recording a session (returns a replay_id and a viewable URL), "stop" to end a recording and persist the video, or "list" to see all replays for a session with their view URLs. Recording is session-scoped: start once, run your automation, then stop -- rather than recording each action separately. Requires a paid Kernel plan; not available on the free tier.',
+      inputSchema: z.object({
+        ...projectSelectionInputSchema(),
+        action: z
+          .enum(["start", "stop", "list"])
+          .describe("Operation to perform."),
+        session_id: z.string().describe("Browser session ID or name."),
+        replay_id: z.string().describe("(stop) Replay ID to stop.").optional(),
+        framerate: z
+          .number()
+          .int()
+          .min(1)
+          .describe(
+            "(start) Recording framerate in fps. Values above 20 require GPU to be enabled on the session.",
+          )
+          .optional(),
+        max_duration_in_seconds: z
+          .number()
+          .int()
+          .min(1)
+          .describe("(start) Maximum recording duration in seconds.")
+          .optional(),
+        record_audio: z
+          .boolean()
+          .describe(
+            "(start) Record audio in addition to video. Defaults to video-only.",
+          )
+          .optional(),
+      }),
+      annotations: {
+        title: "Manage browser session replays",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
     },
-    {
-      title: "Manage browser session replays",
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(
-        extra.authInfo.token,
-        projectForOperation(extra.authInfo, params),
+        ctx.http.authInfo.token,
+        projectForOperation(ctx.http.authInfo, params),
       );
 
       try {

@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
   defaultMcpDependencies,
@@ -22,74 +22,77 @@ export function registerProjectCapabilities(
   dependencies: McpDependencies = defaultMcpDependencies,
 ) {
   // manage_projects -- Create, list, get, update, delete, and manage organization project limits
-  server.tool(
+  server.registerTool(
     "manage_projects",
-    'Manage Kernel projects for resource isolation within an organization. Use "create" to create a project, "list" to discover projects, "get" to retrieve one, "update" to rename or archive one, "delete" to remove an empty project, "get_limits" to inspect project caps, or "update_limits" to change project caps.',
     {
-      action: z
-        .enum([
-          "create",
-          "list",
-          "get",
-          "update",
-          "delete",
-          "get_limits",
-          "update_limits",
-        ])
-        .describe("Operation to perform."),
-      ...projectSelectionInputSchema({
-        project:
-          "Project name or ID. Required for get, update, delete, get_limits, and update_limits.",
-        project_id:
-          "Deprecated: use `project` instead. Project ID. Required for get, update, delete, get_limits, and update_limits.",
+      description:
+        'Manage Kernel projects for resource isolation within an organization. Use "create" to create a project, "list" to discover projects, "get" to retrieve one, "update" to rename or archive one, "delete" to remove an empty project, "get_limits" to inspect project caps, or "update_limits" to change project caps.',
+      inputSchema: z.object({
+        action: z
+          .enum([
+            "create",
+            "list",
+            "get",
+            "update",
+            "delete",
+            "get_limits",
+            "update_limits",
+          ])
+          .describe("Operation to perform."),
+        ...projectSelectionInputSchema({
+          project:
+            "Project name or ID. Required for get, update, delete, get_limits, and update_limits.",
+          project_id:
+            "Deprecated: use `project` instead. Project ID. Required for get, update, delete, get_limits, and update_limits.",
+        }),
+        name: z.string().describe("(create, update) Project name.").optional(),
+        status: z
+          .enum(["active", "archived"])
+          .describe('(update) Project status. Use "archived" to archive.')
+          .optional(),
+        query: z
+          .string()
+          .describe(
+            "(list) Case-insensitive substring match against project name.",
+          )
+          .optional(),
+        ...paginationParams,
+        max_concurrent_invocations: z
+          .number()
+          .int()
+          .min(0)
+          .describe(
+            "(update_limits) Maximum concurrent app invocations for this project. Set 0 to remove the cap.",
+          )
+          .optional(),
+        max_concurrent_sessions: z
+          .number()
+          .int()
+          .min(0)
+          .describe(
+            "(update_limits) Maximum concurrent browser sessions for this project. Set 0 to remove the cap.",
+          )
+          .optional(),
+        max_pooled_sessions: z
+          .number()
+          .int()
+          .min(0)
+          .describe(
+            "(update_limits) Maximum pooled sessions capacity for this project. Set 0 to remove the cap.",
+          )
+          .optional(),
       }),
-      name: z.string().describe("(create, update) Project name.").optional(),
-      status: z
-        .enum(["active", "archived"])
-        .describe('(update) Project status. Use "archived" to archive.')
-        .optional(),
-      query: z
-        .string()
-        .describe(
-          "(list) Case-insensitive substring match against project name.",
-        )
-        .optional(),
-      ...paginationParams,
-      max_concurrent_invocations: z
-        .number()
-        .int()
-        .min(0)
-        .describe(
-          "(update_limits) Maximum concurrent app invocations for this project. Set 0 to remove the cap.",
-        )
-        .optional(),
-      max_concurrent_sessions: z
-        .number()
-        .int()
-        .min(0)
-        .describe(
-          "(update_limits) Maximum concurrent browser sessions for this project. Set 0 to remove the cap.",
-        )
-        .optional(),
-      max_pooled_sessions: z
-        .number()
-        .int()
-        .min(0)
-        .describe(
-          "(update_limits) Maximum pooled sessions capacity for this project. Set 0 to remove the cap.",
-        )
-        .optional(),
+      annotations: {
+        title: "Manage Kernel projects",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
     },
-    {
-      title: "Manage Kernel projects",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
-      const client = dependencies.createKernelClient(extra.authInfo.token);
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      const client = dependencies.createKernelClient(ctx.http.authInfo.token);
 
       try {
         switch (params.action) {

@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { MANAGED_AUTH_APP_HTML } from "@/lib/mcp/apps/generated/managed-auth-app";
 import { mcpAppsAuthSubject } from "@/lib/mcp-apps-marker";
@@ -53,33 +53,34 @@ export function managedAuthResourceMeta() {
   };
 }
 
-const authLoginInputSchema = () => ({
-  ...projectSelectionInputSchema(),
-  mode: z.enum(["new_login", "reauth"]),
-  connection_id: z.string().min(1).optional(),
-  domain: z.string().optional(),
-  profile_name: z.string().optional(),
-  save_credentials: z.boolean().optional(),
-  record_session: z
-    .boolean()
-    .describe(
-      "Record replay video for this managed-auth flow and make it the connection default for new connections. Defaults to true in the secure App.",
-    )
-    .default(true),
-  browser_telemetry: managedAuthBrowserTelemetrySchema
-    .describe(
-      "Browser telemetry for this managed-auth flow and the connection default for new connections. Defaults to { enabled: true }, which captures the operational categories (control, connection, system, captcha).",
-    )
-    .default({ enabled: true }),
-  region: z
-    .enum(["us-east", "eu-west", "ap-southeast"])
-    .describe(
-      "Region for the managed-auth browser session. Sets the connection default for a new login or overrides it for this reauth.",
-    )
-    .optional(),
-  proxy_id: z.string().min(1).optional(),
-  proxy_name: z.string().min(1).optional(),
-});
+const authLoginInputSchema = () =>
+  z.object({
+    ...projectSelectionInputSchema(),
+    mode: z.enum(["new_login", "reauth"]),
+    connection_id: z.string().min(1).optional(),
+    domain: z.string().optional(),
+    profile_name: z.string().optional(),
+    save_credentials: z.boolean().optional(),
+    record_session: z
+      .boolean()
+      .describe(
+        "Record replay video for this managed-auth flow and make it the connection default for new connections. Defaults to true in the secure App.",
+      )
+      .default(true),
+    browser_telemetry: managedAuthBrowserTelemetrySchema
+      .describe(
+        "Browser telemetry for this managed-auth flow and the connection default for new connections. Defaults to { enabled: true }, which captures the operational categories (control, connection, system, captcha).",
+      )
+      .default({ enabled: true }),
+    region: z
+      .enum(["us-east", "eu-west", "ap-southeast"])
+      .describe(
+        "Region for the managed-auth browser session. Sets the connection default for a new login or overrides it for this reauth.",
+      )
+      .optional(),
+    proxy_id: z.string().min(1).optional(),
+    proxy_name: z.string().min(1).optional(),
+  });
 
 function waitAction(
   connectionId: string,
@@ -162,13 +163,13 @@ export function registerAuthLoginApp(server: McpServer) {
         "ui/resourceUri": MANAGED_AUTH_RESOURCE_URI,
       },
     },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
-      const project = projectForOperation(extra.authInfo, params);
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      const project = projectForOperation(ctx.http.authInfo, params);
       const input = inputFromParams(params);
       const validationError = validateAuthLoginInput(input);
       if (validationError) return errorResponse(`Error: ${validationError}`);
-      const client = createKernelClient(extra.authInfo.token, project);
+      const client = createKernelClient(ctx.http.authInfo.token, project);
 
       try {
         const reauthConnection =
@@ -243,29 +244,28 @@ export function registerAuthLoginApp(server: McpServer) {
       },
       _meta: { ui: { visibility: ["app"] } },
     },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
-      const authExtra = extra.authInfo.extra as
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      const authExtra = ctx.http.authInfo.extra as
         | { userId?: unknown }
         | undefined;
       const authSubject = mcpAppsAuthSubject({
-        token: extra.authInfo.token,
+        token: ctx.http.authInfo.token,
         userId: typeof authExtra?.userId === "string" ? authExtra.userId : null,
       });
-      const requestHeaders = (extra as { requestInfo?: { headers?: unknown } })
-        .requestInfo?.headers;
       const gateError = await mcpAppsGateError(
         server,
         authSubject,
-        mcpTransportSessionId(requestHeaders),
+        mcpTransportSessionId(ctx.http?.req?.headers),
         MCP_APPS_GATE_DENIED_MESSAGE,
+        ctx,
       );
       if (gateError) return errorResponse(gateError);
-      const project = projectForOperation(extra.authInfo, params);
+      const project = projectForOperation(ctx.http.authInfo, params);
       const input = inputFromParams(params);
       const validationError = validateAuthLoginInput(input);
       if (validationError) return errorResponse(`Error: ${validationError}`);
-      const client = createKernelClient(extra.authInfo.token, project);
+      const client = createKernelClient(ctx.http.authInfo.token, project);
 
       try {
         const result = await beginAuthLogin(client, input);

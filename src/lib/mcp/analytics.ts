@@ -7,7 +7,10 @@ import {
   type BeforeSendFn,
   type McpAnalytics,
 } from "@posthog/mcp";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  CLIENT_CAPABILITIES_META_KEY,
+  type McpServer,
+} from "@modelcontextprotocol/server";
 import { PostHog } from "posthog-node";
 import type {
   McpConnectionAnalyticsContext,
@@ -16,6 +19,7 @@ import type {
 import { MCP_INTENT_ARGUMENT_DESCRIPTION } from "@/lib/mcp/analytics-context";
 import {
   type KernelFeedback,
+  KERNEL_FEEDBACK_TOOL_NAME,
   registerFeedbackTool,
 } from "@/lib/mcp/tools/feedback";
 import {
@@ -32,6 +36,7 @@ import {
   MCP_ENTERPRISE_MANAGED_AUTHORIZATION_EXTENSION,
   MCP_OAUTH_CLIENT_CREDENTIALS_EXTENSION,
   MCP_TASKS_EXTENSION,
+  type RawClientCapabilities,
 } from "@/lib/mcp/client-capabilities";
 
 const projectToken = process.env.POSTHOG_PROJECT_TOKEN;
@@ -255,8 +260,12 @@ export function clientCapabilityAnalyticsFromInitialize(
   body: unknown,
 ): McpClientCapabilityAnalytics | null {
   const capabilities = initializeClientCapabilities(body);
-  if (!capabilities) return null;
+  return capabilities ? clientCapabilityAnalytics(capabilities) : null;
+}
 
+function clientCapabilityAnalytics(
+  capabilities: RawClientCapabilities,
+): McpClientCapabilityAnalytics {
   const sampling = isRecord(capabilities.sampling)
     ? capabilities.sampling
     : null;
@@ -402,9 +411,10 @@ export const sanitizeMcpAnalyticsEvent: BeforeSendFn = (event) => {
 };
 
 /** Extracts the analytics identity resolved during MCP authentication. */
-function connectionAnalyticsContext(extra: unknown) {
-  const authInfo = (extra as { authInfo?: { extra?: unknown } } | undefined)
-    ?.authInfo;
+function connectionAnalyticsContext(ctx: unknown) {
+  const authInfo = (
+    ctx as { http?: { authInfo?: { extra?: unknown } } } | undefined
+  )?.http?.authInfo;
   const authExtra = authInfo?.extra as
     | { connectionAnalytics?: McpConnectionAnalyticsContext }
     | undefined;
@@ -414,9 +424,10 @@ function connectionAnalyticsContext(extra: unknown) {
 // The route resolves the Kernel connection context at auth time and attaches it to
 // authInfo.extra on every request, so reading the org id out of the request extras
 // adds no I/O.
-function connectionOrgId(extra: unknown) {
-  const authInfo = (extra as { authInfo?: { extra?: unknown } } | undefined)
-    ?.authInfo;
+function connectionOrgId(ctx: unknown) {
+  const authInfo = (
+    ctx as { http?: { authInfo?: { extra?: unknown } } } | undefined
+  )?.http?.authInfo;
   const authExtra = authInfo?.extra as
     | { connectionContext?: McpConnectionContext | null }
     | undefined;
@@ -792,9 +803,23 @@ export function instrumentMcpAnalytics(
     // the SDK default: it repeats per tool in every tools/list response, so it stays
     // short, and it names the arguments agents must not copy into it.
     context: { description: MCP_INTENT_ARGUMENT_DESCRIPTION },
+    // These tools declare their own context field, so PostHog no longer owns it.
+    intentFallback: (request) => {
+      if (
+        request.params?.name !== KERNEL_FEEDBACK_TOOL_NAME &&
+        request.params?.name !== KERNEL_MISSING_CAPABILITY_TOOL_NAME
+      )
+        return null;
+      const args = request.params?.arguments;
+      return isRecord(args) && typeof args.context === "string"
+        ? args.context
+        : null;
+    },
     // A failed tool call otherwise fans out into a second `$exception` event whose
     // `$exception_list` is built from the text the tool returned.
     enableExceptionAutocapture: false,
+    enableConversationId: false,
+    captureModel: false,
     // Keep general MCP telemetry session-scoped. The initialize event alone uses the
     // canonical Kernel user ID when auth context identifies a user; API-key principals
     // remain anonymous because their principal ID identifies the credential itself.
@@ -802,7 +827,7 @@ export function instrumentMcpAnalytics(
     // Attributes every event to the caller's organization via $groups — the same
     // convention as the Kernel API's own events (api_call sends $groups with
     // organization = org id). Stamped here rather than through the SDK's identify
-    // callback because identify never runs for tools/list, and mcp-handler builds a
+    // callback because identify never runs for tools/list, and createMcpHandler builds a
     // fresh McpServer per HTTP request, so the SDK's per-session identity cache is
     // always cold when a tools/list request arrives.
     //
@@ -819,6 +844,13 @@ export function instrumentMcpAnalytics(
         if (context) properties[ANALYTICS_CONTEXT_PROPERTY] = context;
         const capabilities = clientCapabilityAnalyticsFromInitialize(request);
         if (capabilities) Object.assign(properties, capabilities);
+      }
+      const envelope = extra?.mcpReq?.envelope;
+      const capabilities = isRecord(envelope)
+        ? envelope[CLIENT_CAPABILITIES_META_KEY]
+        : undefined;
+      if (isRecord(capabilities)) {
+        Object.assign(properties, clientCapabilityAnalytics(capabilities));
       }
       return Object.keys(properties).length > 0 ? properties : null;
     },

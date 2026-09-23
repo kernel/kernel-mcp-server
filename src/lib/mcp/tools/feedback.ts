@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { parse as parseDomain } from "tldts";
 import { z } from "zod";
 import { MCP_INTENT_ARGUMENT_DESCRIPTION } from "@/lib/mcp/analytics-context";
@@ -406,7 +406,7 @@ export function registerFeedbackTool(
     {
       title: "submit KERNEL feedback",
       description: TOOL_DESCRIPTION,
-      inputSchema: feedbackFields,
+      inputSchema: z.object(feedbackFields),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -414,7 +414,7 @@ export function registerFeedbackTool(
         openWorldHint: false,
       },
     },
-    async ({ context: _context, ...feedback }, extra) => {
+    async ({ context: _context, ...feedback }, ctx) => {
       if (feedback.task_outcome === undefined) {
         feedback.task_outcome =
           feedback.task_completed === undefined
@@ -498,7 +498,7 @@ export function registerFeedbackTool(
       let status: FeedbackCaptureStatus = "unavailable";
       if (capture) {
         try {
-          await capture(feedback, extra);
+          await capture(feedback, ctx);
           status = "recorded";
         } catch {
           // Feedback analytics must not block the user's original task.

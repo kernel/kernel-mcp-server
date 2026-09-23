@@ -1,6 +1,6 @@
 /// <reference types="bun-types" />
+import type { Client } from "@modelcontextprotocol/client";
 
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { describe, expect, test } from "bun:test";
 import { connectTestMcp, toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
 import { registerBrowserCapabilities } from "@/lib/mcp/tools/browsers";

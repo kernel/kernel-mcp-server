@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import type { BrowserReplResult } from "@onkernel/sdk/resources/browsers/browsers";
 import { z } from "zod";
 import {
@@ -151,47 +151,49 @@ export function registerBrowserReplTool(
     ...defaultMcpDependencies,
   },
 ) {
-  server.tool(
+  server.registerTool(
     "browser_repl",
-    BROWSER_REPL_TOOL_DESCRIPTION,
     {
-      ...projectSelectionInputSchema(),
-      session_id: z
-        .string()
-        .min(1, "session_id is required")
-        .describe("Browser session ID or name to execute the cell against."),
-      code: z.string().describe(CODE_DESCRIPTION).default(""),
-      reset: z
-        .boolean()
-        .describe(
-          "Terminate the current REPL, start a fresh process, then evaluate code. Pass reset=true with empty code to clear all persistent state.",
-        )
-        .default(false),
-      timeout_sec: z
-        .number()
-        .int()
-        .min(1)
-        .max(MAX_TIMEOUT_SEC)
-        .describe(
-          `Maximum cell execution time in seconds (1-${MAX_TIMEOUT_SEC}). A timeout terminates the REPL and discards its state. Defaults to ${DEFAULT_TIMEOUT_SEC}.`,
-        )
-        .default(DEFAULT_TIMEOUT_SEC),
-    },
-    {
-      title: "Execute persistent Browser REPL code",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: true,
+      description: BROWSER_REPL_TOOL_DESCRIPTION,
+      inputSchema: z.object({
+        ...projectSelectionInputSchema(),
+        session_id: z
+          .string()
+          .min(1, "session_id is required")
+          .describe("Browser session ID or name to execute the cell against."),
+        code: z.string().describe(CODE_DESCRIPTION).default(""),
+        reset: z
+          .boolean()
+          .describe(
+            "Terminate the current REPL, start a fresh process, then evaluate code. Pass reset=true with empty code to clear all persistent state.",
+          )
+          .default(false),
+        timeout_sec: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_TIMEOUT_SEC)
+          .describe(
+            `Maximum cell execution time in seconds (1-${MAX_TIMEOUT_SEC}). A timeout terminates the REPL and discards its state. Defaults to ${DEFAULT_TIMEOUT_SEC}.`,
+          )
+          .default(DEFAULT_TIMEOUT_SEC),
+      }),
+      annotations: {
+        title: "Execute persistent Browser REPL code",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
     async (
       { session_id, code, reset, timeout_sec, project, project_id },
-      extra,
+      ctx,
     ) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
       const client = options.createKernelClient(
-        extra.authInfo.token,
-        projectForOperation(extra.authInfo, { project, project_id }),
+        ctx.http.authInfo.token,
+        projectForOperation(ctx.http.authInfo, { project, project_id }),
       );
 
       try {

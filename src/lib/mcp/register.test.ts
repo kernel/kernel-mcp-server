@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { connectTestMcp } from "@/lib/mcp/mcp-test-fixtures";
 import { instrumentMcpAnalytics } from "@/lib/mcp/analytics";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
 import { KERNEL_MCP_TOOL_NAMES } from "@/lib/mcp/tool-names";
@@ -27,48 +27,39 @@ const NON_AUTH_TOOLSETS = [
   "vaults",
 ].join(",");
 
-function captureRegistration(
+async function captureRegistration(
   mcpApps: boolean,
   vaults = false,
   analytics = false,
 ) {
-  const legacyTools: string[] = [];
-  const appTools: string[] = [];
-  const resources: string[] = [];
-  const schemas = new Map<string, Record<string, unknown>>();
-  const server = {
-    server: {
-      _requestHandlers: new Map([
-        ["tools/call", async () => ({ content: [] })],
-      ]),
-    },
-    prompt() {},
-    resource() {},
-    tool(name: string, _description: string, inputSchema: object) {
-      legacyTools.push(name);
-      schemas.set(name, inputSchema as Record<string, unknown>);
-    },
-    registerTool(
-      name: string,
-      config: { inputSchema?: Record<string, unknown> },
-    ) {
-      appTools.push(name);
-      schemas.set(name, config.inputSchema ?? {});
-      return { enable() {}, disable() {} };
-    },
-    registerResource(name: string) {
-      resources.push(name);
-      return { enable() {}, disable() {} };
-    },
-  } as unknown as McpServer;
-  registerMcpCapabilities(server, { mcpApps, vaults });
-  if (analytics) instrumentMcpAnalytics(server, null);
-  return { legacyTools, appTools, resources, schemas };
+  const mcp = await connectTestMcp((server) => {
+    registerMcpCapabilities(server, { mcpApps, vaults });
+    if (analytics) instrumentMcpAnalytics(server, null);
+  }, {});
+  try {
+    const { tools } = await mcp.client.listTools();
+    const { resources } = await mcp.client.listResources();
+    const appNames = new Set(["open_auth_login", "begin_auth_login"]);
+    return {
+      legacyTools: tools
+        .filter((tool) => !appNames.has(tool.name))
+        .map((tool) => tool.name),
+      appTools: tools
+        .filter((tool) => appNames.has(tool.name))
+        .map((tool) => tool.name),
+      resources: resources.map((resource) => resource.name),
+      schemas: new Map(
+        tools.map((tool) => [tool.name, tool.inputSchema.properties ?? {}]),
+      ),
+    };
+  } finally {
+    await mcp.close();
+  }
 }
 
 describe("MCP tool ownership", () => {
-  test("matches every registered KERNEL tool in both directions", () => {
-    const registration = captureRegistration(true, true, true);
+  test("matches every registered KERNEL tool in both directions", async () => {
+    const registration = await captureRegistration(true, true, true);
     const registeredTools = new Set([
       ...registration.legacyTools,
       ...registration.appTools,
@@ -85,11 +76,11 @@ describe("MCP tool ownership", () => {
 });
 
 describe("MCP Apps additive registration", () => {
-  test("keeps managed auth unchanged and only adds the App tools for capable clients", () => {
+  test("keeps managed auth unchanged and only adds the App tools for capable clients", async () => {
     const previous = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
     process.env.KERNEL_MCP_DISABLED_TOOLSETS = NON_AUTH_TOOLSETS;
     try {
-      const base = captureRegistration(false);
+      const base = await captureRegistration(false);
       expect(base.legacyTools).toEqual([
         "get_connection_context",
         "manage_auth_connections",
@@ -97,7 +88,7 @@ describe("MCP Apps additive registration", () => {
       expect(base.appTools).toEqual([]);
       expect(base.resources).toEqual([]);
 
-      const withApps = captureRegistration(true);
+      const withApps = await captureRegistration(true);
       expect(withApps.legacyTools).toEqual([
         "get_connection_context",
         "manage_auth_connections",
@@ -120,16 +111,16 @@ describe("MCP Apps additive registration", () => {
 describe("MCP toolset allowlist", () => {
   test.each([false, true])(
     "requires vault access even with an allowlist (MCP Apps: %s)",
-    (mcpApps) => {
+    async (mcpApps) => {
       const previousEnabled = process.env.KERNEL_MCP_ENABLED_TOOLSETS;
       const previousDisabled = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
       process.env.KERNEL_MCP_ENABLED_TOOLSETS = "vaults";
       delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
       try {
-        expect(captureRegistration(mcpApps).legacyTools).toEqual([
+        expect((await captureRegistration(mcpApps)).legacyTools).toEqual([
           "get_connection_context",
         ]);
-        expect(captureRegistration(mcpApps, true).legacyTools).toEqual([
+        expect((await captureRegistration(mcpApps, true)).legacyTools).toEqual([
           "get_connection_context",
           "manage_vault_provider_configs",
           "manage_vault_wallets",
@@ -139,7 +130,7 @@ describe("MCP toolset allowlist", () => {
           "manage_vaults",
         ]);
         process.env.KERNEL_MCP_DISABLED_TOOLSETS = "vaults";
-        expect(captureRegistration(mcpApps, true).legacyTools).toEqual([
+        expect((await captureRegistration(mcpApps, true)).legacyTools).toEqual([
           "get_connection_context",
         ]);
       } finally {
@@ -153,14 +144,14 @@ describe("MCP toolset allowlist", () => {
     },
   );
 
-  test("keeps connection context and only the selected browser controls", () => {
+  test("keeps connection context and only the selected browser controls", async () => {
     const previousEnabled = process.env.KERNEL_MCP_ENABLED_TOOLSETS;
     const previousDisabled = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
     process.env.KERNEL_MCP_ENABLED_TOOLSETS =
       "execute_playwright_code browser_repl computer_action";
     delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
     try {
-      const registration = captureRegistration(false);
+      const registration = await captureRegistration(false);
       expect(registration.legacyTools).toEqual([
         "get_connection_context",
         "computer_action",
@@ -210,8 +201,8 @@ describe("project selection registration", () => {
     "begin_auth_login",
   ];
 
-  test("advertises one stable project-aware tool contract", () => {
-    const registration = captureRegistration(true, true);
+  test("advertises one stable project-aware tool contract", async () => {
+    const registration = await captureRegistration(true, true);
 
     for (const name of projectScopedTools) {
       expect(registration.schemas.get(name)).toHaveProperty("project");

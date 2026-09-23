@@ -1,6 +1,6 @@
 /// <reference types="bun-types" />
+import { McpServer } from "@modelcontextprotocol/server";
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, test } from "bun:test";
 import { projectScopedExtra } from "@/lib/mcp/auth-context.test-fixtures";
 import type { McpDependencies } from "@/lib/mcp/dependencies";
@@ -18,7 +18,7 @@ type ToolResult = {
 
 type ToolHandler = (
   params: Record<string, unknown>,
-  extra: { authInfo?: { token: string } },
+  ctx: ReturnType<typeof projectScopedExtra>,
 ) => Promise<ToolResult>;
 
 type RegisterTool = (server: McpServer, dependencies?: McpDependencies) => void;
@@ -26,8 +26,8 @@ type RegisterTool = (server: McpServer, dependencies?: McpDependencies) => void;
 function captureTool(register: RegisterTool, name: string, client: unknown) {
   let handler: ToolHandler | undefined;
   const server = {
-    resource() {},
-    tool(toolName: string, ...args: unknown[]) {
+    registerResource() {},
+    registerTool(toolName: string, ...args: unknown[]) {
       if (toolName === name) {
         handler = args.at(-1) as ToolHandler;
       }

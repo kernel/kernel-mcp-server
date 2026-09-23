@@ -1,4 +1,13 @@
 import {
+  CLIENT_CAPABILITIES_META_KEY,
+  isLegacyRequest,
+} from "@modelcontextprotocol/server";
+import {
+  clientDeclaresExtension,
+  isRecord,
+  MCP_APPS_EXTENSION,
+} from "@/lib/mcp/client-capabilities";
+import {
   clearMcpAppsClient,
   hasMcpAppsClient,
   markMcpAppsClient,
@@ -37,6 +46,17 @@ export async function requestUsesMcpApps(
     body = await req.clone().json();
   } catch {
     return false;
+  }
+
+  if (!(await isLegacyRequest(req, body))) {
+    const meta =
+      isRecord(body) && isRecord(body.params) && isRecord(body.params._meta)
+        ? body.params._meta
+        : null;
+    return clientDeclaresExtension(
+      meta?.[CLIENT_CAPABILITIES_META_KEY],
+      MCP_APPS_EXTENSION,
+    );
   }
 
   const request =

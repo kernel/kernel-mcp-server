@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { APIError } from "@onkernel/sdk";
 import { z } from "zod";
 import {
@@ -38,36 +38,39 @@ export function registerVaultCapabilities(
   registerVaultCredentialTools(server, dependencies);
   registerVaultItemTools(server, dependencies);
 
-  server.tool(
+  server.registerTool(
     "manage_vaults",
-    'Manage project-owned vaults for end-user credentials and payment items. Use a separate vault per end user, with an immutable name such as user-123; do not mix unrelated users. Vaults store credentials, not authenticated browser sessions, and do not submit website forms or merchant payments. "create" creates or retrieves a vault by immutable name; "list" lists the effective project only; "get" reads one; "delete" invalidates the vault and every item credential. Confirm deletion with the user first; unresolved payment operations block deletion and require provider/support reconciliation. Connect a payment wallet with manage_vault_wallets, configure a card with manage_vault_cards, and inspect credentials or payment items with manage_vault_items. Use manage_vault_credentials to create definitions or update values, then manage_vault_items to collect, observe readiness, and invoke fill with value-free bindings. For credentials, inspect the website and create the named field definitions in its natural top-to-bottom order because that array order controls the user-facing form. Use only the recognizable site name as description and set sensitive:false explicitly for ordinary usernames/emails; passwords and TOTP seeds must be sensitive. Never put credit card data in credential items. Attach vaults when creating a browser; bindings cannot change later. Requests are not automatically retried.',
-    vaultToolInput({
-      ...vaultProjectSchema,
-      action: z.enum(["create", "list", "get", "delete"]),
-      vault: vaultSelectorSchema()
-        .describe("(get, delete) Vault ID or immutable name.")
-        .optional(),
-      name: vaultSelectorSchema()
-        .describe(
-          "(create) Immutable per-end-user vault name, e.g. user-123. Reuse that user's vault; do not mix unrelated users.",
-        )
-        .optional(),
-      ...paginationParams,
-    }),
     {
-      title: "Manage Kernel vaults",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: true,
+      description:
+        'Manage project-owned vaults for end-user credentials and payment items. Use a separate vault per end user, with an immutable name such as user-123; do not mix unrelated users. Vaults store credentials, not authenticated browser sessions, and do not submit website forms or merchant payments. "create" creates or retrieves a vault by immutable name; "list" lists the effective project only; "get" reads one; "delete" invalidates the vault and every item credential. Confirm deletion with the user first; unresolved payment operations block deletion and require provider/support reconciliation. Connect a payment wallet with manage_vault_wallets, configure a card with manage_vault_cards, and inspect credentials or payment items with manage_vault_items. Use manage_vault_credentials to create definitions or update values, then manage_vault_items to collect, observe readiness, and invoke fill with value-free bindings. For credentials, inspect the website and create the named field definitions in its natural top-to-bottom order because that array order controls the user-facing form. Use only the recognizable site name as description and set sensitive:false explicitly for ordinary usernames/emails; passwords and TOTP seeds must be sensitive. Never put credit card data in credential items. Attach vaults when creating a browser; bindings cannot change later. Requests are not automatically retried.',
+      inputSchema: vaultToolInput({
+        ...vaultProjectSchema,
+        action: z.enum(["create", "list", "get", "delete"]),
+        vault: vaultSelectorSchema()
+          .describe("(get, delete) Vault ID or immutable name.")
+          .optional(),
+        name: vaultSelectorSchema()
+          .describe(
+            "(create) Immutable per-end-user vault name, e.g. user-123. Reuse that user's vault; do not mix unrelated users.",
+          )
+          .optional(),
+        ...paginationParams,
+      }),
+      annotations: {
+        title: "Manage Kernel vaults",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
       const client = dependencies.createKernelClient(
-        extra.authInfo.token,
-        projectForOperation(extra.authInfo, params),
+        ctx.http.authInfo.token,
+        projectForOperation(ctx.http.authInfo, params),
       );
-      const options = { maxRetries: 0, signal: extra.signal };
+      const options = { maxRetries: 0, signal: ctx.mcpReq.signal };
       try {
         switch (params.action) {
           case "create": {

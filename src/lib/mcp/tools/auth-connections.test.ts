@@ -34,10 +34,6 @@ describe("manage_auth_connections programmatic surface", () => {
     expect(schema?.sso_button_selector).toBeDefined();
     expect(schema?.allowed_domains).toBeDefined();
     expect(schema?.login_url).toBeDefined();
-    expect(schema?.credential_name.description).toContain("create, update");
-    expect(schema?.credential_provider.description).toContain("create, update");
-    expect(schema?.credential_path.description).toContain("create, update");
-    expect(schema?.credential_auto.description).toContain("create, update");
     expect(schema?.health_checks).toBeDefined();
     expect(schema?.auto_reauth).toBeDefined();
     expect(schema?.browser_region.safeParse("eu-west").success).toBe(true);
@@ -89,6 +85,16 @@ describe("manage_auth_connections programmatic surface", () => {
         ({ name }) => name === "manage_auth_connections",
       );
       const browserTelemetry = tool?.inputSchema.properties?.browser_telemetry;
+      for (const field of [
+        "credential_name",
+        "credential_provider",
+        "credential_path",
+        "credential_auto",
+      ]) {
+        expect(tool?.inputSchema.properties?.[field]).toMatchObject({
+          description: expect.stringContaining("create, update"),
+        });
+      }
 
       expect(browserTelemetry).toBeDefined();
       expect(JSON.stringify(browserTelemetry)).not.toContain('"$ref"');

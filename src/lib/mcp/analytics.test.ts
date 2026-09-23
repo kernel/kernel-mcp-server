@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import type { PostHog } from "posthog-node";
 import {
   encodeSessionId,
@@ -33,6 +33,8 @@ import {
 } from "@/lib/mcp/analytics";
 import { connectTestMcp, toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
 import { KERNEL_FEEDBACK_TOOL_NAME } from "@/lib/mcp/tools/feedback";
+import { registerMcpCapabilities } from "@/lib/mcp/register";
+import { z } from "zod";
 
 const privateContextProperty = "__mcp_connection_analytics_context";
 
@@ -623,10 +625,12 @@ describe("captureMissingCapabilityReport", () => {
         tools_checked: ["manage_browsers"],
       },
       {
-        authInfo: {
-          extra: {
-            connectionContext: {
-              scope: { organizationId: "org_analytics" },
+        http: {
+          authInfo: {
+            extra: {
+              connectionContext: {
+                scope: { organizationId: "org_analytics" },
+              },
             },
           },
         },
@@ -678,10 +682,12 @@ describe("captureMcpFeedback", () => {
           "The error linked to https://example.com/support for user@example.com.",
       },
       {
-        authInfo: {
-          extra: {
-            connectionContext: {
-              scope: { organizationId: "org_analytics" },
+        http: {
+          authInfo: {
+            extra: {
+              connectionContext: {
+                scope: { organizationId: "org_analytics" },
+              },
             },
           },
         },
@@ -773,10 +779,12 @@ describe("captureMcpFeedback", () => {
         },
       },
       {
-        authInfo: {
-          extra: {
-            connectionContext: {
-              scope: { organizationId: "org_analytics" },
+        http: {
+          authInfo: {
+            extra: {
+              connectionContext: {
+                scope: { organizationId: "org_analytics" },
+              },
             },
           },
         },
@@ -926,10 +934,12 @@ describe("captureMcpFeedback", () => {
         },
       },
       {
-        authInfo: {
-          extra: {
-            connectionContext: {
-              scope: { organizationId: "org_analytics" },
+        http: {
+          authInfo: {
+            extra: {
+              connectionContext: {
+                scope: { organizationId: "org_analytics" },
+              },
             },
           },
         },
@@ -976,17 +986,16 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
   const ORG = "org_integration";
 
   test("keeps analytics tool contracts stable", async () => {
-    const disabled = await connectTestMcp(
-      (server) => instrumentMcpAnalytics(server, null),
-      {},
-    );
-    const enabled = await connectTestMcp(
-      (server) =>
-        instrumentMcpAnalytics(server, {
-          capture: () => undefined,
-        } as unknown as PostHog),
-      {},
-    );
+    const disabled = await connectTestMcp((server) => {
+      instrumentMcpAnalytics(server, null);
+      registerMcpCapabilities(server, { mcpApps: true, vaults: true });
+    }, {});
+    const enabled = await connectTestMcp((server) => {
+      instrumentMcpAnalytics(server, {
+        capture: () => undefined,
+      } as unknown as PostHog);
+      registerMcpCapabilities(server, { mcpApps: true, vaults: true });
+    }, {});
 
     try {
       const disabledTool = (await disabled.client.listTools()).tools.find(
@@ -998,6 +1007,35 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       expect(disabledTool).toBeDefined();
       expect(disabledTool?.inputSchema).toEqual(enabledTool?.inputSchema);
       expect(disabledTool?.inputSchema.required).toContain("context");
+      const vaultTool = (await enabled.client.listTools()).tools.find(
+        ({ name }) => name === "manage_vault_credentials",
+      );
+      expect(vaultTool?.inputSchema.properties).toHaveProperty("spec");
+      const rejectedVaultInput = await enabled.client.callTool({
+        name: "manage_vault_credentials",
+        arguments: {
+          action: "create",
+          vault: "test",
+          key: "test",
+          spec: {
+            fields: [
+              {
+                name: "password",
+                type: "password",
+                value: { private_key: "never-echo-this" },
+              },
+            ],
+          },
+        },
+      });
+      expect(rejectedVaultInput.isError).toBe(true);
+      expect(JSON.stringify(rejectedVaultInput)).toContain(
+        "Invalid vault tool input",
+      );
+      expect(JSON.stringify(rejectedVaultInput)).not.toContain(
+        "never-echo-this",
+      );
+      expect(JSON.stringify(rejectedVaultInput)).not.toContain("private_key");
 
       const missingCapabilityTool = (
         await enabled.client.listTools()
@@ -1082,7 +1120,7 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     }
   });
 
-  // mcp-handler builds a fresh McpServer per HTTP request, so each simulated request
+  // createMcpHandler builds a fresh McpServer per HTTP request, so each simulated request
   // gets its own instrumented server and the SDK's per-session identity cache starts
   // cold — this is exactly the deployed topology.
   function makeServer(captured: { event?: string }[]) {
@@ -1091,7 +1129,7 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       capture: (event: unknown) => captured.push(event as { event?: string }),
     } as unknown as PostHog;
     instrumentMcpAnalytics(server, fakePosthog);
-    server.tool("ping", {}, async () => ({
+    server.registerTool("ping", { inputSchema: z.object({}) }, async () => ({
       content: [{ type: "text" as const, text: "pong" }],
     }));
     return server;
@@ -1104,23 +1142,30 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
   ) {
     const server = makeServer(captured);
     const request = { jsonrpc: "2.0", id: 1, method, params };
+
     const extra = {
-      authInfo: {
-        token: "sk_test",
-        clientId: "mcp-server",
-        scopes: ["apikey"],
-        extra: { connectionContext: { scope: { organizationId: ORG } } },
-      },
-      signal: new AbortController().signal,
-      requestInfo: {
-        headers: {
-          [MCP_SESSION_HEADER]: encodeSessionId({
-            sessionId: "ses_integration",
-            clientName: "test-client",
-            clientVersion: "0.0.0",
-            protocolVersion: "2025-03-26",
-          }),
+      http: {
+        authInfo: {
+          token: "sk_test",
+          clientId: "mcp-server",
+          scopes: ["apikey"],
+          extra: { connectionContext: { scope: { organizationId: ORG } } },
         },
+        req: new Request("https://mcp.example.test/mcp", {
+          headers: {
+            [MCP_SESSION_HEADER]: encodeSessionId({
+              sessionId: "ses_integration",
+              clientName: "test-client",
+              clientVersion: "0.0.0",
+              protocolVersion: "2025-03-26",
+            }),
+          },
+        }),
+      },
+      mcpReq: {
+        signal: new AbortController().signal,
+        envelope: {},
+        requestState: () => undefined,
       },
     };
     const handlers = (
@@ -1332,17 +1377,96 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     );
   });
 
+  test("attributes modern requests without a session and preserves the privacy allowlist", async () => {
+    const captured: { event?: string; properties?: Record<string, unknown> }[] =
+      [];
+    const handler = createMcpHandler(() => makeServer(captured));
+    try {
+      const response = await handler.fetch(
+        new Request("https://mcp.example.test/mcp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "MCP-Protocol-Version": "2026-07-28",
+            "Mcp-Method": "tools/call",
+            "Mcp-Name": "ping",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: {
+              name: "ping",
+              arguments: {
+                context:
+                  "Checking https://private.example.com with a secret payload",
+              },
+              _meta: {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {
+                  name: "modern-client",
+                  version: "1",
+                },
+                "io.modelcontextprotocol/clientCapabilities": {
+                  extensions: { "io.modelcontextprotocol/ui": {} },
+                },
+              },
+            },
+          }),
+        }),
+        {
+          authInfo: {
+            token: "test-token",
+            clientId: "test-client",
+            scopes: [],
+            extra: { connectionContext: { scope: { organizationId: ORG } } },
+          },
+        },
+      );
+      expect(response.status).toBe(200);
+      expect((await response.json()).result.resultType).toBe("complete");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const event = captured.find(
+        (event) => event.event === PostHogMCPAnalyticsEvent.ToolCall,
+      );
+      expect(event?.properties).toMatchObject({
+        $groups: { organization: ORG },
+        [MCP_CLIENT_SUPPORTS_APPS_PROPERTY]: true,
+        [PostHogMCPAnalyticsProperty.ProtocolVersion]: "2026-07-28",
+      });
+      expect(event?.properties).not.toHaveProperty(
+        PostHogMCPAnalyticsProperty.Parameters,
+      );
+      expect(event?.properties).not.toHaveProperty(
+        PostHogMCPAnalyticsProperty.Response,
+      );
+      expect(JSON.stringify(event)).not.toContain("private.example.com");
+      expect(JSON.stringify(event)).not.toContain("test-token");
+    } finally {
+      await handler.close();
+    }
+  });
+
   test("stays anonymous when no connection context is attached", async () => {
     const captured: { event?: string }[] = [];
     const server = makeServer(captured);
+
     const extra = {
-      authInfo: {
-        token: "sk_test",
-        clientId: "mcp-server",
-        scopes: ["apikey"],
+      http: {
+        authInfo: {
+          token: "sk_test",
+          clientId: "mcp-server",
+          scopes: ["apikey"],
+        },
+        req: new Request("https://mcp.example.test/mcp", {
+          headers: {},
+        }),
       },
-      signal: new AbortController().signal,
-      requestInfo: { headers: {} },
+      mcpReq: {
+        signal: new AbortController().signal,
+        envelope: {},
+        requestState: () => undefined,
+      },
     };
     const handlers = (
       server.server as unknown as {

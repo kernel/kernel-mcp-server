@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
 import {
@@ -254,31 +254,34 @@ async function executeComputerActionPrefix(
 
 export function registerComputerActionTool(server: McpServer) {
   // computer_action -- Execute one or more computer actions on a browser session
-  server.tool(
+  server.registerTool(
     "computer_action",
-    "Execute computer actions on a browser session. Pass a single action for simple operations (e.g. one click or one screenshot), or pass multiple actions to batch them into a single request for lower latency (e.g. click, type, press_key in one call). Use sleep actions between steps when the page needs time to react (e.g. after a click that triggers navigation or animation). IMPORTANT: Always include a screenshot as the last action so you can see the result of your actions. Action types: click_mouse, move_mouse, type_text, press_key, scroll, drag_mouse, set_cursor, sleep, write_clipboard, read_clipboard, screenshot, get_mouse_position. screenshot, read_clipboard, and get_mouse_position return data, so they must be the last action if included.",
     {
-      ...projectSelectionInputSchema(),
-      session_id: z.string().describe("Browser session ID or name."),
-      actions: z
-        .array(computerActionSchema)
-        .min(1)
-        .describe(
-          "Ordered list of actions. Use one action for simple operations or multiple for batched sequences.",
-        ),
+      description:
+        "Execute computer actions on a browser session. Pass a single action for simple operations (e.g. one click or one screenshot), or pass multiple actions to batch them into a single request for lower latency (e.g. click, type, press_key in one call). Use sleep actions between steps when the page needs time to react (e.g. after a click that triggers navigation or animation). IMPORTANT: Always include a screenshot as the last action so you can see the result of your actions. Action types: click_mouse, move_mouse, type_text, press_key, scroll, drag_mouse, set_cursor, sleep, write_clipboard, read_clipboard, screenshot, get_mouse_position. screenshot, read_clipboard, and get_mouse_position return data, so they must be the last action if included.",
+      inputSchema: z.object({
+        ...projectSelectionInputSchema(),
+        session_id: z.string().describe("Browser session ID or name."),
+        actions: z
+          .array(computerActionSchema)
+          .min(1)
+          .describe(
+            "Ordered list of actions. Use one action for simple operations or multiple for batched sequences.",
+          ),
+      }),
+      annotations: {
+        title: "Control browser (mouse, keyboard, screenshot)",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    {
-      title: "Control browser (mouse, keyboard, screenshot)",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    async ({ session_id, actions, project, project_id }, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+    async ({ session_id, actions, project, project_id }, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(
-        extra.authInfo.token,
-        projectForOperation(extra.authInfo, { project, project_id }),
+        ctx.http.authInfo.token,
+        projectForOperation(ctx.http.authInfo, { project, project_id }),
       );
 
       try {
