@@ -1045,11 +1045,12 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       expect(missingCapabilityTool?.description).toContain(
         "after checking the tool list",
       );
+      expect(missingCapabilityTool?.description).toContain("site_tool_missing");
       expect(missingCapabilityTool?.description).toContain(
-        "transient or capacity failure",
+        "transient capacity failure",
       );
       expect(missingCapabilityTool?.description).toContain(
-        "client-side permission restriction",
+        "client permission restriction",
       );
       expect(missingCapabilityTool?.inputSchema.required).toEqual([
         "context",
@@ -1319,6 +1320,45 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       missing_capability_task_outcome: "blocked",
       missing_capability_tools_checked: ["manage_browsers"],
     });
+  });
+
+  test("routes site tool demand with only a public domain and distinct dedupe keys", async () => {
+    const captured: { event?: string }[] = [];
+    const request = {
+      name: "get_more_tools",
+      arguments: {
+        context:
+          "The page lacks a reusable structured search action, so the agent is continuing with browser interaction instead.",
+        gap_reason: "site_tool_missing",
+        capability_area: "webmcp",
+        capability: "search available products",
+        requested_action: "search",
+        task_outcome: "completed_with_workaround",
+        tools_checked: ["webmcp"],
+        site_domain: "example.com",
+      },
+    };
+
+    await simulateRequest(captured, "tools/call", request);
+    await simulateRequest(captured, "tools/call", {
+      ...request,
+      arguments: { ...request.arguments, site_domain: "example.org" },
+    });
+
+    const requests = captured.filter(
+      ({ event }) => event === MCP_CAPABILITY_REQUESTED_EVENT,
+    ) as { properties: Record<string, unknown> }[];
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.properties).toMatchObject({
+      missing_capability_gap_reason: "site_tool_missing",
+      missing_capability_destination: "webmcp_catalog_demand",
+      missing_capability_area: "webmcp",
+      missing_capability_name: "search available products",
+      missing_capability_site_domain: "example.com",
+    });
+    expect(requests[0]?.properties.missing_capability_dedupe_key).not.toBe(
+      requests[1]?.properties.missing_capability_dedupe_key,
+    );
   });
 
   test("captures feedback with the surrounding MCP session metadata", async () => {

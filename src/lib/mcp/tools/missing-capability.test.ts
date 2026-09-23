@@ -76,6 +76,80 @@ describe("get_more_tools", () => {
     }
   });
 
+  test("records missing site actions separately and validates domain and ownership", async () => {
+    const captured: MissingCapabilityReport[] = [];
+    const { client, close } = await connectTestMcp(
+      (server) =>
+        registerMissingCapabilityTool(server, (report) => {
+          captured.push(report);
+        }),
+      {},
+    );
+
+    const request = {
+      context:
+        "A reusable page search action is not listed by WebMCP, so the agent will continue using browser interaction.",
+      gap_reason: "site_tool_missing",
+      capability_area: "webmcp",
+      capability: "search available products",
+      requested_action: "search",
+      task_outcome: "completed_with_workaround",
+      tools_checked: ["webmcp", "execute_playwright_code"],
+    };
+
+    try {
+      const result = await client.callTool({
+        name: KERNEL_MISSING_CAPABILITY_TOOL_NAME,
+        arguments: { ...request, site_domain: "EXAMPLE.COM" },
+      });
+      expect(toolResultJSON(result)).toMatchObject({
+        recorded: true,
+        destination: "webmcp_catalog_demand",
+      });
+      expect(captured[0]).toMatchObject({
+        site_domain: "example.com",
+        tools_checked: ["webmcp", "execute_playwright_code"],
+      });
+
+      const wrongArea = await client.callTool({
+        name: KERNEL_MISSING_CAPABILITY_TOOL_NAME,
+        arguments: { ...request, capability_area: "browsers" },
+      });
+      expect(toolResultJSON(wrongArea)).toMatchObject({
+        recorded: false,
+        status: "invalid_capability_owner",
+      });
+
+      const wrongReason = await client.callTool({
+        name: KERNEL_MISSING_CAPABILITY_TOOL_NAME,
+        arguments: {
+          ...request,
+          gap_reason: "kernel_capability_missing",
+          site_domain: "example.com",
+        },
+      });
+      expect(toolResultJSON(wrongReason)).toMatchObject({
+        recorded: false,
+        status: "invalid_capability_owner",
+      });
+
+      for (const site_domain of [
+        "https://example.com/path",
+        "foo.example.com",
+        "localhost",
+      ]) {
+        const invalid = await client.callTool({
+          name: KERNEL_MISSING_CAPABILITY_TOOL_NAME,
+          arguments: { ...request, site_domain },
+        });
+        expect(invalid.isError).toBe(true);
+      }
+      expect(captured).toHaveLength(1);
+    } finally {
+      await close();
+    }
+  });
+
   test("accepts the previous context-only contract without recording demand", async () => {
     const captured: MissingCapabilityReport[] = [];
     const { client, close } = await connectTestMcp(

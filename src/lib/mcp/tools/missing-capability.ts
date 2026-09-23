@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { parse as parseDomain } from "tldts";
 import { jsonResponse } from "@/lib/mcp/responses";
 import {
   normalizeKernelMcpToolName,
@@ -10,6 +11,7 @@ export const KERNEL_MISSING_CAPABILITY_TOOL_NAME = "get_more_tools";
 
 const gapReasonSchema = z.enum([
   "kernel_capability_missing",
+  "site_tool_missing",
   "existing_tool_failed",
   "transient_or_capacity_failure",
   "client_permission_restriction",
@@ -19,6 +21,7 @@ const gapReasonSchema = z.enum([
 
 const capabilityAreaSchema = z.enum([
   "browsers",
+  "webmcp",
   "browser_files",
   "profiles",
   "projects",
@@ -77,13 +80,13 @@ const missingCapabilityFields = {
   context: z
     .string()
     .describe(
-      "The missing capability and the user's goal, in 15-25 words and third person. Never include credentials, URLs, domains, account names, file contents, paths, or personal data.",
+      "The missing capability and the user's goal, in 15-25 words and third person. Never include credentials, URLs, domains, account names, file contents, paths, or personal data. For site tools, put the public registrable domain only in site_domain.",
     ),
   gap_reason: gapReasonSchema.describe(
-    "Why the task could not proceed. Only kernel_capability_missing and external_integration_unavailable are recorded as demand. For an existing tool failure, use submit_feedback instead; transient failures and client restrictions are not capability gaps.",
+    "Classify the gap. kernel_capability_missing, site_tool_missing, and external_integration_unavailable are recorded separately. site_tool_missing means a reusable site action is not exposed by webmcp after checking its list, even if Playwright can complete the task. For an existing tool failure, use submit_feedback instead; transient failures and client restrictions are not capability gaps.",
   ),
   capability_area: capabilityAreaSchema.describe(
-    "The single KERNEL product area that would own the capability, or external_integration/client_environment when Kernel does not own it.",
+    "The single KERNEL product area that would own the capability. Use webmcp for site_tool_missing, or external_integration/client_environment when Kernel does not own it.",
   ),
   capability: z
     .string()
@@ -92,6 +95,18 @@ const missingCapabilityFields = {
     .max(100)
     .describe(
       'A short generic capability name, such as "browser filesystem upload". Do not include a site, customer, account, domain, path, or payload.',
+    ),
+  site_domain: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .refine((value) => {
+      const parsed = parseDomain(value, { allowPrivateDomains: false });
+      return parsed.isIcann && parsed.domain === value;
+    }, "must be a public registrable domain without a subdomain or URL components")
+    .optional()
+    .describe(
+      "Only for site_tool_missing: the public registrable domain (e.g. example.com), when known. No URL, subdomain, path, query, port, account identifier, or private hostname.",
     ),
   requested_action: requestedActionSchema.describe(
     "The primary operation the missing capability needed to perform.",
@@ -173,7 +188,7 @@ export function registerMissingCapabilityTool(
     KERNEL_MISSING_CAPABILITY_TOOL_NAME,
     {
       description:
-        "Report a capability that no available KERNEL tool can provide after checking the tool list. Classify disconnected third-party services as external integrations. Do not use this for an existing tool that failed, a transient or capacity failure, or a client-side permission restriction; use submit_feedback for an existing KERNEL tool failure. Reports never replace the original task, so continue with any available workaround.",
+        "Report a missing KERNEL capability, external integration, or reusable site-specific WebMCP action after checking the tool list. For a site action, first list webmcp tools in the browser; if no suitable action is exposed, report site_tool_missing with capability_area webmcp, optionally site_domain, and continue using Playwright when possible. Do not report an existing tool failure, transient capacity failure, or client permission restriction as demand; use submit_feedback for an existing KERNEL tool failure. A request does not install a tool or replace the original task.",
       inputSchema: structuredMissingCapabilitySchema,
       annotations: {
         title: "Get more tools",
@@ -186,9 +201,13 @@ export function registerMissingCapabilityTool(
     async (report, ctx) => {
       const externalIntegration =
         report.gap_reason === "external_integration_unavailable";
+      const siteTool = report.gap_reason === "site_tool_missing";
       if (
         (externalIntegration &&
           report.capability_area !== "external_integration") ||
+        (siteTool && report.capability_area !== "webmcp") ||
+        (!siteTool &&
+          (report.capability_area === "webmcp" || report.site_domain)) ||
         (report.gap_reason === "kernel_capability_missing" &&
           (report.capability_area === "external_integration" ||
             report.capability_area === "client_environment"))
@@ -203,6 +222,7 @@ export function registerMissingCapabilityTool(
 
       const recordable =
         report.gap_reason === "kernel_capability_missing" ||
+        siteTool ||
         externalIntegration;
       if (!recordable) {
         return jsonResponse({
@@ -229,10 +249,11 @@ export function registerMissingCapabilityTool(
         recorded: status === "recorded",
         status,
         capability: report.capability,
-        destination:
-          report.gap_reason === "kernel_capability_missing"
-            ? "kernel_product_demand"
-            : "external_integration_demand",
+        destination: siteTool
+          ? "webmcp_catalog_demand"
+          : externalIntegration
+            ? "external_integration_demand"
+            : "kernel_product_demand",
         message:
           status === "recorded"
             ? "The capability request was recorded. No additional KERNEL tools are available; continue the original task with any available workaround."

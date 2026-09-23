@@ -219,6 +219,7 @@ const SENT_PROPERTIES = new Set<string>([
   "missing_capability_destination",
   "missing_capability_area",
   "missing_capability_name",
+  "missing_capability_site_domain",
   "missing_capability_requested_action",
   "missing_capability_task_outcome",
   "missing_capability_tools_checked",
@@ -467,9 +468,11 @@ export function captureMissingCapabilityReport(
     : { value: "", redacted: false };
   const capability = redactAnalyticsTextWithStatus(report.capability);
   const destination =
-    report.gap_reason === "kernel_capability_missing"
-      ? "kernel_product_demand"
-      : "external_integration_demand";
+    report.gap_reason === "site_tool_missing"
+      ? "webmcp_catalog_demand"
+      : report.gap_reason === "kernel_capability_missing"
+        ? "kernel_product_demand"
+        : "external_integration_demand";
 
   return captureMcpCustomEvent(
     analytics,
@@ -483,12 +486,16 @@ export function captureMissingCapabilityReport(
       missing_capability_destination: destination,
       missing_capability_area: report.capability_area,
       missing_capability_name: capability.value,
+      ...(report.site_domain && {
+        missing_capability_site_domain: report.site_domain,
+      }),
       missing_capability_requested_action: report.requested_action,
       missing_capability_task_outcome: report.task_outcome,
       missing_capability_tools_checked: report.tools_checked,
       missing_capability_dedupe_key: analyticsDedupeKey([
         destination,
         report.capability_area,
+        report.site_domain,
         report.requested_action,
         capability.value.toLowerCase(),
       ]),
