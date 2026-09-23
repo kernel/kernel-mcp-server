@@ -167,6 +167,67 @@ describe("advertised vault operations", () => {
     }
   });
 
+  test.each([400, 403, 409, 422, 429])(
+    "returns the exact provider message for authorize HTTP %s",
+    async (status) => {
+      const reason = `Funding method cannot be used for this purchase (${status}).`;
+      const fixture = await connectVaultTest([
+        Response.json(item),
+        Response.json(
+          { code: "provider_error", message: reason, opaque: "hidden" },
+          { status },
+        ),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          action: "invoke",
+          vault: "checkout",
+          key: "order-1",
+          operation: "authorize",
+        });
+        const text = JSON.stringify(result);
+        expect(result.isError).toBe(true);
+        expect(text).toContain(reason);
+        expect(text).toContain("[code: provider_error]");
+        expect(text).not.toContain("hidden");
+        expect(text).not.toContain(
+          "The payment provider could not complete the vault request.",
+        );
+        expect(fixture.requests.map((request) => request.method)).toEqual([
+          "GET",
+          "POST",
+        ]);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test("keeps non-authorization provider errors curated", async () => {
+    const fixture = await connectVaultTest([
+      Response.json({
+        ...item,
+        available_operations: [{ type: "future_operation", description: "" }],
+      }),
+      Response.json(
+        { code: "provider_error", message: "access_token=hidden" },
+        { status: 400 },
+      ),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "invoke",
+        vault: "checkout",
+        key: "order-1",
+        operation: "future_operation",
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("hidden");
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test.each(["get", "post"])(
     "does not retry an operation's failed %s",
     async (stage) => {

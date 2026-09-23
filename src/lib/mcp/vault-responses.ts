@@ -411,6 +411,7 @@ export function throwVaultError(
   tool: string,
   action: string,
   error: unknown,
+  exposeProviderMessage = false,
 ): never {
   if (error instanceof z.ZodError) {
     throwToolError(
@@ -420,7 +421,6 @@ export function throwVaultError(
     );
   }
   if (error instanceof APIError && typeof error.status === "number") {
-    // Neither provider messages nor unknown codes are safe to return, even as strings.
     const body = error.error;
     const code =
       body &&
@@ -429,6 +429,30 @@ export function throwVaultError(
       typeof body.code === "string"
         ? body.code
         : undefined;
+    if (
+      exposeProviderMessage &&
+      error.status >= 400 &&
+      error.status < 500 &&
+      body &&
+      typeof body === "object" &&
+      "message" in body &&
+      typeof body.message === "string" &&
+      body.message.length > 0
+    ) {
+      throwToolError(
+        tool,
+        action,
+        APIError.generate(
+          error.status,
+          {
+            message: body.message,
+            ...(code !== undefined && vaultErrorMessages.has(code) && { code }),
+          },
+          undefined,
+          new Headers(),
+        ),
+      );
+    }
     const message =
       code === undefined ? undefined : vaultErrorMessages.get(code);
     throwToolError(

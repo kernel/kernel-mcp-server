@@ -86,6 +86,7 @@ export function registerVaultItemTools(
       );
       const options = { maxRetries: 0, signal: ctx.mcpReq.signal };
       let fillRequested = false;
+      let authorizeRequested = false;
       try {
         if (
           params.wait !== undefined &&
@@ -163,6 +164,7 @@ export function registerVaultItemTools(
                 `${operation.type} requires additional inputs not supported by this tool. Use the Kernel API for this operation.`,
               );
             }
+            authorizeRequested = operation.type === "authorize";
             const updated = await client.vaults.items.performOperation(
               params.key,
               {
@@ -225,7 +227,12 @@ export function registerVaultItemTools(
             key: params.key,
           });
         }
-        throwVaultError("manage_vault_items", params.action, error);
+        throwVaultError(
+          "manage_vault_items",
+          params.action,
+          error,
+          authorizeRequested,
+        );
       }
     },
   );
