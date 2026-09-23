@@ -19,6 +19,7 @@ const NON_AUTH_TOOLSETS = [
   "computer",
   "shell",
   "playwright",
+  "repl",
   "webmcp",
   "replays",
   "credentials",
@@ -156,7 +157,7 @@ describe("MCP toolset allowlist", () => {
     const previousEnabled = process.env.KERNEL_MCP_ENABLED_TOOLSETS;
     const previousDisabled = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
     process.env.KERNEL_MCP_ENABLED_TOOLSETS =
-      "execute_playwright_code computer_action";
+      "execute_playwright_code browser_repl computer_action";
     delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
     try {
       const registration = captureRegistration(false);
@@ -164,6 +165,7 @@ describe("MCP toolset allowlist", () => {
         "get_connection_context",
         "computer_action",
         "execute_playwright_code",
+        "browser_repl",
       ]);
       expect(registration.appTools).toEqual([]);
       expect(registration.resources).toEqual([]);
@@ -195,6 +197,7 @@ describe("project selection registration", () => {
     "computer_action",
     "exec_command",
     "execute_playwright_code",
+    "browser_repl",
     "manage_replays",
     "manage_auth_connections",
     "manage_credentials",
