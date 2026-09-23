@@ -67,6 +67,7 @@ export function vaultToolInput<Shape extends z.ZodRawShape>(shape: Shape) {
   return {
     "~standard": {
       ...schema["~standard"],
+      vendor: "kernel",
       validate(value: unknown) {
         const result = schema.safeParse(value);
         if (result.success) return { value: result.data };

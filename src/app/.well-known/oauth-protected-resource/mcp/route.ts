@@ -2,9 +2,7 @@ import { NextRequest } from "next/server";
 import { oauthResourceMetadata } from "@/lib/oauth-discovery";
 
 const handler = async (request: NextRequest) => {
-  const modifiedMetadata = oauthResourceMetadata(request, {});
-
-  return Response.json(modifiedMetadata, {
+  return Response.json(oauthResourceMetadata(request), {
     headers: {
       "Cache-Control": "no-store",
       "Access-Control-Allow-Origin": "*",

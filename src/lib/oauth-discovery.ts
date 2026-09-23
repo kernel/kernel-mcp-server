@@ -24,7 +24,6 @@ export function oauthResourceMetadataUrl(request: Request): string {
 
 export function oauthResourceMetadata(
   request: Request,
-  clerkMetadata: Record<string, unknown>,
 ): Record<string, unknown> {
   const origin = oauthRequestOrigin(request);
   let authorizationServer = origin;
@@ -32,7 +31,6 @@ export function oauthResourceMetadata(
   if (origin === DEV_MCP_ORIGIN) authorizationServer = DEV_OAUTH_ORIGIN;
 
   return {
-    ...clerkMetadata,
     resource: `${origin}/mcp`,
     authorization_servers: [authorizationServer],
     authorization_endpoint: `${authorizationServer}/authorize`,

@@ -106,7 +106,7 @@ describe("unauthenticated discovery", () => {
         expect(metadataUrl).toBe(
           `${publicOrigin}/.well-known/oauth-protected-resource/mcp`,
         );
-        const metadata = oauthResourceMetadata(new Request(metadataUrl!), {});
+        const metadata = oauthResourceMetadata(new Request(metadataUrl!));
         expect(metadata.resource).toBe(`${publicOrigin}/mcp`);
       },
     );

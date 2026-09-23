@@ -108,25 +108,15 @@ export function connectionScopeFailureResponse(
   );
 }
 
-// Handler variants keep per-connection capabilities out of tools/list unless
-// the authenticated connection can use them.
-const serverInfo = { name, version };
-function createHandler({
-  mcpApps = false,
-  vaults = false,
-}: { mcpApps?: boolean; vaults?: boolean } = {}) {
-  return createMcpHandler(() => {
-    const server = new McpServer(serverInfo);
-    instrumentMcpAnalytics(server);
-    registerMcpCapabilities(server, { mcpApps, vaults });
-    return server;
+const handler = createMcpHandler(({ authInfo }) => {
+  const server = new McpServer({ name, version });
+  instrumentMcpAnalytics(server);
+  registerMcpCapabilities(server, {
+    mcpApps: authInfo?.extra?.mcpApps === true,
+    vaults: authInfo?.extra?.vaults === true,
   });
-}
-
-const handler = createHandler();
-const mcpAppsHandler = createHandler({ mcpApps: true });
-const vaultsHandler = createHandler({ vaults: true });
-const vaultsMcpAppsHandler = createHandler({ mcpApps: true, vaults: true });
+  return server;
+});
 
 type AuthInfoExtra = {
   userId: string | null;
@@ -185,15 +175,15 @@ async function handleMcpRequestWithIdentity({
     observeConnection && isMcpAnalyticsEnabled()
       ? connectionAnalyticsFromContext(connectionContext)
       : null;
-  const baseHandler = vaults ? vaultsHandler : handler;
-  const appsHandler = vaults ? vaultsMcpAppsHandler : mcpAppsHandler;
-  return (mcpApps ? appsHandler : baseHandler).fetch(req, {
+  return handler.fetch(req, {
     authInfo: {
       token,
       scopes,
       clientId: "mcp-server",
       extra: {
         ...authInfoExtra,
+        mcpApps,
+        vaults,
         connectionContext,
         connectionAnalytics,
       },
