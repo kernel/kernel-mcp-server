@@ -70,6 +70,34 @@ describe("get_more_tools", () => {
         recorded: false,
         status: "not_a_capability_gap",
       });
+
+      for (const gap_reason of [
+        "existing_tool_failed",
+        "transient_or_capacity_failure",
+        "client_permission_restriction",
+      ]) {
+        const failure = await client.callTool({
+          name: KERNEL_MISSING_CAPABILITY_TOOL_NAME,
+          arguments: {
+            context:
+              "An existing WebMCP action could not complete, so this is not demand for a missing site action.",
+            gap_reason,
+            capability_area: "webmcp",
+            capability: "search available products",
+            requested_action: "search",
+            task_outcome: "blocked",
+            tools_checked: ["webmcp"],
+            site_domain: "example.com",
+          },
+        });
+        expect(toolResultJSON(failure)).toMatchObject({
+          recorded: false,
+          status: "not_a_capability_gap",
+        });
+        if (gap_reason === "existing_tool_failed") {
+          expect(toolResultJSON(failure).message).toContain("submit_feedback");
+        }
+      }
       expect(captured).toHaveLength(1);
     } finally {
       await close();

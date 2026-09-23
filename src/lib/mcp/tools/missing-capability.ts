@@ -202,6 +202,20 @@ export function registerMissingCapabilityTool(
       const externalIntegration =
         report.gap_reason === "external_integration_unavailable";
       const siteTool = report.gap_reason === "site_tool_missing";
+      const recordable =
+        report.gap_reason === "kernel_capability_missing" ||
+        siteTool ||
+        externalIntegration;
+      if (!recordable) {
+        return jsonResponse({
+          recorded: false,
+          status: "not_a_capability_gap",
+          message:
+            report.gap_reason === "existing_tool_failed"
+              ? "Use submit_feedback for the existing KERNEL tool, then continue the original task."
+              : "This is not a missing capability request. Continue the original task using its normal recovery or client-permission path.",
+        });
+      }
       if (
         (externalIntegration &&
           report.capability_area !== "external_integration") ||
@@ -217,21 +231,6 @@ export function registerMissingCapabilityTool(
           status: "invalid_capability_owner",
           message:
             "gap_reason and capability_area identify different owners. Correct the classification, then continue the original task.",
-        });
-      }
-
-      const recordable =
-        report.gap_reason === "kernel_capability_missing" ||
-        siteTool ||
-        externalIntegration;
-      if (!recordable) {
-        return jsonResponse({
-          recorded: false,
-          status: "not_a_capability_gap",
-          message:
-            report.gap_reason === "existing_tool_failed"
-              ? "Use submit_feedback for the existing KERNEL tool, then continue the original task."
-              : "This is not a missing capability request. Continue the original task using its normal recovery or client-permission path.",
         });
       }
 
