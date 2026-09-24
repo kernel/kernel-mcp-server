@@ -193,12 +193,15 @@ describe("vault provider config SDK routing", () => {
           config: config.id,
         });
         expect(result.isError === true).toBe(status === 409);
-        expectSecretFree(result);
-        if (status !== 409)
+        if (status === 409) {
+          expect(JSON.stringify(result)).toContain(`409 ${secret}`);
+          expect(JSON.stringify(result)).toContain("[code: conflict]");
+        } else {
           expect(toolResultJSON(result)).toEqual({
             status: "deleted_or_not_found",
             config: config.id,
           });
+        }
         expect(fixture.requests).toHaveLength(1);
         expect(fixture.requests[0].method).toBe("DELETE");
       } finally {
@@ -208,7 +211,7 @@ describe("vault provider config SDK routing", () => {
   );
 
   test.each([400, 403, 409, 429, 500])(
-    "redacts HTTP %s errors and never retries credential writes",
+    "passes through HTTP %s errors and never retries credential writes",
     async (status) => {
       const fixture = await connectVaultTest(
         [
@@ -227,8 +230,8 @@ describe("vault provider config SDK routing", () => {
       try {
         const result = await fixture.call(tool, create);
         expect(result.isError).toBe(true);
-        expect(JSON.stringify(result)).toContain(`${status} `);
-        expectSecretFree(result);
+        expect(JSON.stringify(result)).toContain(`${status} ${secret}`);
+        expect(JSON.stringify(result)).toContain(`[code: ${secret}]`);
         expect(fixture.requests).toHaveLength(1);
       } finally {
         await fixture.close();
@@ -378,7 +381,7 @@ describe("config scope and validation", () => {
 
 describe("configured wallets and recovery", () => {
   test.each([400, 409, 429, 500])(
-    "does not expose or retry a rejected imported grant (HTTP %s)",
+    "passes through a rejected grant diagnostic without retrying (HTTP %s)",
     async (status) => {
       const fixture = await connectVaultTest([
         Response.json(
@@ -396,7 +399,8 @@ describe("configured wallets and recovery", () => {
           importedCreate,
         );
         expect(result.isError).toBe(true);
-        expectSecretFree(result);
+        expect(JSON.stringify(result)).toContain(`${status} ${access}`);
+        expect(JSON.stringify(result)).toContain("[code: provider_error]");
         expect(fixture.requests).toHaveLength(1);
       } finally {
         await fixture.close();

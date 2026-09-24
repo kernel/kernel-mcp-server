@@ -1,9 +1,3 @@
-import {
-  APIConnectionError,
-  APIConnectionTimeoutError,
-  APIError,
-  APIUserAbortError,
-} from "@onkernel/sdk";
 import { z } from "zod";
 import { jsonResponse, throwToolError } from "@/lib/mcp/responses";
 
@@ -363,65 +357,6 @@ export function vaultItemResponse(
   );
 }
 
-const vaultErrorMessages = new Map([
-  [
-    "invalid_request",
-    "Invalid vault request. Check the tool's documented inputs.",
-  ],
-  [
-    "not_found",
-    "Vault, item, provider configuration, or project not found or unavailable.",
-  ],
-  [
-    "forbidden",
-    "This credential cannot perform the vault operation. Check connection scope and permissions.",
-  ],
-  [
-    "conflict",
-    "The vault request conflicts with the current configuration or state. Inspect the item and its advertised operations and expansions.",
-  ],
-  [
-    "project_error",
-    "Unable to resolve the vault's project. Check connection scope and project selection.",
-  ],
-  ["db_error", "The vault storage request could not be completed."],
-  [
-    "provider_error",
-    "The payment provider could not complete the vault request.",
-  ],
-  [
-    "provider_rate_limited",
-    "The payment provider has rate limited requests. Stop and wait before taking further action.",
-  ],
-  [
-    "spend_request_rate_limited",
-    "The payment provider has rate limited spend requests. Stop and wait before taking further action.",
-  ],
-]);
-// Only these fixed API messages are safe to expose; arbitrary vault/provider
-// error text can contain credentials or collection URLs.
-const vaultFillErrorMessages = new Map([
-  ...[
-    "invalid_request",
-    "invalid_selector",
-    "duplicate_target",
-    "timeout",
-    "target_changed",
-    "page_not_found",
-    "ambiguous_page",
-    "element_not_found",
-    "ambiguous_selector",
-    "element_not_editable",
-    "option_not_found",
-    "field_unavailable",
-  ].map((code): [string, string] => [code, "vault fill validation failed"]),
-  ["destination_denied", "destination is not authorized"],
-  ["conflict", "fill is not currently available"],
-  ["execution_failed", "vault fill could not start"],
-]);
-const vaultErrorGuidance =
-  "Inspect item state/events before taking further action. Do not replay a payment.";
-
 export function throwVaultError(
   tool: string,
   action: string,
@@ -430,92 +365,6 @@ export function throwVaultError(
 ): never {
   const guidance = operationSubmitted
     ? "The operation may have partially completed. Inspect item state, events, and browser before acting. Do not retry automatically."
-    : vaultErrorGuidance;
-  if (error instanceof z.ZodError) {
-    throwToolError(
-      tool,
-      action,
-      new Error("Vault request must match the documented schema."),
-    );
-  }
-  if (error instanceof APIError && typeof error.status === "number") {
-    const body = error.error;
-    const code =
-      body &&
-      typeof body === "object" &&
-      "code" in body &&
-      typeof body.code === "string"
-        ? body.code
-        : undefined;
-    const providerReason = z
-      .object({
-        inner_error: z.object({
-          code: z.literal("provider_rejection_reason"),
-          message: z.string().min(1),
-        }),
-      })
-      .safeParse(body);
-    if (
-      operationSubmitted &&
-      error.status >= 400 &&
-      error.status < 500 &&
-      providerReason.success
-    ) {
-      throwToolError(
-        tool,
-        action,
-        APIError.generate(
-          error.status,
-          {
-            message: `${providerReason.data.inner_error.message} Inspect item state and events before acting. Do not retry automatically.`,
-            ...(code !== undefined &&
-              /^[a-zA-Z0-9_.-]{1,128}$/.test(code) && { code }),
-          },
-          undefined,
-          new Headers(),
-        ),
-      );
-    }
-    const fillMessage =
-      code === undefined ? undefined : vaultFillErrorMessages.get(code);
-    let message = code === undefined ? undefined : vaultErrorMessages.get(code);
-    if (
-      fillMessage !== undefined &&
-      body &&
-      typeof body === "object" &&
-      "message" in body &&
-      body.message === fillMessage
-    ) {
-      message = `Vault request failed: ${fillMessage}.`;
-    }
-    throwToolError(
-      tool,
-      action,
-      APIError.generate(
-        error.status,
-        {
-          message: `${message ?? "Vault request failed."} ${guidance}`,
-          ...((message !== undefined || fillMessage !== undefined) && {
-            code,
-          }),
-        },
-        undefined,
-        new Headers(),
-      ),
-    );
-  }
-  if (error instanceof APIConnectionTimeoutError) {
-    throwToolError(
-      tool,
-      action,
-      new APIConnectionTimeoutError({ message: guidance }),
-    );
-  }
-  if (error instanceof APIUserAbortError) {
-    throwToolError(tool, action, new APIUserAbortError({ message: guidance }));
-  }
-  if (error instanceof APIConnectionError) {
-    throwToolError(tool, action, new APIConnectionError({ message: guidance }));
-  }
-  throwToolError(tool, action, new Error(`Vault request failed; ${guidance}`));
+    : "Inspect item state/events before taking further action. Do not replay a payment.";
+  throwToolError(tool, action, error, guidance);
 }
