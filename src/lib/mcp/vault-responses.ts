@@ -446,7 +446,7 @@ export function throwVaultError(
         APIError.generate(
           error.status,
           {
-            message: providerReason.data.inner_error.message,
+            message: `${providerReason.data.inner_error.message} Inspect item state and events before acting. Do not retry automatically.`,
             ...(code !== undefined &&
               /^[a-zA-Z0-9_.-]{1,128}$/.test(code) && { code }),
           },

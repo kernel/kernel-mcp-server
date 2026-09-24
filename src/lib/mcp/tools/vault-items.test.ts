@@ -323,7 +323,7 @@ describe("advertised vault operations", () => {
     }
   });
 
-  test.each([400, 403, 409, 422, 429])(
+  test.each([400, 403, 409, 422])(
     "returns the exact provider message for authorize HTTP %s",
     async (status) => {
       const reason = `Funding method cannot be used for this purchase (${status}).`;
@@ -349,6 +349,8 @@ describe("advertised vault operations", () => {
         const text = JSON.stringify(result);
         expect(result.isError).toBe(true);
         expect(text).toContain(reason);
+        expect(text).toContain("Inspect item state and events before acting.");
+        expect(text).toContain("Do not retry automatically.");
         expect(text).toContain("[code: invalid_spend_request]");
         expect(text).not.toContain("hidden");
         expect(text).not.toContain(
@@ -363,6 +365,32 @@ describe("advertised vault operations", () => {
       }
     },
   );
+
+  test("keeps unmarked rate limits distinct from provider rejections", async () => {
+    const fixture = await connectVaultTest([
+      Response.json(item),
+      Response.json(
+        {
+          code: "spend_request_rate_limited",
+          message: "private provider text",
+        },
+        { status: 429 },
+      ),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "invoke",
+        vault: "checkout",
+        key: "order-1",
+        operation: "authorize",
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain("rate limited spend requests");
+      expect(JSON.stringify(result)).not.toContain("private provider text");
+    } finally {
+      await fixture.close();
+    }
+  });
 
   test("uses the API rejection marker rather than an operation-name check", async () => {
     const fixture = await connectVaultTest([
