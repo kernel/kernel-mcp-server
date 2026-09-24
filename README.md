@@ -330,6 +330,7 @@ Call `get_connection_context` before deciding whether to create or select a proj
 - `manage_config_registry` - Look up current browser and proxy recommendations, start and inspect analyses, request cancellation, and list project configurations or analysis history.
 - `manage_proxies` - Create, list, get, check, and delete proxy configurations (datacenter, ISP, residential, mobile, custom).
 - `manage_replays` - Start, stop, and list MP4 video replay recordings for a browser session. Session-scoped: start once, run your automation, then stop. Requires a paid Kernel plan.
+- `web_search` - Search the web, retrieve retained results, and inspect provider capabilities. Tool visibility uses a per-credential, per-connection Search entitlement snapshot cached for up to 30 minutes; the Search API remains authoritative for execution access. Search creation is billable and is not automatically retried.
 - `manage_extensions` - List and delete uploaded browser extensions.
 - `manage_apps` - List/search apps, invoke actions, get/list/delete deployments, and get invocation results.
 - `manage_auth_connections` - Create, list, get, update, delete, login, submit, inspect timelines, and wait for managed-auth connections in every client. Supports health-check and automatic re-auth settings, managed-auth browser configuration, and canonical interaction-bound field/choice submissions. Use domain-filtered `list` for discovery. App-capable clients additionally receive `open_auth_login`; the programmatic actions remain available there too.
