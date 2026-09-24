@@ -36,32 +36,30 @@ describe("provider-specific vault payment guidance", () => {
       );
       const guidance = result.guidance.join(" ");
       for (const text of [
-        "Link cards use fill",
+        "Link cards use browser field writes",
+        "only when advertised",
         "does not expose aliases or support egress substitution",
         "fail closed on supported payment shapes",
         "retain this vault attachment in the same project",
         "origin of spec.merchant_url",
         "ready and unexpired",
         "non-deleted parent wallet",
-        "nested fill object",
-        "browser_id",
+        "pass inputs with browser_id",
         "exact current top-level page_url",
         "field/selector bindings, never values",
         "format MM/YY or MM/YYYY",
-        "fill.timeout_ms",
-        "without returning them in the API response",
-        "browser or CDP access may read",
-        "partial writes without rollback",
-        "Never automatically retry",
-        "or fall back to aliases",
-        "not payment or merchant acceptance",
+        "returns no card values",
+        "browser access can expose written values",
+        "Failed or unknown writes may leave partial changes",
+        "Never automatically retry or fall back to aliases",
+        "not that the payment succeeded",
       ])
         expect(guidance).toContain(text);
       expect(guidance).not.toContain(
         "explicitly chosen egress-substitution integrations",
       );
       expect(guidance).not.toContain("prepare_checkout");
-      expect(result.hints.invocation).toEqual([]);
+      expect(result.hints.invocation[0].arguments.operation).toBe("fill");
       if (!legacy) expect(result.item.state).not.toHaveProperty("aliases");
     },
   );
@@ -99,12 +97,14 @@ describe("provider-specific vault payment guidance", () => {
     expect(guidance).toContain(
       "Checkout hold, approval, and replay remain supported",
     );
-    expect(guidance).toContain("API-only prepare_checkout");
+    expect(guidance).toContain("For checkout preparation");
     expect(guidance).toContain("Preparations are single-use");
     expect(guidance).toContain("Never fall back to aliases");
     expect(guidance).not.toContain("nested fill object");
     expect(guidance).not.toContain("Link cards");
-    expect(result.hints.invocation).toEqual([]);
+    expect(result.hints.invocation[0].arguments.operation).toBe(
+      "prepare_checkout",
+    );
   });
 
   test.each(["link", "agentcard"])(
@@ -139,7 +139,7 @@ describe("provider-specific vault payment guidance", () => {
     );
     expect(result.guidance).toHaveLength(5);
     expect(result.guidance[4]).toBe(
-      "Invocation hints are not approval to execute. Invoke fill with manage_vault_items using a fill object containing browser_id and ordered fields of field/selector bindings, never values. Bind the vault at browser creation, authorize the destination, and follow the advertised description. Fill does not submit or navigate; real values enter the browser and may be read by an agent with browser access. Never retry an uncertain fill or fall back to aliases.",
+      "Invocation hints are not approval to execute. Invoke the advertised browser field-writing operation with manage_vault_items using an inputs object containing browser_id and ordered fields of field/selector bindings, never values. Bind the vault at browser creation, authorize the destination, and follow the advertised description. Fill does not submit or navigate; real values enter the browser and may be read by an agent with browser access. Never retry an uncertain fill or fall back to aliases.",
     );
     expect(result.guidance.join(" ")).not.toContain("Link cards");
     expect(result.guidance.join(" ")).not.toContain("AgentCard aliases");
@@ -151,9 +151,9 @@ describe("provider-specific vault payment guidance", () => {
       const { tools } = await fixture.client.listTools();
       const items = tools.find(({ name }) => name === "manage_vault_items");
       expect(items?.description).toContain(
-        "Link cards use advertised fill, not aliases or egress substitution",
+        "Link cards use the advertised browser field-writing operation, not aliases or egress substitution",
       );
-      expect(items?.description).toContain("fill.page_url");
+      expect(items?.description).toContain("inputs.page_url");
       expect(items?.description).toContain(
         "AgentCard aliases and checkout hold/approval/replay remain supported",
       );
@@ -194,9 +194,9 @@ describe("provider-specific vault payment guidance", () => {
         ...target,
         action: "invoke",
         operation: "fill",
-        fill,
+        inputs: fill,
       });
-      expect(result.isError).toBe(false);
+      expect(result.isError).toBeUndefined();
       expect(toolResultJSON(result).result).toEqual(outcome);
       expect(
         fixture.requests.map(({ method, body }) => ({ method, body })),

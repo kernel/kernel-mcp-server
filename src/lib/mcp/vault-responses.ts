@@ -6,7 +6,6 @@ import {
 } from "@onkernel/sdk";
 import { z } from "zod";
 import { jsonResponse, throwToolError } from "@/lib/mcp/responses";
-import { vaultOperationRequiresInputs } from "@/lib/mcp/vault-schemas";
 
 type OutputFields = { [key: string]: OutputFields | null };
 
@@ -64,6 +63,11 @@ export const vaultItemFields: OutputFields = {
       "id status psp merchant amount amount_cents currency created_at expires_at approval_url browser_id reason psp_error_code expected_cents actual_cents amount_authority amount_verified charged_amount_cents charged_currency charged_kind replay_attempted replay_status replay_delivered",
     ),
   },
+};
+
+export const vaultOperationResultFields: OutputFields = {
+  ...fields("type status"),
+  fields: fields("index status error_code"),
 };
 
 export const vaultEventFields: OutputFields = {
@@ -306,10 +310,6 @@ export function vaultItemResponse(
     payment.success && payment.data.type === "card"
       ? payment.data.spec.provider
       : undefined;
-  const canFill =
-    cardProvider !== undefined &&
-    advertised.success &&
-    advertised.data.available_operations.some(({ type }) => type === "fill");
   const secretValues = secretVariants(secrets);
   const safeHint = (hint: unknown) => !containsVaultSecret(hint, secretValues);
   return vaultResponse(
@@ -319,7 +319,6 @@ export function vaultItemResponse(
         observation: vaultObservationHints(target).filter(safeHint),
         invocation: advertised.success
           ? advertised.data.available_operations
-              .filter(({ type }) => !vaultOperationRequiresInputs(type))
               .map(({ type }) => ({
                 tool: "manage_vault_items",
                 arguments: { ...target, action: "invoke", operation: type },
@@ -331,10 +330,10 @@ export function vaultItemResponse(
       guidance: credential
         ? [
             "Present the collection URL only to the intended user in a private surface, outside the agent-controlled browser. It is a bearer credential. Never ask for passwords or TOTP seeds in chat; TOTP seeds require trusted backend provisioning, not hosted collection.",
-            "MCP returns field definitions, has_value, version, collection expiry, and explicitly non-sensitive text/email values. Sensitive values and TOTP seeds are never returned. Ready means required values exist, not that login succeeded. Listing does not renew collection links; use get or the advertised collect operation.",
-            'Use manage_vault_items with action: "invoke" and operation: "collect" to reopen the full form without clearing values or changing readiness or version. wait observes readiness, not edits to ready items. Compare versions with get without wait; a change can also come from an API update, so it does not identify a specific form submission.',
+            "MCP returns field definitions, has_value, version, collection expiry, and explicitly non-sensitive text/email values. Sensitive values and TOTP seeds are never returned. Ready means required values exist, not that login succeeded. Listing does not renew collection links; use get or the advertised collection operation.",
+            'Use manage_vault_items with action: "invoke" and the advertised collection operation to reopen the full form without clearing values or changing readiness or version. wait observes readiness, not edits to ready items. Compare versions with get without wait; a change can also come from an API update, so it does not identify a specific form submission.',
             "Create or update credentials with manage_vault_credentials. On create, inspect the website and list the named field definitions in its natural top-to-bottom order; that array order directly controls the user-facing collection form. Use optional non-secret labels for human-readable text; stable names remain authoritative for state, updates, and fill. Use a per-user vault, a recognizable site-name-only description, and sensitive:false for usernames/emails. Passwords and TOTP must be sensitive. Updates require the current version; supply expected_item_id when bound to an earlier read. Omitted values remain; null or empty strings clear supported fields, including required text/email/password fields. Hosted forms still require populated required inputs. Do not store payment-card data in credential items.",
-            "Invocation hints are not approval to execute. Invoke fill with manage_vault_items using a fill object containing browser_id and ordered fields of field/selector bindings, never values. Bind the vault at browser creation, authorize the destination, and follow the advertised description. Fill does not submit or navigate; real values enter the browser and may be read by an agent with browser access. Never retry an uncertain fill or fall back to aliases.",
+            "Invocation hints are not approval to execute. Invoke the advertised browser field-writing operation with manage_vault_items using an inputs object containing browser_id and ordered fields of field/selector bindings, never values. Bind the vault at browser creation, authorize the destination, and follow the advertised description. Fill does not submit or navigate; real values enter the browser and may be read by an agent with browser access. Never retry an uncertain fill or fall back to aliases.",
           ]
         : [
             "Ask the user to complete returned provider actions. Never request card data or OAuth codes/tokens in chat; imported grants must come from a trusted backend. Read operation descriptions and obtain explicit user approval before invoking.",
@@ -346,19 +345,14 @@ export function vaultItemResponse(
               : []),
             ...(cardProvider === "link"
               ? [
-                  "Link cards use fill for browser checkout, only when advertised. Link does not expose aliases or support egress substitution; do not use aliases from older responses, which fail closed on supported payment shapes. The browser must retain this vault attachment in the same project. The exact current HTTPS top-level page URL must have the origin of spec.merchant_url. The card must remain ready and unexpired with stored card material and a non-deleted parent wallet; lifecycle and destination checks still apply.",
-                ]
-              : []),
-            ...(canFill
-              ? [
-                  "Use manage_vault_items with action invoke, operation fill, and a nested fill object containing browser_id, exact current top-level page_url (including path, query, and fragment), and ordered fields of field/selector bindings, never values. For a combined expiration field, include format MM/YY or MM/YYYY on that binding; fill.timeout_ms is optional. Attach the vault at browser creation. No ready-to-run fill hint is emitted because bindings are caller-chosen.",
-                  "Fill writes real values into the browser without returning them in the API response or explicitly submitting checkout. An agent with browser or CDP access may read those values; input/change events can trigger site behavior. Inspect the value-free result and ordered field outcomes. Failed or unknown fills may leave partial writes without rollback. Never automatically retry a failed or unknown fill or fall back to aliases. Completed means fields were filled, not payment or merchant acceptance; submit separately only after confirming completion and user authorization.",
+                  "Link cards use browser field writes for checkout only when advertised. Link does not expose aliases or support egress substitution; do not use aliases from older responses, which fail closed on supported payment shapes. The browser must retain this vault attachment in the same project. The exact current HTTPS top-level page URL must have the origin of spec.merchant_url. The card must remain ready and unexpired with stored card material and a non-deleted parent wallet; lifecycle and destination checks still apply.",
+                  "When the field-writing operation is advertised, pass inputs with browser_id, exact current top-level page_url (including path, query, and fragment), and ordered field/selector bindings, never values. A combined expiration field requires format MM/YY or MM/YYYY. Attach the vault at browser creation. The operation returns no card values and does not explicitly submit checkout; browser access can expose written values. Failed or unknown writes may leave partial changes. Never automatically retry or fall back to aliases. Completion means fields were written, not that the payment succeeded.",
                 ]
               : []),
             ...(cardProvider === "agentcard"
               ? [
                   "AgentCard aliases remain supported for explicitly chosen egress-substitution integrations: use only returned state.aliases in a browser created with this vault attached, respecting returned permitted domains. Checkout hold, approval, and replay remain supported; observe checkout authorization and approval URLs. Never fall back to aliases after an uncertain fill or preparation.",
-                  "For API-only prepare_checkout, deliver the returned approval URL and keep the approval page open. Poll the item until ready_to_submit, then submit native Pay before state.preparation.expires_at. Readiness lasts at most 30 seconds; polling does not extend it. Preparations are single-use even after failure or expiry. Preparation consumed means claimed, not payment success.",
+                  "For checkout preparation, supply the API-required checkout context and deliver the returned approval URL and keep the approval page open. Poll the item until ready_to_submit, then submit native Pay before state.preparation.expires_at. Readiness lasts at most 30 seconds; polling does not extend it. Preparations are single-use even after failure or expiry. Preparation consumed means claimed, not payment success.",
                 ]
               : []),
             "Observe get/events for outcomes. Do not retry failed, timed-out, rejected, or indeterminate payments or reconfigure a card to retry them.",
@@ -411,16 +405,19 @@ export function throwVaultError(
   tool: string,
   action: string,
   error: unknown,
+  operationSubmitted = false,
 ): never {
+  const guidance = operationSubmitted
+    ? "The operation may have partially completed. Inspect item state, events, and browser before acting. Do not retry automatically."
+    : vaultErrorGuidance;
   if (error instanceof z.ZodError) {
     throwToolError(
       tool,
       action,
-      new Error("spec must match the selected action's documented schema"),
+      new Error("Vault request must match the documented schema."),
     );
   }
   if (error instanceof APIError && typeof error.status === "number") {
-    // Neither provider messages nor unknown codes are safe to return, even as strings.
     const body = error.error;
     const code =
       body &&
@@ -429,6 +426,35 @@ export function throwVaultError(
       typeof body.code === "string"
         ? body.code
         : undefined;
+    const providerReason = z
+      .object({
+        inner_error: z.object({
+          code: z.literal("provider_rejection_reason"),
+          message: z.string().min(1),
+        }),
+      })
+      .safeParse(body);
+    if (
+      operationSubmitted &&
+      error.status >= 400 &&
+      error.status < 500 &&
+      providerReason.success
+    ) {
+      throwToolError(
+        tool,
+        action,
+        APIError.generate(
+          error.status,
+          {
+            message: `${providerReason.data.inner_error.message} Inspect item state and events before acting. Do not retry automatically.`,
+            ...(code !== undefined &&
+              /^[a-zA-Z0-9_.-]{1,128}$/.test(code) && { code }),
+          },
+          undefined,
+          new Headers(),
+        ),
+      );
+    }
     const message =
       code === undefined ? undefined : vaultErrorMessages.get(code);
     throwToolError(
@@ -437,7 +463,7 @@ export function throwVaultError(
       APIError.generate(
         error.status,
         {
-          message: `${message ?? "Vault request failed."} ${vaultErrorGuidance}`,
+          message: `${message ?? "Vault request failed."} ${guidance}`,
           ...(message !== undefined && { code }),
         },
         undefined,
@@ -446,26 +472,17 @@ export function throwVaultError(
     );
   }
   if (error instanceof APIConnectionTimeoutError) {
-    throwToolError(tool, action, new APIConnectionTimeoutError());
-  }
-  if (error instanceof APIUserAbortError) {
-    throwToolError(tool, action, new APIUserAbortError());
-  }
-  if (error instanceof APIConnectionError) {
     throwToolError(
       tool,
       action,
-      new APIConnectionError({
-        message:
-          "Vault connection failed; inspect item state/events before taking further action. Do not replay a payment.",
-      }),
+      new APIConnectionTimeoutError({ message: guidance }),
     );
   }
-  throwToolError(
-    tool,
-    action,
-    new Error(
-      "Vault request failed; inspect item state/events before taking further action. Do not replay a payment.",
-    ),
-  );
+  if (error instanceof APIUserAbortError) {
+    throwToolError(tool, action, new APIUserAbortError({ message: guidance }));
+  }
+  if (error instanceof APIConnectionError) {
+    throwToolError(tool, action, new APIConnectionError({ message: guidance }));
+  }
+  throwToolError(tool, action, new Error(`Vault request failed; ${guidance}`));
 }

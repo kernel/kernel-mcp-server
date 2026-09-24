@@ -137,7 +137,7 @@ describe("vault OpenAPI steering", () => {
       expect(vaults?.description).toContain("sensitive:false");
       expect(items?.description).toContain("without renewing collection links");
       expect(items?.description).toContain(
-        'action: "invoke" with operation: "collect"',
+        "Reopen collection using its advertised operation",
       );
       const credentials = tools.find(
         ({ name }) => name === "manage_vault_credentials",
@@ -146,7 +146,7 @@ describe("vault OpenAPI steering", () => {
         'action: "invoke" and operation: "collect"',
       );
       expect(credentials?.description).toContain("natural top-to-bottom order");
-      expect(items?.description).toContain("API-only");
+      expect(items?.description).toContain("operation-specific inputs");
       expect(tools.map(({ name }) => name)).toContain(
         "manage_vault_credentials",
       );
@@ -184,7 +184,7 @@ describe("vault OpenAPI steering", () => {
           (hint: { arguments: { operation: string } }) =>
             hint.arguments.operation,
         ),
-      ).toEqual(["collect"]);
+      ).toEqual(["collect", "fill"]);
       const guidance = result.guidance.join(" ");
       for (const text of [
         "bearer credential",
@@ -280,7 +280,9 @@ describe("vault OpenAPI steering", () => {
       ),
     );
     expect(result.item.state.preparation).toEqual(preparation);
-    expect(result.hints.invocation).toEqual([]);
+    expect(result.hints.invocation[0].arguments.operation).toBe(
+      "prepare_checkout",
+    );
     expect(result.guidance.join(" ")).toContain("Preparations are single-use");
     expect(result.guidance.join(" ")).toContain("Never fall back to aliases");
     expect(JSON.stringify(result)).not.toContain("private-token");

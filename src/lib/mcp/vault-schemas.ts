@@ -22,12 +22,6 @@ export const vaultItemSchema = {
   vault: vaultSelectorSchema().describe("Vault ID or immutable name."),
 };
 
-export function vaultOperationRequiresInputs(
-  operation: string,
-): operation is "fill" | "prepare_checkout" {
-  return operation === "fill" || operation === "prepare_checkout";
-}
-
 export function vaultKeySchema() {
   return vaultSelectorSchema().describe(
     "Immutable item key within the vault, not the item ID.",
