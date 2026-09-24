@@ -15,9 +15,13 @@ describe("POST /register", () => {
     const createCalls: Parameters<
       RegisterDependencies["createOAuthApplication"]
     >[0][] = [];
+    const metadataCalls: Parameters<
+      RegisterDependencies["saveClientMetadata"]
+    >[0][] = [];
     const response = await registerRequest(
       request({
         client_name: "Test Client",
+        client_uri: "https://client.example.com",
         redirect_uris: ["http://localhost:58432/callback"],
         token_endpoint_auth_method: "none",
         grant_types: ["authorization_code", "refresh_token"],
@@ -33,6 +37,9 @@ describe("POST /register", () => {
             clientSecret: null,
           };
         },
+        saveClientMetadata: async (value) => {
+          metadataCalls.push(value);
+        },
       },
     );
 
@@ -46,6 +53,14 @@ describe("POST /register", () => {
         ],
         scopes: "openid",
         public: true,
+      },
+    ]);
+    expect(metadataCalls).toEqual([
+      {
+        clientId: "client_1",
+        clientName: "Test Client",
+        clientUri: "https://client.example.com",
+        redirectUris: ["http://localhost:58432/callback"],
       },
     ]);
     expect(await response.json()).toMatchObject({
@@ -63,6 +78,7 @@ describe("POST /register", () => {
         called = true;
         return { id: "unexpected", clientId: "unexpected" };
       },
+      saveClientMetadata: async () => {},
     };
 
     const contentType = await registerRequest(request({}, "text/plain"), deps);

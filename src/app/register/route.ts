@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { clerkClient } from "@clerk/nextjs/server";
 import { expandLocalhostUris } from "@/lib/auth-utils";
+import { saveOAuthClientMetadata } from "@/lib/oauth-client-metadata";
 
 // Custom registration endpoint needed because Clerk doesn't support custom scopes
 // We only want "openid" scope instead of Clerk's default email/profile scopes
@@ -28,6 +29,7 @@ export interface RegisterDependencies {
     clientId: string;
     clientSecret?: string | null;
   }>;
+  saveClientMetadata: typeof saveOAuthClientMetadata;
 }
 
 const registerDependencies: RegisterDependencies = {
@@ -35,6 +37,7 @@ const registerDependencies: RegisterDependencies = {
     const clerk = await clerkClient();
     return clerk.oauthApplications.create(input);
   },
+  saveClientMetadata: saveOAuthClientMetadata,
 };
 
 export async function registerRequest(
@@ -143,6 +146,16 @@ export async function registerRequest(
       scopes: scope ? scope : "openid",
       public: true,
     });
+    try {
+      await dependencies.saveClientMetadata({
+        clientId: oauthApp.clientId,
+        clientName: client_name || "MCP Client",
+        ...(typeof client_uri === "string" ? { clientUri: client_uri } : {}),
+        redirectUris: redirect_uris,
+      });
+    } catch (error) {
+      console.error("Failed to save OAuth client metadata:", error);
+    }
 
     // Create response in OAuth Dynamic Client Registration format
     const now = Math.floor(Date.now() / 1000);

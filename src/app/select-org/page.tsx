@@ -19,6 +19,8 @@ import {
   type SelectionScope,
   type SelectionStage,
 } from "./primary-action";
+import { AttributionSurvey } from "./attribution-survey";
+import { parseOAuthAttribution } from "./attribution";
 
 interface OAuthProject {
   id: string;
@@ -46,6 +48,7 @@ function SelectOrgContent(): React.ReactElement {
   const [selectedScope, setSelectedScope] = useState("organization");
   const [projectsError, setProjectsError] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
+  const [attributionSaved, setAttributionSaved] = useState(false);
   const [canScrollUp, setCanScrollUp] = useState(false);
   const [canScrollDown, setCanScrollDown] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -242,6 +245,9 @@ function SelectOrgContent(): React.ReactElement {
 
   const memberships =
     userMemberships?.data || user?.organizationMemberships || [];
+  const hasSavedAttribution = Boolean(
+    parseOAuthAttribution(user?.publicMetadata || {}),
+  );
 
   if (!memberships.length) {
     return (
@@ -264,14 +270,22 @@ function SelectOrgContent(): React.ReactElement {
               you need to be a member of at least one organization to continue.
             </p>
           </Col>
-          <CreateOrganization
-            afterCreateOrganizationUrl={(() => {
-              const params = new URLSearchParams(searchParams.toString());
-              params.set("org_created", "true");
-              return `/select-org?${params.toString()}`;
-            })()}
-            skipInvitationScreen={true}
-          />
+          {attributionSaved || hasSavedAttribution ? (
+            <CreateOrganization
+              afterCreateOrganizationUrl={(() => {
+                const params = new URLSearchParams(searchParams.toString());
+                params.set("org_created", "true");
+                return `/select-org?${params.toString()}`;
+              })()}
+              skipInvitationScreen={true}
+            />
+          ) : (
+            <AttributionSurvey
+              onSaved={() => setAttributionSaved(true)}
+              oauthClientId={searchParams.get("client_id") || undefined}
+              oauthRedirectUri={searchParams.get("redirect_uri") || undefined}
+            />
+          )}
         </Col>
       </Col>
     );
