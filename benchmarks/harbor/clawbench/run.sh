@@ -20,7 +20,7 @@ source_root=${KERNEL_MCP_BENCHMARK_SOURCE_ROOT:-$harness_root}
 benchmark_dir="$harness_root/benchmarks/harbor"
 image_env="$source_root/benchmarks/harbor/.image.env"
 clawbench_repo=${CLAWBENCH_REPO:-$harness_root/../ClawBench}
-clawbench_ref=${CLAWBENCH_REF:-c7feaa2435ca8115c0762c44e13885fe5adf3e98}
+clawbench_ref=${CLAWBENCH_REF:-9dd9d442c8ec720ba4d6d4c95f2bbc0ff2a2d0df}
 
 [[ -f "$image_env" ]] || {
   echo "Missing $image_env; run benchmarks/harbor/build-image.sh first" >&2
