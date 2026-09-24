@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { Kernel } from "@onkernel/sdk";
-import { resolveMcpVaultAccess } from "@/lib/mcp/entitlements";
+import { resolveMcpEntitlements } from "@/lib/mcp/entitlements";
 
 function fixture(body: unknown, status = 200) {
   const requests: Request[] = [];
@@ -19,22 +19,47 @@ function fixture(body: unknown, status = 200) {
   return { requests, dependencies };
 }
 
-describe("MCP vault entitlement", () => {
+describe("MCP feature entitlements", () => {
   test.each([
-    { body: { features: { vaults: { enabled: true } } }, enabled: true },
-    { body: { features: { vaults: { enabled: false } } }, enabled: false },
-    { body: { features: {} }, enabled: false },
-    { body: {}, enabled: false },
-    { body: null, enabled: false },
-    { body: { features: { vaults: null } }, enabled: false },
-    { body: { features: { vaults: { enabled: "true" } } }, enabled: false },
-    { body: { features: { vaults: { enabled: 1 } } }, enabled: false },
-    { body: { features: { vaults: { enabled: null } } }, enabled: false },
-  ])("requires an explicit boolean entitlement", async ({ body, enabled }) => {
+    {
+      body: {
+        features: {
+          vaults: { enabled: true },
+          search: { enabled: true },
+        },
+      },
+      expected: { vaults: true, search: true },
+    },
+    {
+      body: {
+        features: {
+          vaults: { enabled: false },
+          search: { enabled: false },
+        },
+      },
+      expected: { vaults: false, search: false },
+    },
+    {
+      body: { features: { vaults: { enabled: true } } },
+      expected: { vaults: true, search: false },
+    },
+    { body: { features: {} }, expected: { vaults: false, search: false } },
+    { body: {}, expected: { vaults: false, search: false } },
+    { body: null, expected: { vaults: false, search: false } },
+    {
+      body: {
+        features: {
+          vaults: { enabled: true },
+          search: { enabled: "true" },
+        },
+      },
+      expected: { vaults: true, search: false },
+    },
+  ])("requires explicit boolean entitlements", async ({ body, expected }) => {
     const { requests, dependencies } = fixture(body);
     expect(
-      await resolveMcpVaultAccess({ token: "sk_project_key", dependencies }),
-    ).toBe(enabled);
+      await resolveMcpEntitlements({ token: "sk_project_key", dependencies }),
+    ).toEqual(expected);
     expect(requests).toHaveLength(1);
     expect(requests[0].method).toBe("GET");
     expect(new URL(requests[0].url).pathname).toBe("/org/entitlements");
@@ -54,8 +79,8 @@ describe("MCP vault entitlement", () => {
       const warn = spyOn(console, "warn").mockImplementation(() => {});
       try {
         expect(
-          await resolveMcpVaultAccess({ token: "sk_secret", dependencies }),
-        ).toBe(false);
+          await resolveMcpEntitlements({ token: "sk_secret", dependencies }),
+        ).toEqual({ vaults: false, search: false });
         expect(requests).toHaveLength(1);
         expect(JSON.stringify(warn.mock.calls)).not.toContain(
           "hidden-provider-secret",
@@ -68,34 +93,37 @@ describe("MCP vault entitlement", () => {
 
   test("bounds the lookup and forwards cancellation", async () => {
     const { dependencies } = fixture({
-      features: { vaults: { enabled: true } },
+      features: {
+        vaults: { enabled: true },
+        search: { enabled: true },
+      },
     });
     const client = dependencies.createKernelClient("sk_key");
-    const retrieve = spyOn(client.organization.entitlements, "retrieve");
+    const get = spyOn(client, "get");
     const controller = new AbortController();
     try {
       expect(
-        await resolveMcpVaultAccess({
+        await resolveMcpEntitlements({
           token: "sk_key",
           signal: controller.signal,
           dependencies: { createKernelClient: () => client },
         }),
-      ).toBe(true);
-      expect(retrieve).toHaveBeenCalledWith({
+      ).toEqual({ vaults: true, search: true });
+      expect(get).toHaveBeenCalledWith("/org/entitlements", {
         signal: controller.signal,
         maxRetries: 0,
         timeout: 5_000,
       });
       controller.abort();
       expect(
-        await resolveMcpVaultAccess({
+        await resolveMcpEntitlements({
           token: "sk_key",
           signal: controller.signal,
           dependencies: { createKernelClient: () => client },
         }),
-      ).toBe(false);
+      ).toEqual({ vaults: false, search: false });
     } finally {
-      retrieve.mockRestore();
+      get.mockRestore();
     }
   });
 
@@ -106,20 +134,32 @@ describe("MCP vault entitlement", () => {
       createKernelClient: (token: string) => {
         tokens.push(token);
         return fixture({
-          features: { vaults: { enabled: token === "org_a" && enabled } },
+          features: {
+            vaults: { enabled: token === "org_a" && enabled },
+            search: { enabled: token === "org_a" && enabled },
+          },
         }).dependencies.createKernelClient(token);
       },
     };
-    expect(await resolveMcpVaultAccess({ token: "org_a", dependencies })).toBe(
-      true,
-    );
-    expect(await resolveMcpVaultAccess({ token: "org_b", dependencies })).toBe(
-      false,
-    );
+    expect(
+      await resolveMcpEntitlements({ token: "org_a", dependencies }),
+    ).toEqual({
+      vaults: true,
+      search: true,
+    });
+    expect(
+      await resolveMcpEntitlements({ token: "org_b", dependencies }),
+    ).toEqual({
+      vaults: false,
+      search: false,
+    });
     enabled = false;
-    expect(await resolveMcpVaultAccess({ token: "org_a", dependencies })).toBe(
-      false,
-    );
+    expect(
+      await resolveMcpEntitlements({ token: "org_a", dependencies }),
+    ).toEqual({
+      vaults: false,
+      search: false,
+    });
     expect(tokens).toEqual(["org_a", "org_b", "org_a"]);
   });
 });

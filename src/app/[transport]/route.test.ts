@@ -180,11 +180,7 @@ describe("connection scope failures through the handler", () => {
 });
 
 describe("capability routing", () => {
-  function installKernelResponses(
-    entitlements: (token: string) => Response,
-    search: (token: string) => Response = () =>
-      Response.json({}, { status: 404 }),
-  ) {
+  function installKernelResponses(entitlements: (token: string) => Response) {
     const paths: string[] = [];
     defaultMcpDependencies.createKernelClient = (token) =>
       new Kernel({
@@ -209,7 +205,7 @@ describe("capability routing", () => {
               },
             });
           if (path === "/org/entitlements") return entitlements(token);
-          if (path === "/search/providers") return search(token);
+          if (path === "/search/providers") return Response.json([]);
           throw new Error(`Unexpected API request: ${path}`);
         },
       });
@@ -238,7 +234,10 @@ describe("capability routing", () => {
     let enabled = true;
     const paths = installKernelResponses((token) =>
       Response.json({
-        features: { vaults: { enabled: token === "sk_allowed" && enabled } },
+        features: {
+          vaults: { enabled: token === "sk_allowed" && enabled },
+          search: { enabled: false },
+        },
       }),
     );
     const allowed = await call("tools/list");
@@ -263,24 +262,22 @@ describe("capability routing", () => {
     expect(paths).toEqual([
       "/auth/context",
       "/org/entitlements",
-      "/search/providers",
       "/auth/context",
       "/org/entitlements",
-      "/search/providers",
       "/auth/context",
       "/org/entitlements",
-      "/search/providers",
     ]);
   });
 
   test("gates search discovery and direct calls per caller, including revocation", async () => {
     let enabled = true;
-    const paths = installKernelResponses(
-      () => Response.json({ features: { vaults: { enabled: true } } }),
-      (token) =>
-        token === "sk_allowed" && enabled
-          ? Response.json([])
-          : Response.json({ code: "search_disabled" }, { status: 404 }),
+    const paths = installKernelResponses((token) =>
+      Response.json({
+        features: {
+          vaults: { enabled: true },
+          search: { enabled: token === "sk_allowed" && enabled },
+        },
+      }),
     );
     const allowed = await call("tools/list");
     expect(
@@ -310,8 +307,11 @@ describe("capability routing", () => {
       arguments: { action: "create", request: { query: "test" } },
     });
     expect(JSON.stringify(revoked)).toContain("not found");
+    expect(paths.filter((path) => path === "/org/entitlements")).toHaveLength(
+      5,
+    );
     expect(paths.filter((path) => path === "/search/providers")).toHaveLength(
-      6,
+      1,
     );
     expect(paths).not.toContain("/search");
   });
@@ -319,9 +319,10 @@ describe("capability routing", () => {
   test.each([200, 401, 403, 404, 429, 500, 503])(
     "search fails closed without hiding unrelated tools (HTTP %s)",
     async (status) => {
-      installKernelResponses(
-        () => Response.json({ features: {} }),
-        () => Response.json({}, { status }),
+      installKernelResponses(() =>
+        status === 200
+          ? Response.json({ features: {} })
+          : Response.json({}, { status }),
       );
       const result = await call("tools/list");
       const names = result.result.tools.map(
@@ -335,7 +336,9 @@ describe("capability routing", () => {
   test.each([200, 404, 503])(
     "keeps other tools available when entitlements are absent or fail (HTTP %s)",
     async (status) => {
-      installKernelResponses(() => Response.json({ features: {} }, { status }));
+      installKernelResponses(() =>
+        Response.json({ features: { search: { enabled: true } } }, { status }),
+      );
       const result = await call("tools/list");
       expect(
         result.result.tools.filter((tool: { name: string }) =>

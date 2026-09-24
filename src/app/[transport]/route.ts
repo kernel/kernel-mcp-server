@@ -29,8 +29,7 @@ import {
   mcpToolsetEnabledByConfig,
   registerMcpCapabilities,
 } from "@/lib/mcp/register";
-import { resolveMcpVaultAccess } from "@/lib/mcp/entitlements";
-import { resolveMcpSearchAccess } from "@/lib/mcp/search-access";
+import { resolveMcpEntitlements } from "@/lib/mcp/entitlements";
 import { name, version } from "../../../server.json";
 
 export async function OPTIONS(_req: NextRequest): Promise<Response> {
@@ -174,12 +173,12 @@ async function handleMcpRequestWithIdentity({
     return connectionScopeFailureResponse(req, connection);
   }
   // Recheck with the current credential on every request, including tools/call.
-  const [vaults, search] = await Promise.all([
-    resolveMcpVaultAccess({ token, signal: req.signal }),
-    mcpToolsetEnabledByConfig("search")
-      ? resolveMcpSearchAccess({ token, signal: req.signal })
-      : false,
-  ]);
+  const entitlements = await resolveMcpEntitlements({
+    token,
+    signal: req.signal,
+  });
+  const { vaults } = entitlements;
+  const search = mcpToolsetEnabledByConfig("search") && entitlements.search;
   const connectionContext = connection.context;
   const connectionAnalytics =
     observeConnection && isMcpAnalyticsEnabled()
