@@ -342,6 +342,165 @@ describe("manage_browsers telemetry", () => {
   });
 });
 
+describe("manage_browsers proxy routes", () => {
+  test("advertises create-only route selection and host matching", async () => {
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {},
+    );
+    try {
+      const { tools } = await client.listTools();
+      const browser = tools.find(({ name }) => name === "manage_browsers");
+      const routes = browser?.inputSchema.properties?.proxy_routes as
+        | {
+            description?: string;
+            maxItems?: number;
+            items?: {
+              properties?: { hosts?: { minItems?: number; maxItems?: number } };
+            };
+          }
+        | undefined;
+      expect(routes?.maxItems).toBe(10);
+      expect(routes?.items?.properties?.hosts).toMatchObject({
+        minItems: 1,
+        maxItems: 50,
+      });
+      expect(routes?.description).toContain("subdomains only, not the apex");
+      expect(routes?.description).toContain("fail closed");
+    } finally {
+      await close();
+    }
+  });
+
+  test("passes routes and the top-level proxy through SDK create and returns the SDK network on create/get", async () => {
+    const requests: unknown[] = [];
+    const network = {
+      proxy_routes: [
+        { hosts: ["example.com", "*.example.org"], proxy: { id: "prx_route" } },
+      ],
+    };
+    const browser = { session_id: "brr_123", network };
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (params: unknown) => {
+            requests.push(params);
+            return browser;
+          },
+          retrieve: async () => browser,
+        },
+      },
+    );
+
+    try {
+      const routes = [
+        { hosts: ["example.com", "*.example.org"], proxy_id: "prx_route" },
+        { hosts: ["other.example.com"], proxy_name: "backup" },
+      ];
+      const created = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action: "create",
+            proxy_id: "prx_default",
+            proxy_routes: routes,
+          },
+        }),
+      );
+      expect(requests).toEqual([
+        {
+          proxy_id: "prx_default",
+          network: {
+            proxy_routes: [
+              { hosts: routes[0].hosts, proxy: { id: "prx_route" } },
+              { hosts: routes[1].hosts, proxy: { name: "backup" } },
+            ],
+          },
+        },
+      ]);
+      expect(created.browser.network).toEqual(network);
+      const retrieved = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "get", session_id: "brr_123" },
+        }),
+      );
+      expect(retrieved.network).toEqual(network);
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects invalid route selectors and bounded arrays before SDK create", async () => {
+    let creates = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async () => {
+            creates++;
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+    try {
+      const invalid = [
+        [{ hosts: ["example.com"] }],
+        [{ hosts: ["example.com"], proxy_id: "one", proxy_name: "two" }],
+        [{ hosts: [], proxy_id: "one" }],
+        [{ hosts: Array(51).fill("example.com"), proxy_id: "one" }],
+        Array.from({ length: 11 }, () => ({
+          hosts: ["example.com"],
+          proxy_id: "one",
+        })),
+      ];
+      for (const proxy_routes of invalid) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "create", proxy_routes },
+        });
+        expect(result.isError).toBe(true);
+      }
+      expect(creates).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects routes on update without calling the SDK", async () => {
+    let updates = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          update: async () => {
+            updates++;
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+    try {
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "update",
+          session_id: "brr_123",
+          name: "renamed",
+          proxy_routes: [{ hosts: ["example.com"], proxy_id: "prx_route" }],
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(toolResultText(result)).toContain("creation-only");
+      expect(updates).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+});
+
 describe("manage_browsers region", () => {
   test("passes region to create and list", async () => {
     const createCalls: unknown[] = [];

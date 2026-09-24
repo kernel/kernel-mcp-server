@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
-import { NotFoundError } from "@onkernel/sdk";
+import { NotFoundError, type Kernel } from "@onkernel/sdk";
+import type { BrowserNetworkConfig } from "@onkernel/sdk/resources/browsers/browsers";
 import { z } from "zod";
 import {
   buildBrowserCreateConfig,
@@ -535,6 +536,19 @@ export function registerBrowserCapabilities(
             "(create, update) Proxy ID for traffic routing. For update, omit to leave unchanged.",
           )
           .optional(),
+        proxy_routes: z
+          .array(
+            z.object({
+              hosts: z.array(z.string().min(1)).min(1).max(50),
+              proxy_id: z.string().min(1).optional(),
+              proxy_name: z.string().min(1).optional(),
+            }),
+          )
+          .max(10)
+          .describe(
+            '(create only) Route requests for 1–50 host patterns per route through a proxy selected by exactly one of proxy_id or proxy_name (max 10 routes). Use exact hostnames or leading "*." wildcards, which match subdomains only, not the apex. Matching ignores case and ports; the most specific match wins. Matched hosts override the top-level proxy; unmatched hosts use the top-level proxy or the browser default. start_url uses the top-level proxy, not routes. If a route proxy is unavailable, matched requests fail closed.',
+          )
+          .optional(),
         clear_proxy: z
           .boolean()
           .describe(
@@ -692,9 +706,14 @@ export function registerBrowserCapabilities(
             "Vault bindings are creation-only; they cannot be added to an existing browser.",
           );
         }
+        if (params.proxy_routes !== undefined && params.action !== "create") {
+          return errorResponse(
+            "Proxy routes are creation-only; they cannot be added to an existing browser.",
+          );
+        }
         switch (params.action) {
           case "create": {
-            const createParams: BrowserCreateParams = {};
+            const createParams: Kernel.BrowserCreateParams = {};
             if (params.vaults !== undefined)
               createParams.vaults = params.vaults;
             if (params.headless !== undefined)
@@ -715,6 +734,28 @@ export function registerBrowserCapabilities(
               createParams.chrome_policy = params.chrome_policy;
             }
             if (params.proxy_id) createParams.proxy_id = params.proxy_id;
+            if (params.proxy_routes !== undefined) {
+              const proxyRoutes: Array<BrowserNetworkConfig.ProxyRoute> = [];
+              for (const {
+                hosts,
+                proxy_id,
+                proxy_name,
+              } of params.proxy_routes) {
+                if (Boolean(proxy_id) === Boolean(proxy_name)) {
+                  return errorResponse(
+                    "Error: each proxy route requires exactly one of proxy_id or proxy_name.",
+                  );
+                }
+                proxyRoutes.push({
+                  hosts,
+                  proxy: proxy_id ? { id: proxy_id } : { name: proxy_name },
+                });
+              }
+              createParams.network = {
+                ...createParams.network,
+                proxy_routes: proxyRoutes,
+              };
+            }
             if (params.name !== undefined) createParams.name = params.name;
             if (params.tags !== undefined) createParams.tags = params.tags;
             const browserConfig = buildBrowserCreateConfig(params);

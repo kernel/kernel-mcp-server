@@ -322,7 +322,7 @@ Call `get_connection_context` before deciding whether to create or select a proj
 
 ### manage\_\* tools
 
-- `manage_browsers` - Create, update, list, get, and delete browser sessions, and read archived telemetry for active or deleted sessions. Supports headless/stealth modes, profiles, proxies, viewports, extensions, names and tags, and SSH tunneling. The browser tools (`manage_browsers`, `computer_action`, `execute_playwright_code`, `browser_repl`, `exec_command`, `browser_curl`, `manage_replays`, `webmcp`) accept a live session's name in place of its `session_id`; deleted sessions, and `manage_browser_pools` release, take the ID only.
+- `manage_browsers` - Create, update, list, get, and delete browser sessions, and read archived telemetry for active or deleted sessions. Supports headless/stealth modes, profiles, proxies, create-only per-host proxy routes (`proxy_routes`), viewports, extensions, names and tags, and SSH tunneling. The browser tools (`manage_browsers`, `computer_action`, `execute_playwright_code`, `browser_repl`, `exec_command`, `browser_curl`, `manage_replays`, `webmcp`) accept a live session's name in place of its `session_id`; deleted sessions, and `manage_browser_pools` release, take the ID only.
 - `manage_profiles` - Setup (with guided live browser session), search/list with pagination, get, and delete browser profiles for persisting cookies and logins.
 - `manage_projects` - Create, list, get, update, and delete organization projects. Inspect and update per-project resource limits.
 - `manage_api_keys` - Create, list, get, update, and delete org-wide or project-scoped API keys. Create returns the plaintext key once.
