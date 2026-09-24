@@ -44,6 +44,8 @@ const projectToken = process.env.POSTHOG_PROJECT_TOKEN;
 export type OAuthTokenExchangeAnalytics = {
   grantType: "authorization_code" | "refresh_token" | "unknown";
   clientType: "kernel_cli" | "registered_client" | "unknown";
+  /** OAuth client_id, so a failure can be attributed to the client that caused it. */
+  clientId?: string;
   accessScope: "organization" | "project" | "unknown";
   stage:
     | "request_validation"
@@ -59,6 +61,11 @@ export type OAuthTokenExchangeAnalytics = {
     | "invalid_grant"
     | "unsupported_grant_type"
     | "server_error";
+  /** Upstream status when the provider rejected the exchange. */
+  providerStatusCode?: number;
+  /** Coarse RFC 6749 section 5.2 error code from the provider, or `unknown`
+   * for anything outside that set. Narrows a failure; does not identify it. */
+  providerErrorCode?: string;
   statusCode: number;
   durationMs: number;
 };
@@ -559,10 +566,13 @@ export function captureOAuthTokenExchange(
   const properties = {
     oauth_grant_type: exchange.grantType,
     oauth_client_type: exchange.clientType,
+    oauth_client_id: exchange.clientId,
     oauth_access_scope: exchange.accessScope,
     oauth_stage: exchange.stage,
     oauth_outcome: exchange.outcome,
     oauth_error_code: exchange.errorCode,
+    oauth_provider_status_code: exchange.providerStatusCode,
+    oauth_provider_error_code: exchange.providerErrorCode,
     http_status_code: exchange.statusCode,
     duration_ms: exchange.durationMs,
   };
