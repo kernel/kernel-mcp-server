@@ -1,7 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { Kernel } from "@onkernel/sdk";
 import {
-  clearMcpSearchEntitlementCacheForTests,
+  clearMcpEntitlementsCacheForTests,
   resolveMcpEntitlements,
 } from "@/lib/mcp/entitlements";
 
@@ -130,8 +130,8 @@ describe("MCP feature entitlements", () => {
     }
   });
 
-  test("caches Search per connection while refreshing other entitlements", async () => {
-    clearMcpSearchEntitlementCacheForTests();
+  test("caches the entitlement snapshot per connection", async () => {
+    clearMcpEntitlementsCacheForTests();
     let search = true;
     let vaults = true;
     let calls = 0;
@@ -168,10 +168,94 @@ describe("MCP feature entitlements", () => {
     });
 
     expect(first).toEqual({ vaults: true, search: true });
-    expect(sameConnection).toEqual({ vaults: false, search: true });
+    expect(sameConnection).toEqual({ vaults: true, search: true });
     expect(newConnection).toEqual({ vaults: false, search: false });
-    expect(calls).toBe(3);
-    clearMcpSearchEntitlementCacheForTests();
+    expect(calls).toBe(2);
+    clearMcpEntitlementsCacheForTests();
+  });
+
+  test("refreshes entitlement snapshots after 30 minutes", async () => {
+    clearMcpEntitlementsCacheForTests();
+    let enabled = true;
+    let calls = 0;
+    const now = spyOn(Date, "now").mockReturnValue(1_000_000);
+    const dependencies = {
+      createKernelClient: () =>
+        ({
+          get: async () => {
+            calls++;
+            return {
+              features: {
+                vaults: { enabled },
+                search: { enabled },
+              },
+            };
+          },
+        }) as never,
+    };
+    try {
+      expect(
+        await resolveMcpEntitlements({
+          token: "sk_key",
+          dependencies,
+          cacheIdentity: "expires",
+        }),
+      ).toEqual({ vaults: true, search: true });
+      enabled = false;
+      now.mockReturnValue(2_801_001);
+      expect(
+        await resolveMcpEntitlements({
+          token: "sk_key",
+          dependencies,
+          cacheIdentity: "expires",
+        }),
+      ).toEqual({ vaults: false, search: false });
+      expect(calls).toBe(2);
+    } finally {
+      now.mockRestore();
+      clearMcpEntitlementsCacheForTests();
+    }
+  });
+
+  test("does not cache transient lookup failures", async () => {
+    clearMcpEntitlementsCacheForTests();
+    let calls = 0;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const dependencies = {
+      createKernelClient: () =>
+        ({
+          get: async () => {
+            calls++;
+            if (calls === 1) throw new Error("temporarily unavailable");
+            return {
+              features: {
+                vaults: { enabled: true },
+                search: { enabled: true },
+              },
+            };
+          },
+        }) as never,
+    };
+    try {
+      expect(
+        await resolveMcpEntitlements({
+          token: "sk_key",
+          dependencies,
+          cacheIdentity: "transient-failure",
+        }),
+      ).toEqual({ vaults: false, search: false });
+      expect(
+        await resolveMcpEntitlements({
+          token: "sk_key",
+          dependencies,
+          cacheIdentity: "transient-failure",
+        }),
+      ).toEqual({ vaults: true, search: true });
+      expect(calls).toBe(2);
+    } finally {
+      warn.mockRestore();
+      clearMcpEntitlementsCacheForTests();
+    }
   });
 
   test("does not reuse access across credentials or after revocation", async () => {

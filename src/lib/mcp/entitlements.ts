@@ -9,11 +9,11 @@ const entitlementsSchema = z.object({
   features: z.record(z.string(), z.unknown()),
 });
 const featureSchema = z.object({ enabled: z.boolean() });
-const ENTITLEMENTS_CACHE_TTL_MS = 5 * 60 * 1000;
+const ENTITLEMENTS_CACHE_TTL_MS = 30 * 60 * 1000;
 const MAX_ENTITLEMENTS_CACHE_ENTRIES = 1_000;
 const entitlementsCache = new Map<
   string,
-  { search: boolean; expiresAt: number }
+  { value: { vaults: boolean; search: boolean }; expiresAt: number }
 >();
 
 function entitlementCacheKey(identity: string) {
@@ -36,15 +36,11 @@ export async function resolveMcpEntitlements({
   dependencies?: Pick<McpDependencies, "createKernelClient">;
   cacheIdentity?: string;
 }): Promise<{ vaults: boolean; search: boolean }> {
-  let cachedSearch: boolean | undefined;
-  if (cacheIdentity) {
-    const key = entitlementCacheKey(cacheIdentity);
+  const key = cacheIdentity ? entitlementCacheKey(cacheIdentity) : undefined;
+  if (key) {
     const cached = entitlementsCache.get(key);
-    if (cached && cached.expiresAt > Date.now()) {
-      cachedSearch = cached.search;
-    } else if (cached) {
-      entitlementsCache.delete(key);
-    }
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    if (cached) entitlementsCache.delete(key);
   }
 
   try {
@@ -56,30 +52,33 @@ export async function resolveMcpEntitlements({
         timeout: 5_000,
       });
     const parsed = entitlementsSchema.safeParse(entitlements);
-    if (!parsed.success)
-      return { vaults: false, search: cachedSearch ?? false };
-    const currentSearch = featureEnabled(parsed.data.features.search);
-    if (cacheIdentity && cachedSearch === undefined) {
+    if (!parsed.success) return { vaults: false, search: false };
+    const value = {
+      vaults: featureEnabled(parsed.data.features.vaults),
+      search: featureEnabled(parsed.data.features.search),
+    };
+    if (key) {
+      const now = Date.now();
+      for (const [entryKey, entry] of entitlementsCache) {
+        if (entry.expiresAt <= now) entitlementsCache.delete(entryKey);
+      }
       if (entitlementsCache.size >= MAX_ENTITLEMENTS_CACHE_ENTRIES) {
         const oldest = entitlementsCache.keys().next().value;
         if (oldest) entitlementsCache.delete(oldest);
       }
-      entitlementsCache.set(entitlementCacheKey(cacheIdentity), {
-        search: currentSearch,
-        expiresAt: Date.now() + ENTITLEMENTS_CACHE_TTL_MS,
+      entitlementsCache.set(key, {
+        value,
+        expiresAt: now + ENTITLEMENTS_CACHE_TTL_MS,
       });
     }
-    return {
-      vaults: featureEnabled(parsed.data.features.vaults),
-      search: cachedSearch ?? currentSearch,
-    };
+    return value;
   } catch {
-    // Do not expose upstream error bodies or interrupt unrelated toolsets.
+    // Do not expose upstream error bodies or cache transient failures.
     console.warn("Unable to resolve MCP feature entitlements; tools disabled");
-    return { vaults: false, search: cachedSearch ?? false };
+    return { vaults: false, search: false };
   }
 }
 
-export function clearMcpSearchEntitlementCacheForTests() {
+export function clearMcpEntitlementsCacheForTests() {
   entitlementsCache.clear();
 }

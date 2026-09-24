@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Kernel } from "@onkernel/sdk";
 import type { McpConnectionScopeFailureAnalytics } from "@/lib/mcp/analytics";
 import { defaultMcpDependencies } from "@/lib/mcp/dependencies";
-import { clearMcpSearchEntitlementCacheForTests } from "@/lib/mcp/entitlements";
+import { clearMcpEntitlementsCacheForTests } from "@/lib/mcp/entitlements";
 import { oauthResourceMetadata } from "@/lib/oauth-discovery";
 
 process.env.CLERK_SECRET_KEY ??= "test-clerk-secret";
@@ -68,7 +68,7 @@ function failingAuthContext(error: unknown) {
 
 beforeEach(() => {
   captured.length = 0;
-  clearMcpSearchEntitlementCacheForTests();
+  clearMcpEntitlementsCacheForTests();
 });
 
 afterEach(() => {
@@ -208,6 +208,10 @@ describe("capability routing", () => {
             });
           if (path === "/org/entitlements") return entitlements(token);
           if (path === "/search/providers") return Response.json([]);
+          if (path === "/vaults")
+            return Response.json([], {
+              headers: { "x-has-more": "false", "x-next-offset": "0" },
+            });
           throw new Error(`Unexpected API request: ${path}`);
         },
       });
@@ -232,7 +236,7 @@ describe("capability routing", () => {
     return JSON.parse(event ? event.slice(6) : text);
   }
 
-  test("selects tools per credential and rechecks access after revocation", async () => {
+  test("caches entitlement-gated tools per credential and MCP connection", async () => {
     let enabled = true;
     const paths = installKernelResponses((token) =>
       Response.json({
@@ -242,6 +246,13 @@ describe("capability routing", () => {
         },
       }),
     );
+    const unrelated = await call("tools/call", "sk_allowed", {
+      name: "get_connection_context",
+      arguments: {},
+    });
+    expect(unrelated.result.isError).not.toBe(true);
+    expect(paths).toEqual(["/auth/context"]);
+
     const allowed = await call("tools/list");
     expect(
       allowed.result.tools.map((tool: { name: string }) => tool.name),
@@ -256,18 +267,19 @@ describe("capability routing", () => {
       denied.result.tools.map((tool: { name: string }) => tool.name),
     ).toContain("manage_browsers");
     enabled = false;
-    const revoked = await call("tools/call", "sk_allowed", {
+    const stillExposed = await call("tools/call", "sk_allowed", {
       name: "manage_vaults",
       arguments: { action: "list" },
     });
-    expect(JSON.stringify(revoked)).toContain("not found");
+    expect(stillExposed.result.isError).not.toBe(true);
     expect(paths).toEqual([
       "/auth/context",
-      "/org/entitlements",
       "/auth/context",
       "/org/entitlements",
       "/auth/context",
       "/org/entitlements",
+      "/auth/context",
+      "/vaults",
     ]);
   });
 
@@ -309,7 +321,7 @@ describe("capability routing", () => {
       sameConnection.result.tools.map((tool: { name: string }) => tool.name),
     ).toContain("web_search");
     expect(paths.filter((path) => path === "/org/entitlements")).toHaveLength(
-      5,
+      2,
     );
     expect(paths.filter((path) => path === "/search/providers")).toHaveLength(
       1,

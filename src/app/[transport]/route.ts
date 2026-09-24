@@ -44,12 +44,39 @@ export async function OPTIONS(_req: NextRequest): Promise<Response> {
   });
 }
 
+const ENTITLEMENT_GATED_TOOLS = new Set([
+  "web_search",
+  "manage_vaults",
+  "manage_vault_wallets",
+  "manage_vault_cards",
+  "manage_vault_credentials",
+  "manage_vault_items",
+  "manage_vault_provider_configs",
+]);
+
 const CORS_HEADERS = {
   "Content-Type": "application/json",
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
+
+async function requestRequiresMcpEntitlements(req: Request): Promise<boolean> {
+  if (req.method !== "POST") return false;
+  const payload = (await req
+    .clone()
+    .json()
+    .catch(() => null)) as {
+    method?: unknown;
+    params?: { name?: unknown };
+  } | null;
+  if (payload?.method === "tools/list") return true;
+  return (
+    payload?.method === "tools/call" &&
+    typeof payload.params?.name === "string" &&
+    ENTITLEMENT_GATED_TOOLS.has(payload.params.name)
+  );
+}
 
 function errorResponse(
   status: number,
@@ -172,16 +199,19 @@ async function handleMcpRequestWithIdentity({
     }
     return connectionScopeFailureResponse(req, connection);
   }
-  // Recheck with the current credential on every request, including tools/call.
-  const entitlements = await resolveMcpEntitlements({
-    token,
-    signal: req.signal,
-    cacheIdentity: [
-      authSubject,
-      connection.context.authContext.organization.id,
-      transportSessionId ?? "stateless",
-    ].join("\0"),
-  });
+  // Resolve entitlements only for tool discovery and gated tool calls.
+  const entitlements = (await requestRequiresMcpEntitlements(req))
+    ? await resolveMcpEntitlements({
+        token,
+        signal: req.signal,
+        cacheIdentity: [
+          authSubject,
+          connection.context.authContext.organization.id,
+          transportSessionId ?? "stateless",
+          token,
+        ].join("\0"),
+      })
+    : { vaults: false, search: false };
   const { vaults } = entitlements;
   const search = mcpToolsetEnabledByConfig("search") && entitlements.search;
   const connectionContext = connection.context;
