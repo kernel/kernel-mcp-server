@@ -384,8 +384,8 @@ Project resources use the prefix `kernel://orgs/{organization_id}/projects/{proj
 ### Invoke apps from anywhere
 
 ```
-Human: Run my web-scraper app to get data from reddit.com
-Assistant: I'll execute your web-scraper action with reddit.com as the target.
+Human: Run my checkout-test app against example.com
+Assistant: I'll invoke your checkout-test app with example.com as the target.
 [Uses manage_apps tool with action: "invoke" to run your deployed app in the cloud]
 ```
 
@@ -447,7 +447,7 @@ Assistant: [Follows the debugging guide from the prompt: uses Kernel CLI to chec
 
 ### Connect local dev server to cloud browser
 
-This is perfect for AI coding workflows where you need to preview local changes in a real browser:
+Use a cloud browser to preview changes running on your local development server:
 
 ```
 Human: I'm working on a React app running on localhost:3000. I want to test it in a cloud browser.

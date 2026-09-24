@@ -492,7 +492,9 @@ export function registerBrowserCapabilities(
           .optional(),
         stealth: z
           .boolean()
-          .describe("(create) Avoid bot detection. Recommended for scraping.")
+          .describe(
+            "(create) enable browser settings intended to reduce automation detection. site access is not guaranteed.",
+          )
           .optional(),
         region: z
           .enum(["us-east", "eu-west"])
