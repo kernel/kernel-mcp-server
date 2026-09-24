@@ -5,7 +5,11 @@ import {
   vaultItemFields,
 } from "@/lib/mcp/vault-responses";
 import { toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
-import { connectVaultTest, item } from "@/lib/mcp/tools/vaults.test-fixtures";
+import {
+  connectVaultTest,
+  item,
+  linkSpec,
+} from "@/lib/mcp/tools/vaults.test-fixtures";
 
 const aliases = {
   number: "4111111111111111",
@@ -263,6 +267,94 @@ describe("vault public responses", () => {
         expect(text).toContain("Do not replay a payment.");
         expect(text).not.toContain("hidden");
         expect(text).not.toContain("Provider configuration writes");
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test.each([
+    { tool: "manage_vaults", args: { action: "get", vault: "checkout" } },
+    {
+      tool: "manage_vault_items",
+      args: { action: "get", vault: "checkout", key: "order-1" },
+    },
+    {
+      tool: "manage_vault_wallets",
+      args: { action: "payment_methods", vault: "checkout", key: "wallet-1" },
+    },
+    {
+      tool: "manage_vault_credentials",
+      args: {
+        action: "update",
+        vault: "checkout",
+        key: "login",
+        version: 1,
+        spec: { fields: { username: { value: "example-user" } } },
+      },
+    },
+    {
+      tool: "manage_vault_cards",
+      args: {
+        action: "create",
+        vault: "checkout",
+        key: "order-1",
+        provider: "link",
+        spec: { ...linkSpec, provider: "link" },
+      },
+    },
+    {
+      tool: "manage_vault_provider_configs",
+      args: { action: "get", config: "example" },
+    },
+  ])("preserves safe API messages in $tool", async ({ tool, args }) => {
+    const fixture = await connectVaultTest([
+      Response.json(
+        { code: "invalid_request", message: "vault fill validation failed" },
+        { status: 400 },
+      ),
+    ]);
+    try {
+      const result = await fixture.call(tool, args);
+      const text = JSON.stringify(result);
+      expect(result.isError).toBe(true);
+      expect(text).toContain(
+        "400 Vault request failed: vault fill validation failed",
+      );
+      expect(text).toContain("[code: invalid_request]");
+      expect(text).toContain("Do not replay a payment.");
+      expect(fixture.requests).toHaveLength(1);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    undefined,
+    null,
+    123,
+    { secret: "hidden" },
+    "vault fill validation failed hidden-secret",
+    "https://provider.example/?token=hidden-secret",
+    "destination is not authorized",
+  ])(
+    "preserves fill codes without exposing unsafe messages",
+    async (message) => {
+      const fixture = await connectVaultTest([
+        Response.json({ code: "element_not_found", message }, { status: 400 }),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          action: "get",
+          vault: "checkout",
+          key: "order-1",
+        });
+        const text = JSON.stringify(result);
+        expect(result.isError).toBe(true);
+        expect(text).toContain("400 Vault request failed.");
+        expect(text).toContain("[code: element_not_found]");
+        expect(text).not.toContain("hidden");
+        expect(text).not.toContain("destination is not authorized");
       } finally {
         await fixture.close();
       }

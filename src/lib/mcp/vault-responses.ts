@@ -398,6 +398,27 @@ const vaultErrorMessages = new Map([
     "The payment provider has rate limited spend requests. Stop and wait before taking further action.",
   ],
 ]);
+// Only these fixed API messages are safe to expose; arbitrary vault/provider
+// error text can contain credentials or collection URLs.
+const vaultFillErrorMessages = new Map([
+  ...[
+    "invalid_request",
+    "invalid_selector",
+    "duplicate_target",
+    "timeout",
+    "target_changed",
+    "page_not_found",
+    "ambiguous_page",
+    "element_not_found",
+    "ambiguous_selector",
+    "element_not_editable",
+    "option_not_found",
+    "field_unavailable",
+  ].map((code): [string, string] => [code, "vault fill validation failed"]),
+  ["destination_denied", "destination is not authorized"],
+  ["conflict", "fill is not currently available"],
+  ["execution_failed", "vault fill could not start"],
+]);
 const vaultErrorGuidance =
   "Inspect item state/events before taking further action. Do not replay a payment.";
 
@@ -455,8 +476,18 @@ export function throwVaultError(
         ),
       );
     }
-    const message =
-      code === undefined ? undefined : vaultErrorMessages.get(code);
+    const fillMessage =
+      code === undefined ? undefined : vaultFillErrorMessages.get(code);
+    let message = code === undefined ? undefined : vaultErrorMessages.get(code);
+    if (
+      fillMessage !== undefined &&
+      body &&
+      typeof body === "object" &&
+      "message" in body &&
+      body.message === fillMessage
+    ) {
+      message = `Vault request failed: ${fillMessage}.`;
+    }
     throwToolError(
       tool,
       action,
@@ -464,7 +495,9 @@ export function throwVaultError(
         error.status,
         {
           message: `${message ?? "Vault request failed."} ${guidance}`,
-          ...(message !== undefined && { code }),
+          ...((message !== undefined || fillMessage !== undefined) && {
+            code,
+          }),
         },
         undefined,
         new Headers(),
