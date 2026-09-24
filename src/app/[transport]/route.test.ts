@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Kernel } from "@onkernel/sdk";
 import type { McpConnectionScopeFailureAnalytics } from "@/lib/mcp/analytics";
 import { defaultMcpDependencies } from "@/lib/mcp/dependencies";
+import { clearMcpSearchEntitlementCacheForTests } from "@/lib/mcp/entitlements";
 import { oauthResourceMetadata } from "@/lib/oauth-discovery";
 
 process.env.CLERK_SECRET_KEY ??= "test-clerk-secret";
@@ -67,6 +68,7 @@ function failingAuthContext(error: unknown) {
 
 beforeEach(() => {
   captured.length = 0;
+  clearMcpSearchEntitlementCacheForTests();
 });
 
 afterEach(() => {
@@ -269,7 +271,7 @@ describe("capability routing", () => {
     ]);
   });
 
-  test("gates search discovery and direct calls per caller, including revocation", async () => {
+  test("gates Search per connection and keeps other callers isolated", async () => {
     let enabled = true;
     const paths = installKernelResponses((token) =>
       Response.json({
@@ -302,11 +304,10 @@ describe("capability routing", () => {
     });
     expect(JSON.stringify(deniedCall)).toContain("not found");
     enabled = false;
-    const revoked = await call("tools/call", "sk_allowed", {
-      name: "web_search",
-      arguments: { action: "create", request: { query: "test" } },
-    });
-    expect(JSON.stringify(revoked)).toContain("not found");
+    const sameConnection = await call("tools/list", "sk_allowed");
+    expect(
+      sameConnection.result.tools.map((tool: { name: string }) => tool.name),
+    ).toContain("web_search");
     expect(paths.filter((path) => path === "/org/entitlements")).toHaveLength(
       5,
     );

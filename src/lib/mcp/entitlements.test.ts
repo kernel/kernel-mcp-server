@@ -1,6 +1,9 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { Kernel } from "@onkernel/sdk";
-import { resolveMcpEntitlements } from "@/lib/mcp/entitlements";
+import {
+  clearMcpSearchEntitlementCacheForTests,
+  resolveMcpEntitlements,
+} from "@/lib/mcp/entitlements";
 
 function fixture(body: unknown, status = 200) {
   const requests: Request[] = [];
@@ -125,6 +128,50 @@ describe("MCP feature entitlements", () => {
     } finally {
       get.mockRestore();
     }
+  });
+
+  test("caches Search per connection while refreshing other entitlements", async () => {
+    clearMcpSearchEntitlementCacheForTests();
+    let search = true;
+    let vaults = true;
+    let calls = 0;
+    const dependencies = {
+      createKernelClient: (token: string) =>
+        ({
+          get: async () => {
+            calls++;
+            return {
+              features: {
+                vaults: { enabled: vaults },
+                search: { enabled: search },
+              },
+            };
+          },
+        }) as never,
+    };
+    const first = await resolveMcpEntitlements({
+      token: "sk_key",
+      dependencies,
+      cacheIdentity: "connection-a",
+    });
+    search = false;
+    vaults = false;
+    const sameConnection = await resolveMcpEntitlements({
+      token: "sk_key",
+      dependencies,
+      cacheIdentity: "connection-a",
+    });
+    const newConnection = await resolveMcpEntitlements({
+      token: "sk_key",
+      dependencies,
+      cacheIdentity: "connection-b",
+    });
+
+    expect(first).toEqual({ vaults: true, search: true });
+    expect(sameConnection).toEqual({ vaults: false, search: true });
+    expect(newConnection).toEqual({ vaults: false, search: false });
+    expect(calls).toBe(3);
+    clearMcpSearchEntitlementCacheForTests();
   });
 
   test("does not reuse access across credentials or after revocation", async () => {

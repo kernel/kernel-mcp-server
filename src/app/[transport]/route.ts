@@ -176,6 +176,11 @@ async function handleMcpRequestWithIdentity({
   const entitlements = await resolveMcpEntitlements({
     token,
     signal: req.signal,
+    cacheIdentity: [
+      authSubject,
+      connection.context.authContext.organization.id,
+      transportSessionId ?? "stateless",
+    ].join("\0"),
   });
   const { vaults } = entitlements;
   const search = mcpToolsetEnabledByConfig("search") && entitlements.search;
