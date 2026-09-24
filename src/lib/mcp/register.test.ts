@@ -60,7 +60,7 @@ async function captureRegistration(
 
 describe("MCP tool ownership", () => {
   test("matches every registered KERNEL tool in both directions", async () => {
-    const registration = await captureRegistration(true, true, true);
+    const registration = await captureRegistration(true, true, true, true);
     const registeredTools = new Set([
       ...registration.legacyTools,
       ...registration.appTools,
