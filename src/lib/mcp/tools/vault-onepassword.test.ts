@@ -66,7 +66,7 @@ const pendingCredential = {
     instructions: approvalInstructions,
   },
   available_operations: [
-    { type: "1pw_poll_access", description: "Check the request." },
+    { type: "1pw_access_request_status", description: "Check the request." },
   ],
   available_expansions: [],
   created_at: "2026-09-25T00:00:00Z",
@@ -118,9 +118,14 @@ describe("1Password vault credentials", () => {
       expect(descriptionOf("manage_vaults")).toContain(
         "Ask the user which they prefer",
       );
-      expect(descriptionOf("manage_vault_items")).toContain(
-        "1pw_request_access",
-      );
+      const items = descriptionOf("manage_vault_items");
+      expect(items).toContain("1pw_create_access_request");
+      expect(items).toContain("1pw_access_request_status");
+      expect(items).toContain("recover a failed account link");
+      for (const { description } of tools) {
+        expect(description).not.toContain("reconcile_access");
+        expect(description).not.toMatch(/integration key|Family/i);
+      }
       expect(fixture.requests).toEqual([]);
     } finally {
       await fixture.close();
@@ -272,6 +277,50 @@ describe("1Password vault credentials", () => {
     }
   });
 
+  test("offers recovery of a failed account link only when advertised", async () => {
+    const recoverable = {
+      ...account,
+      state: { provider: "1password", status: "reconnect_required" },
+      action: undefined,
+      available_operations: [
+        { type: "1pw_recover", description: "Get a recovery link." },
+      ],
+    };
+    const fixture = await connectVaultTest([
+      Response.json(recoverable),
+      Response.json(recoverable),
+      Response.json({ ...recoverable, action: account.action }),
+    ]);
+    try {
+      const read = toolResultJSON(
+        await fixture.call("manage_vault_items", {
+          vault: target.vault,
+          key: account.key,
+          action: "get",
+        }),
+      );
+      const guidance = read.guidance.join(" ");
+      expect(guidance).toContain("recover a failed account link");
+      expect(guidance).toContain("connect again on the same key");
+      expect(guidance).not.toMatch(/integration key|Family/i);
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_items", {
+          vault: target.vault,
+          key: account.key,
+          action: "invoke",
+          operation: "1pw_recover",
+        }),
+      );
+      expect(fixture.requests[2].body).toEqual({ type: "1pw_recover" });
+      expect(result.item.action).toEqual({
+        name: "1password_oauth",
+        url: oauthURL,
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test("creates a 1Password credential from a single login request", async () => {
     const fixture = await connectVaultTest([Response.json(pendingCredential)]);
     try {
@@ -329,7 +378,7 @@ describe("1Password vault credentials", () => {
       expect(guidance).toContain("unmodified only to the account owner");
       expect(guidance).toContain("never open it in a browser");
       expect(guidance).toContain('action: "invoke"');
-      expect(guidance).toContain('operation: "1pw_poll_access"');
+      expect(guidance).toContain('operation: "1pw_access_request_status"');
       expect(guidance).not.toContain("collection URL");
     } finally {
       await fixture.close();
@@ -406,7 +455,7 @@ describe("1Password vault credentials", () => {
       state: { provider: "1password", status: "pending_authorization" },
       action: undefined,
       available_operations: [
-        { type: "1pw_request_access", description: "Request access." },
+        { type: "1pw_create_access_request", description: "Request access." },
       ],
     };
     const fixture = await connectVaultTest([
@@ -417,12 +466,12 @@ describe("1Password vault credentials", () => {
       const result = await fixture.call("manage_vault_items", {
         ...target,
         action: "invoke",
-        operation: "1pw_request_access",
+        operation: "1pw_create_access_request",
         inputs: { browser_id: "browser-1", reason: "Check order status" },
       });
       expect(result.isError).toBeUndefined();
       expect(fixture.requests[1].body).toEqual({
-        type: "1pw_request_access",
+        type: "1pw_create_access_request",
         browser_id: "browser-1",
         reason: "Check order status",
       });
@@ -473,13 +522,53 @@ describe("1Password vault credentials", () => {
     },
   );
 
+  test.each(["1pw_create_access_request", "1pw_reconcile_access"])(
+    "keeps an uncertain access request blocked: %s",
+    async (operation) => {
+      const uncertain = {
+        ...pendingCredential,
+        state: { provider: "1password", status: "pending_authorization" },
+        action: undefined,
+        available_operations: [],
+      };
+      const fixture = await connectVaultTest([
+        Response.json(uncertain),
+        Response.json(uncertain),
+      ]);
+      try {
+        const read = toolResultJSON(
+          await fixture.call("manage_vault_items", {
+            ...target,
+            action: "get",
+          }),
+        );
+        expect(read.guidance.join(" ")).toContain(
+          "never delete or recreate the item to retry",
+        );
+        const result = await fixture.call("manage_vault_items", {
+          ...target,
+          action: "invoke",
+          operation,
+          inputs: { browser_id: "browser-1" },
+        });
+        expect(result.isError).toBe(true);
+        expect(fixture.requests).toHaveLength(2);
+        expect(fixture.requests.every(({ method }) => method === "GET")).toBe(
+          true,
+        );
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
   test("curates 1Password operation errors", async () => {
     const fixture = await connectVaultTest([
       Response.json({
         ...pendingCredential,
         action: undefined,
         available_operations: [
-          { type: "1pw_request_access", description: "Request access." },
+          { type: "1pw_create_access_request", description: "Request access." },
         ],
       }),
       Response.json(
@@ -491,7 +580,7 @@ describe("1Password vault credentials", () => {
       const result = await fixture.call("manage_vault_items", {
         ...target,
         action: "invoke",
-        operation: "1pw_request_access",
+        operation: "1pw_create_access_request",
         inputs: { browser_id: "browser-1" },
       });
       expect(result.isError).toBe(true);
