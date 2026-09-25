@@ -75,8 +75,53 @@ const createSpec = z
       ),
   })
   .strict();
+const onePasswordCreateSpec = z
+  .object({
+    account_id: z
+      .string()
+      .min(1)
+      .describe(
+        "Immutable id (not key) of a connected 1Password credential_account item in the same vault.",
+      ),
+    website: z
+      .string()
+      .url()
+      .max(2083)
+      .regex(/^https:\/\//)
+      .describe("HTTPS login page for the single requested login."),
+    goal: z
+      .string()
+      .max(140)
+      .optional()
+      .describe("Short request goal shown to the account owner."),
+    reason: z.string().max(100).optional(),
+    keywords: z.array(z.string().min(1).max(50)).min(1).max(5).optional(),
+  })
+  .strict();
+
+function onePasswordCredentialSpec(
+  spec: z.infer<typeof onePasswordCreateSpec>,
+) {
+  return {
+    provider: "1password" as const,
+    account_id: spec.account_id,
+    requests: {
+      version: 2,
+      ...(spec.goal !== undefined && { goal: spec.goal }),
+      entries: [
+        {
+          type: "login",
+          parameters: { website: spec.website },
+          ...(spec.reason !== undefined && { reason: spec.reason }),
+          ...(spec.keywords !== undefined && { keywords: spec.keywords }),
+        },
+      ],
+    },
+  };
+}
+
 function publicCredentialFieldNames(item: VaultItem): Set<string> {
-  if (item.type !== "credential") return new Set();
+  if (item.type !== "credential" || !("fields" in item.spec)) return new Set();
   const names = new Set<string>();
   const publicNames = new Set<string>();
   for (const field of item.spec.fields) {
@@ -115,17 +160,30 @@ export function registerVaultCredentialTools(
     "manage_vault_credentials",
     {
       description:
-        'Create or update credential items in a per-end-user vault. Use only the recognizable site name as description; explicitly set sensitive:false for ordinary usernames/emails. Each field may include an optional non-secret human-readable label; name remains the stable key for updates and browser fills. Passwords and TOTP seeds must be sensitive. Never store payment-card data here. For human collection, omit values and present the returned bearer collection URL privately to the intended user, outside the agent-controlled browser. Never ask for passwords or TOTP seeds in chat. TOTP seeds require trusted provisioning and have no hosted input. On create, fields is an ordered array of named definitions: inspect the website and list fields in its natural top-to-bottom order because this directly controls the user-facing collection form. Update fields remain keyed by name and contain only value. Updates require the latest version and optionally expected_item_id from an earlier read; definitions are immutable. Omitted values are preserved; null or empty strings clear supported values. Clearing required TOTP is unsupported. Hosted forms require populated required inputs. To reopen collection, use manage_vault_items with action: "invoke" and operation: "collect". Use manage_vault_items get with wait for readiness, then invoke fill with fill parameters. For edits to already-ready items compare versions without wait. Explicitly non-sensitive text/email values are returned; sensitive values and TOTP seeds are omitted. Writes are never automatically retried; reconcile conflicts or uncertain outcomes before any further write.',
+        'Create or update credential items in a per-end-user vault. There are two credential paths. Before creating any credential, ask the user which they prefer and set provider to match; never choose for them. provider:"kernel" is Kernel-hosted collection: the user enters values in a Kernel-hosted form and the agent fills them with value-free bindings. provider:"1password" is 1Password brokered approval: the user connects their 1Password account once, approves each login request in the 1Password app, and the 1Password extension, loaded into the browser on demand, fills and submits; Kernel stores no values. ' +
+        'Kernel path: use only the recognizable site name as description; explicitly set sensitive:false for ordinary usernames/emails. Each field may include an optional non-secret human-readable label; name remains the stable key for updates and browser fills. Passwords and TOTP seeds must be sensitive. Never store payment-card data here. For human collection, omit values and present the returned bearer collection URL privately to the intended user, outside the agent-controlled browser. Never ask for passwords or TOTP seeds in chat. TOTP seeds require trusted provisioning and have no hosted input. On create, fields is an ordered array of named definitions: inspect the website and list fields in its natural top-to-bottom order because this directly controls the user-facing collection form. Update fields remain keyed by name and contain only value. Updates require the latest version and optionally expected_item_id from an earlier read; definitions are immutable. Omitted values are preserved; null or empty strings clear supported values. Clearing required TOTP is unsupported. Hosted forms require populated required inputs. To reopen collection, use manage_vault_items with action: "invoke" and operation: "collect". Use manage_vault_items get with wait for readiness, then invoke fill with fill parameters. For edits to already-ready items compare versions without wait. Explicitly non-sensitive text/email values are returned; sensitive values and TOTP seeds are omitted. ' +
+        '1Password path: first use action "connect_account" with provider:"1password" and a new key; present the returned 1Password authorization URL only to the account owner, outside the agent-controlled browser, and let them verify the account on the consent screen. Once manage_vault_items get reports the account connected, create the credential with provider:"1password" and spec {account_id, website, optional goal/reason/keywords}. 1Password credentials cannot be updated. Approval is a human action in the 1Password app: after 1pw_create_access_request, give the returned native onepassword:// approval link unmodified only to the account owner, outside the agent-controlled browser, and never open, decode, or approve it yourself. MCP never returns access-request IDs or tokens. This is unrelated to manage_credential_providers. ' +
+        "Writes are never automatically retried; reconcile conflicts or uncertain outcomes before any further write.",
       inputSchema: vaultToolInput({
         ...vaultItemSchema,
         key: vaultKeySchema(),
-        action: z.enum(["create", "update"]),
+        action: z.enum(["create", "update", "connect_account"]),
+        provider: z
+          .enum(["kernel", "1password"])
+          .describe(
+            '(create, connect_account) The path the user chose. Ask the user before creating. connect_account supports only "1password". Update accepts only Kernel credentials.',
+          )
+          .optional(),
         spec: z
-          .union([createSpec, updateSpec])
+          .union([createSpec, onePasswordCreateSpec, updateSpec])
+          .describe(
+            "(create, update) Kernel create: description and ordered fields. 1Password create: account_id, website, and optional goal/reason/keywords. Update (Kernel only): description and/or fields keyed by name.",
+          )
           .refine(
             (spec) =>
               Buffer.byteLength(JSON.stringify(spec), "utf8") <= 128 * 1024,
-          ),
+          )
+          .optional(),
         version: z
           .number()
           .int()
@@ -159,11 +217,57 @@ export function registerVaultCredentialTools(
       const options = { maxRetries: 0, signal: ctx.mcpReq.signal };
       try {
         if (
-          params.action === "create" &&
+          params.action !== "update" &&
           (params.version !== undefined ||
             params.expected_item_id !== undefined)
         )
           return errorResponse("version and expected_item_id are update-only.");
+        if (params.action === "update" && params.provider === "1password")
+          return errorResponse("1Password credentials cannot be updated.");
+        if (params.action !== "update" && params.provider === undefined)
+          return errorResponse(
+            'provider is required. Ask the user whether they prefer Kernel-hosted collection (provider: "kernel") or 1Password brokered approval (provider: "1password") before creating credentials.',
+          );
+        const target = { project, vault: params.vault, key: params.key };
+        if (params.action === "connect_account") {
+          if (params.provider !== "1password")
+            return errorResponse(
+              'connect_account supports only provider: "1password".',
+            );
+          if (params.spec !== undefined)
+            return errorResponse("spec is not accepted for connect_account.");
+          const account = await client.vaults.items.upsert(
+            params.key,
+            {
+              id_or_name: params.vault,
+              type: "credential_account",
+              spec: {
+                provider: "1password",
+                authorization: {
+                  method: "oauth",
+                  client: { type: "kernel_managed" },
+                },
+              },
+            },
+            options,
+          );
+          return vaultItemResponse(account, target);
+        }
+        if (params.spec === undefined)
+          return errorResponse("spec is required for create and update.");
+        if (params.action === "create" && params.provider === "1password") {
+          const spec = onePasswordCreateSpec.parse(params.spec);
+          const credential = await client.vaults.items.upsert(
+            params.key,
+            {
+              id_or_name: params.vault,
+              type: "credential",
+              spec: onePasswordCredentialSpec(spec),
+            },
+            options,
+          );
+          return vaultItemResponse(credential, target);
+        }
         let item: VaultItem;
         let writtenValues: (string | undefined)[];
         if (params.action === "create") {
@@ -173,7 +277,7 @@ export function registerVaultCredentialTools(
             {
               id_or_name: params.vault,
               type: "credential",
-              spec,
+              spec: { provider: "kernel", ...spec },
             },
             options,
           );
@@ -203,11 +307,7 @@ export function registerVaultCredentialTools(
             .filter(([name]) => !publicNames.has(name))
             .map(([, field]) => field.value ?? undefined);
         }
-        return vaultItemResponse(
-          item,
-          { project, vault: params.vault, key: params.key },
-          writtenValues,
-        );
+        return vaultItemResponse(item, target, writtenValues);
       } catch (error) {
         throwVaultError("manage_vault_credentials", params.action, error);
       }

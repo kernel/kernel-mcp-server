@@ -13,12 +13,24 @@ there is no per-item test flag. AgentCard configuration responses report the
 introspected `test_mode`. A development or staging MCP endpoint does not make a
 card request a test transaction.
 
-The released Node SDK dependency is pinned in `bun.lock`.
+<!-- TODO: replace the temporary stlc preview pin below with the official @onkernel/sdk release that includes 1Password vault credentials. -->
+
+The Node SDK dependency is temporarily pinned to the stlc development preview
+`kernel-node-sdk-staging@b9931e08abc8e38cd8f194a2896c910378b810c9` in `bun.lock`.
 
 ## Credential collection and observation
 
-Use one vault per end user, such as `user-123`. Create credential definitions with
-`manage_vault_credentials`: use only the recognizable site name for `description`, and
+Credentials have two paths. Before creating a credential, ask the user which they
+prefer and pass it as `provider`; never choose for them:
+
+- `provider: "kernel"` (Kernel-hosted collection): the user enters values in a
+  Kernel-hosted form, and the agent fills them with value-free bindings.
+- `provider: "1password"` (1Password brokered approval): the user connects their
+  1Password account once and approves each login request in the 1Password app. See
+  [1Password brokered approval](#1password-brokered-approval).
+
+Use one vault per end user, such as `user-123`. For Kernel-hosted collection, create
+credential definitions with `manage_vault_credentials`: use only the recognizable site name for `description`, and
 set `sensitive: false` explicitly for ordinary usernames/emails. Passwords and TOTP
 seeds must be sensitive. Payment-card data belongs in wallet/card items, not credentials.
 
@@ -51,14 +63,25 @@ fall back to payment aliases.
    ```json
    {
      "action": "create",
+     "provider": "kernel",
      "vault": "user-123",
      "key": "login",
      "spec": {
        "description": "Example",
-       "fields": {
-         "username": { "type": "text", "required": true, "sensitive": false },
-         "password": { "type": "password", "required": true, "sensitive": true }
-       }
+       "fields": [
+         {
+           "name": "username",
+           "type": "text",
+           "required": true,
+           "sensitive": false
+         },
+         {
+           "name": "password",
+           "type": "password",
+           "required": true,
+           "sensitive": true
+         }
+       ]
      }
    }
    ```
@@ -105,6 +128,58 @@ Definitions cannot be changed. Never solicit secret replacement values in chat;
 prefer `collect` for human edits. Requests are not automatically retried.
 `prepare_checkout` remains API/CLI-only.
 
+### 1Password brokered approval
+
+1. Connect the account with `manage_vault_credentials`, `action: "connect_account"`,
+   `provider: "1password"`, the user's vault, and a new key. Give the returned
+   1Password authorization URL only to the account owner, outside the
+   agent-controlled browser; they verify the account on the consent screen. If the
+   account later reports `declined` or `reconnect_required`, connect again on the
+   same key. When `1pw_recover` is advertised, Kernel can recover a failed account
+   link: after explicit user approval, invoke it, give the returned link to the
+   account owner the same way, and connect again on the same key once recovery
+   completes. Never delete the account to recover.
+2. Observe the account with `manage_vault_items` `get` until `state.status` is
+   `connected`, then create the credential:
+
+   ```json
+   {
+     "action": "create",
+     "provider": "1password",
+     "vault": "user-123",
+     "key": "example-login",
+     "spec": {
+       "account_id": "<credential_account item id>",
+       "website": "https://example.com/login"
+     }
+   }
+   ```
+
+   Optional `goal`, `reason`, and `keywords` describe the request to the account owner.
+   1Password credentials store no values or selectors and cannot be updated.
+
+3. With a browser created with the vault attached, and after explicit user approval,
+   invoke the advertised `1pw_create_access_request` with `inputs: {"browser_id": "..."}`.
+   Kernel loads the 1Password extension into that browser on demand.
+4. Approval is a human action in the account owner's 1Password app. The pending item
+   returns `action: {"name": "1password_access_approval", "url": "onepassword://grant-brokered-access?access_request_reference=..."}`.
+   Give that link, unmodified, only to the account owner in a private surface outside
+   the agent-controlled browser; they open it on a device with the 1Password app and
+   choose, approve, or deny the login there. The link grants nothing until they
+   approve, but it identifies the request, so the agent must never open, decode, or
+   approve it. MCP forwards only links in that exact native form, without the API's free-text
+   instructions, and never returns
+   access-request IDs, provider paths or identities, or OAuth tokens. Invoke the
+   advertised `1pw_access_request_status` with `browser_id` to observe the decision.
+   If the item stays `pending_authorization` with no action and no advertised
+   operations, a request may already have reached 1Password. There is no reset:
+   stop, ask the owner to check 1Password, and never delete or recreate the item to
+   retry.
+5. When the item is ready, invoke the advertised `1pw_fill` with `browser_id` and the
+   exact current `page_url`. The extension selects fields and submits the form.
+   `fill_submitted` means the form was submitted, not that login succeeded; `fill_failed` and `fill_unknown` are tool
+   errors, and `fill_unknown` must not be retried in the same browser.
+
 ## Tools and scope
 
 The six vault tools are exposed only when the current credential's
@@ -121,7 +196,7 @@ The `vaults` toolset configuration can further restrict access, never grant it.
 | `manage_vaults`                 | `create`, `list`, `get`, `delete`           |
 | `manage_vault_wallets`          | `create`, `payment_methods`                 |
 | `manage_vault_cards`            | `create`, `update`                          |
-| `manage_vault_credentials`      | `create`, `update`                          |
+| `manage_vault_credentials`      | `create`, `update`, `connect_account`       |
 | `manage_vault_items`            | `list`, `get`, `invoke`, `events`, `delete` |
 
 Provider configurations are organization-owned and do not accept a project
