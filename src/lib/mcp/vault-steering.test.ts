@@ -146,7 +146,9 @@ describe("vault OpenAPI steering", () => {
         'action: "invoke" and operation: "collect"',
       );
       expect(credentials?.description).toContain("natural top-to-bottom order");
-      expect(items?.description).toContain("operation-specific inputs");
+      expect(items?.description).toContain(
+        "supply exactly the inputs it names",
+      );
       expect(tools.map(({ name }) => name)).toContain(
         "manage_vault_credentials",
       );

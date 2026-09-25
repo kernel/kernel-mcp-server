@@ -43,8 +43,12 @@ describe("vault SDK request contracts", () => {
         "Mode is determined by the wallet credentials",
       );
       expect(cards?.description).toContain(
-        "Pending issuance updates preserve omitted optional fields",
+        "Cards are immutable and cannot be updated",
       );
+      expect(cards?.description).toContain("There is no separate authorize");
+      expect(cards?.inputSchema.properties?.action).toMatchObject({
+        enum: ["create"],
+      });
       expect(cards?.description).toContain("recovery_required");
       expect(fixture.requests).toHaveLength(0);
     } finally {
@@ -159,7 +163,7 @@ describe("vault SDK request contracts", () => {
   );
 
   test.each(["link", "agentcard"])(
-    "creates and fully replaces a %s card without authorizing it",
+    "creates a %s card with one PUT and has no update path",
     async (provider) => {
       const original =
         provider === "link"
@@ -197,35 +201,29 @@ describe("vault SDK request contracts", () => {
               card_id: "vc_chosen",
               amount: Number.MAX_SAFE_INTEGER,
             };
-      const replacement = provider === "link" ? linkSpec : agentcardSpec;
-      const fixture = await connectVaultTest([
-        Response.json(item),
-        Response.json(item),
-      ]);
+      const fixture = await connectVaultTest([Response.json(item)]);
       try {
-        for (const [action, spec] of [
-          ["create", original],
-          ["update", replacement],
-        ]) {
-          const result = await fixture.call("manage_vault_cards", {
-            action,
-            vault: "checkout",
-            key: "order-1",
-            provider,
-            spec,
-          });
-          expect(result.isError).toBeUndefined();
-        }
-        expect(fixture.requests).toHaveLength(2);
+        const result = await fixture.call("manage_vault_cards", {
+          action: "create",
+          vault: "checkout",
+          key: "order-1",
+          provider,
+          spec: original,
+        });
+        expect(result.isError).toBeUndefined();
+        const update = await fixture.call("manage_vault_cards", {
+          action: "update",
+          vault: "checkout",
+          key: "order-1",
+          provider,
+          spec: original,
+        });
+        expect(update.isError).toBe(true);
+        expect(fixture.requests).toHaveLength(1);
         expect(fixture.requests[0]).toMatchObject({
           method: "PUT",
           body: { type: "card", spec: original },
         });
-        expect(fixture.requests[1]).toMatchObject({
-          method: "PATCH",
-          body: { spec: { ...replacement, provider } },
-        });
-        expect(fixture.requests[1].body).not.toHaveProperty("type");
       } finally {
         await fixture.close();
       }
@@ -348,7 +346,7 @@ describe("vault scopes and input validation", () => {
         action: "invoke",
         vault: "checkout",
         key: "order-1",
-        operation: "authorize",
+        operation: "fill",
       },
     ],
   ] as const)(
@@ -460,6 +458,12 @@ describe("vault scopes and input validation", () => {
     { ...linkSpec, number: "hidden", cvc: "hidden" },
     { ...linkSpec, domains: ["shop.example"] },
     { ...linkSpec, authorization: { access_token: "hidden" } },
+    { ...linkSpec, merchant_url: "https://shop.example" },
+    { ...linkSpec, merchant_account_id: "acct_hidden" },
+    { ...linkSpec, browser_id: undefined },
+    { ...linkSpec, page_url: undefined },
+    { ...linkSpec, page_url: "http://shop.example/checkout" },
+    { ...linkSpec, page_url: "https://user@shop.example/checkout" },
     { type: "card", spec: linkSpec },
     JSON.stringify(linkSpec),
     null,

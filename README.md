@@ -339,7 +339,7 @@ Call `get_connection_context` before deciding whether to create or select a proj
 - `manage_vault_provider_configs` - Create, list, get, rename, rotate secrets, and delete organization-owned Link and AgentCard configurations. Writes require organization scope.
 - `manage_vaults` - Create, list, get, and delete project-owned vaults; use one per end user.
 - `manage_vault_wallets` - Connect Kernel-managed or configured Link/AgentCard wallets, import Link grants from a trusted backend, and inspect live payment methods.
-- `manage_vault_cards` - Create or update card requests according to the API's lifecycle rules; does not implicitly authorize Link cards.
+- `manage_vault_cards` - Create immutable card requests. Link cards are created at final checkout with a browser session ID and the exact page URL; creation starts user approval. Cards cannot be updated.
 - `manage_vault_credentials` - Create credential definitions for private human collection; update values or description with version and optional immutable item identity preconditions.
 - `manage_vault_items` - List, get, invoke advertised operations (including fill with value-free bindings), observe events, and delete vault items. Read credential definitions, presence, version, collection links, and explicitly non-sensitive values; sensitive values remain hidden. `collect` reopens the full form; provider approvals remain user actions. Ready is not login or payment success.
 

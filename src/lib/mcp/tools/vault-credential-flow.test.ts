@@ -387,6 +387,9 @@ describe("MCP credential flow", () => {
       });
       expect(result.isError).toBeUndefined();
       expect(fixture.requests[0].method).toBe("PATCH");
+      expect(fixture.requests[0].path).toBe(
+        `/vaults/${target.vault}/items/${target.key}`,
+      );
       expect(fixture.requests[0].body).toEqual({
         type: "credential",
         version: 2,

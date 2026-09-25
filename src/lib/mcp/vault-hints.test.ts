@@ -88,7 +88,7 @@ describe("vault next-step hints", () => {
             type: item.type,
             state: { provider: "agentcard", status: "ready" },
             action: {
-              name: "authorize",
+              name: "spend_approval",
               url: "https://provider.example/approve",
             },
             ...(operations !== undefined && {
@@ -113,14 +113,10 @@ describe("vault next-step hints", () => {
       name: "manage_vault_cards",
       args: { action: "create", provider: "link", spec: linkSpec },
     },
-    {
-      name: "manage_vault_cards",
-      args: { action: "update", provider: "link", spec: linkSpec },
-    },
     { name: "manage_vault_items", args: { action: "get" } },
     {
       name: "manage_vault_items",
-      args: { action: "invoke", operation: "authorize" },
+      args: { action: "invoke", operation: "fill" },
     },
   ])(
     "attaches hints to $name/$args.action responses",

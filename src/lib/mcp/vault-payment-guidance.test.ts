@@ -16,7 +16,6 @@ const aliases = {
 };
 const linkCard = {
   ...item,
-  spec: { ...item.spec, merchant_url: "https://shop.example" },
   state: { provider: "link", status: "ready" },
   available_operations: [fillOperation],
 };
@@ -36,21 +35,20 @@ describe("provider-specific vault payment guidance", () => {
       );
       const guidance = result.guidance.join(" ");
       for (const text of [
-        "Link cards use browser field writes",
-        "only when advertised",
-        "does not expose aliases or support egress substitution",
-        "fail closed on supported payment shapes",
-        "retain this vault attachment in the same project",
-        "origin of spec.merchant_url",
-        "ready and unexpired",
-        "non-deleted parent wallet",
-        "pass inputs with browser_id",
-        "exact current top-level page_url",
+        "Link cards are immutable",
+        "spec.browser_id and spec.page_url",
+        "give the user item.action.url",
+        "there is no authorize operation",
+        "Link Pay Token on Stripe Checkout pages",
+        "otherwise a one-time virtual card",
+        "delete this card and create a new one",
+        "Fill only when advertised",
+        "read its description for the exact inputs",
+        "no fields",
         "field/selector bindings, never values",
-        "format MM/YY or MM/YYYY",
-        "returns no card values",
+        "never submits payment or clicks Pay",
         "browser access can expose written values",
-        "Failed or unknown writes may leave partial changes",
+        "Failed or unknown fills may leave partial changes",
         "Never automatically retry or fall back to aliases",
         "not that the payment succeeded",
       ])
@@ -64,11 +62,25 @@ describe("provider-specific vault payment guidance", () => {
     },
   );
 
-  test("Link without fill availability does not receive ready-to-run fill guidance", () => {
-    const result = toolResultJSON(vaultItemResponse(item, target));
-    expect(result.guidance.join(" ")).toContain("only when advertised");
-    expect(result.guidance.join(" ")).not.toContain("nested fill object");
-    expect(result.hints.invocation[0].arguments.operation).toBe("authorize");
+  test("pending Link approval is a user action, not an invocation hint", () => {
+    const approvalURL = "https://link.example/approve";
+    const result = toolResultJSON(
+      vaultItemResponse(
+        {
+          ...item,
+          state: { provider: "link", status: "pending_authorization" },
+          action: { name: "spend_approval", url: approvalURL },
+          available_operations: [],
+        },
+        target,
+      ),
+    );
+    expect(result.item.action).toEqual({
+      name: "spend_approval",
+      url: approvalURL,
+    });
+    expect(result.guidance.join(" ")).toContain("Fill only when advertised");
+    expect(result.hints.invocation).toEqual([]);
   });
 
   test("AgentCard retains aliases, masks, and checkout approval/replay guidance", () => {
@@ -151,15 +163,21 @@ describe("provider-specific vault payment guidance", () => {
       const { tools } = await fixture.client.listTools();
       const items = tools.find(({ name }) => name === "manage_vault_items");
       expect(items?.description).toContain(
-        "Link cards use the advertised browser field-writing operation, not aliases or egress substitution",
+        "Link cards use the advertised fill operation, not aliases or egress substitution",
       );
-      expect(items?.description).toContain("inputs.page_url");
+      expect(items?.description).toContain(
+        "a Link Pay Token fill needs no fields",
+      );
+      expect(items?.description).toContain("there is no authorize operation");
+      expect(items?.description).toContain(
+        "Fill never submits payment or clicks buttons",
+      );
       expect(items?.description).toContain(
         "AgentCard aliases and checkout hold/approval/replay remain supported",
       );
       const browsers = tools.find(({ name }) => name === "manage_browsers");
       expect(JSON.stringify(browsers?.inputSchema)).toContain(
-        "Link cards use fill, not aliases or egress substitution",
+        "Link cards are created against a live browser at final checkout and use fill, not aliases or egress substitution",
       );
       expect(JSON.stringify(browsers?.inputSchema)).toContain(
         "AgentCard aliases remain",
@@ -204,6 +222,35 @@ describe("provider-specific vault payment guidance", () => {
         { method: "GET", body: undefined },
         { method: "POST", body: { type: "fill", ...fill } },
       ]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("Link Pay Token fill sends only browser_id and page_url", async () => {
+    const fill = {
+      browser_id: "browser-session-id",
+      page_url: "https://shop.example/checkout",
+    };
+    const outcome = { type: "fill", status: "completed", fields: [] };
+    const fixture = await connectVaultTest([
+      Response.json(item),
+      Response.json(outcome),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        ...target,
+        action: "invoke",
+        operation: "fill",
+        inputs: fill,
+      });
+      expect(result.isError).toBeUndefined();
+      expect(toolResultJSON(result).result).toEqual(outcome);
+      expect(fixture.requests[1]).toMatchObject({
+        method: "POST",
+        body: { type: "fill", ...fill },
+      });
+      expect(fixture.requests[1].body).not.toHaveProperty("fields");
     } finally {
       await fixture.close();
     }

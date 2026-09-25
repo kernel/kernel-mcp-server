@@ -2,8 +2,9 @@
 
 The vault tools prepare and observe payment credentials and manage non-payment credential items. They do **not** submit
 merchant payments, return real card values in API responses, or complete provider approval actions.
-They use the same vault API as the Kernel CLI. Link cards use the advertised `fill`
-operation for browser checkout: real values enter the browser and may be read by
+They use the same vault API as the Kernel CLI. Link cards are immutable requests
+bound to a live browser at final checkout, and use the advertised `fill` operation:
+Kernel supplies a Link Pay Token or card values to the page, which may be read by
 an agent with browser or CDP access. Link does not expose aliases or support proxy
 substitution. The AgentCard alias recipe below is for explicitly chosen
 egress-substitution integrations, not fallback after a failed or uncertain fill.
@@ -13,7 +14,7 @@ there is no per-item test flag. AgentCard configuration responses report the
 introspected `test_mode`. A development or staging MCP endpoint does not make a
 card request a test transaction.
 
-The released Node SDK dependency is pinned in `bun.lock`.
+The Node SDK dependency is pinned in `bun.lock`.
 
 ## Credential collection and observation
 
@@ -77,7 +78,7 @@ fall back to payment aliases.
      "vault": "user-123",
      "key": "login",
      "operation": "fill",
-     "fill": {
+     "inputs": {
        "browser_id": "browser-session-id",
        "page_url": "https://example.com/login",
        "fields": [
@@ -120,7 +121,7 @@ The `vaults` toolset configuration can further restrict access, never grant it.
 | `manage_vault_provider_configs` | `create`, `list`, `get`, `update`, `delete` |
 | `manage_vaults`                 | `create`, `list`, `get`, `delete`           |
 | `manage_vault_wallets`          | `create`, `payment_methods`                 |
-| `manage_vault_cards`            | `create`, `update`                          |
+| `manage_vault_cards`            | `create`                                    |
 | `manage_vault_credentials`      | `create`, `update`                          |
 | `manage_vault_items`            | `list`, `get`, `invoke`, `events`, `delete` |
 
@@ -253,50 +254,7 @@ credentials. A reused `user_id` must belong to the same organization and config.
    do not automatically choose the default. Capabilities are advisory: absent
    means unknown, not ineligible.
 
-4. Create the purchase request with `manage_vault_cards`, replacing
-   `pm_selected` with the selected returned ID:
-
-   ```json
-   {
-     "action": "create",
-     "vault": "checkout",
-     "key": "order-1",
-     "provider": "link",
-     "spec": {
-       "wallet": "wallet-1",
-       "payment_method_id": "pm_selected",
-       "amount": 1234,
-       "currency": "usd",
-       "merchant_name": "Example Shop",
-       "merchant_url": "https://shop.example",
-       "context": "Purchase the selected office supplies from Example Shop for the approved order, with a total spending limit of 1234 minor currency units."
-     }
-   }
-   ```
-
-   Link also supports `line_items`, `totals`, `metadata`, and `expires_at`.
-   Creating or updating the card does **not** implicitly authorize it.
-
-5. Read `available_operations` with `manage_vault_items`, `action: "get"`.
-   Read the operation description and obtain explicit user approval before
-   invoking an advertised operation:
-
-   ```json
-   {
-     "action": "invoke",
-     "vault": "checkout",
-     "key": "order-1",
-     "operation": "authorize"
-   }
-   ```
-
-   The tool fetches the item again and submits only a currently advertised
-   operation. `authorize` has no additional parameters: its API body is
-   `{"type":"authorize"}`. This does not apply to `fill`, which requires the nested
-   MCP parameters below. Follow any returned provider action and observe state.
-   OAuth, enrollment, MFA, and approval actions are for the user, not operation names.
-
-6. When ready, create a new browser with `manage_browsers`:
+4. Create a new browser with `manage_browsers`, attaching the vault:
 
    ```json
    {
@@ -307,14 +265,54 @@ credentials. A reused `user_id` must belong to the same organization and config.
 
    Keep this vault attached throughout checkout; attachments cannot be added to
    an existing browser. Browser and vault must be in the same project. Navigate
-   to the approved merchant checkout and inspect its inputs. The current top-level
-   HTTPS page must have the origin of `item.spec.merchant_url`; supplying a URL
-   does not authorize a different destination. The card must remain ready and
-   unexpired with stored card material, and its parent wallet must not be deleted.
+   to the merchant's final checkout page and gather the final amount, currency,
+   and merchant name before creating the card.
 
-7. Only when the card advertises `fill`, invoke `manage_vault_items` with the
-   actual browser session ID, exact current top-level page URL (including path,
-   query, and fragment), and selectors verified on that page:
+5. Create the card with `manage_vault_cards`, using the live browser session ID
+   (not a reusable browser name), the exact final checkout URL, and the selected
+   payment method ID:
+
+   ```json
+   {
+     "action": "create",
+     "vault": "checkout",
+     "key": "order-1",
+     "provider": "link",
+     "spec": {
+       "wallet": "wallet-1",
+       "browser_id": "browser-session-id",
+       "page_url": "https://shop.example/checkout",
+       "payment_method_id": "pm_selected",
+       "amount": 1234,
+       "currency": "usd",
+       "merchant_name": "Example Shop",
+       "context": "Purchase the selected office supplies from Example Shop for the approved order, with a total spending limit of 1234 minor currency units."
+     }
+   }
+   ```
+
+   Link also supports `line_items`, `totals`, `metadata`, and `expires_at`.
+   Never pass a merchant account ID or choose an execution mode. Kernel inspects
+   the checkout page at creation: on Stripe Checkout pages that expose Link Pay
+   Token tools, it uses a merchant-bound Link Pay Token (up to 500000 minor
+   units); otherwise it uses a one-time virtual card (up to 50000 minor units).
+   The item does not reveal which mode was chosen.
+
+   Creation starts the Link spend request and approval. There is no separate
+   authorize operation. The card returns `state.status: "pending_authorization"`
+   and `action: {"name": "spend_approval", "url": ...}`. Give `item.action.url`
+   to the user to approve in Link, then observe with `manage_vault_items`,
+   `action: "get"`, and `wait: 60` until the card is ready and advertises `fill`.
+
+   Cards are immutable. An identical create returns the existing item without
+   repeating discovery or approval; a different spec under the same key returns
+   a conflict. To change the payment, delete the card and create a new request
+   under a new key. Never create a new card to retry an uncertain payment.
+
+6. Only when the card advertises `fill`, read that operation's description. It
+   names the exact inputs to supply. For a Link Pay Token, it asks for only
+   `browser_id` and `page_url` exactly as stored in the card's spec, with no
+   `fields`:
 
    ```json
    {
@@ -322,7 +320,23 @@ credentials. A reused `user_id` must belong to the same organization and config.
      "vault": "checkout",
      "key": "order-1",
      "operation": "fill",
-     "fill": {
+     "inputs": {
+       "browser_id": "browser-session-id",
+       "page_url": "https://shop.example/checkout"
+     }
+   }
+   ```
+
+   For a virtual card, it also asks for field/selector bindings verified on the
+   page:
+
+   ```json
+   {
+     "action": "invoke",
+     "vault": "checkout",
+     "key": "order-1",
+     "operation": "fill",
+     "inputs": {
        "browser_id": "browser-session-id",
        "page_url": "https://shop.example/checkout",
        "fields": [
@@ -335,33 +349,35 @@ credentials. A reused `user_id` must belong to the same organization and config.
    }
    ```
 
-   `fill` is a nested MCP input object, not a top-level set of API parameters.
-   `fields` contains bindings, never card values. Each selector must resolve to
-   one unique editable target across all frames. For separate expiration inputs,
-   use `exp_month` (MM) and `exp_year` (YYYY) without `format`. Only combined
-   `expiration` requires `format` (`MM/YY` or `MM/YYYY`). Optional `timeout_ms`
-   is the total operation deadline (1–30000 milliseconds; default 10000).
-   Request only needed billing fields from the advertised description; a missing
+   `inputs` is the operation's request body without `type`. `page_url` must be
+   the exact current top-level page URL (including path, query, and fragment) and
+   match exactly one open page. `fields` contains bindings, never card values.
+   Each selector must resolve to one unique editable target across all frames.
+   For separate expiration inputs, use `exp_month` (MM) and `exp_year` (YYYY)
+   without `format`. Only combined `expiration` requires `format` (`MM/YY` or
+   `MM/YYYY`). Optional `timeout_ms` is the total operation deadline (1–30000
+   milliseconds; default 10000). Request only needed billing fields; a missing
    requested billing value returns `field_unavailable` before any writes.
 
-8. Inspect the value-free `result`: `status` is `completed`, `failed`, or `unknown`,
-   with ordered field outcomes `filled`, `failed`, `unknown`, or `not_attempted`.
-   Filling stops at the first failure; prior writes are not rolled back. Failed
-   and unknown results are tool errors, not invitations to retry. Transport loss
-   can also leave partial writes. Inspect the browser before further action; never
-   automatically retry a failed or uncertain fill or fall back to aliases.
-   Pre-write validation errors confirm that this request wrote no fields; correct
-   the cause before deciding on a new fill.
+7. Inspect the value-free `result`: `status` is `completed`, `failed`, or `unknown`,
+   with one outcome per binding (`filled`, `failed`, `unknown`, or `not_attempted`).
+   `fields` is empty when the fill used no bindings. Filling stops at the first
+   failure; prior writes are not rolled back. Failed and unknown results are tool
+   errors, not invitations to retry. Transport loss can also leave partial writes.
+   Inspect the browser before further action; never automatically retry a failed
+   or uncertain fill or fall back to aliases. Pre-write validation errors
+   (for example `page_not_found`, `ambiguous_page`, `destination_denied`, or
+   `browser_unavailable`) keep their HTTP status and code; correct the cause
+   before deciding on a new fill.
 
-   Fill puts real values into the browser without returning them in the API
-   response. It does not isolate them from browser/CDP access. It does not navigate,
-   click Pay, or explicitly submit checkout, though input/change events may trigger
-   site behavior. `completed` means fields were filled, not merchant acceptance or
-   payment success. Submit separately only after confirming completion and the
-   user's authorization; reconcile uncertain payment outcomes instead of retrying.
+   Fill never navigates, clicks Pay, or submits checkout, though input/change
+   events may trigger site behavior. `completed` means the credential was
+   supplied to the page, not merchant acceptance or payment success. Click Pay
+   separately only after confirming completion and the user's authorization;
+   reconcile uncertain payment outcomes instead of retrying.
 
-Link wallets, provider approval, issuance, and encrypted card material remain
-supported. Link no longer issues or exposes `item.state.aliases`, and proxy swapping
+Link wallets expose a read-only `description` with current server-generated
+guidance. Link no longer issues or exposes `item.state.aliases`, and proxy swapping
 is removed. Do not use aliases from older Link responses: they fail closed on
 supported payment shapes.
 
@@ -381,7 +397,7 @@ then connect a wallet with `manage_vault_wallets`:
 ```
 
 Complete the returned enrollment action. Alternatively, `spec.user_id` may refer
-to a user already enrolled in this organization under the same configuration. Once connected, configure a card
+to a user already enrolled in this organization under the same configuration. Once connected, create a card
 with `manage_vault_cards`:
 
 ```json
@@ -401,8 +417,7 @@ with `manage_vault_cards`:
 
 AgentCard uses `merchant`, not Link's `merchant_name`. Optionally inspect wallet
 payment methods and provide a returned `card_id`; otherwise the cardholder selects
-one at approval. AgentCard currently does not advertise `authorize`: authorization
-happens at checkout. Eligible unused cards may instead advertise `prepare_checkout`;
+one at approval. AgentCard authorization happens at checkout. Eligible unused cards may instead advertise `prepare_checkout`;
 invoke it through the API or CLI with the advertised checkout context. Keep the approval
 page open, poll until `ready_to_submit`, and submit native Pay before
 `state.preparation.expires_at` (at most 30 seconds after readiness). Polling does not
@@ -416,7 +431,7 @@ authorization and approval URLs. Never
 switch to aliases after an uncertain fill or preparation.
 A reusable card remaining `ready` does not establish that the last payment succeeded.
 
-## Observation, updates, and safety
+## Observation and safety
 
 - Single-item responses are JSON text containing `{item, hints, guidance}`. They preserve
   public state, supported AgentCard aliases, masks, safe action/approval URLs, advertised
@@ -437,7 +452,7 @@ A reusable card remaining `ready` does not establish that the last payment succe
   `get` with `expand: ["payment_methods"]` is equivalent to the wallet
   `payment_methods` action. An unavailable expansion returns an API error.
 - Only `get` and `events` accept `wait: 0..60`; other actions reject it.
-  `invoke` does not wait for authorization. Each observation is bounded,
+  `invoke` does not wait for approval. Each observation is bounded,
   not a background polling loop or readiness guarantee. The SDK timeout is the
   wait plus 30 seconds; configure the MCP client's timeout accordingly, or use
   shorter waits. Request cancellation is propagated to the SDK.
@@ -449,13 +464,10 @@ A reusable card remaining `ready` does not establish that the last payment succe
 - **Ready does not mean paid.** Inspect state and immutable events for outcomes.
   No vault request is automatically retried. After a failed, timed-out, rejected,
   or indeterminate payment, inspect state/events; do not replay checkout, invoke
-  again, or reconfigure a card to retry it.
-- Requested-card `update` replaces the spec. Pending issuance updates preserve
-  omitted optional fields and clear explicit empty lists; only provider-supported
-  changes are allowed. Provider/wallet bindings cannot change after authorization
-  starts. The tool forwards omissions and empty values without normalization.
-  The API decides which edits are allowed; an uncertain update enters
-  `recovery_required` and must not be retried.
+  again, or create a new card to retry it.
+- Cards are immutable; there is no card update. The tool forwards omissions and
+  empty values without normalization. An uncertain creation enters
+  `recovery_required` and must not be retried or replaced.
 - `recovery_required` is preserved in responses and ends the API's bounded wait.
   It is neither decline nor expiry. Stop payment attempts and reconcile with the
   provider or support. There is no reset or caller-asserted reconciliation tool.
