@@ -161,7 +161,8 @@ prefer `collect` for human edits. Requests are not automatically retried.
    the agent-controlled browser; they open it on a device with the 1Password app and
    choose, approve, or deny the login there. The link grants nothing until they
    approve, but it identifies the request, so the agent must never open, decode, or
-   approve it. MCP forwards only links in that exact native form and never returns
+   approve it. MCP forwards only links in that exact native form, without the API's free-text
+   instructions, and never returns
    access-request IDs, provider paths or identities, OAuth tokens, or integration
    keys. Invoke the advertised `1pw_poll_access` with `browser_id` to observe the
    decision.

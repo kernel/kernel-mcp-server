@@ -94,15 +94,10 @@ export const vaultEventFields: OutputFields = {
 
 // Native 1Password approvals are human actions: the account owner opens the link
 // in their 1Password app, and it grants nothing until they approve there. Only a
-// link in the exact native form is forwarded; anything else, including legacy
-// nonce approval pages, is reduced to the action name.
+// link in the exact native form is forwarded, without the API's free-text
+// instructions; anything else, including legacy nonce approval pages, is reduced
+// to the action name.
 const onePasswordAccessApproval = "1password_access_approval";
-
-const onePasswordApprovalActionSchema = z.object({
-  name: z.literal(onePasswordAccessApproval),
-  url: z.string().refine(isNativeOnePasswordApprovalLink),
-  instructions: z.string().optional(),
-});
 
 function isNativeOnePasswordApprovalLink(value: string): boolean {
   try {
@@ -239,11 +234,11 @@ export function projectVaultOutput(
       .object({ name: z.literal(onePasswordAccessApproval) })
       .safeParse(result.action).success
   ) {
-    const approval = onePasswordApprovalActionSchema.safeParse(
-      Reflect.get(value, "action"),
-    );
-    result.action = approval.success
-      ? approval.data
+    const url = z
+      .object({ url: z.string().refine(isNativeOnePasswordApprovalLink) })
+      .safeParse(Reflect.get(value, "action"));
+    result.action = url.success
+      ? { name: onePasswordAccessApproval, url: url.data.url }
       : { name: onePasswordAccessApproval };
   }
   if (allowed === vaultItemFields && result.type === "credential") {

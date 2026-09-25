@@ -6,8 +6,7 @@ const target = { vault: "user-123", key: "example-login" };
 const requestID = "private-access-request-id";
 const reference = "eyJpZCI6InByaXZhdGUtYWNjZXNzLXJlcXVlc3QtaWQifQ";
 const approvalLink = `onepassword://grant-brokered-access?access_request_reference=${reference}`;
-const approvalInstructions =
-  "Present this link to the account owner to open on their device with the 1Password app.";
+const approvalInstructions = `Present ${approvalLink} for ${requestID}.`;
 const oauthURL =
   "https://1password.example/oauth/authorize?client_id=kernel&state=opaque";
 
@@ -313,8 +312,8 @@ describe("1Password vault credentials", () => {
       expect(result.item.action).toEqual({
         name: "1password_access_approval",
         url: approvalLink,
-        instructions: approvalInstructions,
       });
+      expect(JSON.stringify(result)).not.toContain(approvalInstructions);
       expect(result.item.spec.requests).toEqual(requests);
       expect(result.item.state).toEqual({
         provider: "1password",
@@ -334,6 +333,31 @@ describe("1Password vault credentials", () => {
       expect(guidance).not.toContain("collection URL");
     } finally {
       await fixture.close();
+    }
+  });
+
+  test("forwards the native approval link whatever the instructions hold", async () => {
+    for (const instructions of [undefined, null, 42]) {
+      const fixture = await connectVaultTest([
+        Response.json({
+          ...pendingCredential,
+          action: { ...pendingCredential.action, instructions },
+        }),
+      ]);
+      try {
+        const result = toolResultJSON(
+          await fixture.call("manage_vault_items", {
+            ...target,
+            action: "get",
+          }),
+        );
+        expect(result.item.action).toEqual({
+          name: "1password_access_approval",
+          url: approvalLink,
+        });
+      } finally {
+        await fixture.close();
+      }
     }
   });
 
