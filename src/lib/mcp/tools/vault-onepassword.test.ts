@@ -1,0 +1,400 @@
+import { describe, expect, test } from "bun:test";
+import { toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
+import { connectVaultTest } from "./vaults.test-fixtures";
+
+const target = { vault: "user-123", key: "example-login" };
+const reference = "private-access-request-reference";
+const approvalLink = `onepassword://grant-brokered-access?access_request_reference=${reference}`;
+const oauthURL =
+  "https://1password.example/oauth/authorize?client_id=kernel&state=opaque";
+
+const account = {
+  id: "vi_account",
+  key: "onepassword",
+  type: "credential_account",
+  spec: {
+    provider: "1password",
+    authorization: { method: "oauth", client: { type: "kernel_managed" } },
+  },
+  state: { provider: "1password", status: "pending_authorization" },
+  action: { name: "1password_oauth", url: oauthURL },
+  available_operations: [],
+  available_expansions: [],
+  created_at: "2026-09-25T00:00:00Z",
+  updated_at: "2026-09-25T00:00:00Z",
+};
+
+const requests = {
+  version: 2,
+  goal: "Sign in to Example",
+  entries: [
+    {
+      type: "login",
+      parameters: { website: "https://example.com/login" },
+      reason: "Check order status",
+      keywords: ["example"],
+    },
+  ],
+};
+
+const pendingCredential = {
+  id: "vi_credential",
+  key: target.key,
+  type: "credential",
+  version: 1,
+  spec: { provider: "1password", account_id: account.id, requests },
+  state: {
+    provider: "1password",
+    status: "pending_authorization",
+    access_request_id: reference,
+    access_request: {
+      id: reference,
+      path: "private-provider-path",
+      identity: "private-provider-identity",
+      createdAt: "2026-09-25T00:00:00Z",
+      state: "pending",
+      has_autofill_token: false,
+      granted_count: 0,
+      entries: [{ ...requests.entries[0], id: "private-entry-id" }],
+    },
+  },
+  action: {
+    name: "1password_access_approval",
+    url: approvalLink,
+    instructions: `Present ${approvalLink} to the account owner.`,
+  },
+  available_operations: [
+    { type: "1pw_poll_access", description: "Check the request." },
+  ],
+  available_expansions: [],
+  created_at: "2026-09-25T00:00:00Z",
+  updated_at: "2026-09-25T00:00:00Z",
+};
+
+const readyCredential = {
+  ...pendingCredential,
+  state: {
+    provider: "1password",
+    status: "ready",
+    access_request: {
+      ...pendingCredential.state.access_request,
+      state: "resolved",
+      has_autofill_token: true,
+      granted_count: 1,
+    },
+  },
+  action: undefined,
+  available_operations: [{ type: "1pw_fill", description: "Fill and submit." }],
+};
+
+function expectNoReferences(value: unknown) {
+  const text = JSON.stringify(value);
+  for (const privateValue of [
+    reference,
+    "onepassword://",
+    "private-provider-path",
+    "private-provider-identity",
+    "private-entry-id",
+    "/approval/",
+  ])
+    expect(text).not.toContain(privateValue);
+}
+
+describe("1Password vault credentials", () => {
+  test("steers agents to ask which credential path the user prefers", async () => {
+    const fixture = await connectVaultTest([]);
+    try {
+      const { tools } = await fixture.client.listTools();
+      const descriptionOf = (name: string) =>
+        tools.find((tool) => tool.name === name)?.description ?? "";
+      const credentials = descriptionOf("manage_vault_credentials");
+      expect(credentials).toContain("two credential paths");
+      expect(credentials).toContain("ask the user which they prefer");
+      expect(credentials).toContain("Kernel-hosted collection");
+      expect(credentials).toContain("1Password brokered approval");
+      expect(credentials).toContain("never open, approve, or relay");
+      expect(descriptionOf("manage_vaults")).toContain(
+        "Ask the user which they prefer",
+      );
+      expect(descriptionOf("manage_vault_items")).toContain(
+        "1pw_request_access",
+      );
+      expect(fixture.requests).toEqual([]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    { action: "create", spec: { fields: [{ name: "a", type: "text" }] } },
+    { action: "connect_account" },
+  ])("requires an explicit provider for $action", async (args) => {
+    const fixture = await connectVaultTest([]);
+    try {
+      const result = await fixture.call("manage_vault_credentials", {
+        ...target,
+        ...args,
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain("Ask the user");
+      expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    { action: "connect_account", provider: "kernel" },
+    {
+      action: "connect_account",
+      provider: "1password",
+      spec: { account_id: "vi_account", website: "https://example.com" },
+    },
+    { action: "update", provider: "1password", version: 1, spec: {} },
+    {
+      action: "create",
+      provider: "1password",
+      spec: { account_id: "vi_account", website: "http://example.com" },
+    },
+    {
+      action: "create",
+      provider: "1password",
+      spec: {
+        account_id: "vi_account",
+        website: "https://example.com",
+        integration_key: "private-integration-key",
+      },
+    },
+    {
+      action: "create",
+      provider: "1password",
+      spec: {
+        account_id: "vi_account",
+        website: "https://example.com",
+        keywords: [],
+      },
+    },
+  ])("rejects invalid 1Password writes without requests (%#)", async (args) => {
+    const fixture = await connectVaultTest([]);
+    try {
+      const result = await fixture.call("manage_vault_credentials", {
+        ...target,
+        ...args,
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("private-integration-key");
+      expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("connects a Kernel-managed 1Password account for human consent", async () => {
+    const fixture = await connectVaultTest([Response.json(account)]);
+    try {
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_credentials", {
+          vault: target.vault,
+          key: account.key,
+          action: "connect_account",
+          provider: "1password",
+        }),
+      );
+      expect(fixture.requests[0]).toMatchObject({
+        method: "PUT",
+        body: {
+          type: "credential_account",
+          spec: {
+            provider: "1password",
+            authorization: {
+              method: "oauth",
+              client: { type: "kernel_managed" },
+            },
+          },
+        },
+      });
+      expect(result.item.action).toEqual({
+        name: "1password_oauth",
+        url: oauthURL,
+      });
+      expect(result.item.state.status).toBe("pending_authorization");
+      expect(result.guidance.join(" ")).toContain("only to the account owner");
+      expect(result.guidance.join(" ")).toContain("account_id");
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("creates a 1Password credential from a single login request", async () => {
+    const fixture = await connectVaultTest([Response.json(pendingCredential)]);
+    try {
+      const result = await fixture.call("manage_vault_credentials", {
+        ...target,
+        action: "create",
+        provider: "1password",
+        spec: {
+          account_id: account.id,
+          website: "https://example.com/login",
+          goal: requests.goal,
+          reason: "Check order status",
+          keywords: ["example"],
+        },
+      });
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests).toHaveLength(1);
+      expect(fixture.requests[0]).toMatchObject({
+        method: "PUT",
+        body: {
+          type: "credential",
+          spec: { provider: "1password", account_id: account.id, requests },
+        },
+      });
+      expectNoReferences(result);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("withholds approval links and request references from item output", async () => {
+    const legacyApprovalPage = {
+      ...pendingCredential,
+      action: {
+        ...pendingCredential.action,
+        url: `https://api.example/vault/onepassword/approval/vi_credential/${reference}`,
+      },
+    };
+    for (const item of [pendingCredential, legacyApprovalPage]) {
+      const fixture = await connectVaultTest([Response.json(item)]);
+      try {
+        const result = toolResultJSON(
+          await fixture.call("manage_vault_items", {
+            ...target,
+            action: "get",
+          }),
+        );
+        expectNoReferences(result);
+        expect(result.item.action).toEqual({
+          name: "1password_access_approval",
+        });
+        expect(result.item.spec.requests).toEqual(requests);
+        expect(result.item.state).toEqual({
+          provider: "1password",
+          status: "pending_authorization",
+          access_request: {
+            state: "pending",
+            has_autofill_token: false,
+            granted_count: 0,
+            entries: requests.entries,
+          },
+        });
+        const guidance = result.guidance.join(" ");
+        expect(guidance).toContain("withholds the native approval link");
+        expect(guidance).toContain("1pw_poll_access");
+        expect(guidance).not.toContain("collection URL");
+      } finally {
+        await fixture.close();
+      }
+    }
+  });
+
+  test("request access returns a pending item without the approval link", async () => {
+    const requestable = {
+      ...pendingCredential,
+      state: { provider: "1password", status: "pending_authorization" },
+      action: undefined,
+      available_operations: [
+        { type: "1pw_request_access", description: "Request access." },
+      ],
+    };
+    const fixture = await connectVaultTest([
+      Response.json(requestable),
+      Response.json(pendingCredential),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        ...target,
+        action: "invoke",
+        operation: "1pw_request_access",
+        inputs: { browser_id: "browser-1", reason: "Check order status" },
+      });
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[1].body).toEqual({
+        type: "1pw_request_access",
+        browser_id: "browser-1",
+        reason: "Check order status",
+      });
+      expectNoReferences(result);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    { status: "fill_submitted", isError: undefined },
+    { status: "fill_failed", error_code: "fillFailed", isError: true },
+    { status: "fill_unknown", isError: true },
+  ])(
+    "reports 1pw_fill $status without treating it as login success",
+    async ({ status, error_code, isError }) => {
+      const fixture = await connectVaultTest([
+        Response.json(readyCredential),
+        Response.json({
+          type: "1pw_fill",
+          status,
+          ...(error_code && { error_code }),
+          detail: `private ${reference}`,
+        }),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          ...target,
+          action: "invoke",
+          operation: "1pw_fill",
+          inputs: {
+            browser_id: "browser-1",
+            page_url: "https://example.com/login",
+          },
+        });
+        expect(result.isError).toBe(isError);
+        const body = toolResultJSON(result);
+        expect(body.result).toEqual({
+          type: "1pw_fill",
+          status,
+          ...(error_code && { error_code }),
+        });
+        expectNoReferences(result);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test("curates 1Password operation errors", async () => {
+    const fixture = await connectVaultTest([
+      Response.json({
+        ...pendingCredential,
+        action: undefined,
+        available_operations: [
+          { type: "1pw_request_access", description: "Request access." },
+        ],
+      }),
+      Response.json(
+        { code: "conflict", message: `private ${approvalLink}` },
+        { status: 409 },
+      ),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        ...target,
+        action: "invoke",
+        operation: "1pw_request_access",
+        inputs: { browser_id: "browser-1" },
+      });
+      expect(result.isError).toBe(true);
+      expectNoReferences(result);
+      expect(fixture.requests).toHaveLength(2);
+    } finally {
+      await fixture.close();
+    }
+  });
+});
