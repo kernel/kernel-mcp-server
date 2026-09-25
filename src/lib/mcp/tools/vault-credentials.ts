@@ -171,7 +171,7 @@ export function registerVaultCredentialTools(
         provider: z
           .enum(["kernel", "1password"])
           .describe(
-            '(create, connect_account) The path the user chose. Ask the user before creating. connect_account supports only "1password".',
+            '(create, connect_account) The path the user chose. Ask the user before creating. connect_account supports only "1password". Update accepts only Kernel credentials.',
           )
           .optional(),
         spec: z
@@ -222,10 +222,8 @@ export function registerVaultCredentialTools(
             params.expected_item_id !== undefined)
         )
           return errorResponse("version and expected_item_id are update-only.");
-        if (params.action === "update" && params.provider !== undefined)
-          return errorResponse(
-            "provider is fixed at creation; omit it for update.",
-          );
+        if (params.action === "update" && params.provider === "1password")
+          return errorResponse("1Password credentials cannot be updated.");
         if (params.action !== "update" && params.provider === undefined)
           return errorResponse(
             'provider is required. Ask the user whether they prefer Kernel-hosted collection (provider: "kernel") or 1Password brokered approval (provider: "1password") before creating credentials.',

@@ -150,7 +150,12 @@ describe("1Password vault credentials", () => {
       provider: "1password",
       spec: { account_id: "vi_account", website: "https://example.com" },
     },
-    { action: "update", provider: "1password", version: 1, spec: {} },
+    {
+      action: "update",
+      provider: "1password",
+      version: 1,
+      spec: { description: "Example" },
+    },
     {
       action: "create",
       provider: "1password",
@@ -184,6 +189,46 @@ describe("1Password vault credentials", () => {
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result)).not.toContain("private-integration-key");
       expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("accepts the Kernel provider on update", async () => {
+    const fixture = await connectVaultTest([
+      Response.json({
+        id: "vi_kernel",
+        key: target.key,
+        type: "credential",
+        version: 3,
+        spec: {
+          provider: "kernel",
+          description: "Example",
+          fields: [{ name: "username", type: "text", sensitive: false }],
+        },
+        state: {
+          provider: "kernel",
+          status: "ready",
+          fields: { username: { has_value: true, value: "alice" } },
+        },
+        available_operations: [],
+        available_expansions: [],
+      }),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_credentials", {
+        ...target,
+        action: "update",
+        provider: "kernel",
+        version: 2,
+        spec: { description: "Example" },
+      });
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[0].body).toEqual({
+        type: "credential",
+        version: 2,
+        spec: { description: "Example" },
+      });
     } finally {
       await fixture.close();
     }
@@ -289,7 +334,8 @@ describe("1Password vault credentials", () => {
         });
         const guidance = result.guidance.join(" ");
         expect(guidance).toContain("withholds the native approval link");
-        expect(guidance).toContain("1pw_poll_access");
+        expect(guidance).toContain('action: "invoke"');
+        expect(guidance).toContain('operation: "1pw_poll_access"');
         expect(guidance).not.toContain("collection URL");
       } finally {
         await fixture.close();
