@@ -340,7 +340,7 @@ export function vaultItemResponse(
             "Invocation hints are not approval to execute. Availability may change; invoke rechecks the advertised operations. Ready does not mean paid.",
             ...(payment.success && payment.data.type === "wallet"
               ? [
-                  "Wallets connect a payment provider; they are not fillable cards. Read item.description for current provider guidance. Create a card with manage_vault_cards only after the vault-attached browser reaches final checkout, then inspect that card's state and advertised operations.",
+                  "Wallets connect a payment provider; they are not fillable cards. Read item.description for current provider guidance. Create a card with manage_vault_cards (for Link, only after the vault-attached browser reaches final checkout), then inspect that card's state and advertised operations.",
                 ]
               : []),
             ...(cardProvider === "link"

@@ -139,6 +139,9 @@ describe("provider-specific vault payment guidance", () => {
         "Wallets connect a payment provider; they are not fillable cards",
       );
       expect(guidance).toContain("manage_vault_cards");
+      expect(guidance).toContain(
+        "for Link, only after the vault-attached browser reaches final checkout",
+      );
       expect(guidance).not.toContain("nested fill object");
       expect(guidance).not.toContain("state.aliases");
       expect(guidance).not.toContain("prepare_checkout");
