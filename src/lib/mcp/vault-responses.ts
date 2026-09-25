@@ -92,9 +92,38 @@ export const vaultEventFields: OutputFields = {
   ),
 };
 
-// Native 1Password approvals are human actions. Their links carry access-request
-// references, so only the action name reaches MCP output, whatever the scheme.
+// Native 1Password approvals are human actions: the account owner opens the link
+// in their 1Password app, and it grants nothing until they approve there. Only a
+// link in the exact native form is forwarded; anything else, including legacy
+// nonce approval pages, is reduced to the action name.
 const onePasswordAccessApproval = "1password_access_approval";
+
+const onePasswordApprovalActionSchema = z.object({
+  name: z.literal(onePasswordAccessApproval),
+  url: z.string().refine(isNativeOnePasswordApprovalLink),
+  instructions: z.string().optional(),
+});
+
+function isNativeOnePasswordApprovalLink(value: string): boolean {
+  try {
+    const url = new URL(value);
+    const references = url.searchParams.getAll("access_request_reference");
+    return (
+      url.protocol === "onepassword:" &&
+      url.host === "grant-brokered-access" &&
+      !url.username &&
+      !url.password &&
+      !url.port &&
+      url.pathname === "" &&
+      !url.hash &&
+      [...url.searchParams.keys()].length === 1 &&
+      references.length === 1 &&
+      /^[A-Za-z0-9_-]{1,65536}$/.test(references[0])
+    );
+  } catch {
+    return false;
+  }
+}
 
 const urlFields = new Set([
   "url",
@@ -210,7 +239,12 @@ export function projectVaultOutput(
       .object({ name: z.literal(onePasswordAccessApproval) })
       .safeParse(result.action).success
   ) {
-    result.action = { name: onePasswordAccessApproval };
+    const approval = onePasswordApprovalActionSchema.safeParse(
+      Reflect.get(value, "action"),
+    );
+    result.action = approval.success
+      ? approval.data
+      : { name: onePasswordAccessApproval };
   }
   if (allowed === vaultItemFields && result.type === "credential") {
     const credential = credentialValuesSchema.safeParse(value);
@@ -413,7 +447,7 @@ const onePasswordAccountGuidance = [
 
 const onePasswordCredentialGuidance = [
   'Operations use manage_vault_items with action: "invoke", operation set to the advertised 1pw_* type, and inputs for that operation. 1Password credentials hold no values in Kernel. After explicit user approval, invoke operation: "1pw_request_access" with inputs {browser_id} and optional goal, reason, and keywords, using a browser created with this vault attached.',
-  'Approval is a human action in the account owner\'s 1Password app. MCP withholds the native approval link and access-request references; never open, approve, or relay an approval yourself. Tell the owner a request is waiting in 1Password, then invoke operation: "1pw_poll_access" with inputs {browser_id} to observe the decision. Do not issue a second request while one is pending.',
+  'Approval is a human action in the account owner\'s 1Password app. When action.name is 1password_access_approval with a url, give that onepassword:// link unmodified only to the account owner, in a private surface outside the agent-controlled browser, to open on a device with the 1Password app; they choose the login and approve or deny there. The link grants nothing until they approve, but it identifies the request: never open it in a browser, decode it, post it where others can see it, or approve on their behalf. Without a url, MCP received no native link: tell the owner the approval link is unavailable and do not request again while pending. Invoke operation: "1pw_poll_access" with inputs {browser_id} to observe the decision. Do not issue a second request while one is pending.',
   'When ready, invoke operation: "1pw_fill" with inputs {browser_id, page_url}, where page_url is the exact current top-level URL on the requested login origin. The extension selects fields and submits; you cannot supply selectors or values. fill_submitted does not confirm login. fill_unknown may have submitted; never retry it in the same browser. operation: "1pw_reconcile_access" only abandons an unconfirmed request after the user checks 1Password for an existing one, requires inputs {acknowledge_unconfirmed: true}, and can lead to duplicate requests.',
 ];
 

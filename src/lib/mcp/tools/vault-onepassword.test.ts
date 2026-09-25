@@ -3,8 +3,11 @@ import { toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
 import { connectVaultTest } from "./vaults.test-fixtures";
 
 const target = { vault: "user-123", key: "example-login" };
-const reference = "private-access-request-reference";
+const requestID = "private-access-request-id";
+const reference = "eyJpZCI6InByaXZhdGUtYWNjZXNzLXJlcXVlc3QtaWQifQ";
 const approvalLink = `onepassword://grant-brokered-access?access_request_reference=${reference}`;
+const approvalInstructions =
+  "Present this link to the account owner to open on their device with the 1Password app.";
 const oauthURL =
   "https://1password.example/oauth/authorize?client_id=kernel&state=opaque";
 
@@ -46,9 +49,9 @@ const pendingCredential = {
   state: {
     provider: "1password",
     status: "pending_authorization",
-    access_request_id: reference,
+    access_request_id: requestID,
     access_request: {
-      id: reference,
+      id: requestID,
       path: "private-provider-path",
       identity: "private-provider-identity",
       createdAt: "2026-09-25T00:00:00Z",
@@ -61,7 +64,7 @@ const pendingCredential = {
   action: {
     name: "1password_access_approval",
     url: approvalLink,
-    instructions: `Present ${approvalLink} to the account owner.`,
+    instructions: approvalInstructions,
   },
   available_operations: [
     { type: "1pw_poll_access", description: "Check the request." },
@@ -87,11 +90,11 @@ const readyCredential = {
   available_operations: [{ type: "1pw_fill", description: "Fill and submit." }],
 };
 
-function expectNoReferences(value: unknown) {
+function expectNoReferences(value: unknown, { approvalLink = false } = {}) {
   const text = JSON.stringify(value);
   for (const privateValue of [
-    reference,
-    "onepassword://",
+    requestID,
+    ...(approvalLink ? [] : [reference, "access_request_reference="]),
     "private-provider-path",
     "private-provider-identity",
     "private-entry-id",
@@ -112,7 +115,7 @@ describe("1Password vault credentials", () => {
       expect(credentials).toContain("ask the user which they prefer");
       expect(credentials).toContain("Kernel-hosted collection");
       expect(credentials).toContain("1Password brokered approval");
-      expect(credentials).toContain("never open, approve, or relay");
+      expect(credentials).toContain("never open, decode, or approve");
       expect(descriptionOf("manage_vaults")).toContain(
         "Ask the user which they prefer",
       );
@@ -294,22 +297,64 @@ describe("1Password vault credentials", () => {
           spec: { provider: "1password", account_id: account.id, requests },
         },
       });
-      expectNoReferences(result);
+      expectNoReferences(result, { approvalLink: true });
     } finally {
       await fixture.close();
     }
   });
 
-  test("withholds approval links and request references from item output", async () => {
-    const legacyApprovalPage = {
-      ...pendingCredential,
-      action: {
-        ...pendingCredential.action,
-        url: `https://api.example/vault/onepassword/approval/vi_credential/${reference}`,
-      },
-    };
-    for (const item of [pendingCredential, legacyApprovalPage]) {
-      const fixture = await connectVaultTest([Response.json(item)]);
+  test("forwards only the native approval link for the account owner", async () => {
+    const fixture = await connectVaultTest([Response.json(pendingCredential)]);
+    try {
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_items", { ...target, action: "get" }),
+      );
+      expectNoReferences(result, { approvalLink: true });
+      expect(result.item.action).toEqual({
+        name: "1password_access_approval",
+        url: approvalLink,
+        instructions: approvalInstructions,
+      });
+      expect(result.item.spec.requests).toEqual(requests);
+      expect(result.item.state).toEqual({
+        provider: "1password",
+        status: "pending_authorization",
+        access_request: {
+          state: "pending",
+          has_autofill_token: false,
+          granted_count: 0,
+          entries: requests.entries,
+        },
+      });
+      const guidance = result.guidance.join(" ");
+      expect(guidance).toContain("unmodified only to the account owner");
+      expect(guidance).toContain("never open it in a browser");
+      expect(guidance).toContain('action: "invoke"');
+      expect(guidance).toContain('operation: "1pw_poll_access"');
+      expect(guidance).not.toContain("collection URL");
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    `https://api.example/vault/onepassword/approval/vi_credential/${reference}`,
+    `onepassword://grant-brokered-access?access_request_reference=${reference}&access_token=secret`,
+    `onepassword://grant-brokered-access?access_request_reference=${reference}&access_request_reference=${reference}`,
+    `onepassword://other-host?access_request_reference=${reference}`,
+    `onepassword://user:pass@grant-brokered-access?access_request_reference=${reference}`,
+    `onepassword://grant-brokered-access/path?access_request_reference=${reference}`,
+    `onepassword://grant-brokered-access?access_request_reference=${reference}#fragment`,
+    "onepassword://grant-brokered-access?access_request_reference=not%20base64url",
+  ])(
+    "reduces non-native approval links to the action name: %s",
+    async (url) => {
+      const fixture = await connectVaultTest([
+        Response.json({
+          ...pendingCredential,
+          action: { ...pendingCredential.action, url },
+        }),
+      ]);
       try {
         const result = toolResultJSON(
           await fixture.call("manage_vault_items", {
@@ -318,32 +363,20 @@ describe("1Password vault credentials", () => {
           }),
         );
         expectNoReferences(result);
+        expect(JSON.stringify(result)).not.toContain("secret");
         expect(result.item.action).toEqual({
           name: "1password_access_approval",
         });
-        expect(result.item.spec.requests).toEqual(requests);
-        expect(result.item.state).toEqual({
-          provider: "1password",
-          status: "pending_authorization",
-          access_request: {
-            state: "pending",
-            has_autofill_token: false,
-            granted_count: 0,
-            entries: requests.entries,
-          },
-        });
-        const guidance = result.guidance.join(" ");
-        expect(guidance).toContain("withholds the native approval link");
-        expect(guidance).toContain('action: "invoke"');
-        expect(guidance).toContain('operation: "1pw_poll_access"');
-        expect(guidance).not.toContain("collection URL");
+        expect(result.guidance.join(" ")).toContain(
+          "tell the owner the approval link is unavailable",
+        );
       } finally {
         await fixture.close();
       }
-    }
-  });
+    },
+  );
 
-  test("request access returns a pending item without the approval link", async () => {
+  test("request access returns the pending item with its approval link", async () => {
     const requestable = {
       ...pendingCredential,
       state: { provider: "1password", status: "pending_authorization" },
@@ -369,7 +402,8 @@ describe("1Password vault credentials", () => {
         browser_id: "browser-1",
         reason: "Check order status",
       });
-      expectNoReferences(result);
+      expectNoReferences(result, { approvalLink: true });
+      expect(toolResultJSON(result).item.action.url).toBe(approvalLink);
     } finally {
       await fixture.close();
     }
@@ -388,7 +422,7 @@ describe("1Password vault credentials", () => {
           type: "1pw_fill",
           status,
           ...(error_code && { error_code }),
-          detail: `private ${reference}`,
+          detail: `private ${reference} ${requestID}`,
         }),
       ]);
       try {

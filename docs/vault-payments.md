@@ -155,11 +155,16 @@ prefer `collect` for human edits. Requests are not automatically retried.
 
 3. With a browser created with the vault attached, and after explicit user approval,
    invoke the advertised `1pw_request_access` with `inputs: {"browser_id": "..."}`.
-4. Approval is a human action in the account owner's 1Password app. MCP output never
-   includes the native approval link, access-request IDs or references, provider
-   paths or identities, OAuth tokens, or integration keys, and the agent must never
-   open, approve, or relay an approval. Invoke the advertised `1pw_poll_access` with
-   `browser_id` to observe the decision.
+4. Approval is a human action in the account owner's 1Password app. The pending item
+   returns `action: {"name": "1password_access_approval", "url": "onepassword://grant-brokered-access?access_request_reference=..."}`.
+   Give that link, unmodified, only to the account owner in a private surface outside
+   the agent-controlled browser; they open it on a device with the 1Password app and
+   choose, approve, or deny the login there. The link grants nothing until they
+   approve, but it identifies the request, so the agent must never open, decode, or
+   approve it. MCP forwards only links in that exact native form and never returns
+   access-request IDs, provider paths or identities, OAuth tokens, or integration
+   keys. Invoke the advertised `1pw_poll_access` with `browser_id` to observe the
+   decision.
 5. When the item is ready, invoke the advertised `1pw_fill` with `browser_id` and the
    exact current `page_url`. The extension selects fields and submits the form.
    `fill_submitted` does not confirm login; `fill_failed` and `fill_unknown` are tool
