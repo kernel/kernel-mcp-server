@@ -28,14 +28,14 @@ const paymentMethodFields = {
 // Allow public metadata, including future operation names, but never unknown
 // provider fields, free-form metadata, or opaque event data.
 export const vaultItemFields: OutputFields = {
-  ...fields("id key type version created_at updated_at expires_at"),
+  ...fields("id key type version description created_at updated_at expires_at"),
   available_operations: operationFields,
   available_expansions: operationFields,
   action: fields("name url expires_at"),
   expanded: { payment_methods: paymentMethodFields },
   spec: {
     ...fields(
-      "provider wallet user_id payment_method_id card_id amount currency merchant merchant_name merchant_url context expires_at description",
+      "provider wallet user_id browser_id page_url payment_method_id card_id amount currency merchant merchant_name context expires_at description",
     ),
     fields: fields("name label type required sensitive"),
     provider_config: fields("id name"),
@@ -80,7 +80,7 @@ export const vaultEventFields: OutputFields = {
 const urlFields = new Set([
   "url",
   "approval_url",
-  "merchant_url",
+  "page_url",
   "merchant_origin",
   "image_url",
   "product_url",
@@ -340,13 +340,13 @@ export function vaultItemResponse(
             "Invocation hints are not approval to execute. Availability may change; invoke rechecks the advertised operations. Ready does not mean paid.",
             ...(payment.success && payment.data.type === "wallet"
               ? [
-                  "Wallets connect a payment provider; they are not fillable cards. Use manage_vault_cards to configure a purchase request, then inspect that card's state and advertised operations.",
+                  "Wallets connect a payment provider; they are not fillable cards. Read item.description for current provider guidance. Create a card with manage_vault_cards (for Link, only after the vault-attached browser reaches final checkout), then inspect that card's state and advertised operations.",
                 ]
               : []),
             ...(cardProvider === "link"
               ? [
-                  "Link cards use browser field writes for checkout only when advertised. Link does not expose aliases or support egress substitution; do not use aliases from older responses, which fail closed on supported payment shapes. The browser must retain this vault attachment in the same project. The exact current HTTPS top-level page URL must have the origin of spec.merchant_url. The card must remain ready and unexpired with stored card material and a non-deleted parent wallet; lifecycle and destination checks still apply.",
-                  "When the field-writing operation is advertised, pass inputs with browser_id, exact current top-level page_url (including path, query, and fragment), and ordered field/selector bindings, never values. A combined expiration field requires format MM/YY or MM/YYYY. Attach the vault at browser creation. The operation returns no card values and does not explicitly submit checkout; browser access can expose written values. Failed or unknown writes may leave partial changes. Never automatically retry or fall back to aliases. Completion means fields were written, not that the payment succeeded.",
+                  "Link cards are immutable and bound to spec.browser_id and spec.page_url. Creation starts approval: while pending_authorization, give the user item.action.url to approve in Link; there is no authorize operation. Kernel uses a Link Pay Token on Stripe Checkout pages that expose one, otherwise a one-time virtual card. To change the payment, delete this card and create a new one; never edit or recreate it to retry a payment.",
+                  "Fill only when advertised, and read its description for the exact inputs: it may need only browser_id and page_url with no fields, or ordered field/selector bindings, never values. The browser must keep this vault attached and stay on the bound checkout page. Fill returns no card or token values and never submits payment or clicks Pay; browser access can expose written values. Failed or unknown fills may leave partial changes. Never automatically retry or fall back to aliases. Completion means the credential was supplied to the page, not that the payment succeeded.",
                 ]
               : []),
             ...(cardProvider === "agentcard"
@@ -397,6 +397,49 @@ const vaultErrorMessages = new Map([
     "spend_request_rate_limited",
     "The payment provider has rate limited spend requests. Stop and wait before taking further action.",
   ],
+  [
+    "browser_not_found",
+    "Browser session not found. Use a live browser session ID in the same project with this vault attached.",
+  ],
+  [
+    "browser_unavailable",
+    "The browser is unavailable. Use a live browser session with this vault attached.",
+  ],
+  [
+    "browser_error",
+    "Kernel could not inspect the checkout page in the browser.",
+  ],
+  [
+    "destination_denied",
+    "The page is not an authorized destination for this item.",
+  ],
+  [
+    "page_not_found",
+    "No open page matches page_url. Use the exact current top-level page URL, including path, query, and fragment.",
+  ],
+  [
+    "ambiguous_page",
+    "More than one open page matches, or the checkout page could not be identified. Leave exactly one matching checkout page open.",
+  ],
+  ["target_changed", "The page or target changed during the operation."],
+  ["timeout", "The operation did not finish before its deadline."],
+  [
+    "field_unavailable",
+    "A requested field has no stored value. Request only fields the item can supply.",
+  ],
+  ["element_not_found", "A selector matched no editable element on the page."],
+  [
+    "ambiguous_selector",
+    "A selector matched more than one element. Use a selector that resolves to exactly one editable element.",
+  ],
+  [
+    "element_not_editable",
+    "A selector matched an element that cannot be edited.",
+  ],
+  ["option_not_found", "A select element has no option with the value."],
+  ["invalid_selector", "A selector is not valid CSS."],
+  ["duplicate_target", "Two field bindings resolve to the same element."],
+  ["execution_failed", "The browser could not complete the operation."],
 ]);
 const vaultErrorGuidance =
   "Inspect item state/events before taking further action. Do not replay a payment.";

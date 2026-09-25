@@ -5,7 +5,11 @@ import {
   vaultItemFields,
 } from "@/lib/mcp/vault-responses";
 import { toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
-import { connectVaultTest, item } from "@/lib/mcp/tools/vaults.test-fixtures";
+import {
+  connectVaultTest,
+  item,
+  linkSpec,
+} from "@/lib/mcp/tools/vaults.test-fixtures";
 
 const aliases = {
   number: "4111111111111111",
@@ -357,4 +361,60 @@ describe("vault public responses", () => {
       }
     },
   );
+
+  test.each([
+    { status: 403, code: "destination_denied", text: "authorized destination" },
+    { status: 404, code: "browser_not_found", text: "live browser session ID" },
+    {
+      status: 409,
+      code: "browser_unavailable",
+      text: "browser is unavailable",
+    },
+    { status: 400, code: "ambiguous_page", text: "exactly one matching" },
+  ])(
+    "curates Link card checkout errors ($status $code)",
+    async ({ status, code, text }) => {
+      const fixture = await connectVaultTest([
+        Response.json({ code, message: "hidden-upstream" }, { status }),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_cards", {
+          action: "create",
+          vault: "checkout",
+          key: "order-1",
+          provider: "link",
+          spec: linkSpec,
+        });
+        const serialized = JSON.stringify(result);
+        expect(result.isError).toBe(true);
+        expect(serialized).toContain(`[code: ${code}]`);
+        expect(serialized).toContain(text);
+        expect(serialized).not.toContain("hidden");
+        expect(fixture.requests).toHaveLength(1);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test("returns Link card checkout bindings and wallet guidance", () => {
+    const card = projectVaultOutput(item, vaultItemFields);
+    expect(card).toMatchObject({
+      spec: {
+        browser_id: item.spec.browser_id,
+        page_url: item.spec.page_url,
+      },
+    });
+    const wallet = projectVaultOutput(
+      {
+        ...item,
+        type: "wallet",
+        description: "Reach final checkout before creating a card.",
+      },
+      vaultItemFields,
+    );
+    expect(wallet).toMatchObject({
+      description: "Reach final checkout before creating a card.",
+    });
+  });
 });

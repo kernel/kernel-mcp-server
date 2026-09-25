@@ -404,7 +404,7 @@ describe("configured wallets and recovery", () => {
     },
   );
 
-  test("an identical card PUT returns recovery unchanged without authorizing", async () => {
+  test("an identical card PUT returns recovery unchanged without repeating approval", async () => {
     const recovery = {
       ...item,
       state: { provider: "link", status: "recovery_required" },
@@ -595,7 +595,7 @@ describe("configured wallets and recovery", () => {
     },
   );
 
-  test("preserves omitted vs explicit empty pending-card fields", async () => {
+  test("forwards omitted vs explicit empty Link card fields unchanged", async () => {
     const fixture = await connectVaultTest([
       Response.json(item),
       Response.json(item),
@@ -606,7 +606,7 @@ describe("configured wallets and recovery", () => {
         { ...linkSpec, line_items: [], totals: [], metadata: {} },
       ]) {
         await fixture.call("manage_vault_cards", {
-          action: "update",
+          action: "create",
           vault: "checkout",
           key: "order-1",
           provider: "link",
@@ -614,8 +614,9 @@ describe("configured wallets and recovery", () => {
         });
       }
       expect(fixture.requests.map(({ body }) => body)).toEqual([
-        { spec: { ...linkSpec, provider: "link" } },
+        { type: "card", spec: { ...linkSpec, provider: "link" } },
         {
+          type: "card",
           spec: {
             ...linkSpec,
             provider: "link",

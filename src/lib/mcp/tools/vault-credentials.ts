@@ -1,6 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import type { VaultItem } from "@onkernel/sdk/resources/vaults/items";
+import type {
+  CredentialVaultItemUpdateRequest,
+  VaultItem,
+} from "@onkernel/sdk/resources/vaults/items";
 import type { McpDependencies } from "@/lib/mcp/dependencies";
 import { projectForOperation } from "@/lib/mcp/project-selection";
 import { errorResponse } from "@/lib/mcp/responses";
@@ -185,18 +188,19 @@ export function registerVaultCredentialTools(
           if (params.version === undefined)
             return errorResponse("version is required for update.");
           const spec = updateSpec.parse(params.spec);
-          item = await client.vaults.items.update(
-            params.key,
-            {
-              id_or_name: params.vault,
-              type: "credential",
-              version: params.version,
-              ...(params.expected_item_id !== undefined && {
-                expected_item_id: params.expected_item_id,
-              }),
-              spec,
-            },
-            options,
+          const body: CredentialVaultItemUpdateRequest = {
+            type: "credential",
+            version: params.version,
+            ...(params.expected_item_id !== undefined && {
+              expected_item_id: params.expected_item_id,
+            }),
+            spec,
+          };
+          // TODO: switch back to client.vaults.items.update once the SDK
+          // regenerates it; the preview build omits the PATCH method.
+          item = await client.patch<VaultItem>(
+            `/vaults/${encodeURIComponent(params.vault)}/items/${encodeURIComponent(params.key)}`,
+            { body, ...options },
           );
           const publicNames = publicCredentialFieldNames(item);
           writtenValues = Object.entries(spec.fields ?? {})

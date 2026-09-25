@@ -2,15 +2,15 @@ import { APIConnectionTimeoutError } from "@onkernel/sdk";
 import { describe, expect, test } from "bun:test";
 import { connectTestMcp, toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
 import { registerVaultCapabilities } from "@/lib/mcp/tools/vaults";
-import { connectVaultTest, item } from "./vaults.test-fixtures";
+import { connectVaultTest, item, linkSpec } from "./vaults.test-fixtures";
 
 describe("advertised vault operations", () => {
   test.each([
     {
       type: "card",
       provider: "link",
-      status: "requested",
-      operation: "authorize",
+      status: "ready",
+      operation: "fill",
     },
     {
       type: "wallet",
@@ -22,7 +22,7 @@ describe("advertised vault operations", () => {
       type: "card",
       provider: "agentcard",
       status: "ready",
-      operation: "authorize",
+      operation: "prepare_checkout",
     },
   ])(
     "uses API-advertised availability for $provider/$type/$status",
@@ -86,7 +86,7 @@ describe("advertised vault operations", () => {
       const advertisedItem = {
         ...item,
         available_operations: [
-          { type: "authorize", description: "Require user approval." },
+          { type: "fill", description: "Fill the bound checkout." },
           { type: operation, description: "Requires additional inputs." },
         ],
       };
@@ -117,7 +117,7 @@ describe("advertised vault operations", () => {
             (hint: { arguments: { operation: string } }) =>
               hint.arguments.operation,
           ),
-        ).toEqual(["authorize", operation]);
+        ).toEqual(["fill", operation]);
         const result = await fixture.call("manage_vault_items", {
           action: "invoke",
           vault: "checkout",
@@ -264,7 +264,7 @@ describe("advertised vault operations", () => {
         action: "invoke",
         vault: "checkout",
         key: "order-1",
-        operation: "authorize",
+        operation: "fill",
       });
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result)).toContain("unrecognized response");
@@ -283,7 +283,7 @@ describe("advertised vault operations", () => {
           action: "invoke",
           vault: "checkout",
           key: "order-1",
-          operation: "authorize",
+          operation: "fill",
           inputs: { [field]: "hidden" },
         });
         expect(result.isError).toBe(true);
@@ -310,7 +310,7 @@ describe("advertised vault operations", () => {
         action: "invoke",
         vault: "checkout",
         key: "order-1",
-        operation: "authorize",
+        operation: "fill",
       });
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result)).toContain("not advertised");
@@ -324,7 +324,7 @@ describe("advertised vault operations", () => {
   });
 
   test.each([400, 403, 409, 422])(
-    "returns the exact provider message for authorize HTTP %s",
+    "returns the exact provider message for a rejected operation HTTP %s",
     async (status) => {
       const reason = `Funding method cannot be used for this purchase (${status}).`;
       const fixture = await connectVaultTest([
@@ -344,7 +344,7 @@ describe("advertised vault operations", () => {
           action: "invoke",
           vault: "checkout",
           key: "order-1",
-          operation: "authorize",
+          operation: "fill",
         });
         const text = JSON.stringify(result);
         expect(result.isError).toBe(true);
@@ -382,7 +382,7 @@ describe("advertised vault operations", () => {
         action: "invoke",
         vault: "checkout",
         key: "order-1",
-        operation: "authorize",
+        operation: "fill",
       });
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result)).toContain("rate limited spend requests");
@@ -470,7 +470,7 @@ describe("advertised vault operations", () => {
           action: "invoke",
           vault: "checkout",
           key: "order-1",
-          operation: "authorize",
+          operation: "fill",
         });
         expect(result.isError).toBe(true);
         expect(JSON.stringify(result)).toContain("provider_error");
@@ -509,7 +509,7 @@ describe("vault observation and deletion", () => {
             action,
             vault: "checkout",
             key: "order-1",
-            operation: "authorize",
+            operation: "fill",
             wait,
           });
           expect(result.isError).toBe(true);
@@ -656,7 +656,7 @@ describe("vault observation and deletion", () => {
           action: "invoke",
           vault: "checkout",
           key: "order-1",
-          operation: "authorize",
+          operation: "fill",
         },
       });
       expect(result.isError).toBe(true);
@@ -720,16 +720,11 @@ describe("vault observation and deletion", () => {
     [
       "manage_vault_cards",
       {
-        action: "update",
+        action: "create",
         vault: "checkout",
         key: "order-1",
-        provider: "agentcard",
-        spec: {
-          wallet: "wallet-1",
-          amount: 100,
-          merchant: "Example",
-          currency: "usd",
-        },
+        provider: "link",
+        spec: linkSpec,
       },
     ],
   ] as const)(
