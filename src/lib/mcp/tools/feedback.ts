@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { parse as parseDomain } from "tldts";
 import { z } from "zod";
 import { MCP_INTENT_ARGUMENT_DESCRIPTION } from "@/lib/mcp/analytics-context";
+import { isRecord } from "@/lib/mcp/client-capabilities";
 import { errorResponse, jsonResponse } from "@/lib/mcp/responses";
 import {
   normalizeKernelMcpToolName,
@@ -35,7 +36,9 @@ const affectedToolSchema = z
   });
 
 const configRegistryAppliedBrowserSchema = z.object({
-  stealth: z.boolean().describe("the applied browser stealth setting."),
+  compatibility_mode: z
+    .boolean()
+    .describe("the applied site-compatibility setting."),
   headless: z.boolean().describe("the applied browser headless setting."),
   gpu: z.boolean().describe("the applied browser GPU setting."),
   viewport: z.object({
@@ -122,7 +125,7 @@ const configRegistryFeedbackSchema = z.object({
   ),
 });
 
-const botDetectionReportSchema = z.object({
+const siteCompatibilityReportSchema = z.object({
   registrable_domain: z
     .string()
     .trim()
@@ -137,37 +140,39 @@ const botDetectionReportSchema = z.object({
   observed_outcome: z
     .enum(["passed", "challenged", "blocked", "degraded"])
     .describe(
-      'what the site did: "passed" = the intended flow remained usable, "challenged" = an anti-bot step appeared but the flow could continue, "blocked" = the flow could not continue, and "degraded" = content or functionality was restricted.',
+      'what the site did: "passed" = the intended flow remained usable, "challenged" = a verification step appeared but the flow could continue, "blocked" = the flow could not continue, and "degraded" = content or functionality was restricted.',
     ),
-  suspected_vendor: z
+  access_provider: z
     .string()
     .trim()
     .min(1)
     .max(100)
     .optional()
     .describe(
-      'the suspected bot-detection vendor or product, when supported by evidence (e.g. "Akamai Bot Manager"). omit rather than guess.',
+      "the site's access-control provider or product, only when evidence identifies it. omit rather than guess.",
     ),
   challenge_type: z
     .enum([
-      "captcha",
-      "javascript_challenge",
+      "verification_prompt",
+      "browser_check",
       "access_denied",
       "rate_limited",
-      "login_block",
-      "fingerprint_block",
+      "login_restricted",
+      "browser_rejected",
       "content_restricted",
       "other",
       "unknown",
     ])
     .optional()
     .describe(
-      "the dominant challenge or block observed. use unknown when the flow failed without a recognizable challenge surface.",
+      "the dominant restriction observed. use unknown when the flow failed without a recognizable restriction.",
     ),
-  stealth: z
+  compatibility_mode: z
     .enum(["enabled", "disabled", "unknown"])
     .optional()
-    .describe("whether KERNEL stealth mode was enabled for the observation."),
+    .describe(
+      "whether KERNEL site-compatibility settings were enabled for the observation.",
+    ),
   proxy_type: z
     .enum([
       "none",
@@ -234,14 +239,14 @@ const feedbackFields = {
   feedback_type: z
     .enum([
       "product",
-      "bot_detection",
+      "site_compatibility",
       "config_registry",
       "mcp",
       "docs",
       "other",
     ])
     .describe(
-      'what this feedback is about. "product" = any KERNEL product or feature, such as browsers, apps, profiles, proxies, browser pools, replays, telemetry, managed auth, credentials, extensions, projects, or api keys. "bot_detection" = a site-specific pass, challenge, block, or degraded result not produced by an unchanged config registry recommendation; include `bot_detection`. "config_registry" = the observed result after requesting and applying a config registry recommendation unchanged; include both `bot_detection` and `config_registry` so the outcome is attributed to the settings used. "mcp" = this mcp server itself, including a tool, input schema, response format, error, or its instructions. "docs" = KERNEL documentation. "other" = anything that does not fit the other types.',
+      'what this feedback is about. "product" = any KERNEL product or feature, such as browsers, apps, profiles, proxies, browser pools, replays, telemetry, managed auth, credentials, extensions, projects, or api keys. "site_compatibility" = a site-specific pass, verification step, block, or degraded result not produced by an unchanged config registry recommendation; include `site_compatibility`. "config_registry" = the observed result after requesting and applying a config registry recommendation unchanged; include both `site_compatibility` and `config_registry` so the outcome is attributed to the settings used. "mcp" = this mcp server itself, including a tool, input schema, response format, error, or its instructions. "docs" = KERNEL documentation. "other" = anything that does not fit the other types.',
     ),
   sentiment: z
     .enum(["positive", "neutral", "negative", "mixed"])
@@ -265,17 +270,17 @@ const feedbackFields = {
     .max(100)
     .optional()
     .describe(
-      'the KERNEL product or area this is about, in free text (e.g. "browsers", "apps", "managed auth", "browser pools", "proxies", or "telemetry"). preferred for new product feedback; omission remains accepted for legacy clients and routes to unclassified feedback. use `feedback_type: "bot_detection"` instead of putting bot detection here, and use affected_tool for mcp feedback.',
+      'the KERNEL product or area this is about, in free text (e.g. "browsers", "apps", "managed auth", "browser pools", "proxies", or "telemetry"). preferred for new product feedback; omission remains accepted for legacy clients and routes to unclassified feedback. use `feedback_type: "site_compatibility"` for site-specific results, and use affected_tool for mcp feedback.',
     ),
-  bot_detection: botDetectionReportSchema
+  site_compatibility: siteCompatibilityReportSchema
     .optional()
     .describe(
-      'the structured site outcome. required when `feedback_type` is "bot_detection" or "config_registry" and rejected for every other feedback type.',
+      'the structured site outcome. required when `feedback_type` is "site_compatibility" or "config_registry" and rejected for every other feedback type.',
     ),
   config_registry: configRegistryFeedbackSchema
     .optional()
     .describe(
-      'the config registry recommendation, evidence snapshot, and exact settings used for the observed site outcome. required when `feedback_type` is "config_registry" and rejected for every other feedback type. `bot_detection.browser_session_id` is also required so KERNEL can investigate without collecting sensitive page details here. use this only after applying the recommendation unchanged, whether it passes or fails; if the settings were changed first, report `bot_detection` instead.',
+      'the config registry recommendation, evidence snapshot, and exact settings used for the observed site outcome. required when `feedback_type` is "config_registry" and rejected for every other feedback type. `site_compatibility.browser_session_id` is also required so KERNEL can investigate without collecting sensitive page details here. use this only after applying the recommendation unchanged, whether it passes or fails; if the settings were changed first, report `site_compatibility` instead.',
     ),
   category: z
     .enum([
@@ -297,7 +302,7 @@ const feedbackFields = {
     .boolean()
     .optional()
     .describe(
-      "legacy task completion signal retained for compatibility. prefer task_outcome, which distinguishes workarounds, partial completion, blockers, and feedback not tied to a task. task_completed remains required for bot-detection and config-registry feedback.",
+      "legacy task completion signal retained for compatibility. prefer task_outcome, which distinguishes workarounds, partial completion, blockers, and feedback not tied to a task. task_completed remains required for site-compatibility and config-registry feedback.",
     ),
   tools_used: z
     .array(z.string().trim().min(1).max(100))
@@ -354,7 +359,7 @@ export type KernelFeedbackCapture = (
 ) => void | Promise<void>;
 
 const TOOL_DESCRIPTION =
-  "send feedback about a KERNEL product, this KERNEL MCP server, or KERNEL documentation. use get_more_tools—not this tool—for a genuinely absent capability. for mcp feedback, identify the single affected KERNEL tool and its category; do not report client behavior or tools owned by another server. describe task impact with task_outcome, while sentiment remains useful for tone and praise. set feedback_type to product, bot_detection, config_registry, mcp, docs, or other. for bot detection, fill bot_detection with the public registrable domain, outcome, and reproducibility. after applying a config registry recommendation unchanged, submit exactly one config_registry report for the tested recommendation, whether it passed or failed; include the recommendation metadata, evidence, exact browser and proxy settings, and bot_detection.browser_session_id. if any setting changed before testing, use bot_detection instead. keep summary to one sentence, make detail fields concise and actionable, and include a concrete suggested_improvement when one is clear. never include credentials, tokens, api keys, urls, paths, browser or page content, customer or account names, private hosts, IP addresses, or personal data. a public registrable domain is allowed only in bot_detection.registrable_domain. submitting feedback is a side report, not a reason to stop; continue the user's task with the other available tools.";
+  "send feedback about a KERNEL product, this KERNEL MCP server, or KERNEL documentation. use get_more_tools—not this tool—for a genuinely absent capability. for mcp feedback, identify the single affected KERNEL tool and its category; do not report client behavior or tools owned by another server. describe task impact with task_outcome, while sentiment remains useful for tone and praise. set feedback_type to product, site_compatibility, config_registry, mcp, docs, or other. for a site-specific result, fill site_compatibility with the public registrable domain, outcome, and reproducibility. after applying a config registry recommendation unchanged, submit exactly one config_registry report for the tested recommendation, whether it passed or failed; include the recommendation metadata, evidence, exact browser and proxy settings, and site_compatibility.browser_session_id. if any setting changed before testing, use site_compatibility instead. keep summary to one sentence, make detail fields concise and actionable, and include a concrete suggested_improvement when one is clear. never include credentials, tokens, api keys, urls, paths, browser or page content, customer or account names, private hosts, IP addresses, or personal data. a public registrable domain is allowed only in site_compatibility.registrable_domain. submitting feedback is a side report, not a reason to stop; continue the user's task with the other available tools.";
 
 const RESPONSE_MESSAGES = {
   recorded:
@@ -395,6 +400,90 @@ function kernelToolsUsed(toolsUsed: string[] | undefined) {
           toolName !== "get_more_tools",
       ),
   );
+}
+
+const LEGACY_CHALLENGE_TYPES: Record<string, string> = {
+  captcha: "verification_prompt",
+  javascript_challenge: "browser_check",
+  login_block: "login_restricted",
+  fingerprint_block: "browser_rejected",
+};
+
+function renameField(
+  record: Record<string, unknown>,
+  from: string,
+  to: string,
+) {
+  if (!(from in record)) return;
+  record[to] ??= record[from];
+  delete record[from];
+}
+
+function upgradeLegacyFeedbackArguments(args: Record<string, unknown>) {
+  const upgraded = { ...args };
+  if (upgraded.feedback_type === "bot_detection") {
+    upgraded.feedback_type = "site_compatibility";
+  }
+  if (isRecord(upgraded.bot_detection)) {
+    const report = { ...upgraded.bot_detection };
+    renameField(report, "suspected_vendor", "access_provider");
+    renameField(report, "stealth", "compatibility_mode");
+    if (typeof report.challenge_type === "string") {
+      report.challenge_type =
+        LEGACY_CHALLENGE_TYPES[report.challenge_type] ?? report.challenge_type;
+    }
+    upgraded.bot_detection = report;
+    renameField(upgraded, "bot_detection", "site_compatibility");
+  }
+  if (
+    isRecord(upgraded.config_registry) &&
+    isRecord(upgraded.config_registry.applied_browser)
+  ) {
+    const appliedBrowser = { ...upgraded.config_registry.applied_browser };
+    renameField(appliedBrowser, "stealth", "compatibility_mode");
+    upgraded.config_registry = {
+      ...upgraded.config_registry,
+      applied_browser: appliedBrowser,
+    };
+  }
+  return upgraded;
+}
+
+type ToolCallRequest = {
+  params?: { name?: unknown; arguments?: unknown };
+};
+type ToolCallHandler = (
+  request: ToolCallRequest,
+  extra: unknown,
+) => Promise<unknown>;
+
+function acceptLegacyFeedbackArguments(server: McpServer) {
+  // The SDK validates before invoking the tool callback, so clients holding the
+  // previous schema are upgraded here while only current names are advertised.
+  const handlers = (
+    server.server as unknown as {
+      _requestHandlers: Map<string, ToolCallHandler>;
+    }
+  )._requestHandlers;
+  const handler = handlers.get("tools/call");
+  if (!handler) throw new Error("tools/call handler is not registered");
+
+  handlers.set("tools/call", async (request, extra) => {
+    const args = request.params?.arguments;
+    if (request.params?.name !== KERNEL_FEEDBACK_TOOL_NAME || !isRecord(args)) {
+      return handler(request, extra);
+    }
+    return handler(
+      {
+        ...request,
+        params: {
+          ...request.params,
+          arguments: upgradeLegacyFeedbackArguments(args),
+        },
+      },
+      extra,
+    );
+  });
 }
 
 export function registerFeedbackTool(
@@ -464,17 +553,20 @@ export function registerFeedbackTool(
       }
 
       const hasSiteOutcome =
-        feedback.feedback_type === "bot_detection" ||
+        feedback.feedback_type === "site_compatibility" ||
         feedback.feedback_type === "config_registry";
       if (hasSiteOutcome) {
-        if (!feedback.bot_detection || feedback.task_completed === undefined) {
+        if (
+          !feedback.site_compatibility ||
+          feedback.task_completed === undefined
+        ) {
           return errorResponse(
-            "bot_detection and task_completed are required for bot-detection and config-registry feedback.",
+            "site_compatibility and task_completed are required for site-compatibility and config-registry feedback.",
           );
         }
-      } else if (feedback.bot_detection) {
+      } else if (feedback.site_compatibility) {
         return errorResponse(
-          "bot_detection is only accepted for bot-detection and config-registry feedback.",
+          "site_compatibility is only accepted for site-compatibility and config-registry feedback.",
         );
       }
 
@@ -484,9 +576,9 @@ export function registerFeedbackTool(
             "config_registry is required when feedback_type is config_registry.",
           );
         }
-        if (!feedback.bot_detection?.browser_session_id) {
+        if (!feedback.site_compatibility?.browser_session_id) {
           return errorResponse(
-            "bot_detection.browser_session_id is required when feedback_type is config_registry.",
+            "site_compatibility.browser_session_id is required when feedback_type is config_registry.",
           );
         }
       } else if (feedback.config_registry) {
@@ -516,4 +608,5 @@ export function registerFeedbackTool(
       });
     },
   );
+  acceptLegacyFeedbackArguments(server);
 }

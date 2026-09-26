@@ -233,7 +233,7 @@ const searchRequest = z
               .min(0)
               .optional()
               .describe(
-                "Maximum age of cached page content. Zero forces a live fetch; caller-supplied browser sessions bypass this cache.",
+                "Maximum age of cached page content. Zero forces a live fetch; caller-supplied browser sessions skip this cache.",
               ),
             timeout_ms: z
               .number()

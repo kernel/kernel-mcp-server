@@ -169,14 +169,13 @@ kernel browsers playwright execute ${session_id} "const cookies = await page.con
 
 ### Network Errors (ERR_HTTP2_PROTOCOL_ERROR, ERR_CONNECTION_RESET, etc.)
 
-**Bot detection is a common cause of network errors.** Many sites use CDNs like Cloudflare, Imperva, or Akamai that fingerprint browsers and block automation.
+**Access restrictions are a common cause of network errors.** Some sites limit automated access.
 
-**Signs of bot detection:**
+**Signs of an access restriction:**
 - curl works from the VM but Chrome shows an error
-- "Access Denied", CAPTCHA pages, or "Checking your browser..." messages
-- \`stealth: false\` in browser config (check with manage_browsers action "get")
+- "Access Denied" or a verification page
 
-**Solutions:** Use \`stealth: true\`, use profiles with real auth, or try shorter session lifetimes.
+**Solutions:** Confirm the user is authorized to automate the site and that its terms allow it. Sign in with the user's own account if they have one.
 
 ### Browser Not Responding
 **Cause:** Chrome process crashed or hung

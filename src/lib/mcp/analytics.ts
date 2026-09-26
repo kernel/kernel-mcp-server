@@ -621,7 +621,7 @@ function configRegistryAppliedConfigKey(
       ? "direct"
       : `managed-${proxy.type}-${proxy.country ?? "default"}`;
   return [
-    `stealth-${browser.stealth}`,
+    `stealth-${browser.compatibility_mode}`,
     `headless-${browser.headless}`,
     `gpu-${browser.gpu}`,
     `viewport-${viewport.width}x${viewport.height}@${viewport.refresh_rate ?? "default"}`,
@@ -629,15 +629,34 @@ function configRegistryAppliedConfigKey(
   ].join("|");
 }
 
+// Site-compatibility feedback keeps its original analytics names and values so
+// existing PostHog insights continue to match.
+const ANALYTICS_CHALLENGE_TYPES: Record<string, string> = {
+  verification_prompt: "captcha",
+  browser_check: "javascript_challenge",
+  login_restricted: "login_block",
+  browser_rejected: "fingerprint_block",
+};
+
 export function captureMcpFeedback(
   feedback: KernelFeedback,
   extra: unknown,
   analytics: McpAnalytics,
 ) {
   const isSiteOutcome =
-    feedback.feedback_type === "bot_detection" ||
+    feedback.feedback_type === "site_compatibility" ||
     feedback.feedback_type === "config_registry";
-  const botDetection = isSiteOutcome ? feedback.bot_detection : undefined;
+  const siteCompatibility = isSiteOutcome
+    ? feedback.site_compatibility
+    : undefined;
+  const feedbackType =
+    feedback.feedback_type === "site_compatibility"
+      ? "bot_detection"
+      : feedback.feedback_type;
+  const challengeType = siteCompatibility?.challenge_type
+    ? (ANALYTICS_CHALLENGE_TYPES[siteCompatibility.challenge_type] ??
+      siteCompatibility.challenge_type)
+    : undefined;
   const configRegistry =
     feedback.feedback_type === "config_registry"
       ? feedback.config_registry
@@ -653,11 +672,13 @@ export function captureMcpFeedback(
 
   const summary = safeText(feedback.summary)!;
   const productArea = safeText(feedback.product_area);
-  const suspectedVendor = safeText(botDetection?.suspected_vendor);
-  const region = safeText(botDetection?.region);
-  const browserVersion = safeText(botDetection?.browser_version);
-  const browserImageVersion = safeText(botDetection?.browser_image_version);
-  const browserSessionId = safeText(botDetection?.browser_session_id);
+  const suspectedVendor = safeText(siteCompatibility?.access_provider);
+  const region = safeText(siteCompatibility?.region);
+  const browserVersion = safeText(siteCompatibility?.browser_version);
+  const browserImageVersion = safeText(
+    siteCompatibility?.browser_image_version,
+  );
+  const browserSessionId = safeText(siteCompatibility?.browser_session_id);
   const analysisId = safeText(configRegistry?.analysis_id);
   const toolsUsed = feedback.tools_used?.map((tool) => safeText(tool)!);
   const frictionPoints = safeText(feedback.friction_points);
@@ -674,7 +695,7 @@ export function captureMcpFeedback(
         : "unknown");
   const destination = configRegistry
     ? "config_registry_quality"
-    : botDetection
+    : siteCompatibility
       ? "config_registry_prioritization"
       : feedback.feedback_type === "mcp"
         ? feedback.category === "missing_tool"
@@ -688,7 +709,7 @@ export function captureMcpFeedback(
             : feedback.sentiment === "positive"
               ? "product_praise"
               : "product_feedback"
-          : `${feedback.feedback_type}_feedback`;
+          : `${feedbackType}_feedback`;
   const appliedConfigKey = configRegistry
     ? configRegistryAppliedConfigKey(configRegistry)
     : undefined;
@@ -696,19 +717,19 @@ export function captureMcpFeedback(
     ? analyticsDedupeKey([
         "config_registry",
         analysisId ?? configRegistry.request_method,
-        botDetection?.registrable_domain,
+        siteCompatibility?.registrable_domain,
         appliedConfigKey,
-        botDetection?.observed_outcome,
+        siteCompatibility?.observed_outcome,
       ])
-    : botDetection
+    : siteCompatibility
       ? analyticsDedupeKey([
           "bot_detection",
-          botDetection.registrable_domain,
-          botDetection.observed_outcome,
-          botDetection.reproducibility,
+          siteCompatibility.registrable_domain,
+          siteCompatibility.observed_outcome,
+          siteCompatibility.reproducibility,
         ])
       : analyticsDedupeKey([
-          feedback.feedback_type,
+          feedbackType,
           feedback.affected_tool,
           productArea,
           feedback.category,
@@ -717,7 +738,7 @@ export function captureMcpFeedback(
 
   return captureMcpCustomEvent(analytics, extra, MCP_FEEDBACK_SUBMITTED_EVENT, {
     feedback_summary: summary,
-    feedback_type: feedback.feedback_type,
+    feedback_type: feedbackType,
     feedback_sentiment: feedback.sentiment,
     feedback_task_outcome: taskOutcome,
     feedback_affected_tool: feedback.affected_tool,
@@ -725,16 +746,18 @@ export function captureMcpFeedback(
     feedback_privacy_redacted: privacyRedacted,
     feedback_product_area: productArea,
     feedback_destination: destination,
-    feedback_bot_detection_registrable_domain: botDetection?.registrable_domain,
-    feedback_bot_detection_observed_outcome: botDetection?.observed_outcome,
+    feedback_bot_detection_registrable_domain:
+      siteCompatibility?.registrable_domain,
+    feedback_bot_detection_observed_outcome:
+      siteCompatibility?.observed_outcome,
     feedback_bot_detection_suspected_vendor: suspectedVendor,
-    feedback_bot_detection_challenge_type: botDetection?.challenge_type,
-    feedback_bot_detection_stealth: botDetection?.stealth,
-    feedback_bot_detection_proxy_type: botDetection?.proxy_type,
+    feedback_bot_detection_challenge_type: challengeType,
+    feedback_bot_detection_stealth: siteCompatibility?.compatibility_mode,
+    feedback_bot_detection_proxy_type: siteCompatibility?.proxy_type,
     feedback_bot_detection_region: region,
     feedback_bot_detection_browser_version: browserVersion,
     feedback_bot_detection_browser_image_version: browserImageVersion,
-    feedback_bot_detection_reproducibility: botDetection?.reproducibility,
+    feedback_bot_detection_reproducibility: siteCompatibility?.reproducibility,
     feedback_bot_detection_browser_session_id: browserSessionId,
     feedback_config_registry_request_method: configRegistry?.request_method,
     feedback_config_registry_analysis_id: analysisId,
@@ -750,7 +773,7 @@ export function captureMcpFeedback(
       configRegistry?.recommendation_evidence.last_verified_at,
     feedback_config_registry_applied_config_key: appliedConfigKey,
     feedback_config_registry_browser_stealth:
-      configRegistry?.applied_browser.stealth,
+      configRegistry?.applied_browser.compatibility_mode,
     feedback_config_registry_browser_headless:
       configRegistry?.applied_browser.headless,
     feedback_config_registry_browser_gpu: configRegistry?.applied_browser.gpu,

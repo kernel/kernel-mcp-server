@@ -749,7 +749,7 @@ describe("captureMcpFeedback", () => {
     );
   });
 
-  test("routes structured bot-detection feedback to config registry prioritization", async () => {
+  test("routes structured site-compatibility feedback to config registry prioritization", async () => {
     const captured: unknown[] = [];
     const analytics = {
       capture: async (event: unknown) => {
@@ -760,16 +760,16 @@ describe("captureMcpFeedback", () => {
     await captureMcpFeedback(
       {
         summary: "Stealth sessions were consistently blocked",
-        feedback_type: "bot_detection",
+        feedback_type: "site_compatibility",
         sentiment: "negative",
         task_completed: false,
         tools_used: ["manage_browsers", "execute_playwright_code"],
-        bot_detection: {
+        site_compatibility: {
           registrable_domain: "example.com",
           observed_outcome: "blocked",
-          suspected_vendor: "Akamai Bot Manager",
-          challenge_type: "access_denied",
-          stealth: "enabled",
+          access_provider: "Akamai Bot Manager",
+          challenge_type: "verification_prompt",
+          compatibility_mode: "enabled",
           proxy_type: "isp",
           region: "us-east",
           browser_version: "152.0.7977.42",
@@ -802,7 +802,7 @@ describe("captureMcpFeedback", () => {
           feedback_bot_detection_registrable_domain: "example.com",
           feedback_bot_detection_observed_outcome: "blocked",
           feedback_bot_detection_suspected_vendor: "Akamai Bot Manager",
-          feedback_bot_detection_challenge_type: "access_denied",
+          feedback_bot_detection_challenge_type: "captcha",
           feedback_bot_detection_stealth: "enabled",
           feedback_bot_detection_proxy_type: "isp",
           feedback_bot_detection_region: "us-east",
@@ -827,7 +827,7 @@ describe("captureMcpFeedback", () => {
       feedback_type: "config_registry" as const,
       sentiment: "mixed" as const,
       task_completed: false,
-      bot_detection: {
+      site_compatibility: {
         registrable_domain: "example.com",
         observed_outcome: "blocked" as const,
         reproducibility: "consistent" as const,
@@ -843,7 +843,7 @@ describe("captureMcpFeedback", () => {
           last_verified_at: "2026-09-13T12:00:00Z",
         },
         applied_browser: {
-          stealth: true,
+          compatibility_mode: true,
           headless: false,
           gpu: false,
           viewport: { width: 1920, height: 1080 },
@@ -856,8 +856,8 @@ describe("captureMcpFeedback", () => {
     await captureMcpFeedback(
       {
         ...base,
-        bot_detection: {
-          ...base.bot_detection,
+        site_compatibility: {
+          ...base.site_compatibility,
           observed_outcome: "passed",
         },
       },
@@ -867,8 +867,8 @@ describe("captureMcpFeedback", () => {
     await captureMcpFeedback(
       {
         ...base,
-        bot_detection: {
-          ...base.bot_detection,
+        site_compatibility: {
+          ...base.site_compatibility,
           observed_outcome: "passed",
         },
         config_registry: {
@@ -903,7 +903,7 @@ describe("captureMcpFeedback", () => {
         feedback_type: "config_registry",
         sentiment: "negative",
         task_completed: false,
-        bot_detection: {
+        site_compatibility: {
           registrable_domain: "example.com",
           observed_outcome: "blocked",
           challenge_type: "access_denied",
@@ -921,7 +921,7 @@ describe("captureMcpFeedback", () => {
             last_verified_at: "2026-09-13T12:00:00Z",
           },
           applied_browser: {
-            stealth: true,
+            compatibility_mode: true,
             headless: false,
             gpu: false,
             viewport: { width: 1920, height: 1080, refresh_rate: 25 },
@@ -1370,13 +1370,13 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
         context:
           "Reporting a repeatable site block so the affected domain can be prioritized for a working browser configuration.",
         summary: "Stealth sessions were consistently blocked",
-        feedback_type: "bot_detection",
+        feedback_type: "site_compatibility",
         sentiment: "negative",
         task_completed: false,
-        bot_detection: {
+        site_compatibility: {
           registrable_domain: "example.com",
           observed_outcome: "blocked",
-          suspected_vendor: "Akamai Bot Manager",
+          access_provider: "Akamai Bot Manager",
           reproducibility: "consistent",
         },
       },

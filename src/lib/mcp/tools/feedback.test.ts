@@ -202,7 +202,7 @@ describe("submit_feedback", () => {
     }
   });
 
-  test("records structured bot-detection outcomes for config registry prioritization", async () => {
+  test("records structured site-compatibility outcomes for config registry prioritization", async () => {
     const captured: KernelFeedback[] = [];
     const { client, close } = await connectTestMcp(
       (server) =>
@@ -217,7 +217,9 @@ describe("submit_feedback", () => {
       const tool = tools.tools.find(
         ({ name }) => name === KERNEL_FEEDBACK_TOOL_NAME,
       );
-      expect(JSON.stringify(tool?.inputSchema)).toContain('"bot_detection"');
+      expect(JSON.stringify(tool?.inputSchema)).toContain(
+        '"site_compatibility"',
+      );
       expect(JSON.stringify(tool?.inputSchema)).toContain(
         '"registrable_domain"',
       );
@@ -230,16 +232,16 @@ describe("submit_feedback", () => {
           context:
             "Reporting a repeatable site block so the affected domain can be prioritized for a working browser configuration.",
           summary: "Stealth sessions were consistently blocked",
-          feedback_type: "bot_detection",
+          feedback_type: "site_compatibility",
           sentiment: "negative",
           task_completed: false,
           tools_used: ["manage_browsers", "execute_playwright_code"],
-          bot_detection: {
+          site_compatibility: {
             registrable_domain: "Example.COM",
             observed_outcome: "blocked",
-            suspected_vendor: "Akamai Bot Manager",
+            access_provider: "Akamai Bot Manager",
             challenge_type: "access_denied",
-            stealth: "enabled",
+            compatibility_mode: "enabled",
             proxy_type: "isp",
             region: "us-east",
             browser_version: "152.0.7977.42",
@@ -252,23 +254,23 @@ describe("submit_feedback", () => {
 
       expect(toolResultJSON(result)).toMatchObject({
         recorded: true,
-        feedback_type: "bot_detection",
+        feedback_type: "site_compatibility",
         sentiment: "negative",
       });
       expect(captured).toEqual([
         {
           summary: "Stealth sessions were consistently blocked",
-          feedback_type: "bot_detection",
+          feedback_type: "site_compatibility",
           sentiment: "negative",
           task_outcome: "blocked",
           task_completed: false,
           tools_used: ["manage_browsers", "execute_playwright_code"],
-          bot_detection: {
+          site_compatibility: {
             registrable_domain: "example.com",
             observed_outcome: "blocked",
-            suspected_vendor: "Akamai Bot Manager",
+            access_provider: "Akamai Bot Manager",
             challenge_type: "access_denied",
-            stealth: "enabled",
+            compatibility_mode: "enabled",
             proxy_type: "isp",
             region: "us-east",
             browser_version: "152.0.7977.42",
@@ -303,7 +305,7 @@ describe("submit_feedback", () => {
           feedback_type: "config_registry",
           sentiment: "negative",
           task_completed: false,
-          bot_detection: {
+          site_compatibility: {
             registrable_domain: "example.com",
             observed_outcome: "blocked",
             challenge_type: "access_denied",
@@ -321,7 +323,7 @@ describe("submit_feedback", () => {
               last_verified_at: "2026-09-13T12:00:00Z",
             },
             applied_browser: {
-              stealth: true,
+              compatibility_mode: true,
               headless: false,
               gpu: false,
               viewport: {
@@ -351,7 +353,7 @@ describe("submit_feedback", () => {
           sentiment: "negative",
           task_outcome: "blocked",
           task_completed: false,
-          bot_detection: {
+          site_compatibility: {
             registrable_domain: "example.com",
             observed_outcome: "blocked",
             challenge_type: "access_denied",
@@ -369,7 +371,7 @@ describe("submit_feedback", () => {
               last_verified_at: "2026-09-13T12:00:00Z",
             },
             applied_browser: {
-              stealth: true,
+              compatibility_mode: true,
               headless: false,
               gpu: false,
               viewport: {
@@ -386,6 +388,86 @@ describe("submit_feedback", () => {
           },
         },
       ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("upgrades submissions that use the previous site outcome field names", async () => {
+    const captured: KernelFeedback[] = [];
+    const { client, close } = await connectTestMcp(
+      (server) =>
+        registerFeedbackTool(server, (feedback) => {
+          captured.push(feedback);
+        }),
+      {},
+    );
+
+    try {
+      const result = await client.callTool({
+        name: KERNEL_FEEDBACK_TOOL_NAME,
+        arguments: {
+          context:
+            "Reporting an applied recommendation from a client that still holds the previous feedback schema.",
+          summary: "The recommended configuration showed a verification step",
+          feedback_type: "config_registry",
+          sentiment: "mixed",
+          task_completed: true,
+          bot_detection: {
+            registrable_domain: "example.com",
+            observed_outcome: "challenged",
+            suspected_vendor: "Example Provider",
+            challenge_type: "captcha",
+            stealth: "enabled",
+            reproducibility: "single_observation",
+            browser_session_id: "session_789",
+          },
+          config_registry: {
+            request_method: "lookup",
+            recommendation_evidence: { sample_size: 1, success_rate: 1 },
+            applied_browser: {
+              stealth: true,
+              headless: false,
+              gpu: false,
+              viewport: { width: 1920, height: 1080 },
+            },
+            applied_proxy: { mode: "direct" },
+          },
+        },
+      });
+
+      expect(toolResultJSON(result)).toMatchObject({ recorded: true });
+      expect(captured[0]).toMatchObject({
+        site_compatibility: {
+          access_provider: "Example Provider",
+          challenge_type: "verification_prompt",
+          compatibility_mode: "enabled",
+        },
+        config_registry: { applied_browser: { compatibility_mode: true } },
+      });
+      expect(captured[0]).not.toHaveProperty("bot_detection");
+
+      await client.callTool({
+        name: KERNEL_FEEDBACK_TOOL_NAME,
+        arguments: {
+          context:
+            "Reporting a site result from a client that still holds the previous feedback type.",
+          summary: "The site rejected the browser",
+          feedback_type: "bot_detection",
+          sentiment: "negative",
+          task_completed: false,
+          bot_detection: {
+            registrable_domain: "example.com",
+            observed_outcome: "blocked",
+            challenge_type: "fingerprint_block",
+            reproducibility: "consistent",
+          },
+        },
+      });
+      expect(captured[1]).toMatchObject({
+        feedback_type: "site_compatibility",
+        site_compatibility: { challenge_type: "browser_rejected" },
+      });
     } finally {
       await close();
     }
@@ -408,7 +490,7 @@ describe("submit_feedback", () => {
           context:
             "Reporting a site-specific browser block without the structured observation required for config registry prioritization.",
           summary: "A site blocked the browser",
-          feedback_type: "bot_detection",
+          feedback_type: "site_compatibility",
           sentiment: "negative",
         },
       });
@@ -424,7 +506,7 @@ describe("submit_feedback", () => {
           feedback_type: "config_registry",
           sentiment: "negative",
           task_completed: false,
-          bot_detection: {
+          site_compatibility: {
             registrable_domain: "example.com",
             observed_outcome: "blocked",
             reproducibility: "single_observation",
@@ -443,7 +525,7 @@ describe("submit_feedback", () => {
           feedback_type: "config_registry",
           sentiment: "negative",
           task_completed: false,
-          bot_detection: {
+          site_compatibility: {
             registrable_domain: "example.com",
             observed_outcome: "blocked",
             reproducibility: "single_observation",
@@ -456,7 +538,7 @@ describe("submit_feedback", () => {
               last_verified_at: null,
             },
             applied_browser: {
-              stealth: true,
+              compatibility_mode: true,
               headless: false,
               gpu: false,
               viewport: { width: 1920, height: 1080 },
@@ -472,11 +554,11 @@ describe("submit_feedback", () => {
         name: KERNEL_FEEDBACK_TOOL_NAME,
         arguments: {
           context:
-            "Reporting general browser feedback without routing it into the site-specific bot-detection prioritization queue.",
+            "Reporting general browser feedback without routing it into the site-compatibility prioritization queue.",
           summary: "Browser startup was clear",
           feedback_type: "product",
           sentiment: "positive",
-          bot_detection: {
+          site_compatibility: {
             registrable_domain: "example.com",
             observed_outcome: "passed",
             reproducibility: "single_observation",
@@ -512,10 +594,10 @@ describe("submit_feedback", () => {
             context:
               "Reporting a site outcome while ensuring sensitive host details cannot enter the prioritization event.",
             summary: "A site blocked the browser",
-            feedback_type: "bot_detection",
+            feedback_type: "site_compatibility",
             sentiment: "negative",
             task_completed: false,
-            bot_detection: {
+            site_compatibility: {
               registrable_domain: registrableDomain,
               observed_outcome: "blocked",
               reproducibility: "single_observation",

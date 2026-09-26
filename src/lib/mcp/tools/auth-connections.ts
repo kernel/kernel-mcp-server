@@ -154,7 +154,7 @@ export function registerAuthConnectionTools(server: McpServer) {
         browser_stealth: z
           .boolean()
           .describe(
-            "(create, update, login) Whether managed-auth browser sessions use stealth mode. Defaults to true on create; omitted on update or login preserves or inherits the connection setting.",
+            "(create, update, login) Whether managed-auth browser sessions use site-compatibility settings. Defaults to true on create; omitted on update or login preserves or inherits the connection setting.",
           )
           .optional(),
         proxy_id: z
@@ -174,7 +174,7 @@ export function registerAuthConnectionTools(server: McpServer) {
         proxy_mode: z
           .enum(["direct", "default"])
           .describe(
-            "(create, update, login) Proxy mode. direct disables proxy egress; default restores the stealth-derived default. Cannot be combined with proxy_id or proxy_name.",
+            "(create, update, login) Proxy mode. direct disables proxy egress; default restores the session's default proxy setting. Cannot be combined with proxy_id or proxy_name.",
           )
           .optional(),
         domain_filter: z
