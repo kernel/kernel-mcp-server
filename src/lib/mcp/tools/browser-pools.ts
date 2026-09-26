@@ -284,7 +284,9 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           .optional(),
         stealth: z
           .boolean()
-          .describe("(create, update) Stealth mode for pool browsers.")
+          .describe(
+            "(create, update) Apply site-compatibility settings to pool browsers.",
+          )
           .optional(),
         timeout_seconds: browserPoolTimeoutSchema
           .describe(
