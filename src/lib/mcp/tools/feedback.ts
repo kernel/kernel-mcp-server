@@ -36,9 +36,11 @@ const affectedToolSchema = z
   });
 
 const configRegistryAppliedBrowserSchema = z.object({
-  compatibility_mode: z
+  stealth: z
     .boolean()
-    .describe("the applied site-compatibility setting."),
+    .describe(
+      "the applied site-compatibility setting, echoed unchanged from the recommendation.",
+    ),
   headless: z.boolean().describe("the applied browser headless setting."),
   gpu: z.boolean().describe("the applied browser GPU setting."),
   viewport: z.object({
@@ -226,6 +228,10 @@ const siteCompatibilityReportSchema = z.object({
     ),
 });
 
+type ChallengeType = NonNullable<
+  z.infer<typeof siteCompatibilityReportSchema>["challenge_type"]
+>;
+
 const feedbackFields = {
   context: z.string().describe(MCP_INTENT_ARGUMENT_DESCRIPTION),
   summary: z
@@ -402,12 +408,26 @@ function kernelToolsUsed(toolsUsed: string[] | undefined) {
   );
 }
 
-const LEGACY_CHALLENGE_TYPES: Record<string, string> = {
-  captcha: "verification_prompt",
-  javascript_challenge: "browser_check",
-  login_block: "login_restricted",
-  fingerprint_block: "browser_rejected",
-};
+// Previous wire names. Analytics keeps emitting these so existing insights match.
+export const LEGACY_SITE_COMPATIBILITY_FEEDBACK_TYPE = "bot_detection";
+const LEGACY_CHALLENGE_TYPE = {
+  verification_prompt: "captcha",
+  browser_check: "javascript_challenge",
+  login_restricted: "login_block",
+  browser_rejected: "fingerprint_block",
+} as const satisfies Partial<Record<ChallengeType, string>>;
+
+const CHALLENGE_TYPE_FROM_LEGACY: Record<string, string> = Object.fromEntries(
+  Object.entries(LEGACY_CHALLENGE_TYPE).map(([current, legacy]) => [
+    legacy,
+    current,
+  ]),
+);
+
+export function legacyChallengeType(challengeType: ChallengeType): string {
+  const legacy: Partial<Record<ChallengeType, string>> = LEGACY_CHALLENGE_TYPE;
+  return legacy[challengeType] ?? challengeType;
+}
 
 function renameField(
   record: Record<string, unknown>,
@@ -421,7 +441,7 @@ function renameField(
 
 function upgradeLegacyFeedbackArguments(args: Record<string, unknown>) {
   const upgraded = { ...args };
-  if (upgraded.feedback_type === "bot_detection") {
+  if (upgraded.feedback_type === LEGACY_SITE_COMPATIBILITY_FEEDBACK_TYPE) {
     upgraded.feedback_type = "site_compatibility";
   }
   if (isRecord(upgraded.bot_detection)) {
@@ -430,21 +450,11 @@ function upgradeLegacyFeedbackArguments(args: Record<string, unknown>) {
     renameField(report, "stealth", "compatibility_mode");
     if (typeof report.challenge_type === "string") {
       report.challenge_type =
-        LEGACY_CHALLENGE_TYPES[report.challenge_type] ?? report.challenge_type;
+        CHALLENGE_TYPE_FROM_LEGACY[report.challenge_type] ??
+        report.challenge_type;
     }
     upgraded.bot_detection = report;
     renameField(upgraded, "bot_detection", "site_compatibility");
-  }
-  if (
-    isRecord(upgraded.config_registry) &&
-    isRecord(upgraded.config_registry.applied_browser)
-  ) {
-    const appliedBrowser = { ...upgraded.config_registry.applied_browser };
-    renameField(appliedBrowser, "stealth", "compatibility_mode");
-    upgraded.config_registry = {
-      ...upgraded.config_registry,
-      applied_browser: appliedBrowser,
-    };
   }
   return upgraded;
 }

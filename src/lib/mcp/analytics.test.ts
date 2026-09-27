@@ -843,7 +843,7 @@ describe("captureMcpFeedback", () => {
           last_verified_at: "2026-09-13T12:00:00Z",
         },
         applied_browser: {
-          compatibility_mode: true,
+          stealth: true,
           headless: false,
           gpu: false,
           viewport: { width: 1920, height: 1080 },
@@ -921,7 +921,7 @@ describe("captureMcpFeedback", () => {
             last_verified_at: "2026-09-13T12:00:00Z",
           },
           applied_browser: {
-            compatibility_mode: true,
+            stealth: true,
             headless: false,
             gpu: false,
             viewport: { width: 1920, height: 1080, refresh_rate: 25 },
@@ -1415,6 +1415,39 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     expect(toolCall.properties[PostHogMCPAnalyticsProperty.Intent]).toBe(
       "Reporting a repeatable site block so the affected domain can be prioritized for a working browser configuration.",
     );
+  });
+
+  test("upgrades previous site outcome names before capture and keeps legacy analytics values", async () => {
+    const captured: { event?: string }[] = [];
+
+    await simulateRequest(captured, "tools/call", {
+      name: KERNEL_FEEDBACK_TOOL_NAME,
+      arguments: {
+        context:
+          "Reporting a site result from a client that still holds the previous feedback schema.",
+        summary: "The site showed a verification step",
+        feedback_type: "bot_detection",
+        sentiment: "mixed",
+        task_completed: true,
+        bot_detection: {
+          registrable_domain: "example.com",
+          observed_outcome: "challenged",
+          challenge_type: "captcha",
+          stealth: "enabled",
+          reproducibility: "single_observation",
+        },
+      },
+    });
+
+    const feedback = captured.find(
+      ({ event }) => event === MCP_FEEDBACK_SUBMITTED_EVENT,
+    ) as { properties: Record<string, unknown> };
+    expect(feedback.properties).toMatchObject({
+      feedback_type: "bot_detection",
+      feedback_destination: "config_registry_prioritization",
+      feedback_bot_detection_challenge_type: "captcha",
+      feedback_bot_detection_stealth: "enabled",
+    });
   });
 
   test("attributes modern requests without a session and preserves the privacy allowlist", async () => {

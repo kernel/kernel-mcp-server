@@ -20,6 +20,8 @@ import { MCP_INTENT_ARGUMENT_DESCRIPTION } from "@/lib/mcp/analytics-context";
 import {
   type KernelFeedback,
   KERNEL_FEEDBACK_TOOL_NAME,
+  LEGACY_SITE_COMPATIBILITY_FEEDBACK_TYPE,
+  legacyChallengeType,
   registerFeedbackTool,
 } from "@/lib/mcp/tools/feedback";
 import {
@@ -621,22 +623,13 @@ function configRegistryAppliedConfigKey(
       ? "direct"
       : `managed-${proxy.type}-${proxy.country ?? "default"}`;
   return [
-    `stealth-${browser.compatibility_mode}`,
+    `stealth-${browser.stealth}`,
     `headless-${browser.headless}`,
     `gpu-${browser.gpu}`,
     `viewport-${viewport.width}x${viewport.height}@${viewport.refresh_rate ?? "default"}`,
     `proxy-${proxyKey}`,
   ].join("|");
 }
-
-// Site-compatibility feedback keeps its original analytics names and values so
-// existing PostHog insights continue to match.
-const ANALYTICS_CHALLENGE_TYPES: Record<string, string> = {
-  verification_prompt: "captcha",
-  browser_check: "javascript_challenge",
-  login_restricted: "login_block",
-  browser_rejected: "fingerprint_block",
-};
 
 export function captureMcpFeedback(
   feedback: KernelFeedback,
@@ -649,14 +642,15 @@ export function captureMcpFeedback(
   const siteCompatibility = isSiteOutcome
     ? feedback.site_compatibility
     : undefined;
+  // Site-compatibility feedback keeps its original analytics names and values
+  // so existing PostHog insights continue to match.
   const feedbackType =
     feedback.feedback_type === "site_compatibility"
-      ? "bot_detection"
+      ? LEGACY_SITE_COMPATIBILITY_FEEDBACK_TYPE
       : feedback.feedback_type;
-  const challengeType = siteCompatibility?.challenge_type
-    ? (ANALYTICS_CHALLENGE_TYPES[siteCompatibility.challenge_type] ??
-      siteCompatibility.challenge_type)
-    : undefined;
+  const challengeType =
+    siteCompatibility?.challenge_type &&
+    legacyChallengeType(siteCompatibility.challenge_type);
   const configRegistry =
     feedback.feedback_type === "config_registry"
       ? feedback.config_registry
@@ -723,7 +717,7 @@ export function captureMcpFeedback(
       ])
     : siteCompatibility
       ? analyticsDedupeKey([
-          "bot_detection",
+          LEGACY_SITE_COMPATIBILITY_FEEDBACK_TYPE,
           siteCompatibility.registrable_domain,
           siteCompatibility.observed_outcome,
           siteCompatibility.reproducibility,
@@ -773,7 +767,7 @@ export function captureMcpFeedback(
       configRegistry?.recommendation_evidence.last_verified_at,
     feedback_config_registry_applied_config_key: appliedConfigKey,
     feedback_config_registry_browser_stealth:
-      configRegistry?.applied_browser.compatibility_mode,
+      configRegistry?.applied_browser.stealth,
     feedback_config_registry_browser_headless:
       configRegistry?.applied_browser.headless,
     feedback_config_registry_browser_gpu: configRegistry?.applied_browser.gpu,

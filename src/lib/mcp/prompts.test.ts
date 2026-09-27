@@ -8,7 +8,20 @@ import { registerMcpCapabilities } from "@/lib/mcp/register";
 const BLOCKED_LANGUAGE =
   /stealth|bot[ _-]?detect|anti-?bot|bot-protected|fingerprint|akamai|cloudflare|imperva|evad|evasion|bypass|scrap|automation detection|unblock|\bsolv/gi;
 
-// Collects human-readable metadata while ignoring schema keys and enum values.
+// Parameter names and enum values are held to the same standard, except these
+// names, which map directly to KERNEL API fields.
+const BLOCKED_NAMES = new RegExp(`${BLOCKED_LANGUAGE.source}|captcha`, "i");
+const API_FIELD_NAMES = new Set([
+  "manage_browsers:stealth",
+  "manage_browsers:captcha",
+  "manage_browser_pools:stealth",
+  "manage_auth_connections:browser_stealth",
+  "manage_auth_connections:captcha",
+  "open_auth_login:captcha",
+  "begin_auth_login:captcha",
+  "submit_feedback:stealth",
+]);
+
 function describedText(value: unknown): string[] {
   if (Array.isArray(value)) return value.flatMap(describedText);
   if (!value || typeof value !== "object") return [];
@@ -17,6 +30,20 @@ function describedText(value: unknown): string[] {
       ? [child]
       : describedText(child),
   );
+}
+
+function schemaNames(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(schemaNames);
+  if (!value || typeof value !== "object") return [];
+  return Object.entries(value).flatMap(([key, child]) => [
+    ...(key === "properties" && child && typeof child === "object"
+      ? Object.keys(child)
+      : []),
+    ...(key === "enum" && Array.isArray(child)
+      ? child.filter((item): item is string => typeof item === "string")
+      : []),
+    ...schemaNames(child),
+  ]);
 }
 
 describe("mcp browser positioning", () => {
@@ -36,7 +63,7 @@ describe("mcp browser positioning", () => {
     }
   });
 
-  test("keeps advertised descriptions and prompts free of access-evasion language", async () => {
+  test("keeps advertised metadata and prompts free of access-evasion language", async () => {
     const mcp = await connectTestMcp((server) => {
       registerMcpCapabilities(server, {
         mcpApps: true,
@@ -45,6 +72,11 @@ describe("mcp browser positioning", () => {
       });
       instrumentMcpAnalytics(server, null);
     }, {});
+    const promptText = async (name: string, args: Record<string, string>) => {
+      const result = await mcp.client.getPrompt({ name, arguments: args });
+      const content = result.messages[0].content;
+      return content.type === "text" ? content.text : "";
+    };
     try {
       const { tools } = await mcp.client.listTools();
       const { prompts } = await mcp.client.listPrompts();
@@ -62,14 +94,19 @@ describe("mcp browser positioning", () => {
       expect(
         texts.flatMap((text) => text.match(BLOCKED_LANGUAGE) ?? []),
       ).toEqual([]);
+      expect(
+        tools.flatMap((tool) =>
+          schemaNames([tool.inputSchema, tool.outputSchema])
+            .map((name) => `${tool.name}:${name}`)
+            .filter(
+              (entry) =>
+                BLOCKED_NAMES.test(entry.split(":")[1]) &&
+                !API_FIELD_NAMES.has(entry),
+            ),
+        ),
+      ).toEqual([]);
     } finally {
       await mcp.close();
-    }
-
-    async function promptText(name: string, args: Record<string, string>) {
-      const result = await mcp.client.getPrompt({ name, arguments: args });
-      const content = result.messages[0].content;
-      return content.type === "text" ? content.text : "";
     }
   });
 

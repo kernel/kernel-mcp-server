@@ -323,7 +323,7 @@ describe("submit_feedback", () => {
               last_verified_at: "2026-09-13T12:00:00Z",
             },
             applied_browser: {
-              compatibility_mode: true,
+              stealth: true,
               headless: false,
               gpu: false,
               viewport: {
@@ -371,7 +371,7 @@ describe("submit_feedback", () => {
               last_verified_at: "2026-09-13T12:00:00Z",
             },
             applied_browser: {
-              compatibility_mode: true,
+              stealth: true,
               headless: false,
               gpu: false,
               viewport: {
@@ -443,7 +443,7 @@ describe("submit_feedback", () => {
           challenge_type: "verification_prompt",
           compatibility_mode: "enabled",
         },
-        config_registry: { applied_browser: { compatibility_mode: true } },
+        config_registry: { applied_browser: { stealth: true } },
       });
       expect(captured[0]).not.toHaveProperty("bot_detection");
 
@@ -538,7 +538,7 @@ describe("submit_feedback", () => {
               last_verified_at: null,
             },
             applied_browser: {
-              compatibility_mode: true,
+              stealth: true,
               headless: false,
               gpu: false,
               viewport: { width: 1920, height: 1080 },
