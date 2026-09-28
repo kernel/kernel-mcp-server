@@ -348,8 +348,12 @@ describe("advertised vault operations", () => {
         });
         const text = JSON.stringify(result);
         expect(result.isError).toBe(true);
-        expect(text).toContain(reason);
-        expect(text).toContain("Inspect item state and events before acting.");
+        expect(text).toContain(
+          `Payment provider rejected card authorization: ${reason}`,
+        );
+        expect(text).toContain(
+          "Inspect item state, events, and browser before acting.",
+        );
         expect(text).toContain("Do not retry automatically.");
         expect(text).toContain("[code: invalid_spend_request]");
         expect(text).not.toContain("hidden");
@@ -366,13 +370,13 @@ describe("advertised vault operations", () => {
     },
   );
 
-  test("keeps unmarked rate limits distinct from provider rejections", async () => {
+  test("passes through rate limit diagnostics", async () => {
     const fixture = await connectVaultTest([
       Response.json(item),
       Response.json(
         {
           code: "spend_request_rate_limited",
-          message: "private provider text",
+          message: "Provider rate limit diagnostic",
         },
         { status: 429 },
       ),
@@ -385,14 +389,18 @@ describe("advertised vault operations", () => {
         operation: "authorize",
       });
       expect(result.isError).toBe(true);
-      expect(JSON.stringify(result)).toContain("rate limited spend requests");
-      expect(JSON.stringify(result)).not.toContain("private provider text");
+      expect(JSON.stringify(result)).toContain(
+        "Provider rate limit diagnostic",
+      );
+      expect(JSON.stringify(result)).toContain(
+        "[code: spend_request_rate_limited]",
+      );
     } finally {
       await fixture.close();
     }
   });
 
-  test("uses the API rejection marker rather than an operation-name check", async () => {
+  test("preserves the API message instead of substituting inner errors", async () => {
     const fixture = await connectVaultTest([
       Response.json({
         ...item,
@@ -418,7 +426,9 @@ describe("advertised vault operations", () => {
         operation: "future_operation",
       });
       expect(result.isError).toBe(true);
-      expect(JSON.stringify(result)).toContain(
+      expect(JSON.stringify(result)).toContain("Public error wrapper");
+      expect(JSON.stringify(result)).toContain("[code: future_decline]");
+      expect(JSON.stringify(result)).not.toContain(
         "Provider declined the request.",
       );
     } finally {
@@ -426,14 +436,14 @@ describe("advertised vault operations", () => {
     }
   });
 
-  test("keeps unmarked provider errors curated for other operations", async () => {
+  test("passes through provider errors for other operations", async () => {
     const fixture = await connectVaultTest([
       Response.json({
         ...item,
         available_operations: [{ type: "future_operation", description: "" }],
       }),
       Response.json(
-        { code: "provider_error", message: "access_token=hidden" },
+        { code: "provider_error", message: "Provider diagnostic" },
         { status: 400 },
       ),
     ]);
@@ -445,7 +455,8 @@ describe("advertised vault operations", () => {
         operation: "future_operation",
       });
       expect(result.isError).toBe(true);
-      expect(JSON.stringify(result)).not.toContain("hidden");
+      expect(JSON.stringify(result)).toContain("400 Provider diagnostic");
+      expect(JSON.stringify(result)).toContain("[code: provider_error]");
     } finally {
       await fixture.close();
     }

@@ -122,18 +122,81 @@ describe("MCP credential flow", () => {
   );
 
   test.each([
+    ...[
+      "element_not_found",
+      "invalid_selector",
+      "ambiguous_selector",
+      "duplicate_target",
+      "page_not_found",
+      "ambiguous_page",
+      "target_changed",
+      "element_not_editable",
+      "option_not_found",
+      "field_unavailable",
+      "invalid_request",
+      "timeout",
+    ].map((code) => ({
+      status: 400,
+      code,
+      message: "vault fill validation failed",
+    })),
+    {
+      status: 403,
+      code: "destination_denied",
+      message: "destination is not authorized",
+    },
+    {
+      status: 409,
+      code: "conflict",
+      message: "fill is not currently available",
+    },
+    {
+      status: 500,
+      code: "execution_failed",
+      message: "vault fill could not start",
+    },
+  ])(
+    "preserves fill API diagnostics for $status / $code without retrying",
+    async ({ status, code, message }) => {
+      const fixture = await connectVaultTest([
+        Response.json(ready),
+        Response.json(
+          { code, message, details: "private-upstream-secret" },
+          { status },
+        ),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", invoke);
+        const text = JSON.stringify(result);
+        expect(result.isError).toBe(true);
+        expect(text).toContain(`${status} ${message}`);
+        expect(text).toContain(`[code: ${code}]`);
+        expect(text).toContain("The operation may have partially completed");
+        expect(text).toContain("Do not retry automatically.");
+        expect(text).not.toContain("private-");
+        expect(fixture.requests.map((request) => request.method)).toEqual([
+          "GET",
+          "POST",
+        ]);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test.each([
     { status: 400, code: "ambiguous_selector" },
     { status: 403, code: "destination_denied" },
     { status: 404, code: "not_found" },
     { status: 409, code: "conflict" },
     { status: 400, code: "field_unavailable" },
-    { status: 400, code: "private-unknown-code" },
+    { status: 400, code: "new_api_error" },
   ])(
-    "curates operation errors without interpreting the operation type ($status $code)",
+    "passes through operation errors without interpreting the operation type ($status $code)",
     async ({ status, code }) => {
       const fixture = await connectVaultTest([
         Response.json(ready),
-        Response.json({ code, message: "private-upstream-secret" }, { status }),
+        Response.json({ code, message: "API diagnostic message" }, { status }),
       ]);
       try {
         const result = await fixture.call("manage_vault_items", invoke);
@@ -141,7 +204,8 @@ describe("MCP credential flow", () => {
         expect(result.isError).toBe(true);
         expect(text).toContain(String(status));
         expect(text).toContain("The operation may have partially completed");
-        expect(text).not.toContain("private-");
+        expect(text).toContain("API diagnostic message");
+        expect(text).toContain(`[code: ${code}]`);
         expect(
           fixture.requests.filter((request) => request.method === "POST"),
         ).toHaveLength(1);
@@ -552,9 +616,9 @@ describe("MCP credential flow", () => {
       async (failure) => {
         const reply =
           failure === "transport"
-            ? new Error("private-transport-error")
+            ? new Error("transport failure")
             : Response.json(
-                { message: "private-upstream-error" },
+                { message: "API diagnostic message" },
                 { status: Number(failure) },
               );
         const fixture = await connectVaultTest(
@@ -572,7 +636,11 @@ describe("MCP credential flow", () => {
                     : { spec }),
                 });
           expect(result.isError).toBe(true);
-          expect(JSON.stringify(result)).not.toContain("private-");
+          expect(JSON.stringify(result)).toContain(
+            failure === "transport"
+              ? "Connection error"
+              : "API diagnostic message",
+          );
           expect(
             fixture.requests.filter(({ method }) => method !== "GET"),
           ).toHaveLength(1);
