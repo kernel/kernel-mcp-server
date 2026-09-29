@@ -13,7 +13,8 @@ export const vaultProviderConfigFields = fields(
 );
 const operationFields = fields("type description");
 const totalFields = fields("type display_text amount");
-// Access-request IDs, provider paths, identities, and entry IDs are omitted.
+// Access-request IDs, provider paths, and identities are omitted. Returned
+// entry IDs are kept so 1pw_fill can select among approved logins.
 const onePasswordRequestEntryFields = {
   ...fields("type reason keywords"),
   parameters: fields("website"),
@@ -21,6 +22,10 @@ const onePasswordRequestEntryFields = {
 const onePasswordRequestFields = {
   ...fields("version goal"),
   entries: onePasswordRequestEntryFields,
+};
+const onePasswordReturnedEntryFields = {
+  ...onePasswordRequestEntryFields,
+  ...fields("id"),
 };
 const paymentMethodFields = {
   ...fields("id provider type is_default"),
@@ -38,7 +43,7 @@ export const vaultItemFields: OutputFields = {
   expanded: { payment_methods: paymentMethodFields },
   spec: {
     ...fields(
-      "provider wallet user_id payment_method_id card_id amount currency merchant merchant_name merchant_url context expires_at description account_id",
+      "provider wallet user_id payment_method_id card_id amount currency merchant merchant_name merchant_url context expires_at description account access_token_expires_at",
     ),
     requests: onePasswordRequestFields,
     fields: fields("name label type required sensitive"),
@@ -60,8 +65,11 @@ export const vaultItemFields: OutputFields = {
     fields: { "*": fields("has_value") },
     access_request: {
       ...fields("state has_autofill_token granted_count goal"),
-      request: onePasswordRequestFields,
-      entries: onePasswordRequestEntryFields,
+      request: {
+        ...fields("version goal"),
+        entries: onePasswordReturnedEntryFields,
+      },
+      entries: onePasswordReturnedEntryFields,
     },
     preparation: fields(
       "id status browser_id merchant_origin environment created_at expires_at approval_url",
@@ -347,7 +355,12 @@ export function vaultItemResponse(
   const typed = z
     .object({
       type: z.string(),
-      spec: z.object({ provider: z.string().optional() }).optional(),
+      spec: z
+        .object({
+          provider: z.string().optional(),
+          account: z.string().optional(),
+        })
+        .optional(),
     })
     .safeParse(projected);
   const onePasswordAccount =
@@ -361,7 +374,9 @@ export function vaultItemResponse(
   const onePasswordGuidance = onePasswordAccount
     ? onePasswordAccountGuidance
     : onePasswordCredential
-      ? onePasswordCredentialGuidance
+      ? typed.data.spec?.account === undefined
+        ? [...onePasswordCredentialGuidance, onePasswordStoredTokenGuidance]
+        : onePasswordCredentialGuidance
       : undefined;
   const advertised = advertisedOperationsSchema.safeParse(projected);
   const payment = z
@@ -431,14 +446,18 @@ export function vaultItemResponse(
 
 const onePasswordAccountGuidance = [
   "This credential_account connects a 1Password account; it is not a fillable credential. If an action URL is present, present it only to the account owner, outside the agent-controlled browser, and let them complete 1Password consent and verify the account shown there. Never ask for 1Password passwords, Secret Keys, OAuth codes, or tokens in chat.",
-  'Observe with manage_vault_items action: "get" until state.status is connected, then create 1Password credentials with manage_vault_credentials, provider: "1password", and account_id set to this item\'s id. declined or reconnect_required need the user to connect again with connect_account on the same key. 1pw_recover is advertised only when Kernel can recover a failed account link: after explicit user approval, call manage_vault_items with action: "invoke" and operation: "1pw_recover", present the returned link to the account owner the same way, and once recovery completes connect again on the same key. Never delete the account to recover.',
+  'Observe with manage_vault_items action: "get" until state.status is connected. Before reusing a connected account for a new credential, confirm with the owner that it is their 1Password account; then create 1Password credentials with manage_vault_credentials, provider: "1password", and account set to this item\'s key. declined or reconnect_required need the user to connect again with connect_account on the same key. 1pw_recover is advertised only when Kernel can recover a failed account link: after explicit user approval, call manage_vault_items with action: "invoke" and operation: "1pw_recover", present the returned link to the account owner the same way, and once recovery completes connect again on the same key. Never delete the account to recover.',
 ];
 
 const onePasswordCredentialGuidance = [
-  'Operations use manage_vault_items with action: "invoke", operation set to the advertised 1pw_* type, and inputs for that operation. 1Password credentials hold no values in Kernel. After explicit user approval, invoke operation: "1pw_create_access_request" with inputs {browser_id} and optional goal, reason, and keywords, using a browser created with this vault attached; Kernel loads the 1Password extension into that browser on demand.',
-  'Approval is a human action in the account owner\'s 1Password app. When action.name is 1password_access_approval with a url, give that onepassword:// link unmodified only to the account owner, in a private surface outside the agent-controlled browser, to open on a device with the 1Password app; they choose the login and approve or deny there. The link grants nothing until they approve, but it identifies the request: never open it in a browser, decode it, post it where others can see it, or approve on their behalf. Without a url, MCP received no native link: tell the owner the approval link is unavailable and do not request again while pending. Invoke operation: "1pw_access_request_status" with inputs {browser_id} to observe the decision. Do not issue a second request while one is pending. If the item stays pending_authorization with no action and no advertised operations, a request may already have reached 1Password: stop, tell the owner to check 1Password, and never delete or recreate the item to retry.',
-  'When ready, invoke operation: "1pw_fill" with inputs {browser_id, page_url}, where page_url is the exact current top-level URL on the requested login origin. The extension selects fields and submits; you cannot supply selectors or values. fill_submitted means the form was submitted, not that login succeeded: check the page. fill_unknown may have submitted; never retry it in the same browser.',
+  'Operations use manage_vault_items with action: "invoke", operation set to the advertised 1pw_* type, and inputs for that operation. 1Password credentials hold no values in Kernel; spec.requests.entries lists the 1-5 requested logins and their websites. Only logins in the owner\'s own non-shared 1Password vault are supported, not shared-vault items or passkeys. After explicit user approval, invoke operation: "1pw_create_access_request" with inputs {browser_id} and an optional goal (reason and keywords only for a single-login request), using a browser created with this vault attached; Kernel loads the 1Password extension into that browser on demand.',
+  'Approval is a human action in the account owner\'s 1Password app. When action.name is 1password_access_approval with a url, give that onepassword:// link unmodified only to the account owner, in a private surface outside the agent-controlled browser, to open on a device with the 1Password app; they choose the login and approve or deny there. The link grants nothing until they approve, but it identifies the request: never open it in a browser, decode it, post it where others can see it, or approve on their behalf. Without a url, MCP received no native link: tell the owner the approval link is unavailable and do not request again while pending. Invoke operation: "1pw_access_request_status" with inputs {browser_id} to observe the decision. Do not issue a second request while one is pending.',
+  "declined means the owner denied the request: do not request again unless they ask, and offer Kernel-hosted collection instead. failed is a confirmed failure: ask the end-user before deleting and recreating this credential for at most one new request, or offer Kernel-hosted collection. If the item stays pending_authorization with no action and no advertised operations, first check that the credential_account named by spec.account is connected; if it is, a request may already have reached 1Password: stop, tell the owner to check 1Password, and never delete or recreate the item to retry.",
+  'When ready, invoke operation: "1pw_fill" with inputs {browser_id, page_url}, where page_url is the exact current top-level URL on a requested login origin. If several approved logins share that origin, ask the owner which one to use and add entry_id from state.access_request entries; never guess. The extension selects fields and submits; you cannot supply selectors or values. fill_submitted means the form was submitted, not that login succeeded: check the page. fill_failed with noExistingCredentials means the owner\'s 1Password has no usable login for the page: tell the owner instead of retrying. fill_unknown may have submitted; never retry it in the same browser.',
 ];
+
+const onePasswordStoredTokenGuidance =
+  "This credential has no account: it uses a customer-supplied 1Password access token stored encrypted by Kernel, and spec.access_token_expires_at is optional expiry metadata. The integrating developer replaces the token through the Kernel API; 1pw_update_access_token is not available through MCP. Never ask for or accept 1Password tokens or integration keys in chat. While the token is expired, request and fill are unavailable.";
 
 export function throwVaultError(
   tool: string,

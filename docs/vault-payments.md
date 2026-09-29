@@ -16,7 +16,7 @@ card request a test transaction.
 <!-- TODO: replace the temporary stlc preview pin below with the official @onkernel/sdk release that includes 1Password vault credentials. -->
 
 The Node SDK dependency is temporarily pinned to the stlc development preview
-`kernel-node-sdk-staging@b9931e08abc8e38cd8f194a2896c910378b810c9` in `bun.lock`.
+`kernel-node-sdk-staging@be64af0301e30156e15529856b5107efc258964c` in `bun.lock`.
 
 ## Credential collection and observation
 
@@ -130,6 +130,15 @@ prefer `collect` for human edits. Requests are not automatically retried.
 
 ### 1Password brokered approval
 
+Before creating anything, list the vault and reuse a ready credential whose
+`spec.requests.entries` websites cover the login page, or a connected
+`credential_account` the owner confirms is theirs. If none fits, ask where the
+user's login lives, for example: "Is your example.com login saved in your own
+1Password, or would you rather enter it in a secure Kernel form?" 1Password
+supports only logins in the owner's own non-shared vault, not shared-vault items or
+passkeys; use Kernel-hosted collection for those, or when the user declines
+1Password or that path fails.
+
 1. Connect the account with `manage_vault_credentials`, `action: "connect_account"`,
    `provider: "1password"`, the user's vault, and a new key. Give the returned
    1Password authorization URL only to the account owner, outside the
@@ -140,7 +149,8 @@ prefer `collect` for human edits. Requests are not automatically retried.
    account owner the same way, and connect again on the same key once recovery
    completes. Never delete the account to recover.
 2. Observe the account with `manage_vault_items` `get` until `state.status` is
-   `connected`, then create the credential:
+   `connected`. Confirm with the owner which site logins to request (1-5, approved
+   together), then create the credential:
 
    ```json
    {
@@ -149,36 +159,55 @@ prefer `collect` for human edits. Requests are not automatically retried.
      "vault": "user-123",
      "key": "example-login",
      "spec": {
-       "account_id": "<credential_account item id>",
-       "website": "https://example.com/login"
+       "account": "<credential_account item key>",
+       "logins": [{ "website": "https://example.com/login" }]
      }
    }
    ```
 
-   Optional `goal`, `reason`, and `keywords` describe the request to the account owner.
-   1Password credentials store no values or selectors and cannot be updated.
+   Optional `goal`, and per-login `reason` and `keywords`, describe the request to
+   the account owner. 1Password credentials store no values or selectors and cannot
+   be updated.
 
 3. With a browser created with the vault attached, and after explicit user approval,
    invoke the advertised `1pw_create_access_request` with `inputs: {"browser_id": "..."}`.
-   Kernel loads the 1Password extension into that browser on demand.
+   Kernel loads the 1Password extension into that browser on demand. Request-time
+   `reason` and `keywords` apply only to a single-login credential.
 4. Approval is a human action in the account owner's 1Password app. The pending item
    returns `action: {"name": "1password_access_approval", "url": "onepassword://grant-brokered-access?access_request_reference=..."}`.
    Give that link, unmodified, only to the account owner in a private surface outside
    the agent-controlled browser; they open it on a device with the 1Password app and
    choose, approve, or deny the login there. The link grants nothing until they
    approve, but it identifies the request, so the agent must never open, decode, or
-   approve it. MCP forwards only links in that exact native form, without the API's free-text
-   instructions, and never returns
-   access-request IDs, provider paths or identities, or OAuth tokens. Invoke the
-   advertised `1pw_access_request_status` with `browser_id` to observe the decision.
-   If the item stays `pending_authorization` with no action and no advertised
-   operations, a request may already have reached 1Password. There is no reset:
-   stop, ask the owner to check 1Password, and never delete or recreate the item to
-   retry.
+   approve it. MCP forwards only links in that exact native form, without the API's
+   free-text instructions, and never returns access-request IDs, provider paths or
+   identities, or OAuth tokens. Invoke the advertised `1pw_access_request_status`
+   with `browser_id` to observe the decision.
+   - `declined`: the owner denied the request. Do not request again unless they
+     ask; offer Kernel-hosted collection.
+   - `failed`: a confirmed failure. Ask the end-user before deleting and recreating
+     the credential for at most one new request, or offer Kernel-hosted collection.
+   - `pending_authorization` with no action and no advertised operations: check that
+     the `credential_account` named by `spec.account` is connected. If it is, a
+     request may already have reached 1Password. There is no reset: stop, ask the
+     owner to check 1Password, and never delete or recreate the item to retry.
 5. When the item is ready, invoke the advertised `1pw_fill` with `browser_id` and the
-   exact current `page_url`. The extension selects fields and submits the form.
-   `fill_submitted` means the form was submitted, not that login succeeded; `fill_failed` and `fill_unknown` are tool
-   errors, and `fill_unknown` must not be retried in the same browser.
+   exact current `page_url`. When several approved logins share the page origin, ask
+   the owner which one to use and pass its `entry_id` from `state.access_request`
+   entries. The extension selects fields and submits the form. `fill_submitted`
+   means the form was submitted, not that login succeeded, so check the page.
+   `fill_failed` and `fill_unknown` are tool errors; `noExistingCredentials` means the
+   owner's 1Password has no usable login for the page, and `fill_unknown` must not be
+   retried in the same browser.
+
+The Kernel API also supports 1Password credentials backed by a customer-supplied
+access token and integration key instead of a connected account. The integrating
+developer creates them and replaces tokens (`1pw_update_access_token`) through the
+Kernel API. MCP accepts neither secret: it rejects them in create specs, refuses
+`1pw_update_access_token`, and never returns them. It can read such credentials,
+including optional `access_token_expires_at`, and request, observe, and fill them like
+account-backed credentials; request and fill are unavailable while the token is
+expired.
 
 ## Tools and scope
 

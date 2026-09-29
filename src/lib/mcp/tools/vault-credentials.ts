@@ -75,27 +75,38 @@ const createSpec = z
       ),
   })
   .strict();
-const onePasswordCreateSpec = z
+const onePasswordLogin = z
   .object({
-    account_id: z
-      .string()
-      .min(1)
-      .describe(
-        "Immutable id (not key) of a connected 1Password credential_account item in the same vault.",
-      ),
     website: z
       .string()
       .url()
       .max(2083)
       .regex(/^https:\/\//)
-      .describe("HTTPS login page for the single requested login."),
+      .describe("HTTPS login page for this login."),
+    reason: z.string().max(100).optional(),
+    keywords: z.array(z.string().min(1).max(50)).min(1).max(5).optional(),
+  })
+  .strict();
+const onePasswordCreateSpec = z
+  .object({
+    account: z
+      .string()
+      .min(1)
+      .describe(
+        "Key (not id) of a connected 1Password credential_account item in the same vault.",
+      ),
+    logins: z
+      .array(onePasswordLogin)
+      .min(1)
+      .max(5)
+      .describe(
+        "1-5 logins the account owner approves together in one request, each with the site it signs in to.",
+      ),
     goal: z
       .string()
       .max(140)
       .optional()
       .describe("Short request goal shown to the account owner."),
-    reason: z.string().max(100).optional(),
-    keywords: z.array(z.string().min(1).max(50)).min(1).max(5).optional(),
   })
   .strict();
 
@@ -104,18 +115,16 @@ function onePasswordCredentialSpec(
 ) {
   return {
     provider: "1password" as const,
-    account_id: spec.account_id,
+    account: spec.account,
     requests: {
       version: 2,
       ...(spec.goal !== undefined && { goal: spec.goal }),
-      entries: [
-        {
-          type: "login",
-          parameters: { website: spec.website },
-          ...(spec.reason !== undefined && { reason: spec.reason }),
-          ...(spec.keywords !== undefined && { keywords: spec.keywords }),
-        },
-      ],
+      entries: spec.logins.map((login) => ({
+        type: "login",
+        parameters: { website: login.website },
+        ...(login.reason !== undefined && { reason: login.reason }),
+        ...(login.keywords !== undefined && { keywords: login.keywords }),
+      })),
     },
   };
 }
@@ -160,9 +169,9 @@ export function registerVaultCredentialTools(
     "manage_vault_credentials",
     {
       description:
-        'Create or update credential items in a per-end-user vault. There are two credential paths. Before creating any credential, ask the user which they prefer and set provider to match; never choose for them. provider:"kernel" is Kernel-hosted collection: the user enters values in a Kernel-hosted form and the agent fills them with value-free bindings. provider:"1password" is 1Password brokered approval: the user connects their 1Password account once, approves each login request in the 1Password app, and the 1Password extension, loaded into the browser on demand, fills and submits; Kernel stores no values. ' +
+        'Create or update credential items in a per-end-user vault. First list the vault with manage_vault_items and reuse an existing credential for the site: fill a ready Kernel credential, 1pw_fill a ready 1Password credential, and reuse a connected 1Password credential_account for new 1Password credentials. Never claim access the vault does not hold. There are two credential paths. Before creating any credential, ask the user which they prefer by asking where their login for the site lives, for example: "Is your example.com login saved in your own 1Password, or would you rather enter it in a secure Kernel form?" Set provider to match; never choose for them. provider:"kernel" is Kernel-hosted collection: the user enters values in a Kernel-hosted form and the agent fills them with value-free bindings. provider:"1password" is 1Password brokered approval: the user connects their 1Password account once, approves each login request in the 1Password app, and the 1Password extension, loaded into the browser on demand, fills and submits; Kernel stores no values. 1Password supports only logins in the owner\'s own non-shared vault, not shared-vault items or passkeys; use Kernel-hosted collection for those, or if the user declines 1Password or that path fails. ' +
         'Kernel path: use only the recognizable site name as description; explicitly set sensitive:false for ordinary usernames/emails. Each field may include an optional non-secret human-readable label; name remains the stable key for updates and browser fills. Passwords and TOTP seeds must be sensitive. Never store payment-card data here. For human collection, omit values and present the returned bearer collection URL privately to the intended user, outside the agent-controlled browser. Never ask for passwords or TOTP seeds in chat. TOTP seeds require trusted provisioning and have no hosted input. On create, fields is an ordered array of named definitions: inspect the website and list fields in its natural top-to-bottom order because this directly controls the user-facing collection form. Update fields remain keyed by name and contain only value. Updates require the latest version and optionally expected_item_id from an earlier read; definitions are immutable. Omitted values are preserved; null or empty strings clear supported values. Clearing required TOTP is unsupported. Hosted forms require populated required inputs. To reopen collection, use manage_vault_items with action: "invoke" and operation: "collect". Use manage_vault_items get with wait for readiness, then invoke fill with fill parameters. For edits to already-ready items compare versions without wait. Explicitly non-sensitive text/email values are returned; sensitive values and TOTP seeds are omitted. ' +
-        '1Password path: first use action "connect_account" with provider:"1password" and a new key; present the returned 1Password authorization URL only to the account owner, outside the agent-controlled browser, and let them verify the account on the consent screen. Once manage_vault_items get reports the account connected, create the credential with provider:"1password" and spec {account_id, website, optional goal/reason/keywords}. 1Password credentials cannot be updated. Approval is a human action in the 1Password app: after 1pw_create_access_request, give the returned native onepassword:// approval link unmodified only to the account owner, outside the agent-controlled browser, and never open, decode, or approve it yourself. MCP never returns access-request IDs or tokens. This is unrelated to manage_credential_providers. ' +
+        '1Password path: reuse a connected credential_account in the vault once the owner confirms it is their account; otherwise use action "connect_account" with provider:"1password" and a new key, and present the returned 1Password authorization URL only to the account owner, outside the agent-controlled browser, and let them verify the account on the consent screen. Once manage_vault_items get reports the account connected, confirm with the owner which site logins to request (1-5, approved together), then create the credential with provider:"1password" and spec {account: the account item key, logins: [{website, optional reason/keywords}], optional goal}. 1Password credentials cannot be updated. Approval is a human action in the 1Password app: after 1pw_create_access_request, give the returned native onepassword:// approval link unmodified only to the account owner, outside the agent-controlled browser, and never open, decode, or approve it yourself. MCP never returns access-request IDs or tokens. Credentials backed by a customer-supplied 1Password access token and integration key are created and rotated by the integrating developer through the Kernel API, not through MCP; never ask for or accept those secrets in chat. This is unrelated to manage_credential_providers. ' +
         "Writes are never automatically retried; reconcile conflicts or uncertain outcomes before any further write.",
       inputSchema: vaultToolInput({
         ...vaultItemSchema,
@@ -177,7 +186,7 @@ export function registerVaultCredentialTools(
         spec: z
           .union([createSpec, onePasswordCreateSpec, updateSpec])
           .describe(
-            "(create, update) Kernel create: description and ordered fields. 1Password create: account_id, website, and optional goal/reason/keywords. Update (Kernel only): description and/or fields keyed by name.",
+            "(create, update) Kernel create: description and ordered fields. 1Password create: account key, 1-5 logins, and optional goal. Update (Kernel only): description and/or fields keyed by name.",
           )
           .refine(
             (spec) =>

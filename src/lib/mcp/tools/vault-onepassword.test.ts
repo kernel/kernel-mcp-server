@@ -44,7 +44,7 @@ const pendingCredential = {
   key: target.key,
   type: "credential",
   version: 1,
-  spec: { provider: "1password", account_id: account.id, requests },
+  spec: { provider: "1password", account: account.key, requests },
   state: {
     provider: "1password",
     status: "pending_authorization",
@@ -57,7 +57,7 @@ const pendingCredential = {
       state: "pending",
       has_autofill_token: false,
       granted_count: 0,
-      entries: [{ ...requests.entries[0], id: "private-entry-id" }],
+      entries: [{ ...requests.entries[0], id: "entry-1" }],
     },
   },
   action: {
@@ -96,7 +96,6 @@ function expectNoReferences(value: unknown, { approvalLink = false } = {}) {
     ...(approvalLink ? [] : [reference, "access_request_reference="]),
     "private-provider-path",
     "private-provider-identity",
-    "private-entry-id",
     "/approval/",
   ])
     expect(text).not.toContain(privateValue);
@@ -115,8 +114,12 @@ describe("1Password vault credentials", () => {
       expect(credentials).toContain("Kernel-hosted collection");
       expect(credentials).toContain("1Password brokered approval");
       expect(credentials).toContain("never open, decode, or approve");
+      expect(credentials).toContain("where their login for the site lives");
+      expect(credentials).toContain("First list the vault");
+      expect(credentials).toContain("not shared-vault items or passkeys");
+      expect(credentials).toContain("not through MCP");
       expect(descriptionOf("manage_vaults")).toContain(
-        "Ask the user which they prefer",
+        "Reuse an existing credential for the site first",
       );
       const items = descriptionOf("manage_vault_items");
       expect(items).toContain("1pw_create_access_request");
@@ -124,7 +127,7 @@ describe("1Password vault credentials", () => {
       expect(items).toContain("recover a failed account link");
       for (const { description } of tools) {
         expect(description).not.toContain("reconcile_access");
-        expect(description).not.toMatch(/integration key|Family/i);
+        expect(description).not.toMatch(/Family/i);
       }
       expect(fixture.requests).toEqual([]);
     } finally {
@@ -155,7 +158,10 @@ describe("1Password vault credentials", () => {
     {
       action: "connect_account",
       provider: "1password",
-      spec: { account_id: "vi_account", website: "https://example.com" },
+      spec: {
+        account: "onepassword",
+        logins: [{ website: "https://example.com" }],
+      },
     },
     {
       action: "update",
@@ -166,14 +172,17 @@ describe("1Password vault credentials", () => {
     {
       action: "create",
       provider: "1password",
-      spec: { account_id: "vi_account", website: "http://example.com" },
+      spec: {
+        account: "onepassword",
+        logins: [{ website: "http://example.com" }],
+      },
     },
     {
       action: "create",
       provider: "1password",
       spec: {
-        account_id: "vi_account",
-        website: "https://example.com",
+        account: "onepassword",
+        logins: [{ website: "https://example.com" }],
         integration_key: "private-integration-key",
       },
     },
@@ -181,10 +190,38 @@ describe("1Password vault credentials", () => {
       action: "create",
       provider: "1password",
       spec: {
-        account_id: "vi_account",
-        website: "https://example.com",
-        keywords: [],
+        logins: [{ website: "https://example.com" }],
+        access_token: "private-access-token",
+        integration_key: "private-integration-key",
       },
+    },
+    {
+      action: "create",
+      provider: "1password",
+      spec: {
+        account: "onepassword",
+        logins: [{ website: "https://example.com", keywords: [] }],
+      },
+    },
+    {
+      action: "create",
+      provider: "1password",
+      spec: { account: "onepassword", logins: [] },
+    },
+    {
+      action: "create",
+      provider: "1password",
+      spec: {
+        account: "onepassword",
+        logins: Array.from({ length: 6 }, (_, i) => ({
+          website: `https://site${i}.example/login`,
+        })),
+      },
+    },
+    {
+      action: "create",
+      provider: "1password",
+      spec: { account_id: "vi_account", website: "https://example.com" },
     },
   ])("rejects invalid 1Password writes without requests (%#)", async (args) => {
     const fixture = await connectVaultTest([]);
@@ -195,6 +232,7 @@ describe("1Password vault credentials", () => {
       });
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result)).not.toContain("private-integration-key");
+      expect(JSON.stringify(result)).not.toContain("private-access-token");
       expect(fixture.requests).toHaveLength(0);
     } finally {
       await fixture.close();
@@ -271,7 +309,9 @@ describe("1Password vault credentials", () => {
       });
       expect(result.item.state.status).toBe("pending_authorization");
       expect(result.guidance.join(" ")).toContain("only to the account owner");
-      expect(result.guidance.join(" ")).toContain("account_id");
+      expect(result.guidance.join(" ")).toContain(
+        "account set to this item's key",
+      );
     } finally {
       await fixture.close();
     }
@@ -329,11 +369,15 @@ describe("1Password vault credentials", () => {
         action: "create",
         provider: "1password",
         spec: {
-          account_id: account.id,
-          website: "https://example.com/login",
+          account: account.key,
           goal: requests.goal,
-          reason: "Check order status",
-          keywords: ["example"],
+          logins: [
+            {
+              website: "https://example.com/login",
+              reason: "Check order status",
+              keywords: ["example"],
+            },
+          ],
         },
       });
       expect(result.isError).toBeUndefined();
@@ -342,7 +386,7 @@ describe("1Password vault credentials", () => {
         method: "PUT",
         body: {
           type: "credential",
-          spec: { provider: "1password", account_id: account.id, requests },
+          spec: { provider: "1password", account: account.key, requests },
         },
       });
       expectNoReferences(result, { approvalLink: true });
@@ -371,7 +415,7 @@ describe("1Password vault credentials", () => {
           state: "pending",
           has_autofill_token: false,
           granted_count: 0,
-          entries: requests.entries,
+          entries: [{ ...requests.entries[0], id: "entry-1" }],
         },
       });
       const guidance = result.guidance.join(" ");
@@ -515,12 +559,193 @@ describe("1Password vault credentials", () => {
           status,
           ...(error_code && { error_code }),
         });
+        expect(body.guidance).toContain("not that login succeeded");
         expectNoReferences(result);
       } finally {
         await fixture.close();
       }
     },
   );
+
+  test("requests several logins and fills the one the owner picks", async () => {
+    const logins = [
+      { website: "https://example.com/login" },
+      { website: "https://example.com/login", reason: "Work account" },
+      { website: "https://shop.example/signin" },
+    ];
+    const multiRequests = {
+      version: 2,
+      entries: logins.map(({ website, ...rest }) => ({
+        type: "login",
+        parameters: { website },
+        ...rest,
+      })),
+    };
+    const ready = {
+      ...readyCredential,
+      spec: {
+        provider: "1password",
+        account: account.key,
+        requests: multiRequests,
+      },
+      state: {
+        ...readyCredential.state,
+        access_request: {
+          ...readyCredential.state.access_request,
+          granted_count: 3,
+          entries: multiRequests.entries.map((entry, i) => ({
+            ...entry,
+            id: `entry-${i + 1}`,
+          })),
+        },
+      },
+    };
+    const fixture = await connectVaultTest([
+      Response.json({ ...pendingCredential, spec: ready.spec }),
+      Response.json(ready),
+      Response.json(ready),
+      Response.json({ type: "1pw_fill", status: "fill_submitted" }),
+    ]);
+    try {
+      await fixture.call("manage_vault_credentials", {
+        ...target,
+        action: "create",
+        provider: "1password",
+        spec: { account: account.key, logins },
+      });
+      expect(fixture.requests[0].body).toMatchObject({
+        spec: {
+          provider: "1password",
+          account: account.key,
+          requests: multiRequests,
+        },
+      });
+      const read = toolResultJSON(
+        await fixture.call("manage_vault_items", { ...target, action: "get" }),
+      );
+      expect(
+        read.item.state.access_request.entries.map(
+          (entry: { id: string }) => entry.id,
+        ),
+      ).toEqual(["entry-1", "entry-2", "entry-3"]);
+      expect(read.guidance.join(" ")).toContain(
+        "ask the owner which one to use and add entry_id",
+      );
+      await fixture.call("manage_vault_items", {
+        ...target,
+        action: "invoke",
+        operation: "1pw_fill",
+        inputs: {
+          browser_id: "browser-1",
+          page_url: "https://example.com/login",
+          entry_id: "entry-2",
+        },
+      });
+      expect(fixture.requests[3].body).toEqual({
+        type: "1pw_fill",
+        browser_id: "browser-1",
+        page_url: "https://example.com/login",
+        entry_id: "entry-2",
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    {
+      status: "failed",
+      expected: "ask the end-user before deleting and recreating",
+    },
+    { status: "declined", expected: "do not request again unless they ask" },
+  ])(
+    "tells the agent what a $status request allows",
+    async ({ status, expected }) => {
+      const fixture = await connectVaultTest([
+        Response.json({
+          ...pendingCredential,
+          state: { provider: "1password", status },
+          action: undefined,
+          available_operations: [],
+        }),
+      ]);
+      try {
+        const read = toolResultJSON(
+          await fixture.call("manage_vault_items", {
+            ...target,
+            action: "get",
+          }),
+        );
+        const guidance = read.guidance.join(" ");
+        expect(guidance).toContain(expected);
+        expect(guidance).toContain("offer Kernel-hosted collection");
+        expect(fixture.requests).toHaveLength(1);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test("describes stored-token credentials without exposing or accepting tokens", async () => {
+    const storedToken = {
+      ...readyCredential,
+      spec: {
+        provider: "1password",
+        requests,
+        access_token_expires_at: "2026-10-01T00:00:00Z",
+        access_token: "private-access-token",
+        integration_key: "private-integration-key",
+      },
+      available_operations: [
+        ...readyCredential.available_operations,
+        { type: "1pw_update_access_token", description: "Replace the token." },
+      ],
+    };
+    const fixture = await connectVaultTest([Response.json(storedToken)]);
+    try {
+      const read = await fixture.call("manage_vault_items", {
+        ...target,
+        action: "get",
+      });
+      const body = toolResultJSON(read);
+      expect(body.item.spec).toEqual({
+        provider: "1password",
+        requests,
+        access_token_expires_at: "2026-10-01T00:00:00Z",
+      });
+      expect(body.guidance.join(" ")).toContain(
+        "1pw_update_access_token is not available through MCP",
+      );
+      const update = await fixture.call("manage_vault_items", {
+        ...target,
+        action: "invoke",
+        operation: "1pw_update_access_token",
+        inputs: { access_token: "private-access-token" },
+      });
+      expect(update.isError).toBe(true);
+      for (const result of [read, update]) {
+        const text = JSON.stringify(result);
+        expect(text).not.toContain("private-access-token");
+        expect(text).not.toContain("private-integration-key");
+      }
+      expect(fixture.requests).toHaveLength(1);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("keeps account-backed guidance free of stored-token steps", async () => {
+    const fixture = await connectVaultTest([Response.json(readyCredential)]);
+    try {
+      const read = toolResultJSON(
+        await fixture.call("manage_vault_items", { ...target, action: "get" }),
+      );
+      expect(read.item.spec.account).toBe(account.key);
+      expect(read.guidance.join(" ")).not.toContain("customer-supplied");
+    } finally {
+      await fixture.close();
+    }
+  });
 
   test.each(["1pw_create_access_request", "1pw_reconcile_access"])(
     "keeps an uncertain access request blocked: %s",
@@ -544,6 +769,9 @@ describe("1Password vault credentials", () => {
         );
         expect(read.guidance.join(" ")).toContain(
           "never delete or recreate the item to retry",
+        );
+        expect(read.guidance.join(" ")).toContain(
+          "first check that the credential_account named by spec.account is connected",
         );
         const result = await fixture.call("manage_vault_items", {
           ...target,
