@@ -265,13 +265,17 @@ export function registerVaultCredentialTools(
         if (params.spec === undefined)
           return errorResponse("spec is required for create and update.");
         if (params.action === "create" && params.provider === "1password") {
-          const spec = onePasswordCreateSpec.parse(params.spec);
+          const spec = onePasswordCreateSpec.safeParse(params.spec);
+          if (!spec.success)
+            return errorResponse(
+              'provider: "1password" create requires spec {account, logins, goal?}. No request was sent.',
+            );
           const credential = await client.vaults.items.upsert(
             params.key,
             {
               id_or_name: params.vault,
               type: "credential",
-              spec: onePasswordCredentialSpec(spec),
+              spec: onePasswordCredentialSpec(spec.data),
             },
             options,
           );
@@ -280,7 +284,12 @@ export function registerVaultCredentialTools(
         let item: VaultItem;
         let writtenValues: (string | undefined)[];
         if (params.action === "create") {
-          const spec = createSpec.parse(params.spec);
+          const parsed = createSpec.safeParse(params.spec);
+          if (!parsed.success)
+            return errorResponse(
+              'provider: "kernel" create requires spec {description?, fields}. No request was sent.',
+            );
+          const spec = parsed.data;
           item = await client.vaults.items.upsert(
             params.key,
             {
@@ -297,7 +306,12 @@ export function registerVaultCredentialTools(
         } else {
           if (params.version === undefined)
             return errorResponse("version is required for update.");
-          const spec = updateSpec.parse(params.spec);
+          const parsed = updateSpec.safeParse(params.spec);
+          if (!parsed.success)
+            return errorResponse(
+              "update requires spec {description?, fields?} keyed by field name. No request was sent.",
+            );
+          const spec = parsed.data;
           item = await client.vaults.items.update(
             params.key,
             {

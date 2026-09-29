@@ -398,6 +398,7 @@ export function vaultItemResponse(
         observation: vaultObservationHints(target).filter(safeHint),
         invocation: advertised.success
           ? advertised.data.available_operations
+              .filter(({ type }) => type !== "1pw_update_access_token")
               .map(({ type }) => ({
                 tool: "manage_vault_items",
                 arguments: { ...target, action: "invoke", operation: type },

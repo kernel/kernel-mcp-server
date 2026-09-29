@@ -239,6 +239,50 @@ describe("1Password vault credentials", () => {
     }
   });
 
+  test.each([
+    {
+      action: "create",
+      provider: "1password",
+      spec: {
+        fields: [{ name: "password", type: "password", value: "hunter2" }],
+      },
+    },
+    {
+      action: "create",
+      provider: "kernel",
+      spec: {
+        account: "onepassword",
+        logins: [{ website: "https://example.com" }],
+      },
+    },
+    {
+      action: "update",
+      version: 1,
+      spec: {
+        fields: [{ name: "password", type: "password", value: "hunter2" }],
+      },
+    },
+  ])(
+    "rejects a spec that does not match $provider $action before sending",
+    async (args) => {
+      const fixture = await connectVaultTest([]);
+      try {
+        const result = await fixture.call("manage_vault_credentials", {
+          ...target,
+          ...args,
+        });
+        expect(result.isError).toBe(true);
+        const text = JSON.stringify(result);
+        expect(text).toContain("No request was sent");
+        expect(text).not.toContain("hunter2");
+        expect(text).not.toContain("payment");
+        expect(fixture.requests).toHaveLength(0);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
   test("accepts the Kernel provider on update", async () => {
     const fixture = await connectVaultTest([
       Response.json({
@@ -716,6 +760,12 @@ describe("1Password vault credentials", () => {
       expect(body.guidance.join(" ")).toContain(
         "1pw_update_access_token is not available through MCP",
       );
+      expect(
+        body.hints.invocation.map(
+          (hint: { arguments: { operation: string } }) =>
+            hint.arguments.operation,
+        ),
+      ).toEqual(["1pw_fill"]);
       const update = await fixture.call("manage_vault_items", {
         ...target,
         action: "invoke",
