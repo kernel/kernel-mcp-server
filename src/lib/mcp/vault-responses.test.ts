@@ -5,7 +5,11 @@ import {
   vaultItemFields,
 } from "@/lib/mcp/vault-responses";
 import { toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
-import { connectVaultTest, item } from "@/lib/mcp/tools/vaults.test-fixtures";
+import {
+  connectVaultTest,
+  item,
+  linkSpec,
+} from "@/lib/mcp/tools/vaults.test-fixtures";
 
 const aliases = {
   number: "4111111111111111",
@@ -237,13 +241,13 @@ describe("vault public responses", () => {
     [500, "provider_rate_limited", "rate limited requests"],
     [429, "spend_request_rate_limited", "rate limited spend requests"],
   ] as const)(
-    "returns curated text for HTTP %s / %s",
+    "passes through API diagnostics for HTTP %s / %s",
     async (status, code, message) => {
       const fixture = await connectVaultTest([
         Response.json(
           {
             code,
-            message: "access_token=hidden-free-text",
+            message,
             details: "hidden-details",
           },
           { status },
@@ -269,6 +273,92 @@ describe("vault public responses", () => {
     },
   );
 
+  test.each([
+    { tool: "manage_vaults", args: { action: "get", vault: "checkout" } },
+    {
+      tool: "manage_vault_items",
+      args: { action: "get", vault: "checkout", key: "order-1" },
+    },
+    {
+      tool: "manage_vault_wallets",
+      args: { action: "payment_methods", vault: "checkout", key: "wallet-1" },
+    },
+    {
+      tool: "manage_vault_credentials",
+      args: {
+        action: "update",
+        vault: "checkout",
+        key: "login",
+        version: 1,
+        spec: { fields: { username: { value: "example-user" } } },
+      },
+    },
+    {
+      tool: "manage_vault_cards",
+      args: {
+        action: "create",
+        vault: "checkout",
+        key: "order-1",
+        provider: "link",
+        spec: { ...linkSpec, provider: "link" },
+      },
+    },
+    {
+      tool: "manage_vault_provider_configs",
+      args: { action: "get", config: "example" },
+    },
+  ])(
+    "passes through API codes and messages in $tool",
+    async ({ tool, args }) => {
+      const fixture = await connectVaultTest([
+        Response.json(
+          { code: "new_api_error", message: "A new API diagnostic message." },
+          { status: 400 },
+        ),
+      ]);
+      try {
+        const result = await fixture.call(tool, args);
+        const text = JSON.stringify(result);
+        expect(result.isError).toBe(true);
+        expect(text).toContain("400 A new API diagnostic message.");
+        expect(text).toContain("[code: new_api_error]");
+        expect(text).toContain("Do not replay a payment.");
+        expect(fixture.requests).toHaveLength(1);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test.each([
+    "vault fill validation failed: additional API details",
+    "See https://example.com/help?code=example for details",
+    "An arbitrary API diagnostic with punctuation, spaces, and newlines.\nDetails.",
+  ])(
+    "passes through API messages without filtering or rewriting",
+    async (message) => {
+      const fixture = await connectVaultTest([
+        Response.json({ code: "element_not_found", message }, { status: 400 }),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          action: "get",
+          vault: "checkout",
+          key: "order-1",
+        });
+        expect(result.isError).toBe(true);
+        expect(result.content).toEqual([
+          {
+            type: "text",
+            text: `Error in manage_vault_items (get): 400 ${message} [code: element_not_found] Inspect item state/events before taking further action. Do not replay a payment.`,
+          },
+        ]);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
   test.each(
     [
       undefined,
@@ -283,13 +373,10 @@ describe("vault public responses", () => {
       "invalid_request hidden-suffix",
     ].map((code) => ({ code })),
   )(
-    "uses a generic fallback for unrecognized error codes",
+    "passes through unrecognized string codes without inventing missing codes",
     async ({ code }) => {
       const fixture = await connectVaultTest([
-        Response.json(
-          { code, message: "password=hidden-password" },
-          { status: 400 },
-        ),
+        Response.json({ code, message: "API diagnostic" }, { status: 400 }),
       ]);
       try {
         const result = await fixture.call("manage_vault_items", {
@@ -299,59 +386,12 @@ describe("vault public responses", () => {
         });
         const text = JSON.stringify(result);
         expect(result.isError).toBe(true);
-        expect(text).toContain("400 Vault request failed.");
-        expect(text).not.toContain("[code:");
-        expect(text).not.toContain("hidden");
-      } finally {
-        await fixture.close();
-      }
-    },
-  );
-
-  test.each([
-    {
-      message: "Expansion unavailable",
-      code: "expansion_unavailable",
-      opaque: "hidden-opaque",
-      headers: { authorization: "hidden-auth" },
-    },
-    { raw_provider: { secret: "hidden-without-message" } },
-    {
-      code: "invalid_request",
-      message: "access_token=hidden-plaintext-secret",
-    },
-    { code: "access_token=hidden-code-secret", message: "Invalid request" },
-    { code: "conflict", message: "password=hidden-password-secret" },
-    {
-      message: "Follow https://provider.example/?code=hidden-code",
-      code: "action_required",
-    },
-    { message: { secret: "hidden-object-message" }, code: "provider_error" },
-  ])(
-    "does not dump provider bodies or credential-bearing URLs in errors",
-    async (body) => {
-      const fixture = await connectVaultTest([
-        Response.json(body, { status: 409 }),
-      ]);
-      try {
-        const result = await fixture.call("manage_vault_items", {
-          action: "get",
-          vault: "checkout",
-          key: "order-1",
-        });
-        expect(result.isError).toBe(true);
-        expect(JSON.stringify(result)).not.toContain("hidden");
-        if (
-          ["provider_error", "invalid_request", "conflict"].includes(
-            body.code ?? "",
-          )
-        ) {
-          expect(JSON.stringify(result)).toContain(`[code: ${body.code}]`);
+        expect(text).toContain("400 API diagnostic");
+        if (typeof code === "string" && code) {
+          expect(text).toContain(`[code: ${code}]`);
         } else {
-          expect(JSON.stringify(result)).not.toContain("[code:");
+          expect(text).not.toContain("[code:");
         }
-        if (body.message === "Expansion unavailable")
-          expect(JSON.stringify(result)).not.toContain(body.message);
       } finally {
         await fixture.close();
       }

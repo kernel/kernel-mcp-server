@@ -562,7 +562,7 @@ describe("1Password vault credentials", () => {
     },
   );
 
-  test("curates 1Password operation errors", async () => {
+  test("passes 1Password operation errors through without retrying", async () => {
     const fixture = await connectVaultTest([
       Response.json({
         ...pendingCredential,
@@ -572,7 +572,10 @@ describe("1Password vault credentials", () => {
         ],
       }),
       Response.json(
-        { code: "conflict", message: `private ${approvalLink}` },
+        {
+          code: "conflict",
+          message: "1Password access request is already in progress",
+        },
         { status: 409 },
       ),
     ]);
@@ -584,7 +587,9 @@ describe("1Password vault credentials", () => {
         inputs: { browser_id: "browser-1" },
       });
       expect(result.isError).toBe(true);
-      expectNoReferences(result);
+      const text = JSON.stringify(result.content);
+      expect(text).toContain("1Password access request is already in progress");
+      expect(text).toContain("Do not retry automatically");
       expect(fixture.requests).toHaveLength(2);
     } finally {
       await fixture.close();

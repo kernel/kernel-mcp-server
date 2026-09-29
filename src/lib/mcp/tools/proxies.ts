@@ -43,7 +43,7 @@ export function registerProxyTools(
     "manage_proxies",
     {
       description:
-        'Manage proxy configurations for routing browser traffic. Use "create" to add a proxy, "list" to see all proxies, "get" to retrieve one, "rename" to change its name, "check" to test connectivity (optionally against a target URL), or "delete" to remove one. Proxy quality for bot detection avoidance, best to worst: mobile > residential > ISP > datacenter.',
+        'Manage proxy configurations for routing browser traffic. Use "create" to add a proxy, "list" to see all proxies, "get" to retrieve one, "rename" to change its name, "check" to test connectivity (optionally against a target URL), or "delete" to remove one. Choose a proxy type that fits the workload and the terms of the target site.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z
