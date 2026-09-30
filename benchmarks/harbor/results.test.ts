@@ -624,6 +624,34 @@ describe("Braintrust redaction", () => {
     delete process.env.TEST_API_KEY;
   });
 
+  test("redacts normalized cookie headers and compound secret keys", () => {
+    const redacted = redactValue({
+      "Set-Cookie": "session=visible",
+      client_secret: "client-value",
+      secret_key: "key-value",
+      webhook_secret: "webhook-value",
+    });
+    expect(redacted).toEqual({
+      "Set-Cookie": "[REDACTED]",
+      client_secret: "[REDACTED]",
+      secret_key: "[REDACTED]",
+      webhook_secret: "[REDACTED]",
+    });
+    expect(() => assertSafeToPublish(redacted)).not.toThrow();
+    expect(() =>
+      assertSafeToPublish({ "Set-Cookie": "session=visible" }),
+    ).toThrow("Set-Cookie");
+    expect(() =>
+      assertSafeToPublish({ client_secret: "client-value" }),
+    ).toThrow("client_secret");
+
+    const text = redactString(
+      `'client_secret': 'client-value'&webhook_secret=webhook-value`,
+    );
+    expect(text).not.toContain("client-value");
+    expect(text).not.toContain("webhook-value");
+  });
+
   test("redacts complex Playwright typing calls and rejects originals", () => {
     const calls = [
       `page.fill('#password', 'Str0ng)Pass!')`,

@@ -16,7 +16,7 @@ const SENSITIVE_FIELDS = new Set([
   "credential",
   "credentials",
   "cookie",
-  "set-cookie",
+  "set_cookie",
   "session_id",
   "replay_id",
   "cdp_url",
@@ -36,7 +36,7 @@ function sensitiveField(key: string): boolean {
   const normalized = normalizedField(key);
   return (
     SENSITIVE_FIELDS.has(normalized) ||
-    /(?:^|_)(?:api_key|access_token|auth_token|refresh_token|session_token|password|private_key|credential|session_id|replay_id|cdp_url|viewer_url)$/.test(
+    /(?:^|_)(?:api_key|access_token|auth_token|refresh_token|session_token|password|private_key|credential|secret(?:_key)?|session_id|replay_id|cdp_url|viewer_url)$/.test(
       normalized,
     )
   );
@@ -165,11 +165,11 @@ export function redactStringWithSecrets(
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, REDACTED)
     .replace(/\b(?:sk|pk|bt|kapi|whsec)[-_][A-Za-z0-9_-]{12,}\b/gi, REDACTED)
     .replace(
-      /(["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|credential|jwt|password|private[_-]?key|refresh[_-]?token|replay[_-]?id|secret|session[_-]?id|session[_-]?token|token)["']?\s*[:=]\s*["']?)[^"'\s,}&]+/gi,
+      /(["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|credential|jwt|password|private[_-]?key|refresh[_-]?token|replay[_-]?id|[a-z0-9_-]*secret(?:[_-]?key)?|session[_-]?id|session[_-]?token|token)["']?\s*[:=]\s*["']?)[^"'\s,}&]+/gi,
       `$1${REDACTED}`,
     )
     .replace(
-      /([?&](?:api[_-]?key|access[_-]?token|auth|code|credential|jwt|password|secret|session[_-]?id|session[_-]?token|token)=)[^&#\s]+/gi,
+      /([?&](?:api[_-]?key|access[_-]?token|auth|code|credential|jwt|password|[a-z0-9_-]*secret(?:[_-]?key)?|session[_-]?id|session[_-]?token|token)=)[^&#\s]+/gi,
       `$1${REDACTED}`,
     )
     .replace(/(\b(?:cookie|set-cookie)\s*:\s*)[^\r\n]+/gi, `$1${REDACTED}`)
@@ -358,7 +358,7 @@ function assertSafeString(value: string): void {
   }
   assertTypedCallsRedacted(value);
   for (const match of value.matchAll(
-    /["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|credential|jwt|password|private[_-]?key|refresh[_-]?token|replay[_-]?id|secret|session[_-]?id|session[_-]?token)["']?\s*[:=]\s*["']?([^"'\s,}&]+)/gi,
+    /["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|credential|jwt|password|private[_-]?key|refresh[_-]?token|replay[_-]?id|[a-z0-9_-]*secret(?:[_-]?key)?|session[_-]?id|session[_-]?token)["']?\s*[:=]\s*["']?([^"'\s,}&]+)/gi,
   )) {
     if (match[1] !== REDACTED) {
       throw new Error(
