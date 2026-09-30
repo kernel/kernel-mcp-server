@@ -99,6 +99,7 @@ describe("MCP credential flow", () => {
                   spec: { fields: { username: { value: target.vault } } },
                 }
               : {
+                  provider: "kernel",
                   spec: {
                     ...spec,
                     fields: spec.fields.map((field) =>
@@ -387,6 +388,7 @@ describe("MCP credential flow", () => {
         await fixture.call("manage_vault_credentials", {
           ...target,
           action: "create",
+          provider: "kernel",
           spec,
         }),
       );
@@ -427,7 +429,10 @@ describe("MCP credential flow", () => {
         "GET",
         "POST",
       ]);
-      expect(fixture.requests[2].body).toEqual({ type: "credential", spec });
+      expect(fixture.requests[2].body).toEqual({
+        type: "credential",
+        spec: { provider: "kernel", ...spec },
+      });
       expect(fixture.requests.at(-1)?.body).toEqual({ type: "fill", ...fill });
       expect(fixture.requests[5].path).toContain("wait=60");
     } finally {
@@ -471,6 +476,7 @@ describe("MCP credential flow", () => {
       const result = await fixture.call("manage_vault_credentials", {
         ...target,
         action: "create",
+        provider: "kernel",
         spec: {
           ...spec,
           fields: [
@@ -522,6 +528,7 @@ describe("MCP credential flow", () => {
           action,
           ...(action === "create"
             ? {
+                provider: "kernel",
                 spec: {
                   fields: [
                     {
@@ -633,7 +640,7 @@ describe("MCP credential flow", () => {
                   action: operation,
                   ...(operation === "update"
                     ? { version: 2, spec: { description: "Example" } }
-                    : { spec }),
+                    : { provider: "kernel", spec }),
                 });
           expect(result.isError).toBe(true);
           expect(JSON.stringify(result)).toContain(
