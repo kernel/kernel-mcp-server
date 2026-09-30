@@ -427,7 +427,10 @@ describe("MCP credential flow", () => {
         "GET",
         "POST",
       ]);
-      expect(fixture.requests[2].body).toEqual({ type: "credential", spec });
+      expect(fixture.requests[2].body).toEqual({
+        type: "credential",
+        spec: { provider: "kernel", ...spec },
+      });
       expect(fixture.requests.at(-1)?.body).toEqual({ type: "fill", ...fill });
       expect(fixture.requests[5].path).toContain("wait=60");
     } finally {

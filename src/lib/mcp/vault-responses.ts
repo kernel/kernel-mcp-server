@@ -9,7 +9,7 @@ function fields(names: string): OutputFields {
 
 export const vaultFields = fields("id name created_at updated_at");
 export const vaultProviderConfigFields = fields(
-  "id name provider client_id test_mode created_at updated_at",
+  "id name provider client_id publishable_key test_mode created_at updated_at",
 );
 const operationFields = fields("type description");
 const totalFields = fields("type display_text amount");

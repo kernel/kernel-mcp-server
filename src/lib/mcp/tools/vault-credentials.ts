@@ -76,7 +76,7 @@ const createSpec = z
   })
   .strict();
 function publicCredentialFieldNames(item: VaultItem): Set<string> {
-  if (item.type !== "credential") return new Set();
+  if (item.type !== "credential" || !("fields" in item.spec)) return new Set();
   const names = new Set<string>();
   const publicNames = new Set<string>();
   for (const field of item.spec.fields) {
@@ -173,7 +173,7 @@ export function registerVaultCredentialTools(
             {
               id_or_name: params.vault,
               type: "credential",
-              spec,
+              spec: { provider: "kernel", ...spec },
             },
             options,
           );
