@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
   defaultMcpDependencies,
@@ -101,49 +101,52 @@ export function registerProfileCapabilities(
     options,
   );
 
-  server.tool(
+  server.registerTool(
     "manage_profiles",
-    'Manage browser profiles when an agent needs persistent cookies, login state, or reusable browser state. Use "setup" for a guided login session, "list" to find a profile, "get" to retrieve one, "rename" to change its name, and "delete" only when a profile should be removed. Do not rename a profile while a browser is using it because that session may no longer save changes back to the profile.',
     {
-      ...projectSelectionInputSchema(),
-      action: z
-        .enum(["setup", "list", "get", "rename", "delete"])
-        .describe("Operation to perform."),
-      profile_name: z
-        .string()
-        .describe(
-          "(setup, get, rename, delete) Profile name. For setup: 1-255 chars.",
-        )
-        .optional(),
-      profile_id: z
-        .string()
-        .describe(
-          "(get, rename, delete) Profile ID. Alternative to profile_name.",
-        )
-        .optional(),
-      new_name: z.string().describe("(rename) New profile name.").optional(),
-      update_existing: z
-        .boolean()
-        .describe("(setup) If true, update existing profile. Default false.")
-        .optional(),
-      query: z
-        .string()
-        .describe("(list) Search profiles by name or ID.")
-        .optional(),
-      ...paginationParams,
+      description:
+        'Manage browser profiles when an agent needs persistent cookies, login state, or reusable browser state. Use "setup" for a guided login session, "list" to find a profile, "get" to retrieve one, "rename" to change its name, and "delete" only when a profile should be removed. Do not rename a profile while a browser is using it because that session may no longer save changes back to the profile.',
+      inputSchema: z.object({
+        ...projectSelectionInputSchema(),
+        action: z
+          .enum(["setup", "list", "get", "rename", "delete"])
+          .describe("Operation to perform."),
+        profile_name: z
+          .string()
+          .describe(
+            "(setup, get, rename, delete) Profile name. For setup: 1-255 chars.",
+          )
+          .optional(),
+        profile_id: z
+          .string()
+          .describe(
+            "(get, rename, delete) Profile ID. Alternative to profile_name.",
+          )
+          .optional(),
+        new_name: z.string().describe("(rename) New profile name.").optional(),
+        update_existing: z
+          .boolean()
+          .describe("(setup) If true, update existing profile. Default false.")
+          .optional(),
+        query: z
+          .string()
+          .describe("(list) Search profiles by name or ID.")
+          .optional(),
+        ...paginationParams,
+      }),
+      annotations: {
+        title: "Manage Kernel browser profiles",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    {
-      title: "Manage Kernel browser profiles",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
       const client = options.createKernelClient(
-        extra.authInfo.token,
-        projectForOperation(extra.authInfo, params),
+        ctx.http.authInfo.token,
+        projectForOperation(ctx.http.authInfo, params),
       );
 
       try {

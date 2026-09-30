@@ -1,6 +1,6 @@
 /// <reference types="bun-types" />
+import type { McpServer } from "@modelcontextprotocol/server";
 
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { z } from "zod";
 import { projectScopedExtra } from "@/lib/mcp/auth-context.test-fixtures";
@@ -15,7 +15,7 @@ const { registerBrowserPoolCapabilities } = await import(
 
 type ToolHandler = (
   params: Record<string, unknown>,
-  extra: { authInfo?: { token: string } },
+  ctx: ReturnType<typeof projectScopedExtra>,
 ) => Promise<{
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
@@ -23,14 +23,17 @@ type ToolHandler = (
 
 function captureBrowserPoolTool() {
   let handler: ToolHandler | undefined;
-  let schema: z.ZodRawShape | undefined;
+  let schema: Record<string, z.ZodType> | undefined;
   const server = {
-    resource() {},
     registerResource() {},
-    tool(name: string, ...args: unknown[]) {
+    registerTool(
+      name: string,
+      config: { inputSchema: z.ZodObject<Record<string, z.ZodType>> },
+      callback: ToolHandler,
+    ) {
       if (name !== "manage_browser_pools") return;
-      schema = args[1] as z.ZodRawShape;
-      handler = args.at(-1) as ToolHandler;
+      schema = config.inputSchema.shape;
+      handler = callback;
     },
   } as unknown as McpServer;
 

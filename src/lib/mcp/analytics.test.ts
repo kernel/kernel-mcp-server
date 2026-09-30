@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import type { PostHog } from "posthog-node";
 import {
   encodeSessionId,
@@ -11,10 +11,12 @@ import {
 import {
   captureMcpConnectionScopeFailure,
   captureMcpFeedback,
+  captureMissingCapabilityReport,
   captureOAuthTokenExchange,
   clientCapabilityAnalyticsFromInitialize,
   enrichMcpAnalyticsEvent,
   instrumentMcpAnalytics,
+  MCP_CAPABILITY_REQUESTED_EVENT,
   MCP_CLIENT_ELICITATION_MODE_PROPERTY,
   MCP_CLIENT_SUPPORTS_APPS_PROPERTY,
   MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY,
@@ -31,6 +33,8 @@ import {
 } from "@/lib/mcp/analytics";
 import { connectTestMcp, toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
 import { KERNEL_FEEDBACK_TOOL_NAME } from "@/lib/mcp/tools/feedback";
+import { registerMcpCapabilities } from "@/lib/mcp/register";
+import { z } from "zod";
 
 const privateContextProperty = "__mcp_connection_analytics_context";
 
@@ -341,6 +345,27 @@ describe("sanitizeMcpAnalyticsEvent", () => {
     expect(result?.properties[PostHogMCPAnalyticsProperty.IsError]).toBe(false);
   });
 
+  test("drops vault specs, aliases, provider actions, and error bodies", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.ToolName]: "manage_vault_cards",
+      [PostHogMCPAnalyticsProperty.Parameters]: {
+        spec: { metadata: { order: "private-order" } },
+      },
+      [PostHogMCPAnalyticsProperty.Response]: {
+        state: { aliases: { number: "private-alias" } },
+        action: { url: "https://provider.example/approve?code=private-code" },
+      },
+      [PostHogMCPAnalyticsProperty.ErrorMessage]: "private-provider-body",
+    });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    expect(JSON.stringify(result)).not.toContain("private-");
+    expect(result?.properties[PostHogMCPAnalyticsProperty.ToolName]).toBe(
+      "manage_vault_cards",
+    );
+  });
+
   test("drops $set so no person properties can flow", async () => {
     const event = toolCallEvent({ $set: { email: "agent@example.com" } });
 
@@ -349,10 +374,10 @@ describe("sanitizeMcpAnalyticsEvent", () => {
     expect(result?.properties.$set).toBeUndefined();
   });
 
-  test("redacts emails, URLs, and tokens from intent", async () => {
+  test("redacts identifiable values from analytics text", async () => {
     const event = toolCallEvent({
       [PostHogMCPAnalyticsProperty.Intent]:
-        "Checking out on https://shop.example.com/cart for buyer@example.com with key sk_abc123DEF456",
+        "Checking /tmp/private/cart.json on shop.example.com at 192.0.2.1 for buyer@example.com using https://shop.example.com/cart and key sk_abc123DEF456",
     });
 
     const result = await sanitizeMcpAnalyticsEvent(event);
@@ -363,8 +388,32 @@ describe("sanitizeMcpAnalyticsEvent", () => {
     expect(intent).toContain("[url]");
     expect(intent).toContain("[email]");
     expect(intent).toContain("[token]");
+    expect(intent).toContain("[domain]");
+    expect(intent).toContain("[ip]");
+    expect(intent).toContain("[path]");
     expect(intent).not.toContain("buyer@example.com");
     expect(intent).not.toContain("sk_abc123DEF456");
+    expect(intent).not.toContain("shop.example.com");
+    expect(intent).not.toContain("192.0.2.1");
+    expect(intent).not.toContain("/tmp/private/cart.json");
+  });
+
+  test("redacts compressed and digit-only IPv6 addresses", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.Intent]:
+        "Checking 2001:4860:4860::8888, fe80::1, and ::1 at 12:30:45.",
+    });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+    const intent = result?.properties[
+      PostHogMCPAnalyticsProperty.Intent
+    ] as string;
+
+    expect(intent.match(/\[ip\]/g)).toHaveLength(3);
+    expect(intent).toContain("12:30:45");
+    expect(intent).not.toContain("2001:4860:4860::8888");
+    expect(intent).not.toContain("fe80::1");
+    expect(intent).not.toContain("::1");
   });
 
   test("deletes non-string intents", async () => {
@@ -555,6 +604,61 @@ describe("captureMcpConnectionScopeFailure", () => {
   });
 });
 
+describe("captureMissingCapabilityReport", () => {
+  test("routes structured Kernel demand and redacts sensitive text", async () => {
+    const captured: unknown[] = [];
+    const analytics = {
+      capture: async (event: unknown) => {
+        captured.push(event);
+      },
+    } as McpAnalytics;
+
+    await captureMissingCapabilityReport(
+      {
+        context:
+          "Uploading /tmp/private/image.png to files.example.com requires a browser filesystem transfer capability.",
+        gap_reason: "kernel_capability_missing",
+        capability_area: "browser_files",
+        capability: "browser filesystem upload",
+        requested_action: "transfer",
+        task_outcome: "blocked",
+        tools_checked: ["manage_browsers"],
+      },
+      {
+        http: {
+          authInfo: {
+            extra: {
+              connectionContext: {
+                scope: { organizationId: "org_analytics" },
+              },
+            },
+          },
+        },
+      },
+      analytics,
+    );
+
+    expect(captured).toEqual([
+      {
+        event: MCP_CAPABILITY_REQUESTED_EVENT,
+        properties: expect.objectContaining({
+          $groups: { organization: "org_analytics" },
+          [PostHogMCPAnalyticsProperty.Intent]:
+            "Uploading [path] to [domain] requires a browser filesystem transfer capability.",
+          missing_capability_gap_reason: "kernel_capability_missing",
+          missing_capability_destination: "kernel_product_demand",
+          missing_capability_area: "browser_files",
+          missing_capability_name: "browser filesystem upload",
+          missing_capability_requested_action: "transfer",
+          missing_capability_task_outcome: "blocked",
+          missing_capability_tools_checked: ["manage_browsers"],
+          missing_capability_privacy_redacted: true,
+        }),
+      },
+    ]);
+  });
+});
+
 describe("captureMcpFeedback", () => {
   test("routes redacted feedback through contextual MCP analytics", async () => {
     const captured: unknown[] = [];
@@ -578,10 +682,12 @@ describe("captureMcpFeedback", () => {
           "The error linked to https://example.com/support for user@example.com.",
       },
       {
-        authInfo: {
-          extra: {
-            connectionContext: {
-              scope: { organizationId: "org_analytics" },
+        http: {
+          authInfo: {
+            extra: {
+              connectionContext: {
+                scope: { organizationId: "org_analytics" },
+              },
             },
           },
         },
@@ -592,21 +698,285 @@ describe("captureMcpFeedback", () => {
     expect(captured).toEqual([
       {
         event: MCP_FEEDBACK_SUBMITTED_EVENT,
-        properties: {
+        properties: expect.objectContaining({
           $groups: { organization: "org_analytics" },
           feedback_summary: "Browser timeout guidance was unclear",
           feedback_type: "product",
           feedback_sentiment: "mixed",
           feedback_product_area: "browsers",
+          feedback_destination: "product_feedback",
           feedback_category: undefined,
+          feedback_task_outcome: "completed",
           feedback_task_completed: true,
+          feedback_privacy_redacted: true,
           feedback_tools_used: ["manage_browsers"],
           feedback_friction_points: "- The response did not say when to retry.",
           feedback_suggested_improvement:
             "Include a retry interval in the response.",
           feedback_user_request: undefined,
           feedback_details: "The error linked to [url] for [email]",
+        }),
+      },
+    ]);
+  });
+
+  test("routes product feedback without an area as unclassified before praise", async () => {
+    const captured: { properties: Record<string, unknown> }[] = [];
+    const analytics = {
+      capture: async (event: { properties: Record<string, unknown> }) => {
+        captured.push(event);
+      },
+    } as McpAnalytics;
+
+    for (const summary of ["功能无法使用", "設定を保存できない"]) {
+      await captureMcpFeedback(
+        {
+          summary,
+          feedback_type: "product",
+          sentiment: "positive",
+          task_outcome: "unknown",
         },
+        {},
+        analytics,
+      );
+    }
+
+    expect(
+      captured.map(({ properties }) => properties.feedback_destination),
+    ).toEqual(["product_unclassified", "product_unclassified"]);
+    expect(captured[0]?.properties.feedback_dedupe_key).not.toBe(
+      captured[1]?.properties.feedback_dedupe_key,
+    );
+  });
+
+  test("routes structured site-compatibility feedback to config registry prioritization", async () => {
+    const captured: unknown[] = [];
+    const analytics = {
+      capture: async (event: unknown) => {
+        captured.push(event);
+      },
+    } as McpAnalytics;
+
+    await captureMcpFeedback(
+      {
+        summary: "Stealth sessions were consistently blocked",
+        feedback_type: "site_compatibility",
+        sentiment: "negative",
+        task_completed: false,
+        tools_used: ["manage_browsers", "execute_playwright_code"],
+        site_compatibility: {
+          registrable_domain: "example.com",
+          observed_outcome: "blocked",
+          access_provider: "Akamai Bot Manager",
+          challenge_type: "verification_prompt",
+          compatibility_mode: "enabled",
+          proxy_type: "isp",
+          region: "us-east",
+          browser_version: "152.0.7977.42",
+          browser_image_version: "2026.09.14",
+          reproducibility: "consistent",
+          browser_session_id: "session_123",
+        },
+      },
+      {
+        http: {
+          authInfo: {
+            extra: {
+              connectionContext: {
+                scope: { organizationId: "org_analytics" },
+              },
+            },
+          },
+        },
+      },
+      analytics,
+    );
+
+    expect(captured).toEqual([
+      {
+        event: MCP_FEEDBACK_SUBMITTED_EVENT,
+        properties: expect.objectContaining({
+          $groups: { organization: "org_analytics" },
+          feedback_type: "bot_detection",
+          feedback_destination: "config_registry_prioritization",
+          feedback_bot_detection_registrable_domain: "example.com",
+          feedback_bot_detection_observed_outcome: "blocked",
+          feedback_bot_detection_suspected_vendor: "Akamai Bot Manager",
+          feedback_bot_detection_challenge_type: "captcha",
+          feedback_bot_detection_stealth: "enabled",
+          feedback_bot_detection_proxy_type: "isp",
+          feedback_bot_detection_region: "us-east",
+          feedback_bot_detection_browser_version: "152.0.7977.42",
+          feedback_bot_detection_browser_image_version: "2026.09.14",
+          feedback_bot_detection_reproducibility: "consistent",
+          feedback_bot_detection_browser_session_id: "session_123",
+        }),
+      },
+    ]);
+  });
+
+  test("separates lookup feedback by outcome and applied configuration", async () => {
+    const captured: { properties: Record<string, unknown> }[] = [];
+    const analytics = {
+      capture: async (event: { properties: Record<string, unknown> }) => {
+        captured.push(event);
+      },
+    } as McpAnalytics;
+    const base = {
+      summary: "The lookup recommendation was tested",
+      feedback_type: "config_registry" as const,
+      sentiment: "mixed" as const,
+      task_completed: false,
+      site_compatibility: {
+        registrable_domain: "example.com",
+        observed_outcome: "blocked" as const,
+        reproducibility: "consistent" as const,
+        browser_session_id: "session_lookup",
+      },
+      config_registry: {
+        request_method: "lookup" as const,
+        recommendation_match_scope: "exact" as const,
+        recommendation_verification: "verified" as const,
+        recommendation_evidence: {
+          sample_size: 5,
+          success_rate: 1,
+          last_verified_at: "2026-09-13T12:00:00Z",
+        },
+        applied_browser: {
+          stealth: true,
+          headless: false,
+          gpu: false,
+          viewport: { width: 1920, height: 1080 },
+        },
+        applied_proxy: { mode: "direct" as const },
+      },
+    };
+
+    await captureMcpFeedback(base, {}, analytics);
+    await captureMcpFeedback(
+      {
+        ...base,
+        site_compatibility: {
+          ...base.site_compatibility,
+          observed_outcome: "passed",
+        },
+      },
+      {},
+      analytics,
+    );
+    await captureMcpFeedback(
+      {
+        ...base,
+        site_compatibility: {
+          ...base.site_compatibility,
+          observed_outcome: "passed",
+        },
+        config_registry: {
+          ...base.config_registry,
+          applied_browser: {
+            ...base.config_registry.applied_browser,
+            headless: true,
+          },
+        },
+      },
+      {},
+      analytics,
+    );
+
+    const dedupeKeys = captured.map(
+      ({ properties }) => properties.feedback_dedupe_key,
+    );
+    expect(new Set(dedupeKeys).size).toBe(3);
+  });
+
+  test("attributes config-registry feedback to the applied configuration", async () => {
+    const captured: unknown[] = [];
+    const analytics = {
+      capture: async (event: unknown) => {
+        captured.push(event);
+      },
+    } as McpAnalytics;
+
+    await captureMcpFeedback(
+      {
+        summary: "The recommended configuration remained blocked",
+        feedback_type: "config_registry",
+        sentiment: "negative",
+        task_completed: false,
+        site_compatibility: {
+          registrable_domain: "example.com",
+          observed_outcome: "blocked",
+          challenge_type: "access_denied",
+          reproducibility: "consistent",
+          browser_session_id: "session_456",
+        },
+        config_registry: {
+          request_method: "resolve",
+          analysis_id: "analysis_123",
+          recommendation_match_scope: "exact",
+          recommendation_verification: "verified",
+          recommendation_evidence: {
+            sample_size: 5,
+            success_rate: 1,
+            last_verified_at: "2026-09-13T12:00:00Z",
+          },
+          applied_browser: {
+            stealth: true,
+            headless: false,
+            gpu: false,
+            viewport: { width: 1920, height: 1080, refresh_rate: 25 },
+          },
+          applied_proxy: {
+            mode: "managed",
+            type: "residential",
+            country: "US",
+          },
+        },
+      },
+      {
+        http: {
+          authInfo: {
+            extra: {
+              connectionContext: {
+                scope: { organizationId: "org_analytics" },
+              },
+            },
+          },
+        },
+      },
+      analytics,
+    );
+
+    expect(captured).toEqual([
+      {
+        event: MCP_FEEDBACK_SUBMITTED_EVENT,
+        properties: expect.objectContaining({
+          $groups: { organization: "org_analytics" },
+          feedback_type: "config_registry",
+          feedback_destination: "config_registry_quality",
+          feedback_bot_detection_registrable_domain: "example.com",
+          feedback_bot_detection_observed_outcome: "blocked",
+          feedback_config_registry_request_method: "resolve",
+          feedback_config_registry_analysis_id: "analysis_123",
+          feedback_config_registry_recommendation_match_scope: "exact",
+          feedback_config_registry_recommendation_verification: "verified",
+          feedback_config_registry_evidence_sample_size: 5,
+          feedback_config_registry_evidence_success_rate: 1,
+          feedback_config_registry_evidence_last_verified_at:
+            "2026-09-13T12:00:00Z",
+          feedback_config_registry_applied_config_key:
+            "stealth-true|headless-false|gpu-false|viewport-1920x1080@25|proxy-managed-residential-US",
+          feedback_config_registry_browser_stealth: true,
+          feedback_config_registry_browser_headless: false,
+          feedback_config_registry_browser_gpu: false,
+          feedback_config_registry_viewport_width: 1920,
+          feedback_config_registry_viewport_height: 1080,
+          feedback_config_registry_viewport_refresh_rate: 25,
+          feedback_config_registry_proxy_mode: "managed",
+          feedback_config_registry_proxy_type: "residential",
+          feedback_config_registry_proxy_country: "US",
+          feedback_task_completed: false,
+        }),
       },
     ]);
   });
@@ -616,17 +986,16 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
   const ORG = "org_integration";
 
   test("keeps analytics tool contracts stable", async () => {
-    const disabled = await connectTestMcp(
-      (server) => instrumentMcpAnalytics(server, null),
-      {},
-    );
-    const enabled = await connectTestMcp(
-      (server) =>
-        instrumentMcpAnalytics(server, {
-          capture: () => undefined,
-        } as unknown as PostHog),
-      {},
-    );
+    const disabled = await connectTestMcp((server) => {
+      instrumentMcpAnalytics(server, null);
+      registerMcpCapabilities(server, { mcpApps: true, vaults: true });
+    }, {});
+    const enabled = await connectTestMcp((server) => {
+      instrumentMcpAnalytics(server, {
+        capture: () => undefined,
+      } as unknown as PostHog);
+      registerMcpCapabilities(server, { mcpApps: true, vaults: true });
+    }, {});
 
     try {
       const disabledTool = (await disabled.client.listTools()).tools.find(
@@ -638,19 +1007,96 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       expect(disabledTool).toBeDefined();
       expect(disabledTool?.inputSchema).toEqual(enabledTool?.inputSchema);
       expect(disabledTool?.inputSchema.required).toContain("context");
+      const vaultTool = (await enabled.client.listTools()).tools.find(
+        ({ name }) => name === "manage_vault_credentials",
+      );
+      expect(vaultTool?.inputSchema.properties).toHaveProperty("spec");
+      const rejectedVaultInput = await enabled.client.callTool({
+        name: "manage_vault_credentials",
+        arguments: {
+          action: "create",
+          vault: "test",
+          key: "test",
+          spec: {
+            fields: [
+              {
+                name: "password",
+                type: "password",
+                value: { private_key: "never-echo-this" },
+              },
+            ],
+          },
+        },
+      });
+      expect(rejectedVaultInput.isError).toBe(true);
+      expect(JSON.stringify(rejectedVaultInput)).toContain(
+        "Invalid vault tool input",
+      );
+      expect(JSON.stringify(rejectedVaultInput)).not.toContain(
+        "never-echo-this",
+      );
+      expect(JSON.stringify(rejectedVaultInput)).not.toContain("private_key");
 
       const missingCapabilityTool = (
         await enabled.client.listTools()
       ).tools.find(({ name }) => name === "get_more_tools");
+      expect(missingCapabilityTool?.annotations?.readOnlyHint).toBe(false);
+      expect(missingCapabilityTool?.annotations?.idempotentHint).toBe(false);
       expect(missingCapabilityTool?.description).toContain(
-        "only after checking the available tools",
+        "after checking the tool list",
+      );
+      expect(missingCapabilityTool?.description).toContain("site_tool_missing");
+      expect(missingCapabilityTool?.description).toContain(
+        "transient capacity failure",
       );
       expect(missingCapabilityTool?.description).toContain(
-        "transient failure or capacity limit",
+        "client permission restriction",
       );
-      expect(missingCapabilityTool?.description).toContain(
-        "client-side permission restriction",
+      expect(missingCapabilityTool?.inputSchema.required).toEqual([
+        "context",
+        "gap_reason",
+        "capability_area",
+        "capability",
+        "requested_action",
+        "task_outcome",
+      ]);
+      const disabledMissingCapabilityTool = (
+        await disabled.client.listTools()
+      ).tools.find(({ name }) => name === "get_more_tools");
+      expect(disabledMissingCapabilityTool?.inputSchema).toEqual(
+        missingCapabilityTool?.inputSchema,
       );
+
+      const legacyRequest = await enabled.client.callTool({
+        name: "get_more_tools",
+        arguments: {
+          context:
+            "Reporting a capability through the previous contract while refreshing the available tool definitions.",
+        },
+      });
+      expect(legacyRequest.isError).not.toBe(true);
+      expect(toolResultJSON(legacyRequest)).toMatchObject({
+        recorded: false,
+        status: "legacy_schema_refresh_required",
+      });
+
+      const unavailableRequest = await disabled.client.callTool({
+        name: "get_more_tools",
+        arguments: {
+          context:
+            "Transferring a binary into a browser requires a filesystem upload capability that no listed tool provides.",
+          gap_reason: "kernel_capability_missing",
+          capability_area: "browser_files",
+          capability: "browser filesystem upload",
+          requested_action: "transfer",
+          task_outcome: "blocked",
+          tools_checked: ["manage_browsers"],
+        },
+      });
+      expect(toolResultJSON(unavailableRequest)).toMatchObject({
+        recorded: false,
+        status: "unavailable",
+      });
 
       const result = await disabled.client.callTool({
         name: KERNEL_FEEDBACK_TOOL_NAME,
@@ -660,6 +1106,9 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
           summary: "Feedback analytics are unavailable",
           feedback_type: "mcp",
           sentiment: "negative",
+          task_outcome: "blocked",
+          affected_tool: "submit_feedback",
+          category: "tool_correctness",
         },
       });
       expect(toolResultJSON(result)).toMatchObject({
@@ -672,7 +1121,7 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     }
   });
 
-  // mcp-handler builds a fresh McpServer per HTTP request, so each simulated request
+  // createMcpHandler builds a fresh McpServer per HTTP request, so each simulated request
   // gets its own instrumented server and the SDK's per-session identity cache starts
   // cold — this is exactly the deployed topology.
   function makeServer(captured: { event?: string }[]) {
@@ -681,7 +1130,7 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       capture: (event: unknown) => captured.push(event as { event?: string }),
     } as unknown as PostHog;
     instrumentMcpAnalytics(server, fakePosthog);
-    server.tool("ping", {}, async () => ({
+    server.registerTool("ping", { inputSchema: z.object({}) }, async () => ({
       content: [{ type: "text" as const, text: "pong" }],
     }));
     return server;
@@ -694,23 +1143,30 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
   ) {
     const server = makeServer(captured);
     const request = { jsonrpc: "2.0", id: 1, method, params };
+
     const extra = {
-      authInfo: {
-        token: "sk_test",
-        clientId: "mcp-server",
-        scopes: ["apikey"],
-        extra: { connectionContext: { scope: { organizationId: ORG } } },
-      },
-      signal: new AbortController().signal,
-      requestInfo: {
-        headers: {
-          [MCP_SESSION_HEADER]: encodeSessionId({
-            sessionId: "ses_integration",
-            clientName: "test-client",
-            clientVersion: "0.0.0",
-            protocolVersion: "2025-03-26",
-          }),
+      http: {
+        authInfo: {
+          token: "sk_test",
+          clientId: "mcp-server",
+          scopes: ["apikey"],
+          extra: { connectionContext: { scope: { organizationId: ORG } } },
         },
+        req: new Request("https://mcp.example.test/mcp", {
+          headers: {
+            [MCP_SESSION_HEADER]: encodeSessionId({
+              sessionId: "ses_integration",
+              clientName: "test-client",
+              clientVersion: "0.0.0",
+              protocolVersion: "2025-03-26",
+            }),
+          },
+        }),
+      },
+      mcpReq: {
+        signal: new AbortController().signal,
+        envelope: {},
+        requestState: () => undefined,
       },
     };
     const handlers = (
@@ -723,9 +1179,10 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     )._requestHandlers;
     const handler = handlers.get(method);
     if (!handler) throw new Error(`no handler registered for ${method}`);
-    await handler(request, extra);
+    const result = await handler(request, extra);
     // The SDK's event sink captures fire-and-forget; give it a tick to flush.
     await new Promise((resolve) => setTimeout(resolve, 50));
+    return result;
   }
 
   test("attributes initialize, tools/list, and tools/call to the organization", async () => {
@@ -787,6 +1244,123 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     expect(byEvent.has("$identify")).toBe(false);
   });
 
+  test("classifies rejected capability input through instrumentation", async () => {
+    const captured: { event?: string }[] = [];
+
+    const result = (await simulateRequest(captured, "tools/call", {
+      name: "get_more_tools",
+      arguments: {
+        context:
+          "Reporting a malformed structured capability request to verify validation telemetry.",
+        gap_reason: "not_a_gap_reason",
+        capability_area: "browser_files",
+        capability: "browser filesystem upload",
+        requested_action: "transfer",
+        task_outcome: "blocked",
+      },
+    })) as { isError?: boolean };
+
+    expect(result.isError).toBe(true);
+    const toolCall = captured.find(
+      ({ event }) => event === PostHogMCPAnalyticsEvent.ToolCall,
+    ) as { properties: Record<string, unknown> };
+    expect(toolCall.properties).toMatchObject({
+      [PostHogMCPAnalyticsProperty.ToolName]: "get_more_tools",
+      [PostHogMCPAnalyticsProperty.IsError]: true,
+      [PostHogMCPAnalyticsProperty.ErrorType]: "validation",
+    });
+    expect(
+      toolCall.properties[PostHogMCPAnalyticsProperty.ErrorMessage],
+    ).toBeUndefined();
+  });
+
+  test("captures only structured capability demand", async () => {
+    const captured: { event?: string }[] = [];
+
+    const capabilityResult = await simulateRequest(captured, "tools/call", {
+      name: "get_more_tools",
+      arguments: {
+        context:
+          "Transferring a local binary into a browser requires a filesystem upload capability that no listed tool provides.",
+        gap_reason: "kernel_capability_missing",
+        capability_area: "browser_files",
+        capability: "browser filesystem upload",
+        requested_action: "transfer",
+        task_outcome: "blocked",
+        tools_checked: ["kernel__manage_browsers"],
+      },
+    });
+    await simulateRequest(captured, "tools/call", {
+      name: "get_more_tools",
+      arguments: {
+        context:
+          "Retrying an existing browser tool after a capacity failure does not require a new server capability.",
+        gap_reason: "transient_or_capacity_failure",
+        capability_area: "browsers",
+        capability: "browser creation",
+        requested_action: "create",
+        task_outcome: "blocked",
+        tools_checked: ["manage_browsers"],
+      },
+    });
+
+    expect(capabilityResult).toBeDefined();
+    const requests = captured.filter(
+      ({ event }) => event === MCP_CAPABILITY_REQUESTED_EVENT,
+    ) as { properties: Record<string, unknown> }[];
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.properties).toMatchObject({
+      $groups: { organization: ORG },
+      [PostHogMCPAnalyticsProperty.SessionId]: "ses_integration",
+      missing_capability_gap_reason: "kernel_capability_missing",
+      missing_capability_destination: "kernel_product_demand",
+      missing_capability_area: "browser_files",
+      missing_capability_name: "browser filesystem upload",
+      missing_capability_requested_action: "transfer",
+      missing_capability_task_outcome: "blocked",
+      missing_capability_tools_checked: ["manage_browsers"],
+    });
+  });
+
+  test("routes site tool demand with only a public domain and distinct dedupe keys", async () => {
+    const captured: { event?: string }[] = [];
+    const request = {
+      name: "get_more_tools",
+      arguments: {
+        context:
+          "The page lacks a reusable structured search action, so the agent is continuing with browser interaction instead.",
+        gap_reason: "site_tool_missing",
+        capability_area: "webmcp",
+        capability: "search available products",
+        requested_action: "search",
+        task_outcome: "completed_with_workaround",
+        tools_checked: ["webmcp"],
+        site_domain: "example.com",
+      },
+    };
+
+    await simulateRequest(captured, "tools/call", request);
+    await simulateRequest(captured, "tools/call", {
+      ...request,
+      arguments: { ...request.arguments, site_domain: "example.org" },
+    });
+
+    const requests = captured.filter(
+      ({ event }) => event === MCP_CAPABILITY_REQUESTED_EVENT,
+    ) as { properties: Record<string, unknown> }[];
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.properties).toMatchObject({
+      missing_capability_gap_reason: "site_tool_missing",
+      missing_capability_destination: "webmcp_catalog_demand",
+      missing_capability_area: "webmcp",
+      missing_capability_name: "search available products",
+      missing_capability_site_domain: "example.com",
+    });
+    expect(requests[0]?.properties.missing_capability_dedupe_key).not.toBe(
+      requests[1]?.properties.missing_capability_dedupe_key,
+    );
+  });
+
   test("captures feedback with the surrounding MCP session metadata", async () => {
     const captured: { event?: string }[] = [];
 
@@ -794,11 +1368,17 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       name: KERNEL_FEEDBACK_TOOL_NAME,
       arguments: {
         context:
-          "Reporting that browser timeout guidance did not explain when the caller should retry.",
-        summary: "Browser timeout guidance was unclear",
-        feedback_type: "product",
-        sentiment: "mixed",
-        product_area: "browsers",
+          "Reporting a repeatable site block so the affected domain can be prioritized for a working browser configuration.",
+        summary: "Stealth sessions were consistently blocked",
+        feedback_type: "site_compatibility",
+        sentiment: "negative",
+        task_completed: false,
+        site_compatibility: {
+          registrable_domain: "example.com",
+          observed_outcome: "blocked",
+          access_provider: "Akamai Bot Manager",
+          reproducibility: "consistent",
+        },
       },
     });
 
@@ -822,27 +1402,144 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       [PostHogMCPAnalyticsProperty.ProtocolVersion]: "2025-03-26",
       [PostHogMCPAnalyticsProperty.ServerName]: "test",
       [PostHogMCPAnalyticsProperty.ServerVersion]: "0.0.0",
-      feedback_summary: "Browser timeout guidance was unclear",
-      feedback_type: "product",
-      feedback_sentiment: "mixed",
-      feedback_product_area: "browsers",
+      feedback_summary: "Stealth sessions were consistently blocked",
+      feedback_type: "bot_detection",
+      feedback_sentiment: "negative",
+      feedback_task_completed: false,
+      feedback_destination: "config_registry_prioritization",
+      feedback_bot_detection_registrable_domain: "example.com",
+      feedback_bot_detection_observed_outcome: "blocked",
+      feedback_bot_detection_suspected_vendor: "Akamai Bot Manager",
+      feedback_bot_detection_reproducibility: "consistent",
     });
     expect(toolCall.properties[PostHogMCPAnalyticsProperty.Intent]).toBe(
-      "Reporting that browser timeout guidance did not explain when the caller should retry.",
+      "Reporting a repeatable site block so the affected domain can be prioritized for a working browser configuration.",
     );
+  });
+
+  test("upgrades previous site outcome names before capture and keeps legacy analytics values", async () => {
+    const captured: { event?: string }[] = [];
+
+    await simulateRequest(captured, "tools/call", {
+      name: KERNEL_FEEDBACK_TOOL_NAME,
+      arguments: {
+        context:
+          "Reporting a site result from a client that still holds the previous feedback schema.",
+        summary: "The site showed a verification step",
+        feedback_type: "bot_detection",
+        sentiment: "mixed",
+        task_completed: true,
+        bot_detection: {
+          registrable_domain: "example.com",
+          observed_outcome: "challenged",
+          challenge_type: "captcha",
+          stealth: "enabled",
+          reproducibility: "single_observation",
+        },
+      },
+    });
+
+    const feedback = captured.find(
+      ({ event }) => event === MCP_FEEDBACK_SUBMITTED_EVENT,
+    ) as { properties: Record<string, unknown> };
+    expect(feedback.properties).toMatchObject({
+      feedback_type: "bot_detection",
+      feedback_destination: "config_registry_prioritization",
+      feedback_bot_detection_challenge_type: "captcha",
+      feedback_bot_detection_stealth: "enabled",
+    });
+  });
+
+  test("attributes modern requests without a session and preserves the privacy allowlist", async () => {
+    const captured: { event?: string; properties?: Record<string, unknown> }[] =
+      [];
+    const handler = createMcpHandler(() => makeServer(captured));
+    try {
+      const response = await handler.fetch(
+        new Request("https://mcp.example.test/mcp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "MCP-Protocol-Version": "2026-07-28",
+            "Mcp-Method": "tools/call",
+            "Mcp-Name": "ping",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: {
+              name: "ping",
+              arguments: {
+                context:
+                  "Checking https://private.example.com with a secret payload",
+              },
+              _meta: {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {
+                  name: "modern-client",
+                  version: "1",
+                },
+                "io.modelcontextprotocol/clientCapabilities": {
+                  extensions: { "io.modelcontextprotocol/ui": {} },
+                },
+              },
+            },
+          }),
+        }),
+        {
+          authInfo: {
+            token: "test-token",
+            clientId: "test-client",
+            scopes: [],
+            extra: { connectionContext: { scope: { organizationId: ORG } } },
+          },
+        },
+      );
+      expect(response.status).toBe(200);
+      expect((await response.json()).result.resultType).toBe("complete");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const event = captured.find(
+        (event) => event.event === PostHogMCPAnalyticsEvent.ToolCall,
+      );
+      expect(event?.properties).toMatchObject({
+        $groups: { organization: ORG },
+        [MCP_CLIENT_SUPPORTS_APPS_PROPERTY]: true,
+        [PostHogMCPAnalyticsProperty.ProtocolVersion]: "2026-07-28",
+      });
+      expect(event?.properties).not.toHaveProperty(
+        PostHogMCPAnalyticsProperty.Parameters,
+      );
+      expect(event?.properties).not.toHaveProperty(
+        PostHogMCPAnalyticsProperty.Response,
+      );
+      expect(JSON.stringify(event)).not.toContain("private.example.com");
+      expect(JSON.stringify(event)).not.toContain("test-token");
+    } finally {
+      await handler.close();
+    }
   });
 
   test("stays anonymous when no connection context is attached", async () => {
     const captured: { event?: string }[] = [];
     const server = makeServer(captured);
+
     const extra = {
-      authInfo: {
-        token: "sk_test",
-        clientId: "mcp-server",
-        scopes: ["apikey"],
+      http: {
+        authInfo: {
+          token: "sk_test",
+          clientId: "mcp-server",
+          scopes: ["apikey"],
+        },
+        req: new Request("https://mcp.example.test/mcp", {
+          headers: {},
+        }),
       },
-      signal: new AbortController().signal,
-      requestInfo: { headers: {} },
+      mcpReq: {
+        signal: new AbortController().signal,
+        envelope: {},
+        requestState: () => undefined,
+      },
     };
     const handlers = (
       server.server as unknown as {

@@ -1,7 +1,7 @@
 # Kernel MCP Server
 
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/Node.js-18%2B-green.svg)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-20%2B-green.svg)](https://nodejs.org/)
 [![Next.js](https://img.shields.io/badge/Next.js-15.3%2B-black.svg)](https://nextjs.org/)
 [![smithery badge](https://smithery.ai/badge/kernel)](https://smithery.ai/server/kernel)
 
@@ -20,6 +20,7 @@ The Kernel MCP Server bridges AI assistants (like Claude, Cursor, fx, or other M
 - 📊 Monitor deployments and track invocations
 - 🔍 Search Kernel documentation and inject context
 - 💻 Execute arbitrary Playwright code against live browsers
+- 🧠 Run persistent JavaScript Browser REPL cells with native helpers, Patchright, Playwright, and raw CDP
 - 🎥 Record MP4 video replays of browser automation
 
 **Open-source & fully-managed** — the complete codebase is available here, and we run the production instance so you don't need to deploy anything.
@@ -38,6 +39,23 @@ For a deeper dive into why and how we built this server, see our blog post: [Int
 Use the streamable HTTP endpoint where supported for increased reliability. If your client does not support remote MCP, use `mcp-remote` over stdio.
 
 Kernel's server is a centrally hosted, authenticated remote MCP using OAuth 2.1 with dynamic client registration.
+
+### Protocol compatibility
+
+The same `/mcp` endpoint serves SDK v1 / 2025-era Streamable HTTP clients and
+protocol revision `2026-07-28` clients through the SDK v2 stateless handler.
+Legacy clients still initialize normally. Modern clients use per-request metadata
+and do not initialize or receive an MCP session ID. Both use the same tools and
+authentication checks; MCP Apps capabilities are read per request for modern clients.
+
+Legacy clients should handle both JSON-RPC errors and `isError` tool results.
+Unknown tools now produce JSON-RPC error `-32602`; ordinary tool failures still
+return `isError`. Validation-error text and generated tool schemas can differ from
+SDK v1. No byte-preserving compatibility layer or Tasks extension is installed.
+
+Run `bun test 'src/app/[transport]/dual-era.test.ts'` to exercise both SDK client
+generations over HTTP, including OAuth authorization and refresh with local upstream
+service fixtures. The v1 SDK is retained only as a test dependency.
 
 ## Quick Setup with Kernel CLI
 
@@ -292,47 +310,80 @@ Many other MCP-capable tools accept:
 
 Configure these values wherever the tool expects MCP server settings.
 
-## Tools (19 model-facing, plus 1 app-only helper)
+## Tools
 
 Each Kernel feature has a single `manage_*` tool with an `action` parameter, keeping the tool set small and consistent. Standalone tools handle high-frequency and interactive workflows.
 
 One additional Managed Auth helper (`begin_auth_login`) is marked app-only (`_meta.ui.visibility: ["app"]`); it refuses to execute on hosts that do not declare MCP Apps support. The App forwards the server-issued signed flow checkpoint to the shared `manage_auth_connections` `wait` action, so flow identity and terminal-state decisions stay on the server.
 
-Self-hosted deployments can select tool families with `KERNEL_MCP_ENABLED_TOOLSETS` or hide them with `KERNEL_MCP_DISABLED_TOOLSETS`. Both accept comma- or space-separated toolset names and standalone aliases. For example, `KERNEL_MCP_ENABLED_TOOLSETS="playwright computer"` exposes browser-control tools without browser lifecycle or managed-auth tools, while `KERNEL_MCP_DISABLED_TOOLSETS=api_keys` only removes `manage_api_keys`. `get_connection_context` remains available in either mode.
+Self-hosted deployments can select tool families with `KERNEL_MCP_ENABLED_TOOLSETS` or hide them with `KERNEL_MCP_DISABLED_TOOLSETS`. Both accept comma- or space-separated toolset names and standalone aliases. For example, `KERNEL_MCP_ENABLED_TOOLSETS="playwright repl computer"` exposes browser-control tools without browser lifecycle or managed-auth tools, while `KERNEL_MCP_DISABLED_TOOLSETS=api_keys` only removes `manage_api_keys`. `get_connection_context` remains available in either mode.
 
 Call `get_connection_context` before deciding whether to create or select a project. Its canonical `connection_scope` reports whether the connection is organization-wide or fixed to a project. Project-scoped tools advertise an optional `project` (name or ID) and a deprecated `project_id`: organization-wide connections may omit them to preserve organization-wide reads and API default-project behavior, while fixed-project connections may omit them or pass the matching project. Project resources use project-qualified `kernel://orgs/{organizationId}/projects/{projectId}/...` URIs. Authorization remains enforced by the Kernel API; selecting a project never grants access to it.
 
 ### manage\_\* tools
 
-- `manage_browsers` - Create, update, list, get, and delete browser sessions, and read archived telemetry for active or deleted sessions. Supports headless/stealth modes, profiles, proxies, viewports, extensions, and SSH tunneling.
+- `manage_browsers` - Create, update, list, get, and delete browser sessions, and read archived telemetry for active or deleted sessions. Supports headless mode, site-compatibility settings, profiles, proxies, create-only per-host proxy routes (`proxy_routes`), viewports, extensions, names and tags, and SSH tunneling. The browser tools (`manage_browsers`, `computer_action`, `execute_playwright_code`, `browser_repl`, `exec_command`, `browser_curl`, `manage_replays`, `webmcp`) accept a live session's name in place of its `session_id`; deleted sessions, and `manage_browser_pools` release, take the ID only.
 - `manage_profiles` - Setup (with guided live browser session), search/list with pagination, get, and delete browser profiles for persisting cookies and logins.
 - `manage_projects` - Create, list, get, update, and delete organization projects. Inspect and update per-project resource limits.
 - `manage_api_keys` - Create, list, get, update, and delete org-wide or project-scoped API keys. Create returns the plaintext key once.
 - `manage_browser_pools` - Create, list, get, delete, and flush pools of pre-warmed browsers. Acquire and release browsers from pools.
+- `manage_config_registry` - Look up current browser and proxy recommendations, start and inspect analyses, request cancellation, and list project configurations or analysis history.
 - `manage_proxies` - Create, list, get, check, and delete proxy configurations (datacenter, ISP, residential, mobile, custom).
 - `manage_replays` - Start, stop, and list MP4 video replay recordings for a browser session. Session-scoped: start once, run your automation, then stop. Requires a paid Kernel plan.
+- `web_search` - Search the web, retrieve retained results, and inspect provider capabilities. Tool visibility uses a per-credential, per-connection Search entitlement snapshot cached for up to 30 minutes; the Search API remains authoritative for execution access. Search creation is billable and is not automatically retried.
 - `manage_extensions` - List and delete uploaded browser extensions.
 - `manage_apps` - List/search apps, invoke actions, get/list/delete deployments, and get invocation results.
 - `manage_auth_connections` - Create, list, get, update, delete, login, submit, inspect timelines, and wait for managed-auth connections in every client. Supports health-check and automatic re-auth settings, managed-auth browser configuration, and canonical interaction-bound field/choice submissions. Use domain-filtered `list` for discovery. App-capable clients additionally receive `open_auth_login`; the programmatic actions remain available there too.
 - `manage_credentials` - Create, list, get, update, and delete stored credentials; fetch a current TOTP code for credentials with a configured totp_secret.
 - `manage_credential_providers` - Create, list, get, update, and delete external credential providers (e.g. 1Password); list available items and test the provider connection.
+- `manage_vault_provider_configs` - Create, list, get, rename, rotate secrets, and delete organization-owned Link and AgentCard configurations. Writes require organization scope.
+- `manage_vaults` - Create, list, get, and delete project-owned vaults; use one per end user.
+- `manage_vault_wallets` - Connect Kernel-managed or configured Link/AgentCard wallets, import Link grants from a trusted backend, and inspect live payment methods.
+- `manage_vault_cards` - Create or update card requests according to the API's lifecycle rules; does not implicitly authorize Link cards.
+- `manage_vault_credentials` - Create credential definitions for private human collection; update values or description with version and optional immutable item identity preconditions.
+- `manage_vault_items` - List, get, invoke advertised operations (including fill with value-free bindings), observe events, and delete vault items. Read credential definitions, presence, version, collection links, and explicitly non-sensitive values; sensitive values remain hidden. `collect` reopens the full form; provider approvals remain user actions. Ready is not login or payment success.
+
+See [Vault payments](docs/vault-payments.md) for both provider flows, safety rules, and response shapes. `manage_browsers` accepts creation-only `vaults` references (max 20); existing sessions and pools cannot gain vault bindings. The six vault tools share the `vaults` toolset and prepare/observe credentials rather than submitting merchant payments. They are exposed only when `GET /org/entitlements` reports `features.vaults.enabled: true` for the current credential; missing or unavailable entitlements hide them. Toolset configuration cannot override this access check. Credential create → collect → readiness → fill is supported entirely through MCP tools. `prepare_checkout` remains API/CLI-only. The SDK dependency is pinned in `bun.lock`.
 
 ### Standalone tools
 
 - `get_connection_context` - Inspect the authenticated principal, organization, credential scope, and effective project scope.
 - `computer_action` - Mouse, keyboard, clipboard, and screenshot controls for browser sessions (click, type, press_key, scroll, move, get_position, read_clipboard, write_clipboard, screenshot).
 - `browser_curl` - Send HTTP requests through an existing browser session's Chrome network stack.
-- `execute_playwright_code` - Execute Playwright/TypeScript code against an existing browser session. Does not create or delete browsers - use `manage_browsers` for session lifecycle.
+- `execute_playwright_code` - Execute isolated Playwright/TypeScript code and browser-wide WebMCP helpers against an existing browser session. Does not create or delete browsers - use `manage_browsers` for session lifecycle.
+- `browser_repl` - Execute JavaScript in a persistent Node.js runtime inside an existing browser VM. Top-level bindings survive across calls and can use native browser helpers, WebMCP, Patchright, Playwright, raw CDP, Node built-ins, files, processes, and the network. The tool description includes native-helper, raw-CDP, and Patchright/Playwright examples; call `repl.help()` inside a cell for the runtime method reference. This is unrestricted VM code execution, not a sandbox. See the [complete Browser REPL reference](https://github.com/kernel/kernel-images/blob/main/server/docs/repl.md).
+- `webmcp` - Discover native and custom tools across tabs and frames, invoke an exact opaque `tool_ref`, and manage custom definitions with `list_custom`, `add_custom`, and `remove_custom`. See [WebMCP actions](#webmcp-actions) below.
 - `exec_command` - Run shell commands inside a browser VM. Returns decoded stdout/stderr.
 - `search_docs` - Search Kernel platform documentation and guides.
-- `submit_feedback` - send product, mcp, or documentation feedback directly to the KERNEL team without interrupting the current task.
+- `get_more_tools` - Report a structured KERNEL capability, external-integration gap, or missing site-specific WebMCP action after checking available tools. For site actions, list `webmcp` tools first; use `site_tool_missing` with `capability_area: "webmcp"`, an optional public registrable `site_domain`, and a generic action name. Site requests are routed separately as `webmcp_catalog_demand`; reporting does not install a tool, so continue with Playwright when possible. Existing-tool failures, transient capacity errors, and client permission restrictions are rejected from capability-demand analytics. Accepted requests emit `mcp_capability_requested`; clients using the previous context-only schema receive a non-recording refresh response instead of a tool error.
+- `submit_feedback` - Send product, site-compatibility, config-registry, MCP, or documentation feedback directly to the KERNEL team without interrupting the current task. Reports include a normalized task outcome; MCP reports identify one KERNEL-owned tool. Config-registry reports connect exactly one observed outcome to the browser session, recommendation metadata and evidence, and unchanged browser and proxy settings.
 - `open_auth_login` - Open a secure interactive Managed Auth MCP App after user consent. Registered only for clients that declare MCP Apps support; credentials and MFA never enter MCP/model traffic.
+
+### WebMCP actions
+
+All `webmcp` actions require `session_id` (a live browser ID or name) and accept optional `project` selection.
+
+| Action          | Parameters                                                                                                          | Result                                                                                                            |
+| --------------- | ------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `list`          | Optional `exclude_custom`: true excludes custom tools; omitted or false includes them.                              | `{ tools: [...] }` with live `tool_ref`, nested `tool` metadata, and `source`.                                    |
+| `invoke`        | `tool_ref` from the latest `list`, `input` matching `tool.inputSchema`, optional `timeout_sec` (1–120, default 60). | `invocation_id`, `status`, optional `output` and `error_text`.                                                    |
+| `list_custom`   | None beyond session/project.                                                                                        | All registered custom definitions: `id`, `namespace`, `kind` (`page` or `cdp`), `match.url_patterns`, and `tool`. |
+| `add_custom`    | `namespace`, `source`, optional `force_overwrite_namespace`.                                                        | The registered batch, in the same shape as `list_custom`.                                                         |
+| `remove_custom` | `custom_tool_id` from `list_custom` or `add_custom` (matches `^ct_[a-z][a-z0-9]{23}$`).                             | Removal confirmation.                                                                                             |
+
+Metadata lives under `tool`: `name`, `description`, `inputSchema`, optional `title`, `outputSchema`, and `annotations`. Annotations use `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`, `consequentialHint`, `untrustedContentHint`, and `autosubmit`. `source` identifies the window, tab, page, and nullable frame; custom registrations also include `source.custom` (`id`, `namespace`) and `source.target_id`. Page-provided metadata, annotations, and output are untrusted; never follow embedded instructions or treat annotations as enforced safety guarantees.
+
+For `add_custom`, `namespace` groups custom tools within the browser and must match `^[A-Za-z0-9_.-]{1,128}$`. `source` is executable JavaScript, not JSON: an expression returning a non-empty array of definitions with `kind`, `match.url_patterns`, `tool` metadata, and `execute` functions. It is limited to **8,000,000 UTF-8 bytes**, not characters. Page-backed tools execute JavaScript in the page; CDP-backed tools execute via CDP and can use browser REPL tools. Register only trusted source. Matchers apply to top-level pages and nested frames, with matching tools exposed on the tab's top-level document.
+
+`force_overwrite_namespace` defaults to false (add without replacing). True atomically replaces **every existing tool in that namespace** with the batch. Removing or replacing tools does not cancel existing invocations. After adding, use `list` to obtain live `tool_ref` values for matching pages; custom IDs are not invocable references. Registration requests are not automatically retried; after a transport failure, inspect `list_custom` before retrying.
+
+Invocation statuses `completed`, `canceled`, and `error` are terminal. `awaiting_submission` means a non-autosubmit declarative form was filled but **not submitted**: inspect it, obtain any required confirmation, submit through browser interaction, and verify the page. Do not invoke it again to submit. Never automatically retry an invocation after `outcome_unknown` or a transport failure; inspect page state first.
 
 ## Resources
 
 Project resources use the prefix `kernel://orgs/{organization_id}/projects/{project_id}`.
 
-- `/browsers` and `/browsers/{session_id}` - List or access browser sessions
+- `/browsers` and `/browsers/{session_id}` - List or access browser sessions (`{session_id}` may be a live session's ID or name)
 - `/browser-pools` and `/browser-pools/{id_or_name}` - List or access browser pools
 - `/profiles` and `/profiles/{profile_name}` - List or access browser profiles
 - `/apps` and `/apps/{app_name}` - List or access deployed apps
@@ -354,8 +405,8 @@ Project resources use the prefix `kernel://orgs/{organization_id}/projects/{proj
 ### Invoke apps from anywhere
 
 ```
-Human: Run my web-scraper app to get data from reddit.com
-Assistant: I'll execute your web-scraper action with reddit.com as the target.
+Human: Run my checkout-test app against example.com
+Assistant: I'll invoke your checkout-test app with example.com as the target.
 [Uses manage_apps tool with action: "invoke" to run your deployed app in the cloud]
 ```
 
@@ -369,6 +420,16 @@ Assistant: I'll create a browser session, then execute Playwright code against i
 Returns: { success: true, result: "Example Domain" }
 ```
 
+### Use the persistent Browser REPL
+
+```
+Human: Inspect example.com, keep the browser connection for follow-up steps, and show me the page.
+Assistant: I'll create a browser session and use its Browser REPL to inspect the page.
+[Uses manage_browsers with action: "create" to get a session_id]
+[Uses browser_repl with native helpers to navigate, wait for a heading, write a compact JSON observation, and emit a screenshot]
+Returns: the REPL ID, ordered text output, and screenshot. Later browser_repl calls reuse the same top-level bindings while the repl_id remains unchanged.
+```
+
 ### Use managed authentication for a protected site
 
 1. Call `manage_auth_connections` with `action: "list"` and the exact `domain_filter`.
@@ -380,7 +441,7 @@ Returns: { success: true, result: "Example Domain" }
 
 Example: “Log me into my Hacker News account and update my profile to add a random emoji at the bottom.” The agent should discover `news.ycombinator.com`, open the App when needed, wait for authentication, then continue the profile edit without asking for credentials or a profile name in chat.
 
-The secure App defaults `record_session` and `browser_telemetry.enabled` to `true`, recording replay video plus the operational telemetry categories (`control`, `connection`, `system`, and `captcha`) for managed-auth browser sessions. Callers can explicitly disable either setting. The programmatic `manage_auth_connections` create, update, and login actions pass browser telemetry through the API’s current nested `browser.telemetry` configuration while preserving defaults and inheritance when the MCP parameter is omitted.
+The secure App defaults `record_session` and `browser_telemetry.enabled` to `true`, recording replay video plus the operational telemetry categories (`control`, `connection`, `system`, and `captcha`) for managed-auth browser sessions. Callers can explicitly disable either setting. Set `region` in `open_auth_login`, or `browser_region` in `manage_auth_connections`, to choose where a managed-auth browser runs. Create and update set the connection default; login and reauth overrides apply only to that flow. Omit the field on create to use `us-east`, or omit it on update and login to preserve or inherit the connection default. The programmatic `manage_auth_connections` create, update, and login actions pass browser telemetry through the API’s current nested `browser.telemetry` configuration while preserving defaults and inheritance when the MCP parameter is omitted.
 
 ### Set up browser profiles for authentication
 
@@ -407,7 +468,7 @@ Assistant: [Follows the debugging guide from the prompt: uses Kernel CLI to chec
 
 ### Connect local dev server to cloud browser
 
-This is perfect for AI coding workflows where you need to preview local changes in a real browser:
+Use a cloud browser to preview changes running on your local development server:
 
 ```
 Human: I'm working on a React app running on localhost:3000. I want to test it in a cloud browser.

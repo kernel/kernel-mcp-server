@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
@@ -12,73 +12,76 @@ import { paginationParams } from "@/lib/mcp/schemas";
 
 export function registerCredentialProviderTools(server: McpServer) {
   // manage_credential_providers -- Manage external credential providers
-  server.tool(
+  server.registerTool(
     "manage_credential_providers",
-    'Manage external credential providers (e.g. 1Password). "list" returns configured providers, "get" retrieves one by ID, "create" configures a new provider with a service-account token, "update" changes its name/token/priority/enabled/cache_ttl_seconds, "delete" removes it, "list_items" returns available credential items from the provider (e.g. 1Password login items with their paths), and "test" validates the token and lists accessible vaults.',
     {
-      action: z
-        .enum([
-          "list",
-          "get",
-          "create",
-          "update",
-          "delete",
-          "list_items",
-          "test",
-        ])
-        .describe("Operation to perform."),
-      id: z
-        .string()
-        .describe(
-          "(get, update, delete, list_items, test) Credential provider ID.",
-        )
-        .optional(),
-      ...paginationParams,
-      name: z
-        .string()
-        .describe("(create, update) Human-readable name (unique per org).")
-        .optional(),
-      token: z
-        .string()
-        .describe(
-          "(create) Service-account token for the provider. (update) New token to rotate credentials.",
-        )
-        .optional(),
-      provider_type: z
-        .enum(["onepassword"])
-        .describe("(create) Type of credential provider.")
-        .optional(),
-      cache_ttl_seconds: z
-        .number()
-        .int()
-        .describe(
-          "(create, update) How long to cache credential lists (default 300).",
-        )
-        .optional(),
-      enabled: z
-        .boolean()
-        .describe(
-          "(update) Whether the provider is enabled for credential lookups.",
-        )
-        .optional(),
-      priority: z
-        .number()
-        .int()
-        .describe(
-          "(update) Priority order for credential lookups (lower numbers checked first).",
-        )
-        .optional(),
+      description:
+        'Manage external credential providers (e.g. 1Password). "list" returns configured providers, "get" retrieves one by ID, "create" configures a new provider with a service-account token, "update" changes its name/token/priority/enabled/cache_ttl_seconds, "delete" removes it, "list_items" returns available credential items from the provider (e.g. 1Password login items with their paths), and "test" validates the token and lists accessible vaults.',
+      inputSchema: z.object({
+        action: z
+          .enum([
+            "list",
+            "get",
+            "create",
+            "update",
+            "delete",
+            "list_items",
+            "test",
+          ])
+          .describe("Operation to perform."),
+        id: z
+          .string()
+          .describe(
+            "(get, update, delete, list_items, test) Credential provider ID.",
+          )
+          .optional(),
+        ...paginationParams,
+        name: z
+          .string()
+          .describe("(create, update) Human-readable name (unique per org).")
+          .optional(),
+        token: z
+          .string()
+          .describe(
+            "(create) Service-account token for the provider. (update) New token to rotate credentials.",
+          )
+          .optional(),
+        provider_type: z
+          .enum(["onepassword"])
+          .describe("(create) Type of credential provider.")
+          .optional(),
+        cache_ttl_seconds: z
+          .number()
+          .int()
+          .describe(
+            "(create, update) How long to cache credential lists (default 300).",
+          )
+          .optional(),
+        enabled: z
+          .boolean()
+          .describe(
+            "(update) Whether the provider is enabled for credential lookups.",
+          )
+          .optional(),
+        priority: z
+          .number()
+          .int()
+          .describe(
+            "(update) Priority order for credential lookups (lower numbers checked first).",
+          )
+          .optional(),
+      }),
+      annotations: {
+        title: "Manage Kernel credential providers",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    {
-      title: "Manage Kernel credential providers",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      const client = createKernelClient(ctx.http.authInfo.token);
 
       try {
         switch (params.action) {

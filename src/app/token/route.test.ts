@@ -115,6 +115,33 @@ function dependencies({
 }
 
 describe("POST /token", () => {
+  for (const grantType of ["authorization_code", "refresh_token"]) {
+    test.each([
+      "https://mcp.example.test",
+      "https://mcp.example.test/mcp",
+      undefined,
+    ])(
+      `preserves the existing resource %s during ${grantType}`,
+      async (resource) => {
+        const deps = dependencies();
+        const response = await tokenRequest(
+          request({
+            grant_type: grantType,
+            client_id: "client_1",
+            ...(grantType === "authorization_code"
+              ? { code: "code_1", code_verifier: "verifier_1" }
+              : { refresh_token: "refresh-old" }),
+            ...(resource ? { resource } : {}),
+          }),
+          deps.value,
+        );
+        expect(response.status).toBe(200);
+        expect(deps.calls.exchanges).toHaveLength(1);
+        expect(deps.calls.exchanges[0].get("resource")).toBe(resource ?? null);
+      },
+    );
+  }
+
   test("issues an organization-wide token and persists both contexts", async () => {
     const deps = dependencies();
     const response = await tokenRequest(

@@ -1,11 +1,13 @@
 import { MCP_SESSION_HEADER } from "@posthog/mcp";
 import {
   createMcpHandler,
-  experimental_withMcpAuth as withMcpAuth,
-} from "mcp-handler";
+  isLegacyRequest,
+  McpServer,
+} from "@modelcontextprotocol/server";
 import { verifyToken } from "@clerk/nextjs/server";
 import { after, NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
+import { oauthResourceMetadataUrl } from "@/lib/oauth-discovery";
 import {
   captureMcpConnectionScopeFailure,
   flushMcpAnalytics,
@@ -23,7 +25,11 @@ import {
   createMcpTransportSession,
   verifyMcpTransportSession,
 } from "@/lib/mcp-transport-session";
-import { registerMcpCapabilities } from "@/lib/mcp/register";
+import {
+  mcpToolsetEnabledByConfig,
+  registerMcpCapabilities,
+} from "@/lib/mcp/register";
+import { resolveMcpEntitlements } from "@/lib/mcp/entitlements";
 import { name, version } from "../../../server.json";
 
 export async function OPTIONS(_req: NextRequest): Promise<Response> {
@@ -32,11 +38,21 @@ export async function OPTIONS(_req: NextRequest): Promise<Response> {
     headers: {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": `Content-Type, Authorization, ${MCP_SESSION_HEADER}`,
-      "Access-Control-Expose-Headers": MCP_SESSION_HEADER,
+      "Access-Control-Allow-Headers": `Content-Type, Authorization, Accept, MCP-Protocol-Version, Mcp-Method, Mcp-Name, ${MCP_SESSION_HEADER}`,
+      "Access-Control-Expose-Headers": `${MCP_SESSION_HEADER}, WWW-Authenticate`,
     },
   });
 }
+
+const ENTITLEMENT_GATED_TOOLS = new Set([
+  "web_search",
+  "manage_vaults",
+  "manage_vault_wallets",
+  "manage_vault_cards",
+  "manage_vault_credentials",
+  "manage_vault_items",
+  "manage_vault_provider_configs",
+]);
 
 const CORS_HEADERS = {
   "Content-Type": "application/json",
@@ -44,6 +60,23 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
+
+async function requestRequiresMcpEntitlements(req: Request): Promise<boolean> {
+  if (req.method !== "POST") return false;
+  const payload = (await req
+    .clone()
+    .json()
+    .catch(() => null)) as {
+    method?: unknown;
+    params?: { name?: unknown };
+  } | null;
+  if (payload?.method === "tools/list") return true;
+  return (
+    payload?.method === "tools/call" &&
+    typeof payload.params?.name === "string" &&
+    ENTITLEMENT_GATED_TOOLS.has(payload.params.name)
+  );
+}
 
 function errorResponse(
   status: number,
@@ -59,15 +92,17 @@ function errorResponse(
 
 // Helper function to create authentication error response
 function createAuthErrorResponse(
+  req: Request,
   error: string = "invalid_token",
   description: string = "Missing or invalid access token",
 ): Response {
   return errorResponse(401, error, description, {
-    "WWW-Authenticate": `Bearer realm="OAuth", error="${error}", error_description="${description}"`,
+    "WWW-Authenticate": `Bearer realm="OAuth", error="${error}", error_description="${description}", resource_metadata="${oauthResourceMetadataUrl(req)}"`,
   });
 }
 
 export function connectionScopeFailureResponse(
+  req: Request,
   failure: Exclude<McpConnectionContextFailure, { status: "invalid" }>,
 ): Response {
   if (failure.status === "rejected") {
@@ -89,6 +124,7 @@ export function connectionScopeFailureResponse(
         );
       case 401:
         return createAuthErrorResponse(
+          req,
           "invalid_token",
           "The Kernel API rejected this credential",
         );
@@ -102,18 +138,16 @@ export function connectionScopeFailureResponse(
   );
 }
 
-// Handler variants keep per-connection capabilities out of tools/list unless
-// the authenticated connection can use them.
-const serverInfo = { serverInfo: { name, version } };
-function createHandler({ mcpApps = false }: { mcpApps?: boolean } = {}) {
-  return createMcpHandler((server) => {
-    instrumentMcpAnalytics(server);
-    registerMcpCapabilities(server, { mcpApps });
-  }, serverInfo);
-}
-
-const handler = createHandler();
-const mcpAppsHandler = createHandler({ mcpApps: true });
+const handler = createMcpHandler(({ authInfo }) => {
+  const server = new McpServer({ name, version });
+  instrumentMcpAnalytics(server);
+  registerMcpCapabilities(server, {
+    mcpApps: authInfo?.extra?.mcpApps === true,
+    vaults: authInfo?.extra?.vaults === true,
+    search: authInfo?.extra?.search === true,
+  });
+  return server;
+});
 
 type AuthInfoExtra = {
   userId: string | null;
@@ -163,31 +197,43 @@ async function handleMcpRequestWithIdentity({
     if (connection.status === "invalid") {
       throw new Error("Unable to resolve Kernel connection scope");
     }
-    return connectionScopeFailureResponse(connection);
+    return connectionScopeFailureResponse(req, connection);
   }
+  // Resolve entitlements only for tool discovery and gated tool calls.
+  const entitlements = (await requestRequiresMcpEntitlements(req))
+    ? await resolveMcpEntitlements({
+        token,
+        signal: req.signal,
+        cacheIdentity: [
+          authSubject,
+          connection.context.authContext.organization.id,
+          transportSessionId ?? "stateless",
+          token,
+        ].join("\0"),
+      })
+    : { vaults: false, search: false };
+  const { vaults } = entitlements;
+  const search = mcpToolsetEnabledByConfig("search") && entitlements.search;
   const connectionContext = connection.context;
   const connectionAnalytics =
     observeConnection && isMcpAnalyticsEnabled()
       ? connectionAnalyticsFromContext(connectionContext)
       : null;
-  const authHandler = withMcpAuth(
-    mcpApps ? mcpAppsHandler : handler,
-    async () => ({
+  return handler.fetch(req, {
+    authInfo: {
       token,
       scopes,
       clientId: "mcp-server",
       extra: {
         ...authInfoExtra,
+        mcpApps,
+        vaults,
+        search,
         connectionContext,
         connectionAnalytics,
       },
-    }),
-    {
-      required: true,
-      resourceMetadataPath: "/.well-known/oauth-protected-resource/mcp",
     },
-  );
-  return await authHandler(req);
+  });
 }
 
 async function handleAuthenticatedRequest(
@@ -201,6 +247,7 @@ async function handleAuthenticatedRequest(
     : null;
   if (!token) {
     return createAuthErrorResponse(
+      req,
       "invalid_token",
       "Missing or invalid access token",
     );
@@ -229,6 +276,7 @@ async function handleAuthenticatedRequest(
     });
     if (!payload.sub) {
       return createAuthErrorResponse(
+        req,
         "invalid_token",
         "Invalid token: No user ID found in token payload",
       );
@@ -236,6 +284,7 @@ async function handleAuthenticatedRequest(
     userId = payload.sub;
   } catch (authError) {
     return createAuthErrorResponse(
+      req,
       "invalid_token",
       `Invalid token: ${authError instanceof Error ? authError.message : "Authentication failed"}`,
     );
@@ -259,13 +308,32 @@ async function handleAuthenticatedRequest(
   });
 }
 
+function withCors(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set("Access-Control-Allow-Origin", "*");
+  headers.set(
+    "Access-Control-Expose-Headers",
+    `${MCP_SESSION_HEADER}, WWW-Authenticate`,
+  );
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 export async function GET(req: NextRequest): Promise<Response> {
   after(flushMcpAnalytics);
-  return await handleAuthenticatedRequest(req);
+  return withCors(await handleAuthenticatedRequest(req));
 }
 
 export async function POST(req: NextRequest): Promise<Response> {
   after(flushMcpAnalytics);
+
+  // Modern requests carry capabilities per call and must never acquire a session.
+  if (!(await isLegacyRequest(req))) {
+    return withCors(await handleAuthenticatedRequest(req));
+  }
 
   const body = await req.text();
   type InitializeRequest = {
@@ -312,15 +380,16 @@ export async function POST(req: NextRequest): Promise<Response> {
     isInitialize,
   );
 
-  if (!session) return response;
+  if (!session) return withCors(response);
   const headers = new Headers(response.headers);
   if (isStreamableInitialize || headers.has(MCP_SESSION_HEADER)) {
     headers.set(MCP_SESSION_HEADER, session.token);
   }
-  headers.set("Access-Control-Expose-Headers", MCP_SESSION_HEADER);
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
+  return withCors(
+    new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    }),
+  );
 }

@@ -43,7 +43,9 @@ export type BrowserSharedConfigParams = BrowserProfileParams &
   BrowserViewportParams;
 
 export type BrowserUpdateConfigParams = BrowserProfileParams &
-  BrowserViewportUpdateParams;
+  BrowserViewportUpdateParams & {
+    start_url?: string;
+  };
 
 type BrowserProfileConfig = NonNullable<
   | BrowserCreateParams["profile"]
@@ -78,7 +80,7 @@ export type BrowserSharedConfig = Pick<
 
 export type BrowserUpdateConfig = Pick<
   BrowserUpdateParams,
-  "profile" | "viewport"
+  "profile" | "viewport" | "start_url"
 >;
 
 export type BrowserConfigResult<T> =
@@ -240,8 +242,12 @@ export function buildBrowserUpdateConfig(
   const viewport = buildBrowserViewportUpdate(params);
   if (!viewport.ok) return viewport;
 
+  const startUrl = buildBrowserStartUrl(params.start_url);
+  if (!startUrl.ok) return startUrl;
+
   return configValue({
     ...(profile.value && { profile: profile.value }),
     ...(viewport.value && { viewport: viewport.value }),
+    ...(startUrl.value !== undefined && { start_url: startUrl.value }),
   });
 }

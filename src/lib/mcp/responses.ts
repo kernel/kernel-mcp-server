@@ -123,9 +123,26 @@ export function throwToolError(
   toolName: string,
   action: string,
   error: unknown,
+  note?: string,
 ): never {
   throw new ToolCallError(
     errorName(error),
-    `Error in ${toolName} (${action}): ${errorMessage(error)}`,
+    `Error in ${toolName} (${action}): ${errorMessage(error)}${note ? ` ${note}` : ""}`,
+  );
+}
+
+export function throwToolErrorWithApiBody(
+  toolName: string,
+  action: string,
+  error: unknown,
+  fallbackNote?: string,
+): never {
+  const body = error instanceof APIError ? error.error : undefined;
+  const structuredBody = body && typeof body === "object";
+  const detail = structuredBody ? JSON.stringify(body) : errorMessage(error);
+  const note = !structuredBody && fallbackNote ? ` ${fallbackNote}` : "";
+  throw new ToolCallError(
+    errorName(error),
+    `Error in ${toolName} (${action}): ${detail}${note}`,
   );
 }

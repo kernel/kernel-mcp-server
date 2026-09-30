@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { beginAuthLogin } from "./managed-auth-state";
+import type { ManagedAuth } from "@onkernel/sdk/resources/auth/connections";
 import {
   assertNoSecrets,
   connection,
@@ -64,6 +65,28 @@ describe("managed-auth start/resume state machine", () => {
       record_session: true,
       browser: { telemetry: { enabled: true } },
     });
+  });
+
+  test("secure App login forwards the selected region", async () => {
+    const initial = connection({
+      browser: { region: "eu-west" } as NonNullable<ManagedAuth["browser"]> & {
+        region: "eu-west";
+      },
+    });
+    const { client, calls } = fakeClient({ initial });
+    const result = await beginAuthLogin(client, {
+      mode: "new_login",
+      domain: "example.com",
+      profile_name: "work",
+      region: "eu-west",
+    });
+    expect(calls.createParams).toMatchObject({
+      browser: { region: "eu-west" },
+    });
+    expect(calls.loginParams).toMatchObject({
+      browser: { region: "eu-west" },
+    });
+    expect(result.connection.region).toBe("eu-west");
   });
 
   test("secure App login preserves explicit recording opt-outs", async () => {

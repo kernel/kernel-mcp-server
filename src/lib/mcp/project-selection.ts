@@ -1,4 +1,4 @@
-import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
+import type { AuthInfo } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { McpConnectionContext } from "@/lib/mcp/auth-context";
 

@@ -1,4 +1,4 @@
-import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
+import type { AuthInfo } from "@modelcontextprotocol/server";
 
 export function projectScopedAuthInfo(
   projectId = "proj_test",
@@ -48,5 +48,8 @@ export function projectScopedExtra(
   projectId = "proj_test",
   token = "test-token",
 ) {
-  return { authInfo: projectScopedAuthInfo(projectId, "org_test", token) };
+  return {
+    http: { authInfo: projectScopedAuthInfo(projectId, "org_test", token) },
+    mcpReq: { signal: new AbortController().signal, envelope: {} },
+  };
 }

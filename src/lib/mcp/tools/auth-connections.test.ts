@@ -34,12 +34,10 @@ describe("manage_auth_connections programmatic surface", () => {
     expect(schema?.sso_button_selector).toBeDefined();
     expect(schema?.allowed_domains).toBeDefined();
     expect(schema?.login_url).toBeDefined();
-    expect(schema?.credential_name.description).toContain("create, update");
-    expect(schema?.credential_provider.description).toContain("create, update");
-    expect(schema?.credential_path.description).toContain("create, update");
-    expect(schema?.credential_auto.description).toContain("create, update");
     expect(schema?.health_checks).toBeDefined();
     expect(schema?.auto_reauth).toBeDefined();
+    expect(schema?.browser_region.safeParse("eu-west").success).toBe(true);
+    expect(schema?.browser_region.safeParse("emea").success).toBe(false);
     expect(schema?.browser_stealth).toBeDefined();
     expect(schema?.query).toBeDefined();
     expect(schema?.timeline_type).toBeDefined();
@@ -87,6 +85,16 @@ describe("manage_auth_connections programmatic surface", () => {
         ({ name }) => name === "manage_auth_connections",
       );
       const browserTelemetry = tool?.inputSchema.properties?.browser_telemetry;
+      for (const field of [
+        "credential_name",
+        "credential_provider",
+        "credential_path",
+        "credential_auto",
+      ]) {
+        expect(tool?.inputSchema.properties?.[field]).toMatchObject({
+          description: expect.stringContaining("create, update"),
+        });
+      }
 
       expect(browserTelemetry).toBeDefined();
       expect(JSON.stringify(browserTelemetry)).not.toContain('"$ref"');
@@ -131,7 +139,7 @@ describe("manage_auth_connections programmatic surface", () => {
     expect(selectedProject).toBeUndefined();
   });
 
-  test("forwards replay and browser telemetry settings on create and login", async () => {
+  test("forwards browser settings on create and login", async () => {
     const { handler } = captureHandler();
     let createBody: unknown;
     let loginBody: unknown;
@@ -176,6 +184,7 @@ describe("manage_auth_connections programmatic surface", () => {
           domain: "example.com",
           profile_name: "work",
           record_session: true,
+          browser_region: "eu-west",
           browser_telemetry: {
             enabled: true,
             browser: { network: { enabled: true } },
@@ -186,6 +195,7 @@ describe("manage_auth_connections programmatic surface", () => {
       expect(createBody).toMatchObject({
         record_session: true,
         browser: {
+          region: "eu-west",
           telemetry: {
             enabled: true,
             browser: { network: { enabled: true } },
@@ -198,13 +208,17 @@ describe("manage_auth_connections programmatic surface", () => {
           action: "login",
           id: "conn_1",
           record_session: false,
+          browser_region: "ap-southeast",
           browser_telemetry: { enabled: false },
         },
         extra,
       );
       expect(loginBody).toEqual({
         record_session: false,
-        browser: { telemetry: { enabled: false } },
+        browser: {
+          region: "ap-southeast",
+          telemetry: { enabled: false },
+        },
       });
     } finally {
       kernelClientMock.factory = () => unusedKernelClient;
@@ -238,6 +252,7 @@ describe("manage_auth_connections programmatic surface", () => {
           auto_reauth: false,
           save_credentials: false,
           record_session: true,
+          browser_region: "eu-west",
           browser_stealth: false,
           proxy_mode: "direct",
           browser_telemetry: {
@@ -263,6 +278,7 @@ describe("manage_auth_connections programmatic surface", () => {
         save_credentials: false,
         record_session: true,
         browser: {
+          region: "eu-west",
           stealth: false,
           proxy: { mode: "direct" },
           telemetry: {

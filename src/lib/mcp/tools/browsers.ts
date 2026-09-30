@@ -1,5 +1,6 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { NotFoundError } from "@onkernel/sdk";
+import type { McpServer } from "@modelcontextprotocol/server";
+import { NotFoundError, type Kernel } from "@onkernel/sdk";
+import type { BrowserNetworkConfig } from "@onkernel/sdk/resources/browsers/browsers";
 import { z } from "zod";
 import {
   buildBrowserCreateConfig,
@@ -23,6 +24,7 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
+import { browserVaultsSchema } from "@/lib/mcp/vault-schemas";
 import {
   projectForOperation,
   projectSelectionInputSchema,
@@ -431,236 +433,289 @@ export function registerBrowserCapabilities(
   );
 
   // manage_browsers -- Manage browser sessions and read archived telemetry
-  server.tool(
+  server.registerTool(
     "manage_browsers",
-    'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
     {
-      ...projectSelectionInputSchema(),
-      action: z
-        .enum(["create", "update", "list", "get", "get_telemetry", "delete"])
-        .describe("Operation to perform."),
-      session_id: z
-        .string()
-        .describe(
-          "Browser session ID. Required for update, get, get_telemetry, and delete actions.",
-        )
-        .optional(),
-      start_url: z
-        .string()
-        .url()
-        .describe(
-          "(create) URL to open when the browser is created. Navigation is best-effort.",
-        )
-        .optional(),
-      chrome_policy: z
-        .record(z.string(), z.unknown())
-        .describe(
-          "(create) Chrome enterprise policy overrides. Kernel-managed policies such as extensions, proxy, CDP, and automation are blocked by the API.",
-        )
-        .optional(),
-      headless: z
-        .boolean()
-        .describe("(create) Launch without GUI. Faster but no live view.")
-        .optional(),
-      gpu: z
-        .boolean()
-        .describe(
-          "(create) Enable GPU acceleration. Requires Start-Up or Enterprise plan and headless=false.",
-        )
-        .optional(),
-      stealth: z
-        .boolean()
-        .describe("(create) Avoid bot detection. Recommended for scraping.")
-        .optional(),
-      region: z
-        .enum(["us-east", "eu-west"])
-        .describe(
-          "(create) Geographic region for the browser session. Fixed once created; requires Start-Up or Enterprise plan, defaults to us-east. (list) Filter sessions by region.",
-        )
-        .optional(),
-      timeout_seconds: z
-        .number()
-        .int()
-        .min(10)
-        .max(259200)
-        .describe(
-          "(create) Inactivity timeout in seconds (max 259200 = 72h). Default 60.",
-        )
-        .optional(),
-      profile_name: z
-        .string()
-        .describe(
-          "(create, update) Profile name to load saved cookies/logins. Cannot use with profile_id.",
-        )
-        .optional(),
-      profile_id: z
-        .string()
-        .describe(
-          "(create, update) Profile ID to load. Cannot use with profile_name.",
-        )
-        .optional(),
-      save_profile_changes: z
-        .boolean()
-        .describe(
-          "(create, update) Save session changes back to profile on close.",
-        )
-        .optional(),
-      proxy_id: z
-        .string()
-        .describe(
-          "(create, update) Proxy ID for traffic routing. For update, omit to leave unchanged.",
-        )
-        .optional(),
-      clear_proxy: z
-        .boolean()
-        .describe("(update) Remove the current proxy from the browser session.")
-        .optional(),
-      disable_default_proxy: z
-        .boolean()
-        .describe(
-          "(update) For stealth browsers, connect directly instead of using the default stealth proxy.",
-        )
-        .optional(),
-      kiosk_mode: z
-        .boolean()
-        .describe("(create) Hide address bar/tabs in live view.")
-        .optional(),
-      viewport_width: z
-        .number()
-        .int()
-        .min(1)
-        .describe(
-          "(create, update) Window width in pixels. Must pair with viewport_height.",
-        )
-        .optional(),
-      viewport_height: z
-        .number()
-        .int()
-        .min(1)
-        .describe(
-          "(create, update) Window height in pixels. Must pair with viewport_width.",
-        )
-        .optional(),
-      viewport_refresh_rate: z
-        .number()
-        .int()
-        .min(1)
-        .describe("(create, update) Display refresh rate in Hz.")
-        .optional(),
-      viewport_force: z
-        .boolean()
-        .describe(
-          "(update) Force viewport changes even when live view or recording is active.",
-        )
-        .optional(),
-      extension_id: z
-        .string()
-        .describe("(create) Extension ID to load.")
-        .optional(),
-      extension_name: z
-        .string()
-        .describe("(create) Extension name to load.")
-        .optional(),
-      local_forward: z
-        .string()
-        .describe("(create) SSH local forwarding (localport:host:remoteport).")
-        .optional(),
-      remote_forward: z
-        .string()
-        .describe(
-          "(create) SSH remote forwarding (remoteport:host:localport). Use to expose local dev server to browser.",
-        )
-        .optional(),
-      status: z
-        .enum(["active", "deleted", "all"])
-        .describe('(list) Filter by status. Default "active".')
-        .optional(),
-      limit: paginationParams.limit.describe(
-        "(list, get_telemetry) Max results per page (1-100). get_telemetry defaults to 100; the list default is set by the API.",
-      ),
-      offset: paginationParams.offset.describe(
-        "(list) Numeric pagination offset. (get_telemetry) Opaque cursor: pass next_offset from the previous response and preserve categories, until, and order. Do not derive it from event seq values.",
-      ),
-      categories: z
-        .array(z.enum(telemetryEventCategories))
-        .min(1)
-        .describe(
-          `(get_telemetry) Restrict results to these event categories. A filtered page can be empty while has_more is true. ${TELEMETRY_EVENT_CATALOG}`,
-        )
-        .optional(),
-      since: z
-        .string()
-        .describe(
-          "(get_telemetry) Start of the window: an RFC-3339 timestamp or a duration like '30m' meaning that long ago. Defaults to session creation. Ignored when offset is set; cannot be combined with order=desc.",
-        )
-        .optional(),
-      until: z
-        .string()
-        .describe(
-          "(get_telemetry) End of the window (exclusive): an RFC-3339 timestamp or a duration like '5m'. Preserve it while paging.",
-        )
-        .optional(),
-      order: z
-        .enum(["asc", "desc"])
-        .describe(
-          "(get_telemetry) Read direction. asc (default) reads oldest first from session start; desc reads newest first. Prefer desc when diagnosing a recent failure in a long session — it reaches the end without paging. Preserve it while paging.",
-        )
-        .optional(),
-      compact: z
-        .boolean()
-        .describe(
-          "(get_telemetry) Defaults to true. Compact items flatten the event envelope, add an ISO time, and omit data fields named body, headers, post_data, or png plus any data field over 8 KiB; omitted_fields lists removals. An eligible category-filtered compact response includes raw_replay_best_effort arguments targeting the same page start, but late events or retention may change results between calls. Raw mode requires explicit categories and limit<=5, rejects screenshot PNGs, and caps the serialized response at 1 MiB.",
-        )
-        .optional(),
-      telemetry_enabled: z
-        .boolean()
-        .describe(
-          "(create, update) Enable telemetry, or disable telemetry when false. Telemetry is off unless requested. The default category set is the lightweight operational bundle (control, connection, system, captcha) and does NOT include console, network, or page — enable those explicitly when you intend to debug page behavior.",
-        )
-        .optional(),
-      telemetry_console: z
-        .boolean()
-        .describe(
-          "(create, update) Enable or disable console telemetry (console output and uncaught exceptions). Off by default; enable for debugging.",
-        )
-        .optional(),
-      telemetry_network: z
-        .boolean()
-        .describe(
-          "(create, update) Enable or disable network telemetry (request/response metadata). Off by default; enable for debugging.",
-        )
-        .optional(),
-      telemetry_page: z
-        .boolean()
-        .describe(
-          "(create, update) Enable or disable page lifecycle telemetry (navigation, load, layout shifts, LCP). Off by default; enable for debugging.",
-        )
-        .optional(),
-      telemetry_interaction: z
-        .boolean()
-        .describe(
-          "(create, update) Enable or disable user interaction telemetry (clicks, keys, scrolls). Off by default; enable for debugging.",
-        )
-        .optional(),
+      description:
+        'Manage browser sessions and their archived telemetry. Use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished. Live sessions can be addressed by ID or by the name given at creation or set on update; deleted sessions only by ID. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
+      inputSchema: z.object({
+        ...projectSelectionInputSchema(),
+        action: z
+          .enum(["create", "update", "list", "get", "get_telemetry", "delete"])
+          .describe("Operation to perform."),
+        session_id: z
+          .string()
+          .describe(
+            "Browser session ID or name. Required for update, get, get_telemetry, and delete actions. A name resolves only a live session; for a deleted session (get_telemetry) pass its ID.",
+          )
+          .optional(),
+        name: z
+          .string()
+          .describe(
+            "(create, update) Human-readable session name, unique among active sessions in the project. 1-255 chars of letters, digits, '.', '_' or '-', and not a cuid-like ID. While the session is live it can be passed as session_id to the browser tools (manage_browsers, computer_action, execute_playwright_code, browser_repl, exec_command, browser_curl, manage_replays, webmcp). On update, an empty string clears the name.",
+          )
+          .optional(),
+        tags: z
+          .record(z.string(), z.string())
+          .describe(
+            "(create, update) Key-value tags for grouping sessions. Up to 50 pairs. On update, an empty object clears all tags. (list) Return only sessions carrying all of these tags.",
+          )
+          .optional(),
+        query: z
+          .string()
+          .describe(
+            "(list) Text filter matched against session name, session ID, profile name or ID, proxy ID, or pool name.",
+          )
+          .optional(),
+        start_url: z
+          .string()
+          .url()
+          .describe(
+            "(create) URL to open when the browser is created, or (update) URL to navigate to after applying the update. When a profile is loaded in the same update, this overrides the profile's restored tabs. Navigation is best-effort.",
+          )
+          .optional(),
+        vaults: browserVaultsSchema,
+        chrome_policy: z
+          .record(z.string(), z.unknown())
+          .describe(
+            "(create) Chrome enterprise policy overrides. Kernel-managed policies such as extensions, proxy, CDP, and automation are blocked by the API.",
+          )
+          .optional(),
+        headless: z
+          .boolean()
+          .describe("(create) Launch without GUI. Faster but no live view.")
+          .optional(),
+        gpu: z
+          .boolean()
+          .describe(
+            "(create) Enable GPU acceleration. Requires Start-Up or Enterprise plan and headless=false.",
+          )
+          .optional(),
+        stealth: z
+          .boolean()
+          .describe(
+            "(create) apply KERNEL site-compatibility browser settings. use only on sites and accounts the user is authorized to access.",
+          )
+          .optional(),
+        region: z
+          .enum(["us-east", "eu-west"])
+          .describe(
+            "(create) Geographic region for the browser session. Fixed once created; requires Start-Up or Enterprise plan, defaults to us-east. (list) Filter sessions by region.",
+          )
+          .optional(),
+        timeout_seconds: z
+          .number()
+          .int()
+          .min(10)
+          .max(259200)
+          .describe(
+            "(create) Inactivity timeout in seconds (max 259200 = 72h). Default 60.",
+          )
+          .optional(),
+        profile_name: z
+          .string()
+          .describe(
+            "(create, update) Profile name to load saved cookies/logins. Cannot use with profile_id.",
+          )
+          .optional(),
+        profile_id: z
+          .string()
+          .describe(
+            "(create, update) Profile ID to load. Cannot use with profile_name.",
+          )
+          .optional(),
+        save_profile_changes: z
+          .boolean()
+          .describe(
+            "(create, update) Save session changes back to profile on close.",
+          )
+          .optional(),
+        proxy_id: z
+          .string()
+          .describe(
+            "(create, update) Proxy ID for traffic routing. For update, omit to leave unchanged.",
+          )
+          .optional(),
+        proxy_routes: z
+          .array(
+            z.object({
+              hosts: z.array(z.string().min(1)).min(1).max(50),
+              proxy_id: z.string().min(1).optional(),
+              proxy_name: z.string().min(1).optional(),
+            }),
+          )
+          .max(10)
+          .describe(
+            '(create only) Route requests for 1–50 host patterns per route through a proxy selected by exactly one of proxy_id or proxy_name (max 10 routes). Use exact hostnames or leading "*." wildcards, which match subdomains only, not the apex. Matching ignores case and ports; the most specific match wins. Matched hosts override the top-level proxy; unmatched hosts use the top-level proxy or the browser default. start_url uses the top-level proxy, not routes. If a route proxy is unavailable, matched requests fail closed.',
+          )
+          .optional(),
+        clear_proxy: z
+          .boolean()
+          .describe(
+            "(update) Remove the current proxy from the browser session.",
+          )
+          .optional(),
+        disable_default_proxy: z
+          .boolean()
+          .describe(
+            "(update) Connect directly instead of through the session's default KERNEL-managed proxy.",
+          )
+          .optional(),
+        kiosk_mode: z
+          .boolean()
+          .describe("(create) Hide address bar/tabs in live view.")
+          .optional(),
+        viewport_width: z
+          .number()
+          .int()
+          .min(1)
+          .describe(
+            "(create, update) Window width in pixels. Must pair with viewport_height.",
+          )
+          .optional(),
+        viewport_height: z
+          .number()
+          .int()
+          .min(1)
+          .describe(
+            "(create, update) Window height in pixels. Must pair with viewport_width.",
+          )
+          .optional(),
+        viewport_refresh_rate: z
+          .number()
+          .int()
+          .min(1)
+          .describe("(create, update) Display refresh rate in Hz.")
+          .optional(),
+        viewport_force: z
+          .boolean()
+          .describe(
+            "(update) Force viewport changes even when live view or recording is active.",
+          )
+          .optional(),
+        extension_id: z
+          .string()
+          .describe("(create) Extension ID to load.")
+          .optional(),
+        extension_name: z
+          .string()
+          .describe("(create) Extension name to load.")
+          .optional(),
+        local_forward: z
+          .string()
+          .describe(
+            "(create) SSH local forwarding (localport:host:remoteport).",
+          )
+          .optional(),
+        remote_forward: z
+          .string()
+          .describe(
+            "(create) SSH remote forwarding (remoteport:host:localport). Use to expose local dev server to browser.",
+          )
+          .optional(),
+        status: z
+          .enum(["active", "deleted", "all"])
+          .describe('(list) Filter by status. Default "active".')
+          .optional(),
+        limit: paginationParams.limit.describe(
+          "(list, get_telemetry) Max results per page (1-100). get_telemetry defaults to 100; the list default is set by the API.",
+        ),
+        offset: paginationParams.offset.describe(
+          "(list) Numeric pagination offset. (get_telemetry) Opaque cursor: pass next_offset from the previous response and preserve categories, until, and order. Do not derive it from event seq values.",
+        ),
+        categories: z
+          .array(z.enum(telemetryEventCategories))
+          .min(1)
+          .describe(
+            `(get_telemetry) Restrict results to these event categories. A filtered page can be empty while has_more is true. ${TELEMETRY_EVENT_CATALOG}`,
+          )
+          .optional(),
+        since: z
+          .string()
+          .describe(
+            "(get_telemetry) Start of the window: an RFC-3339 timestamp or a duration like '30m' meaning that long ago. Defaults to session creation. Ignored when offset is set; cannot be combined with order=desc.",
+          )
+          .optional(),
+        until: z
+          .string()
+          .describe(
+            "(get_telemetry) End of the window (exclusive): an RFC-3339 timestamp or a duration like '5m'. Preserve it while paging.",
+          )
+          .optional(),
+        order: z
+          .enum(["asc", "desc"])
+          .describe(
+            "(get_telemetry) Read direction. asc (default) reads oldest first from session start; desc reads newest first. Prefer desc when diagnosing a recent failure in a long session — it reaches the end without paging. Preserve it while paging.",
+          )
+          .optional(),
+        compact: z
+          .boolean()
+          .describe(
+            "(get_telemetry) Defaults to true. Compact items flatten the event envelope, add an ISO time, and omit data fields named body, headers, post_data, or png plus any data field over 8 KiB; omitted_fields lists removals. An eligible category-filtered compact response includes raw_replay_best_effort arguments targeting the same page start, but late events or retention may change results between calls. Raw mode requires explicit categories and limit<=5, rejects screenshot PNGs, and caps the serialized response at 1 MiB.",
+          )
+          .optional(),
+        telemetry_enabled: z
+          .boolean()
+          .describe(
+            "(create, update) Enable telemetry, or disable telemetry when false. Telemetry is off unless requested. The default category set is the lightweight operational bundle (control, connection, system, captcha) and does NOT include console, network, or page — enable those explicitly when you intend to debug page behavior.",
+          )
+          .optional(),
+        telemetry_console: z
+          .boolean()
+          .describe(
+            "(create, update) Enable or disable console telemetry (console output and uncaught exceptions). Off by default; enable for debugging.",
+          )
+          .optional(),
+        telemetry_network: z
+          .boolean()
+          .describe(
+            "(create, update) Enable or disable network telemetry (request/response metadata). Off by default; enable for debugging.",
+          )
+          .optional(),
+        telemetry_page: z
+          .boolean()
+          .describe(
+            "(create, update) Enable or disable page lifecycle telemetry (navigation, load, layout shifts, LCP). Off by default; enable for debugging.",
+          )
+          .optional(),
+        telemetry_interaction: z
+          .boolean()
+          .describe(
+            "(create, update) Enable or disable user interaction telemetry (clicks, keys, scrolls). Off by default; enable for debugging.",
+          )
+          .optional(),
+      }),
+      annotations: {
+        title: "Manage Kernel browser sessions",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
     },
-    {
-      title: "Manage Kernel browser sessions",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
       const client = dependencies.createKernelClient(
-        extra.authInfo.token,
-        projectForOperation(extra.authInfo, params),
+        ctx.http.authInfo.token,
+        projectForOperation(ctx.http.authInfo, params),
       );
 
       try {
+        if (params.vaults !== undefined && params.action !== "create") {
+          return errorResponse(
+            "Vault bindings are creation-only; they cannot be added to an existing browser.",
+          );
+        }
+        if (params.proxy_routes !== undefined && params.action !== "create") {
+          return errorResponse(
+            "Proxy routes are creation-only; they cannot be added to an existing browser.",
+          );
+        }
         switch (params.action) {
           case "create": {
-            const createParams: BrowserCreateParams = {};
+            const createParams: Kernel.BrowserCreateParams = {};
+            if (params.vaults !== undefined)
+              createParams.vaults = params.vaults;
             if (params.headless !== undefined)
               createParams.headless = params.headless;
             if (params.gpu !== undefined) createParams.gpu = params.gpu;
@@ -679,6 +734,30 @@ export function registerBrowserCapabilities(
               createParams.chrome_policy = params.chrome_policy;
             }
             if (params.proxy_id) createParams.proxy_id = params.proxy_id;
+            if (params.proxy_routes !== undefined) {
+              const proxyRoutes: Array<BrowserNetworkConfig.ProxyRoute> = [];
+              for (const {
+                hosts,
+                proxy_id,
+                proxy_name,
+              } of params.proxy_routes) {
+                if (Boolean(proxy_id) === Boolean(proxy_name)) {
+                  return errorResponse(
+                    "Error: each proxy route requires exactly one of proxy_id or proxy_name.",
+                  );
+                }
+                proxyRoutes.push({
+                  hosts,
+                  proxy: proxy_id ? { id: proxy_id } : { name: proxy_name },
+                });
+              }
+              createParams.network = {
+                ...createParams.network,
+                proxy_routes: proxyRoutes,
+              };
+            }
+            if (params.name !== undefined) createParams.name = params.name;
+            if (params.tags !== undefined) createParams.tags = params.tags;
             const browserConfig = buildBrowserCreateConfig(params);
             if (!browserConfig.ok) return errorResponse(browserConfig.error);
             Object.assign(createParams, browserConfig.value);
@@ -687,7 +766,12 @@ export function registerBrowserCapabilities(
             if (telemetry.value !== undefined)
               createParams.telemetry = telemetry.value;
 
-            const browser = await client.browsers.create(createParams);
+            const browser = await client.browsers.create(
+              createParams,
+              params.vaults?.length
+                ? { maxRetries: 0, signal: ctx.mcpReq.signal }
+                : undefined,
+            );
             if (!browser)
               return errorResponse("Failed to create browser session");
 
@@ -723,6 +807,8 @@ export function registerBrowserCapabilities(
             } else if (params.proxy_id !== undefined) {
               updateParams.proxy_id = params.proxy_id;
             }
+            if (params.name !== undefined) updateParams.name = params.name;
+            if (params.tags !== undefined) updateParams.tags = params.tags;
             const browserConfig = buildBrowserUpdateConfig(params);
             if (!browserConfig.ok) return errorResponse(browserConfig.error);
             Object.assign(updateParams, browserConfig.value);
@@ -752,6 +838,8 @@ export function registerBrowserCapabilities(
             const page = await client.browsers.list({
               ...(params.status && { status: params.status }),
               ...(params.region && { region: params.region }),
+              ...(params.query && { query: params.query }),
+              ...(params.tags !== undefined && { tags: params.tags }),
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });

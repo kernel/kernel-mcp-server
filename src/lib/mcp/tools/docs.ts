@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { errorResponse } from "@/lib/mcp/responses";
 
@@ -10,24 +10,27 @@ interface MintlifySearchResult {
 
 export function registerDocsTools(server: McpServer) {
   // search_docs -- Search Kernel platform documentation
-  server.tool(
+  server.registerTool(
     "search_docs",
-    "Search Kernel platform documentation for guides, tutorials, and API references. Use when you need to understand how Kernel features work or troubleshoot issues.",
     {
-      query: z
-        .string()
-        .describe(
-          'Natural language search query (e.g., "how to deploy an app", "browser automation examples").',
-        ),
+      description:
+        "Search Kernel platform documentation for guides, tutorials, and API references. Use when you need to understand how Kernel features work or troubleshoot issues.",
+      inputSchema: z.object({
+        query: z
+          .string()
+          .describe(
+            'Natural language search query (e.g., "how to deploy an app", "browser automation examples").',
+          ),
+      }),
+      annotations: {
+        title: "Search Kernel documentation",
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
     },
-    {
-      title: "Search Kernel documentation",
-      readOnlyHint: true,
-      destructiveHint: false,
-      idempotentHint: true,
-      openWorldHint: false,
-    },
-    async ({ query }, extra) => {
+    async ({ query }, ctx) => {
       if (
         !process.env.MINTLIFY_ASSISTANT_API_TOKEN ||
         !process.env.MINTLIFY_DOMAIN
