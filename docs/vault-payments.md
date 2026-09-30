@@ -129,7 +129,8 @@ prefer `collect` for human edits. Requests are not automatically retried.
 
 Before creating anything, list the vault and reuse a ready credential whose
 `spec.requests.entries` websites cover the login page, or a connected
-`credential_account` the owner confirms is theirs. If none fits, ask where the
+`credential_account`. A `credential_account` belongs to one vault, so each end
+user's vault connects its own 1Password account. If none fits, ask where the
 user's login lives, for example: "Is your example.com login saved in your own
 1Password, or would you rather enter it in a secure Kernel form?" 1Password
 supports only logins in the owner's own non-shared vault, not shared-vault items or
@@ -139,8 +140,7 @@ passkeys; use Kernel-hosted collection for those, or when the user declines
 1. Connect the account with `manage_vault_credentials`, `action: "connect_account"`,
    `provider: "1password"`, the user's vault, and a new key. Give the returned
    1Password authorization URL only to the account owner, outside the
-   agent-controlled browser; they verify the account on the consent screen. If the
-   account later reports `declined` or `reconnect_required`, connect again on the
+   agent-controlled browser, to complete 1Password consent. If the account later reports `declined` or `reconnect_required`, connect again on the
    same key. When `1pw_recover` is advertised, Kernel can recover a failed account
    link: after explicit user approval, invoke it, give the returned link to the
    account owner the same way, and connect again on the same key once recovery
@@ -166,8 +166,10 @@ passkeys; use Kernel-hosted collection for those, or when the user declines
    the account owner. 1Password credentials store no values or selectors and cannot
    be updated.
 
-3. With a browser created with the vault attached, and after explicit user approval,
-   invoke the advertised `1pw_create_access_request` with `inputs: {"browser_id": "..."}`.
+3. Create a browser with the vault attached before asking the owner to approve
+   anything: the approval link exists only after this request. After explicit user
+   approval, invoke the advertised `1pw_create_access_request` with
+   `inputs: {"browser_id": "..."}`.
    Kernel loads the 1Password extension into that browser on demand. Request-time
    `reason` and `keywords` apply only to a single-login credential.
 4. Approval is a human action in the account owner's 1Password app. The pending item
@@ -177,9 +179,9 @@ passkeys; use Kernel-hosted collection for those, or when the user declines
    choose, approve, or deny the login there. The link grants nothing until they
    approve, but it identifies the request, so the agent must never open, decode, or
    approve it. MCP forwards only links in that exact native form, without the API's
-   free-text instructions, and never returns access-request IDs, provider paths or
-   identities, or OAuth tokens. Invoke the advertised `1pw_access_request_status`
-   with `browser_id` to observe the decision.
+   free-text instructions. Invoke the advertised `1pw_access_request_status` with
+   `browser_id` to observe the decision; it only reads status, so its hint has
+   `requires_user_approval: false`.
    - `declined`: the owner denied the request. Do not request again unless they
      ask; offer Kernel-hosted collection.
    - `failed`: a confirmed failure. Ask the end-user before deleting and recreating
@@ -528,7 +530,8 @@ A reusable card remaining `ready` does not establish that the last payment succe
   There is no raw-output or raw-card tool.
 - `hints.observation` contains `{tool, arguments}` entries for non-blocking `get`
   and `events` calls. `hints.invocation` contains only currently advertised
-  operations, each with `requires_user_approval: true`. Hints preserve the resolved
+  operations, each with `requires_user_approval: true` except the read-only
+  `1pw_access_request_status`. Hints preserve the resolved
   project selector (when present), vault, and item key. Pass `tool` as the MCP
   call's `name` and `arguments` unchanged. Provider-hosted actions remain separate
   in `item.action` and approval URLs; they are not callable operation hints.

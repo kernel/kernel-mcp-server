@@ -125,8 +125,17 @@ describe("1Password vault credentials", () => {
       expect(items).toContain("1pw_create_access_request");
       expect(items).toContain("1pw_access_request_status");
       expect(items).toContain("recover a failed account link");
+      expect(items).toContain("so create the browser first");
+      expect(credentials).toContain(
+        "no approval link exists before that request",
+      );
+      expect(descriptionOf("manage_vaults")).toContain(
+        "create a browser with this vault attached, then request access",
+      );
       for (const { description } of tools) {
         expect(description).not.toContain("reconcile_access");
+        expect(description).not.toContain("never returns access-request IDs");
+        expect(description).not.toMatch(/confirms it is their account/);
         expect(description).not.toMatch(/Family/i);
       }
       expect(fixture.requests).toEqual([]);
@@ -356,6 +365,12 @@ describe("1Password vault credentials", () => {
       expect(result.guidance.join(" ")).toContain(
         "account set to this item's key",
       );
+      expect(result.guidance.join(" ")).toContain(
+        "another end user's vault needs its own connection",
+      );
+      expect(result.guidance.join(" ")).not.toContain(
+        "their 1Password account",
+      );
     } finally {
       await fixture.close();
     }
@@ -467,7 +482,19 @@ describe("1Password vault credentials", () => {
       expect(guidance).toContain("never open it in a browser");
       expect(guidance).toContain('action: "invoke"');
       expect(guidance).toContain('operation: "1pw_access_request_status"');
+      expect(guidance).toContain("needs no user approval");
+      expect(guidance).toContain(
+        "Create that browser before requesting access",
+      );
       expect(guidance).not.toContain("collection URL");
+      expect(result.hints.invocation).toEqual([
+        expect.objectContaining({
+          arguments: expect.objectContaining({
+            operation: "1pw_access_request_status",
+          }),
+          requires_user_approval: false,
+        }),
+      ]);
     } finally {
       await fixture.close();
     }
