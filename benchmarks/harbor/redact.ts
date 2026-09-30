@@ -319,6 +319,7 @@ export function collectSensitiveValues(value: unknown): string[] {
   const collectString = (text: string) => {
     for (const assignment of sensitiveAssignments(text)) {
       if (assignment.value.length >= 4) values.add(assignment.value);
+      if (/^[{[]/.test(assignment.value)) collectString(assignment.value);
     }
     for (const typedValue of typedCallValues(text)) {
       if (typedValue.length >= 4) values.add(typedValue);
