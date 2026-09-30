@@ -400,7 +400,7 @@ export function registerSearchTools(
                   body: params.contents,
                   signal: ctx.mcpReq.signal,
                   maxRetries: 0,
-                  timeout: (params.contents.timeout_ms ?? 30000) + 10000,
+                  timeout: (params.contents.timeout_ms ?? 60000) + 10000,
                 },
               ),
             );
