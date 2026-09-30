@@ -13,10 +13,7 @@ there is no per-item test flag. AgentCard configuration responses report the
 introspected `test_mode`. A development or staging MCP endpoint does not make a
 card request a test transaction.
 
-<!-- TODO: replace the temporary stlc preview pin below with the official @onkernel/sdk release that includes 1Password vault credentials. -->
-
-The Node SDK dependency is temporarily pinned to the stlc development preview
-`kernel-node-sdk-staging@be64af0301e30156e15529856b5107efc258964c` in `bun.lock`.
+The released Node SDK dependency is pinned in `bun.lock`.
 
 ## Credential collection and observation
 
