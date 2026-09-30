@@ -76,6 +76,33 @@ describe("web_search", () => {
     }
   });
 
+  test("fetches selected retained search content without retrying", async () => {
+    const f = await fixture();
+    const contents = {
+      limit: 2,
+      content: { source: "browser", format: "markdown" },
+    };
+    try {
+      const result = await f.client.callTool({
+        name: "web_search",
+        arguments: {
+          action: "contents",
+          search_id: "id/with?reserved",
+          contents,
+        },
+      });
+      expect(result.isError).not.toBe(true);
+      expect(f.requests).toHaveLength(1);
+      expect(f.requests[0].method).toBe("POST");
+      expect(f.requests[0].url).toBe(
+        "https://api.example.test/search/id%2Fwith%3Freserved/contents",
+      );
+      expect(await f.requests[0].json()).toEqual(contents);
+    } finally {
+      await f.close();
+    }
+  });
+
   test.each([
     {
       args: { action: "get", search_id: "id/with?reserved" },
@@ -103,6 +130,17 @@ describe("web_search", () => {
   test.each([
     { action: "create" },
     { action: "get" },
+    { action: "contents", search_id: "srch_test" },
+    {
+      action: "contents",
+      search_id: "srch_test",
+      contents: { limit: 1, result_ids: ["r1"] },
+    },
+    {
+      action: "contents",
+      search_id: "srch_test",
+      contents: { limit: 1, content: { browser: { browser_id: "b1" } } },
+    },
     { action: "providers", project: "proj_other" },
     { action: "create", request: { query: "" } },
     { action: "create", request: { query: "test", max_results: 101 } },
