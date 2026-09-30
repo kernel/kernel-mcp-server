@@ -99,6 +99,7 @@ describe("MCP credential flow", () => {
                   spec: { fields: { username: { value: target.vault } } },
                 }
               : {
+                  provider: "kernel",
                   spec: {
                     ...spec,
                     fields: spec.fields.map((field) =>
@@ -387,6 +388,7 @@ describe("MCP credential flow", () => {
         await fixture.call("manage_vault_credentials", {
           ...target,
           action: "create",
+          provider: "kernel",
           spec,
         }),
       );
@@ -474,6 +476,7 @@ describe("MCP credential flow", () => {
       const result = await fixture.call("manage_vault_credentials", {
         ...target,
         action: "create",
+        provider: "kernel",
         spec: {
           ...spec,
           fields: [
@@ -525,6 +528,7 @@ describe("MCP credential flow", () => {
           action,
           ...(action === "create"
             ? {
+                provider: "kernel",
                 spec: {
                   fields: [
                     {
@@ -636,7 +640,7 @@ describe("MCP credential flow", () => {
                   action: operation,
                   ...(operation === "update"
                     ? { version: 2, spec: { description: "Example" } }
-                    : { spec }),
+                    : { provider: "kernel", spec }),
                 });
           expect(result.isError).toBe(true);
           expect(JSON.stringify(result)).toContain(
