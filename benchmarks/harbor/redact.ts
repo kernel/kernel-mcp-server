@@ -54,7 +54,7 @@ function sensitiveField(key: string): boolean {
 }
 
 const SENSITIVE_ASSIGNMENT =
-  /(["']?)([a-z0-9_-]+)\1(\s*[:=]\s*)(?:(["'])((?:\\.|(?!\4)[\s\S])*)\4|([^"'\s,}&]+))/gi;
+  /(["']?)([a-z0-9_-]+)\1(\s*[:=]\s*)(?:(["'])((?:\\[\s\S]|(?!\4)[^\\])*)\4|([^"'\s,}&]+))/gi;
 const SENSITIVE_QUERY_VALUE = /([?&])([a-z0-9_-]+)=([^&#\s]+)/gi;
 const SENSITIVE_QUERY_ONLY_FIELDS = new Set(["auth", "code"]);
 
@@ -62,10 +62,15 @@ function redactSensitiveAssignments(value: string): string {
   return value
     .replace(
       SENSITIVE_ASSIGNMENT,
-      (match, keyQuote, key, separator, valueQuote) =>
-        sensitiveField(key)
-          ? `${keyQuote}${key}${keyQuote}${separator}${valueQuote ?? ""}${REDACTED}${valueQuote ?? ""}`
-          : match,
+      (match, keyQuote, key, separator, valueQuote, quotedValue) => {
+        if (sensitiveField(key)) {
+          return `${keyQuote}${key}${keyQuote}${separator}${valueQuote ?? ""}${REDACTED}${valueQuote ?? ""}`;
+        }
+        if (valueQuote) {
+          return `${keyQuote}${key}${keyQuote}${separator}${valueQuote}${redactSensitiveAssignments(quotedValue)}${valueQuote}`;
+        }
+        return match;
+      },
     )
     .replace(SENSITIVE_QUERY_VALUE, (match, prefix, key) =>
       sensitiveField(key) ||
@@ -232,6 +237,8 @@ export function collectSensitiveValues(value: unknown): string[] {
       const value = match[5] ?? match[6];
       if (sensitiveField(match[2]) && value.length >= 4) {
         values.add(value);
+      } else if (match[4]) {
+        collectString(value);
       }
     }
     for (const typedValue of typedCallValues(text)) {
@@ -259,6 +266,47 @@ export function collectSensitiveValues(value: unknown): string[] {
       )) {
         visit(child, childKey);
       }
+    }
+  };
+  visit(value);
+  return [...values].sort((left, right) => right.length - left.length);
+}
+
+const PRIVATE_INFO_CONTEXTS = new Set([
+  "financial",
+  "government_ids",
+  "insurance",
+]);
+const PRIVATE_INFO_IDENTIFIERS = new Set([
+  "number",
+  "number_formatted",
+  "sin",
+  "transit_number",
+]);
+
+export function collectPrivateInfoValues(value: unknown): string[] {
+  const values = new Set(collectSensitiveValues(value));
+  const visit = (entry: unknown, inSensitiveContext = false): void => {
+    if (Array.isArray(entry)) {
+      for (const item of entry) visit(item, inSensitiveContext);
+      return;
+    }
+    if (entry === null || typeof entry !== "object") return;
+    for (const [key, child] of Object.entries(
+      entry as Record<string, unknown>,
+    )) {
+      const normalized = normalizedField(key);
+      const childContext =
+        inSensitiveContext || PRIVATE_INFO_CONTEXTS.has(normalized);
+      if (
+        childContext &&
+        PRIVATE_INFO_IDENTIFIERS.has(normalized) &&
+        typeof child === "string" &&
+        child.length >= 4
+      ) {
+        values.add(child);
+      }
+      visit(child, childContext);
     }
   };
   visit(value);
@@ -357,6 +405,9 @@ function assertSafeString(value: string): void {
       throw new Error(
         "Braintrust payload still contains a sensitive field value",
       );
+    }
+    if (!sensitiveField(match[2]) && match[4]) {
+      assertSafeString(match[5]);
     }
   }
   for (const secret of secretValues()) {

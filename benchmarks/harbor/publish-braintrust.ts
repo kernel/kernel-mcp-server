@@ -13,6 +13,7 @@ import {
 } from "./results";
 import {
   assertSafeToPublish,
+  collectPrivateInfoValues,
   collectSensitiveValues,
   privateInfoRead,
   redactString,
@@ -265,9 +266,9 @@ function privateInfoValues(steps: AtifStep[]): string[] {
       try {
         privateInfo = JSON.parse(observation.content);
       } catch {
-        // collectSensitiveValues also handles key/value pairs in non-JSON output.
+        // The collector also handles key/value pairs in non-JSON output.
       }
-      for (const value of collectSensitiveValues(privateInfo)) {
+      for (const value of collectPrivateInfoValues(privateInfo)) {
         values.add(value);
       }
     }

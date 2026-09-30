@@ -626,14 +626,15 @@ describe("Harbor result ingestion", () => {
               {
                 source_call_id: "private-read",
                 content:
-                  '{"name":"Close Window","width":"1208","account_number":"12345678"}',
+                  '{"name":"Close Window","width":"1208","account_number":"12345678","government_ids":{"passport":{"number":"JK456789"},"drivers_license":{"number":"G4567-89018-05501"},"health_card":{"number":"6789-012-345"},"sin":"472-345-678"},"financial":{"bank_accounts":[{"transit_number":"10202"}],"credit_cards":[{"number":"4519873424604532"}]}}',
               },
             ],
           },
         },
         {
           source: "agent",
-          message: "Close Window width 1208 account 12345678",
+          message:
+            "Close Window width 1208 account 12345678 passport JK456789 licence G4567-89018-05501 health 6789-012-345 sin 472-345-678 transit 10202 card 4519873424604532",
         },
       ],
     });
@@ -643,7 +644,7 @@ describe("Harbor result ingestion", () => {
     ).filter((event) => event.span_attributes.type === "llm");
 
     expect(llmEvents[1].output).toBe(
-      "Close Window width 1208 account [REDACTED]",
+      "Close Window width 1208 account [REDACTED] passport [REDACTED] licence [REDACTED] health [REDACTED] sin [REDACTED] transit [REDACTED] card [REDACTED]",
     );
   });
 });
@@ -753,6 +754,29 @@ describe("Braintrust redaction", () => {
       "camel-secret-value",
     ]) {
       expect(text).not.toContain(secret);
+    }
+  });
+
+  test("redacts nested and unterminated sensitive assignments", () => {
+    const nested =
+      '{"success": true, "result": "Account created.\\nTemporary password: Hunter2Pass"}';
+    const unterminated =
+      '{"text": "Step 1...' +
+      "\\n".repeat(30) +
+      "...password: Unterminated2Pass";
+
+    for (const [source, secret] of [
+      [nested, "Hunter2Pass"],
+      [unterminated, "Unterminated2Pass"],
+    ]) {
+      const redacted = redactString(source);
+      expect(redacted).not.toContain(secret);
+      expect(redacted).toContain("password: [REDACTED]");
+      expect(collectSensitiveValues(source)).toContain(secret);
+      expect(() => assertSafeToPublish(redacted)).not.toThrow();
+      expect(() => assertSafeToPublish(source)).toThrow(
+        "sensitive field value",
+      );
     }
   });
 
