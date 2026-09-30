@@ -764,14 +764,19 @@ describe("Braintrust redaction", () => {
       '{"text": "Step 1...' +
       "\\n".repeat(30) +
       "...password: Unterminated2Pass";
+    const escapedNested =
+      '{"success":true,"result":"{\\"password\\":\\"Escaped2Pass\\"}"}';
+    const escapedValue = String.raw`password: \"EscapedValue2Pass\"`;
 
     for (const [source, secret] of [
       [nested, "Hunter2Pass"],
       [unterminated, "Unterminated2Pass"],
+      [escapedNested, "Escaped2Pass"],
+      [escapedValue, "EscapedValue2Pass"],
     ]) {
       const redacted = redactString(source);
       expect(redacted).not.toContain(secret);
-      expect(redacted).toContain("password: [REDACTED]");
+      expect(redacted).toContain("[REDACTED]");
       expect(collectSensitiveValues(source)).toContain(secret);
       expect(() => assertSafeToPublish(redacted)).not.toThrow();
       expect(() => assertSafeToPublish(source)).toThrow(
