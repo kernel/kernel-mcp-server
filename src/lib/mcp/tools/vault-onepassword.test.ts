@@ -784,6 +784,53 @@ describe("1Password vault credentials", () => {
     }
   });
 
+  test("lets the owner request again after an approval without a usable login", async () => {
+    const statusReason =
+      "1Password did not return a uniquely matched login; request access again";
+    const reopened = {
+      ...pendingCredential,
+      state: {
+        ...pendingCredential.state,
+        status_reason: statusReason,
+        access_request: {
+          ...pendingCredential.state.access_request,
+          state: "resolved",
+        },
+      },
+      action: undefined,
+      available_operations: [
+        {
+          type: "1pw_create_access_request",
+          description: "Request access to the login.",
+        },
+      ],
+    };
+    const fixture = await connectVaultTest([Response.json(reopened)]);
+    try {
+      const read = toolResultJSON(
+        await fixture.call("manage_vault_items", { ...target, action: "get" }),
+      );
+      expect(read.item.state.status_reason).toBe(statusReason);
+      expect(read.item.action).toBeUndefined();
+      expect(
+        read.hints.invocation.map(
+          (hint: { arguments: { operation: string } }) =>
+            hint.arguments.operation,
+        ),
+      ).toEqual(["1pw_create_access_request"]);
+      const guidance = read.guidance.join(" ");
+      expect(guidance).toContain(
+        "1pw_create_access_request is advertised again, the earlier request finished without a usable login",
+      );
+      expect(guidance).toContain(
+        "with their approval, request access once more",
+      );
+      expect(fixture.requests).toHaveLength(1);
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test("keeps account-backed guidance free of stored-token steps", async () => {
     const fixture = await connectVaultTest([Response.json(readyCredential)]);
     try {
