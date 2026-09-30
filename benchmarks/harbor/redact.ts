@@ -62,6 +62,31 @@ interface SensitiveAssignment {
   value: string;
 }
 
+function structuredValueEnd(text: string, start: number): number {
+  const stack = [text[start]];
+  let quote: string | undefined;
+  for (let cursor = start + 1; cursor < text.length; cursor += 1) {
+    const character = text[cursor];
+    if (quote) {
+      if (character === "\\") cursor += 1;
+      else if (character === quote) quote = undefined;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === "{" || character === "[") {
+      stack.push(character);
+    } else if (
+      (character === "}" && stack.at(-1) === "{") ||
+      (character === "]" && stack.at(-1) === "[")
+    ) {
+      stack.pop();
+      if (stack.length === 0) return cursor + 1;
+    }
+  }
+  return text.length;
+}
+
 function sensitiveAssignments(text: string): SensitiveAssignment[] {
   const assignments: SensitiveAssignment[] = [];
   for (let separator = 0; separator < text.length; separator += 1) {
@@ -111,6 +136,10 @@ function sensitiveAssignments(text: string): SensitiveAssignment[] {
         }
       }
       if (end === text.length) separator = text.length;
+    } else if (quote === "{" || quote === "[") {
+      start = valueCursor;
+      end = structuredValueEnd(text, start);
+      separator = end - 1;
     } else {
       while (end < text.length && !/[\s,"'\}&;]/.test(text[end] ?? "")) {
         end += 1;
@@ -118,9 +147,7 @@ function sensitiveAssignments(text: string): SensitiveAssignment[] {
       separator = Math.max(separator, end - 1);
     }
 
-    if (end > start) {
-      assignments.push({ start, end, value: text.slice(start, end) });
-    }
+    assignments.push({ start, end, value: text.slice(start, end) });
   }
   return assignments;
 }

@@ -786,6 +786,20 @@ describe("Braintrust redaction", () => {
     expect(() =>
       assertSafeToPublish('password: [REDACTED]"StillVisible"'),
     ).toThrow("data after a redacted field value");
+
+    for (const source of [
+      'password: ""',
+      "token=",
+      'credentials: {"username":"alex","password":"Nested2Pass"}',
+      'credentials: ["first", {"token":"NestedToken"}]',
+    ]) {
+      const redacted = redactString(source);
+      expect(redacted).toContain("[REDACTED]");
+      expect(() => assertSafeToPublish(redacted)).not.toThrow();
+      expect(() => assertSafeToPublish(source)).toThrow(
+        "sensitive field value",
+      );
+    }
   });
 
   test("redacts complex Playwright typing calls and rejects originals", () => {
