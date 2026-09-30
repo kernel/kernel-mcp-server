@@ -139,6 +139,11 @@ describe("web_search", () => {
     {
       action: "contents",
       search_id: "srch_test",
+      contents: { result_ids: [""] },
+    },
+    {
+      action: "contents",
+      search_id: "srch_test",
       contents: { limit: 1, content: { browser: { browser_id: "b1" } } },
     },
     { action: "providers", project: "proj_other" },

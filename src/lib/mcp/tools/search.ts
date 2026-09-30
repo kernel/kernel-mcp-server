@@ -88,7 +88,7 @@ const contentRequest = z
 
 const searchContentsRequest = z
   .object({
-    result_ids: z.array(z.string()).min(1).max(100).optional(),
+    result_ids: z.array(z.string().min(1)).min(1).max(100).optional(),
     limit: z.number().int().min(1).max(100).optional(),
     timeout_ms: z.number().int().min(1000).max(120000).optional(),
     content: contentRequest.optional(),
