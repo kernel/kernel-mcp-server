@@ -59,7 +59,7 @@ Single-task runs have a 40-minute wall-clock limit. Full-suite runs default to s
 
 Before creating the Harbor dataset, the runner creates and deletes one disposable PurelyMail account. API errors stop the run before trials begin, so missing email accounts cannot silently become task failures.
 
-The runner retries a whole isolated trial up to five times for transient Hypeman connection, timeout, exec-stream, and agent/task setup failures. Set `HARBOR_MAX_RETRIES` to override that limit. Per-request SDK retries remain disabled because transparently retrying instance or image creation can duplicate a request whose first response was lost.
+The runner retries a whole isolated trial up to five times for transient Hypeman connection, timeout, exec-stream, and agent setup failures. Harbor step `setup.sh` failures are not retried; the PurelyMail preflight catches the known external setup dependency before trials begin. Set `HARBOR_MAX_RETRIES` to override the trial retry limit. Per-request SDK retries remain disabled because transparently retrying instance or image creation can duplicate a request whose first response was lost.
 
 ## GitHub Actions
 

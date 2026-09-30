@@ -1,3 +1,5 @@
+import ts from "typescript";
+
 const SECRET_NAME = /(API_KEY|TOKEN|SECRET|PASSWORD|PRIVATE_KEY|CREDENTIAL)/i;
 const REDACTED = "[REDACTED]";
 const REDACTED_PRIVATE_INFO = "[REDACTED_PRIVATE_INFO]";
@@ -26,6 +28,11 @@ const SENSITIVE_FIELDS = new Set([
   "email",
   "phone",
   "address",
+  "account_number",
+  "card_number",
+  "routing_number",
+  "ssn",
+  "tax_id",
 ]);
 
 function normalizedField(key: string): string {
@@ -40,6 +47,28 @@ function sensitiveField(key: string): boolean {
       normalized,
     )
   );
+}
+
+const SENSITIVE_ASSIGNMENT =
+  /(["']?)([a-z0-9_-]+)\1(\s*[:=]\s*)(?:(["'])((?:\\.|(?!\4)[\s\S])*)\4|([^"'\s,}&]+))/gi;
+const SENSITIVE_QUERY_VALUE = /([?&])([a-z0-9_-]+)=([^&#\s]+)/gi;
+const SENSITIVE_QUERY_ONLY_FIELDS = new Set(["auth", "code"]);
+
+function redactSensitiveAssignments(value: string): string {
+  return value
+    .replace(
+      SENSITIVE_ASSIGNMENT,
+      (match, keyQuote, key, separator, valueQuote) =>
+        sensitiveField(key)
+          ? `${keyQuote}${key}${keyQuote}${separator}${valueQuote ?? ""}${REDACTED}${valueQuote ?? ""}`
+          : match,
+    )
+    .replace(SENSITIVE_QUERY_VALUE, (match, prefix, key) =>
+      sensitiveField(key) ||
+      SENSITIVE_QUERY_ONLY_FIELDS.has(normalizedField(key))
+        ? `${prefix}${key}=${REDACTED}`
+        : match,
+    );
 }
 
 function secretValues(): string[] {
@@ -69,22 +98,6 @@ function typedLiterals(value: string): TypedLiteral[] {
   let cursor = 0;
 
   while (cursor < value.length) {
-    const quote = value[cursor];
-    if (quote === '"' || quote === "'" || quote === "`") {
-      cursor += 1;
-      while (cursor < value.length) {
-        if (value[cursor] === "\\") {
-          cursor += 2;
-        } else if (value[cursor] === quote) {
-          cursor += 1;
-          break;
-        } else {
-          cursor += 1;
-        }
-      }
-      continue;
-    }
-
     const match = value.slice(cursor).match(callStart);
     if (!match || !TYPING_METHODS.has(match[1])) {
       cursor += 1;
@@ -160,18 +173,10 @@ export function redactStringWithSecrets(
     if (secret.length >= 4) redacted = redacted.split(secret).join(REDACTED);
   }
 
-  redacted = redactTypedLiterals(redacted)
+  redacted = redactSensitiveAssignments(redactTypedLiterals(redacted))
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, `Bearer ${REDACTED}`)
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, REDACTED)
     .replace(/\b(?:sk|pk|bt|kapi|whsec)[-_][A-Za-z0-9_-]{12,}\b/gi, REDACTED)
-    .replace(
-      /(["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|credential|jwt|password|private[_-]?key|refresh[_-]?token|replay[_-]?id|[a-z0-9_-]*secret(?:[_-]?key)?|session[_-]?id|session[_-]?token|token)["']?\s*[:=]\s*["']?)[^"'\s,}&]+/gi,
-      `$1${REDACTED}`,
-    )
-    .replace(
-      /([?&](?:api[_-]?key|access[_-]?token|auth|code|credential|jwt|password|[a-z0-9_-]*secret(?:[_-]?key)?|session[_-]?id|session[_-]?token|token)=)[^&#\s]+/gi,
-      `$1${REDACTED}`,
-    )
     .replace(/(\b(?:cookie|set-cookie)\s*:\s*)[^\r\n]+/gi, `$1${REDACTED}`)
     .replace(/(\/browser\/live\/)[^/?#\s]+/gi, `$1${REDACTED}`)
     .replace(/(wss?:\/\/)[^/@\s]+@/gi, `$1${REDACTED}@`)
@@ -219,10 +224,11 @@ export function redactValue(value: unknown, maxStringLength = 20_000): unknown {
 export function collectSensitiveValues(value: unknown): string[] {
   const values = new Set<string>();
   const collectString = (text: string) => {
-    for (const match of text.matchAll(
-      /["']?(?:password|private[_-]?key|secret|session[_-]?id|replay[_-]?id)["']?\s*[:=]\s*["']([^"'\s,}&]{4,})/gi,
-    )) {
-      values.add(match[1]);
+    for (const match of text.matchAll(new RegExp(SENSITIVE_ASSIGNMENT))) {
+      const value = match[5] ?? match[6];
+      if (sensitiveField(match[2]) && value.length >= 4) {
+        values.add(value);
+      }
     }
     for (const typedValue of typedCallValues(text)) {
       if (typedValue.length >= 4) values.add(typedValue);
@@ -283,72 +289,57 @@ export function privateInfoRead(toolName: string, input: unknown): boolean {
 }
 
 function assertTypedCallsRedacted(value: string): void {
-  const callStart = /^\.(?:fill|type|pressSequentially|insertText)\s*\(/;
-  let cursor = 0;
-
-  while (cursor < value.length) {
-    const quote = value[cursor];
-    if (quote === '"' || quote === "'" || quote === "`") {
-      cursor += 1;
-      while (cursor < value.length) {
-        if (value[cursor] === "\\") {
-          cursor += 2;
-        } else if (value[cursor] === quote) {
-          cursor += 1;
-          break;
-        } else {
-          cursor += 1;
-        }
+  for (const match of value.matchAll(
+    /\.(fill|type|pressSequentially|insertText)\s*\(/g,
+  )) {
+    const source = ts.createSourceFile(
+      "typed-call.ts",
+      `receiver${value.slice(match.index)}`,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS,
+    );
+    let target: ts.CallExpression | undefined;
+    const findTarget = (node: ts.Node): void => {
+      if (
+        !target &&
+        ts.isCallExpression(node) &&
+        ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.name.text === match[1] &&
+        node.expression.expression.getText(source) === "receiver"
+      ) {
+        target = node;
+        return;
       }
-      continue;
+      ts.forEachChild(node, findTarget);
+    };
+    findTarget(source);
+    if (!target) {
+      throw new Error("Braintrust payload contains an unvalidated typing call");
     }
 
-    const match = value.slice(cursor).match(callStart);
-    if (!match) {
-      cursor += 1;
-      continue;
-    }
-
-    let callCursor = cursor + match[0].length;
-    let depth = 1;
-    let lastLiteral: string | undefined;
-    while (callCursor < value.length && depth > 0) {
-      const callQuote = value[callCursor];
-      if (callQuote === '"' || callQuote === "'" || callQuote === "`") {
-        const literalStart = callCursor + 1;
-        callCursor += 1;
-        while (callCursor < value.length) {
-          if (value[callCursor] === "\\") {
-            callCursor += 2;
-          } else if (value[callCursor] === callQuote) {
-            break;
-          } else {
-            callCursor += 1;
-          }
-        }
-        lastLiteral = value.slice(literalStart, callCursor);
-        if (callCursor < value.length) callCursor += 1;
-        continue;
+    const literals: ts.Node[] = [];
+    const collectLiterals = (node: ts.Node): void => {
+      if (
+        ts.isStringLiteral(node) ||
+        ts.isNoSubstitutionTemplateLiteral(node) ||
+        ts.isTemplateExpression(node)
+      ) {
+        literals.push(node);
+        return;
       }
-      if (value.startsWith("//", callCursor)) {
-        const newline = value.indexOf("\n", callCursor + 2);
-        callCursor = newline === -1 ? value.length : newline + 1;
-        continue;
-      }
-      if (value.startsWith("/*", callCursor)) {
-        const commentEnd = value.indexOf("*/", callCursor + 2);
-        callCursor = commentEnd === -1 ? value.length : commentEnd + 2;
-        continue;
-      }
-      if (value[callCursor] === "(") depth += 1;
-      if (value[callCursor] === ")") depth -= 1;
-      callCursor += 1;
-    }
-
-    if (lastLiteral !== undefined && lastLiteral !== REDACTED) {
+      ts.forEachChild(node, collectLiterals);
+    };
+    for (const argument of target.arguments) collectLiterals(argument);
+    const literal = literals.at(-1);
+    if (!literal) continue;
+    const literalValue =
+      ts.isStringLiteral(literal) || ts.isNoSubstitutionTemplateLiteral(literal)
+        ? literal.text
+        : literal.getText(source).slice(1, -1);
+    if (literalValue !== REDACTED) {
       throw new Error("Braintrust payload still contains a typed form value");
     }
-    cursor = callCursor;
   }
 }
 
@@ -357,10 +348,8 @@ function assertSafeString(value: string): void {
     throw new Error("Braintrust payload still contains an email address");
   }
   assertTypedCallsRedacted(value);
-  for (const match of value.matchAll(
-    /["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|credential|jwt|password|private[_-]?key|refresh[_-]?token|replay[_-]?id|[a-z0-9_-]*secret(?:[_-]?key)?|session[_-]?id|session[_-]?token)["']?\s*[:=]\s*["']?([^"'\s,}&]+)/gi,
-  )) {
-    if (match[1] !== REDACTED) {
+  for (const match of value.matchAll(new RegExp(SENSITIVE_ASSIGNMENT))) {
+    if (sensitiveField(match[2]) && (match[5] ?? match[6]) !== REDACTED) {
       throw new Error(
         "Braintrust payload still contains a sensitive field value",
       );
@@ -373,23 +362,33 @@ function assertSafeString(value: string): void {
   }
 }
 
-export function assertSafeToPublish(value: unknown): void {
+export function assertSafeToPublish(value: unknown, path = "$"): void {
   if (typeof value === "string") {
-    assertSafeString(value);
+    try {
+      assertSafeString(value);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`${message} at ${path}`);
+    }
     return;
   }
   if (Array.isArray(value)) {
-    for (const entry of value) assertSafeToPublish(entry);
+    for (const [index, entry] of value.entries()) {
+      assertSafeToPublish(entry, `${path}[${index}]`);
+    }
     return;
   }
   if (value !== null && typeof value === "object") {
     for (const [key, entry] of Object.entries(
       value as Record<string, unknown>,
     )) {
+      const childPath = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key)
+        ? `${path}.${key}`
+        : `${path}[${JSON.stringify(key)}]`;
       if (sensitiveField(key) && entry !== REDACTED) {
-        throw new Error(`Braintrust payload did not redact ${key}`);
+        throw new Error(`Braintrust payload did not redact ${childPath}`);
       }
-      assertSafeToPublish(entry);
+      assertSafeToPublish(entry, childPath);
     }
   }
 }

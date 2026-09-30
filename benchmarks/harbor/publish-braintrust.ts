@@ -234,10 +234,7 @@ function llmInput(
       break;
     }
   }
-  const context =
-    previousAgent === -1
-      ? prior
-      : prior.slice(previousAgent, previousAgent + 1);
+  const context = previousAgent === -1 ? prior : prior.slice(previousAgent);
   return context.map((step) => stepContext(step, sensitiveValues));
 }
 
@@ -264,10 +261,14 @@ function privateInfoValues(steps: AtifStep[]): string[] {
         (result) => result.source_call_id === call.tool_call_id,
       );
       if (typeof observation?.content !== "string") continue;
-      for (const match of observation.content.matchAll(
-        /["']\s*:\s*["']([^"'\\]{4,})["']/g,
-      )) {
-        values.add(match[1]);
+      let privateInfo: unknown = observation.content;
+      try {
+        privateInfo = JSON.parse(observation.content);
+      } catch {
+        // collectSensitiveValues also handles key/value pairs in non-JSON output.
+      }
+      for (const value of collectSensitiveValues(privateInfo)) {
+        values.add(value);
       }
     }
   }
@@ -507,7 +508,9 @@ export function buildExperimentEvents(
       events.push(...atifEvents(trial, rowId));
     }
   }
-  assertSafeToPublish(events);
+  for (const event of events) {
+    assertSafeToPublish(event, `event ${event.id}`);
+  }
   return events;
 }
 

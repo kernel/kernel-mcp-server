@@ -566,6 +566,86 @@ describe("Harbor result ingestion", () => {
     ).filter((event) => event.span_attributes.type === "llm");
     expect(new Set(events.map((event) => event.id)).size).toBe(2);
   });
+
+  test("includes context added after the previous agent turn", () => {
+    const root = fixture();
+    writeJson(join(root, "task-one__abc", "steps/run/agent/trajectory.json"), {
+      steps: [
+        { source: "system", message: "system prompt" },
+        { source: "user", message: "first request" },
+        { source: "agent", message: "first response" },
+        { source: "user", message: "follow-up" },
+        { source: "system", message: "updated constraint" },
+        { source: "agent", message: "second response" },
+      ],
+    });
+    const llmEvents = buildExperimentEvents(
+      [readBenchmarkArm({ name: "candidate", path: root })],
+      "multi-turn-context",
+    ).filter((event) => event.span_attributes.type === "llm");
+
+    expect(llmEvents[1].input).toEqual([
+      {
+        source: "agent",
+        message: "first response",
+        toolCalls: [],
+        observations: [],
+      },
+      {
+        source: "user",
+        message: "follow-up",
+        toolCalls: [],
+        observations: [],
+      },
+      {
+        source: "system",
+        message: "updated constraint",
+        toolCalls: [],
+        observations: [],
+      },
+    ]);
+  });
+
+  test("harvests only sensitive values from private-info output", () => {
+    const root = fixture();
+    writeJson(join(root, "task-one__abc", "steps/run/agent/trajectory.json"), {
+      steps: [
+        { source: "user", message: "perform the task" },
+        {
+          source: "agent",
+          message: "",
+          tool_calls: [
+            {
+              tool_call_id: "private-read",
+              function_name: "Read",
+              arguments: { file_path: "/my-info/personal.json" },
+            },
+          ],
+          observation: {
+            results: [
+              {
+                source_call_id: "private-read",
+                content:
+                  '{"name":"Close Window","width":"1208","account_number":"12345678"}',
+              },
+            ],
+          },
+        },
+        {
+          source: "agent",
+          message: "Close Window width 1208 account 12345678",
+        },
+      ],
+    });
+    const llmEvents = buildExperimentEvents(
+      [readBenchmarkArm({ name: "candidate", path: root })],
+      "private-info-values",
+    ).filter((event) => event.span_attributes.type === "llm");
+
+    expect(llmEvents[1].output).toBe(
+      "Close Window width 1208 account [REDACTED]",
+    );
+  });
 });
 
 describe("Braintrust redaction", () => {
@@ -601,6 +681,11 @@ describe("Braintrust redaction", () => {
         code: "page.fill('#password', 'still-visible')",
       }),
     ).toThrow("typed form value");
+    expect(() =>
+      assertSafeToPublish({
+        nested: { code: "page.fill('#password', 'still-visible')" },
+      }),
+    ).toThrow("$.nested.code");
     expect(
       privateInfoRead("exec_command", {
         cmd: "cat /my-info/email_credentials.json",
@@ -646,10 +731,11 @@ describe("Braintrust redaction", () => {
     ).toThrow("client_secret");
 
     const text = redactString(
-      `'client_secret': 'client-value'&webhook_secret=webhook-value`,
+      `'client_secret': 'client-value'&webhook_secret=webhook-value; 'address': '123 Main St'`,
     );
     expect(text).not.toContain("client-value");
     expect(text).not.toContain("webhook-value");
+    expect(text).not.toContain("123 Main St");
   });
 
   test("redacts complex Playwright typing calls and rejects originals", () => {
@@ -661,6 +747,9 @@ describe("Braintrust redaction", () => {
       `page.locator('#pw').pressSequentially(\`multi\nline)pass\`)`,
       `page.keyboard.insertText("typed)secret")`,
       `page.fill(buildSelector('nested)selector'), 'last)value')`,
+      `// Fill in the user's password\nawait page.locator('#password').fill('Comment2Pass')`,
+      `/* we'll sign up now */\nawait page.fill('#password', 'Block2Pass')`,
+      `node -e 'await page.fill("#pw", "Shell2Pass")'`,
     ];
     const source = calls.join(";\n");
     const redacted = redactString(source);
@@ -673,6 +762,9 @@ describe("Braintrust redaction", () => {
       "multi\nline)pass",
       "typed)secret",
       "last)value",
+      "Comment2Pass",
+      "Block2Pass",
+      "Shell2Pass",
     ]) {
       expect(redacted).not.toContain(secret);
       expect(collectSensitiveValues({ code: source })).toContain(secret);
