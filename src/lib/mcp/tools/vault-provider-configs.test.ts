@@ -92,6 +92,48 @@ describe("vault provider config SDK routing", () => {
     },
   );
 
+  test("sets the Link publishable key on create and update", async () => {
+    const link = {
+      ...config,
+      provider: "link",
+      publishable_key: "pk_live_example",
+    };
+    const fixture = await connectVaultTest(
+      [Response.json(link), Response.json(link)],
+      organizationWideAuthInfo(),
+    );
+    try {
+      const created = await fixture.call(tool, {
+        ...create,
+        provider: "link",
+        credentials: {
+          ...create.credentials,
+          publishable_key: "pk_live_example",
+        },
+      });
+      expectSecretFree(created);
+      expect(toolResultJSON(created)).toEqual(link);
+      await fixture.call(tool, {
+        action: "update",
+        config: config.id,
+        credentials: { publishable_key: "pk_live_example" },
+      });
+      expect(fixture.requests.map(({ body }) => body)).toEqual([
+        {
+          name: config.name,
+          provider: "link",
+          credentials: {
+            ...create.credentials,
+            publishable_key: "pk_live_example",
+          },
+        },
+        { credentials: { publishable_key: "pk_live_example" } },
+      ]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test("gets, paginates a single page, renames, and rotates without defaulting omitted fields", async () => {
     const fixture = await connectVaultTest(
       [
@@ -356,6 +398,19 @@ describe("config scope and validation", () => {
     },
     { action: "update", config: config.id, credentials: create.credentials },
     { action: "update", config: config.id },
+    { action: "update", config: config.id, credentials: {} },
+    {
+      action: "update",
+      config: config.id,
+      credentials: { publishable_key: "sk_live_secret" },
+    },
+    {
+      ...create,
+      credentials: {
+        ...create.credentials,
+        publishable_key: "pk_live_example",
+      },
+    },
     { action: "update", name: "renamed" },
     { action: "get" },
     { action: "get", config: "../bad" },

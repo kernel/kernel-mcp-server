@@ -84,7 +84,15 @@ export const providerCredentialsSchema = z
       .min(1)
       .describe(
         "Write-only secret; supply through a trusted client, never chat.",
-      ),
+      )
+      .optional(),
+    publishable_key: z
+      .string()
+      .regex(/^pk_(live|test)_[A-Za-z0-9]+$/)
+      .describe(
+        "(Link only) Public Stripe publishable key Kernel sends when refreshing and revoking imported wallet grants. Without it, imported wallets stop working when their access token expires.",
+      )
+      .optional(),
   })
   .strict();
 
