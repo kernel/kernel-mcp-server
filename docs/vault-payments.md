@@ -495,7 +495,8 @@ with `manage_vault_cards`:
     "wallet": "agentcard-wallet",
     "merchant": "Example Shop",
     "amount": 1234,
-    "currency": "usd"
+    "currency": "usd",
+    "checkout_origin": "https://shop.example"
   }
 }
 ```
@@ -509,6 +510,16 @@ page open, poll until `ready_to_submit`, and submit native Pay before
 `state.preparation.expires_at` (at most 30 seconds after readiness). Polling does not
 extend the deadline. Each preparation is single-use even after failure or expiry.
 MCP preserves preparation metadata but does not expose an invocation hint for it.
+
+For non-prepared checkout authorizations, `spec.checkout_origin` is an optional
+caller-declared origin used for eligible AgentCard autopilot rule matching. Supply
+only a canonical HTTPS origin with a lowercase hostname, no explicit default port
+443, and no path (for example, `https://shop.example`), or a localhost HTTP origin
+for local test pages (for example, `http://localhost:3000`). Kernel forwards this
+value to AgentCard and does not compare it with the browser page. Omitting it keeps
+the existing approval flow; autopilot may also fall back to user approval. Prepared
+checkout uses `preparation.merchant_origin` instead. Providing this origin does not
+enable autopilot or ensure payment success.
 
 For an explicitly chosen alias-based integration, attach the vault to a new browser
 and use returned `item.state.aliases`, respecting returned permitted domains.

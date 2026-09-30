@@ -46,7 +46,39 @@ describe("vault SDK request contracts", () => {
         "Pending issuance updates preserve omitted optional fields",
       );
       expect(cards?.description).toContain("recovery_required");
+      expect(JSON.stringify(cards?.inputSchema)).toContain("checkout_origin");
+      expect(cards?.description).toContain(
+        "Kernel does not compare it with the browser page",
+      );
+      expect(cards?.description).toContain(
+        "Prepared checkout uses preparation.merchant_origin",
+      );
       expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("forwards AgentCard checkout_origin in the card specification", async () => {
+    const spec = {
+      ...agentcardSpec,
+      checkout_origin: "https://shop.example",
+    };
+    const fixture = await connectVaultTest([Response.json(item)]);
+    try {
+      const result = await fixture.call("manage_vault_cards", {
+        action: "create",
+        vault: "checkout",
+        key: "order-1",
+        provider: "agentcard",
+        spec,
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[0].body).toMatchObject({
+        type: "card",
+        spec: { ...spec, provider: "agentcard" },
+      });
     } finally {
       await fixture.close();
     }
