@@ -13,6 +13,7 @@ import { renderMarkdown } from "./report";
 import { readBenchmarkArm, selectPrimaryReward, summarizeArm } from "./results";
 import {
   assertSafeToPublish,
+  collectSensitiveValues,
   privateInfoRead,
   redactString,
   redactValue,
@@ -358,10 +359,40 @@ describe("Harbor result ingestion", () => {
       prompt_cached_tokens: 80,
       completion_tokens: 20,
       tokens: 120,
-      cost_usd: 0.01,
+      estimated_cost: 0.01,
+    });
+    expect(root?.metrics).toMatchObject({
+      prompt_tokens: 100,
+      prompt_cached_tokens: 80,
+      completion_tokens: 20,
+      tokens: 120,
+      estimated_cost: 0.01,
     });
     expect(root?.metrics).not.toHaveProperty("input_tokens");
     expect(root?.metrics).not.toHaveProperty("cost_usd");
+  });
+
+  test("retains row cost when ATIF has no per-turn cost", () => {
+    const root = fixture();
+    const trajectoryPath = join(
+      root,
+      "task-one__abc",
+      "steps/run/agent/trajectory.json",
+    );
+    const trajectory = JSON.parse(readFileSync(trajectoryPath, "utf8")) as {
+      steps: Array<{ metrics?: Record<string, number> }>;
+    };
+    delete trajectory.steps[2].metrics?.cost_usd;
+    writeJson(trajectoryPath, trajectory);
+
+    const events = buildExperimentEvents(
+      [readBenchmarkArm({ name: "candidate", path: root })],
+      "row-cost-fallback",
+    );
+    const row = events.find((event) => event.span_attributes.type === "eval");
+    const llm = events.find((event) => event.span_attributes.type === "llm");
+    expect(row?.metrics).toMatchObject({ estimated_cost: 0.01 });
+    expect(llm?.metrics).not.toHaveProperty("estimated_cost");
   });
 
   test("re-publishes the same rows and spans by deterministic ID", async () => {
@@ -591,6 +622,41 @@ describe("Braintrust redaction", () => {
       }),
     ).toBe(false);
     delete process.env.TEST_API_KEY;
+  });
+
+  test("redacts complex Playwright typing calls and rejects originals", () => {
+    const calls = [
+      `page.fill('#password', 'Str0ng)Pass!')`,
+      `page.type('#password', 'type)value')`,
+      `page.locator('#pw').fill('abc)def')`,
+      `page.locator('#pw').fill('forced)value', { force: true })`,
+      `page.locator('#pw').pressSequentially(\`multi\nline)pass\`)`,
+      `page.keyboard.insertText("typed)secret")`,
+      `page.fill(buildSelector('nested)selector'), 'last)value')`,
+    ];
+    const source = calls.join(";\n");
+    const redacted = redactString(source);
+
+    for (const secret of [
+      "Str0ng)Pass!",
+      "type)value",
+      "abc)def",
+      "forced)value",
+      "multi\nline)pass",
+      "typed)secret",
+      "last)value",
+    ]) {
+      expect(redacted).not.toContain(secret);
+      expect(collectSensitiveValues({ code: source })).toContain(secret);
+    }
+    expect(redacted).toContain("buildSelector('nested)selector')");
+    expect(redacted.match(/\[REDACTED\]/g)).toHaveLength(calls.length);
+    expect(() => assertSafeToPublish({ code: redacted })).not.toThrow();
+    for (const call of calls) {
+      expect(() => assertSafeToPublish({ code: call })).toThrow(
+        "typed form value",
+      );
+    }
   });
 });
 

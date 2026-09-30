@@ -132,12 +132,22 @@ function trajectorySteps(trial: BenchmarkTrial): AtifStep[] {
 }
 
 function metricRecord(trial: BenchmarkTrial): Record<string, number> {
+  const promptTokens = trial.metrics.inputTokens;
+  const completionTokens = trial.metrics.outputTokens;
   return Object.fromEntries(
     Object.entries({
       start: trial.metrics.start,
       end: trial.metrics.end,
       duration_ms: trial.metrics.durationMs,
       tool_calls: trial.metrics.toolCalls,
+      prompt_tokens: promptTokens,
+      prompt_cached_tokens: trial.metrics.cacheTokens,
+      completion_tokens: completionTokens,
+      tokens:
+        promptTokens === undefined || completionTokens === undefined
+          ? undefined
+          : promptTokens + completionTokens,
+      estimated_cost: trial.metrics.costUsd,
     }).filter((entry): entry is [string, number] => entry[1] !== undefined),
   );
 }
@@ -387,7 +397,7 @@ function atifEvents(trial: BenchmarkTrial, rowId: string): BraintrustEvent[] {
           promptTokens === undefined || completionTokens === undefined
             ? undefined
             : promptTokens + completionTokens,
-        cost_usd: number(step.metrics?.cost_usd),
+        estimated_cost: number(step.metrics?.cost_usd),
       }).filter((entry): entry is [string, number] => entry[1] !== undefined),
     );
     events.push({

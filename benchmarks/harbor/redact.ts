@@ -51,30 +51,103 @@ function secretValues(): string[] {
     .sort((left, right) => right.length - left.length);
 }
 
-const TYPED_CALL = /\.(?:fill|type)\(([^)]*)\)/g;
-const STRING_LITERAL = /(["'`])((?:\\.|(?!\1).)*)\1/g;
+const TYPING_METHODS = new Set([
+  "fill",
+  "type",
+  "pressSequentially",
+  "insertText",
+]);
+
+interface TypedLiteral {
+  start: number;
+  end: number;
+}
+
+function typedLiterals(value: string): TypedLiteral[] {
+  const callStart = /^\.([A-Za-z]+)\s*\(/;
+  const literals: TypedLiteral[] = [];
+  let cursor = 0;
+
+  while (cursor < value.length) {
+    const quote = value[cursor];
+    if (quote === '"' || quote === "'" || quote === "`") {
+      cursor += 1;
+      while (cursor < value.length) {
+        if (value[cursor] === "\\") {
+          cursor += 2;
+        } else if (value[cursor] === quote) {
+          cursor += 1;
+          break;
+        } else {
+          cursor += 1;
+        }
+      }
+      continue;
+    }
+
+    const match = value.slice(cursor).match(callStart);
+    if (!match || !TYPING_METHODS.has(match[1])) {
+      cursor += 1;
+      continue;
+    }
+
+    let callCursor = cursor + match[0].length;
+    let depth = 1;
+    let lastLiteral: TypedLiteral | undefined;
+    while (callCursor < value.length && depth > 0) {
+      const callQuote = value[callCursor];
+      if (callQuote === '"' || callQuote === "'" || callQuote === "`") {
+        const start = callCursor;
+        callCursor += 1;
+        while (callCursor < value.length) {
+          if (value[callCursor] === "\\") {
+            callCursor += 2;
+          } else if (value[callCursor] === callQuote) {
+            callCursor += 1;
+            break;
+          } else {
+            callCursor += 1;
+          }
+        }
+        lastLiteral = { start, end: callCursor };
+        continue;
+      }
+      if (value.startsWith("//", callCursor)) {
+        const newline = value.indexOf("\n", callCursor + 2);
+        callCursor = newline === -1 ? value.length : newline + 1;
+        continue;
+      }
+      if (value.startsWith("/*", callCursor)) {
+        const commentEnd = value.indexOf("*/", callCursor + 2);
+        callCursor = commentEnd === -1 ? value.length : commentEnd + 2;
+        continue;
+      }
+      if (value[callCursor] === "(") depth += 1;
+      if (value[callCursor] === ")") depth -= 1;
+      callCursor += 1;
+    }
+
+    if (lastLiteral) literals.push(lastLiteral);
+    cursor = callCursor;
+  }
+  return literals;
+}
 
 function typedCallValues(value: string): string[] {
-  const values: string[] = [];
-  for (const call of value.matchAll(TYPED_CALL)) {
-    const literals = [...call[1].matchAll(STRING_LITERAL)];
-    const typedValue = literals.at(-1)?.[2];
-    if (typedValue !== undefined) values.push(typedValue);
-  }
-  return values;
+  return typedLiterals(value).map((literal) =>
+    value.slice(literal.start + 1, literal.end - 1),
+  );
 }
 
 function redactTypedLiterals(value: string): string {
-  return value.replace(TYPED_CALL, (call, argumentsText: string) => {
-    const literals = [...argumentsText.matchAll(STRING_LITERAL)];
-    const typedValue = literals.at(-1);
-    if (!typedValue || typedValue.index === undefined) return call;
-    const start = typedValue.index;
-    const end = start + typedValue[0].length;
-    const quote = typedValue[1];
-    const redactedArguments = `${argumentsText.slice(0, start)}${quote}${REDACTED}${quote}${argumentsText.slice(end)}`;
-    return call.replace(argumentsText, redactedArguments);
-  });
+  let redacted = value;
+  for (const literal of typedLiterals(value).sort(
+    (left, right) => right.start - left.start,
+  )) {
+    const quote = value[literal.start];
+    redacted = `${redacted.slice(0, literal.start)}${quote}${REDACTED}${quote}${redacted.slice(literal.end)}`;
+  }
+  return redacted;
 }
 
 export function redactStringWithSecrets(
@@ -209,15 +282,81 @@ export function privateInfoRead(toolName: string, input: unknown): boolean {
   );
 }
 
+function assertTypedCallsRedacted(value: string): void {
+  const callStart = /^\.(?:fill|type|pressSequentially|insertText)\s*\(/;
+  let cursor = 0;
+
+  while (cursor < value.length) {
+    const quote = value[cursor];
+    if (quote === '"' || quote === "'" || quote === "`") {
+      cursor += 1;
+      while (cursor < value.length) {
+        if (value[cursor] === "\\") {
+          cursor += 2;
+        } else if (value[cursor] === quote) {
+          cursor += 1;
+          break;
+        } else {
+          cursor += 1;
+        }
+      }
+      continue;
+    }
+
+    const match = value.slice(cursor).match(callStart);
+    if (!match) {
+      cursor += 1;
+      continue;
+    }
+
+    let callCursor = cursor + match[0].length;
+    let depth = 1;
+    let lastLiteral: string | undefined;
+    while (callCursor < value.length && depth > 0) {
+      const callQuote = value[callCursor];
+      if (callQuote === '"' || callQuote === "'" || callQuote === "`") {
+        const literalStart = callCursor + 1;
+        callCursor += 1;
+        while (callCursor < value.length) {
+          if (value[callCursor] === "\\") {
+            callCursor += 2;
+          } else if (value[callCursor] === callQuote) {
+            break;
+          } else {
+            callCursor += 1;
+          }
+        }
+        lastLiteral = value.slice(literalStart, callCursor);
+        if (callCursor < value.length) callCursor += 1;
+        continue;
+      }
+      if (value.startsWith("//", callCursor)) {
+        const newline = value.indexOf("\n", callCursor + 2);
+        callCursor = newline === -1 ? value.length : newline + 1;
+        continue;
+      }
+      if (value.startsWith("/*", callCursor)) {
+        const commentEnd = value.indexOf("*/", callCursor + 2);
+        callCursor = commentEnd === -1 ? value.length : commentEnd + 2;
+        continue;
+      }
+      if (value[callCursor] === "(") depth += 1;
+      if (value[callCursor] === ")") depth -= 1;
+      callCursor += 1;
+    }
+
+    if (lastLiteral !== undefined && lastLiteral !== REDACTED) {
+      throw new Error("Braintrust payload still contains a typed form value");
+    }
+    cursor = callCursor;
+  }
+}
+
 function assertSafeString(value: string): void {
   if (/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(value)) {
     throw new Error("Braintrust payload still contains an email address");
   }
-  for (const typedValue of typedCallValues(value)) {
-    if (typedValue !== REDACTED) {
-      throw new Error("Braintrust payload still contains a typed form value");
-    }
-  }
+  assertTypedCallsRedacted(value);
   for (const match of value.matchAll(
     /["']?(?:api[_-]?key|access[_-]?token|auth[_-]?token|credential|jwt|password|private[_-]?key|refresh[_-]?token|replay[_-]?id|secret|session[_-]?id|session[_-]?token)["']?\s*[:=]\s*["']?([^"'\s,}&]+)/gi,
   )) {
