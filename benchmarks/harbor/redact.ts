@@ -36,7 +36,11 @@ const SENSITIVE_FIELDS = new Set([
 ]);
 
 function normalizedField(key: string): string {
-  return key.trim().toLowerCase().replace(/-/g, "_");
+  return key
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .replace(/-/g, "_");
 }
 
 function sensitiveField(key: string): boolean {

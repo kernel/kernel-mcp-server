@@ -715,12 +715,20 @@ describe("Braintrust redaction", () => {
       client_secret: "client-value",
       secret_key: "key-value",
       webhook_secret: "webhook-value",
+      apiKey: "camel-api-value",
+      sessionId: "camel-session-value",
+      clientSecret: "camel-secret-value",
+      accountNumber: "camel-account-value",
     });
     expect(redacted).toEqual({
       "Set-Cookie": "[REDACTED]",
       client_secret: "[REDACTED]",
       secret_key: "[REDACTED]",
       webhook_secret: "[REDACTED]",
+      apiKey: "[REDACTED]",
+      sessionId: "[REDACTED]",
+      clientSecret: "[REDACTED]",
+      accountNumber: "[REDACTED]",
     });
     expect(() => assertSafeToPublish(redacted)).not.toThrow();
     expect(() =>
@@ -729,13 +737,23 @@ describe("Braintrust redaction", () => {
     expect(() =>
       assertSafeToPublish({ client_secret: "client-value" }),
     ).toThrow("client_secret");
+    expect(() =>
+      assertSafeToPublish({ clientSecret: "camel-secret-value" }),
+    ).toThrow("clientSecret");
 
     const text = redactString(
-      `'client_secret': 'client-value'&webhook_secret=webhook-value; 'address': '123 Main St'`,
+      `'client_secret': 'client-value'&webhook_secret=webhook-value; 'address': '123 Main St'; "apiKey":"camel-api-value"; "sessionId":"camel-session-value"; "clientSecret":"camel-secret-value"`,
     );
-    expect(text).not.toContain("client-value");
-    expect(text).not.toContain("webhook-value");
-    expect(text).not.toContain("123 Main St");
+    for (const secret of [
+      "client-value",
+      "webhook-value",
+      "123 Main St",
+      "camel-api-value",
+      "camel-session-value",
+      "camel-secret-value",
+    ]) {
+      expect(text).not.toContain(secret);
+    }
   });
 
   test("redacts complex Playwright typing calls and rejects originals", () => {
