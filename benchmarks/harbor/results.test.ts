@@ -761,18 +761,18 @@ describe("Braintrust redaction", () => {
     const nested =
       '{"success": true, "result": "Account created.\\nTemporary password: Hunter2Pass"}';
     const unterminated =
-      '{"text": "Step 1...' +
-      "\\n".repeat(30) +
-      "...password: Unterminated2Pass";
+      '{"text": "Step 1...' + "\\n".repeat(30) + "password: Unterminated2Pass";
     const escapedNested =
       '{"success":true,"result":"{\\"password\\":\\"Escaped2Pass\\"}"}';
     const escapedValue = String.raw`password: \"EscapedValue2Pass\"`;
+    const escapedWrapped = String.raw`result: \"wrapper password: \\\"EscapedWrapped2Pass\\\"\"`;
 
     for (const [source, secret] of [
       [nested, "Hunter2Pass"],
       [unterminated, "Unterminated2Pass"],
       [escapedNested, "Escaped2Pass"],
       [escapedValue, "EscapedValue2Pass"],
+      [escapedWrapped, "EscapedWrapped2Pass"],
     ]) {
       const redacted = redactString(source);
       expect(redacted).not.toContain(secret);
@@ -783,6 +783,9 @@ describe("Braintrust redaction", () => {
         "sensitive field value",
       );
     }
+    expect(() =>
+      assertSafeToPublish('password: [REDACTED]"StillVisible"'),
+    ).toThrow("data after a redacted field value");
   });
 
   test("redacts complex Playwright typing calls and rejects originals", () => {

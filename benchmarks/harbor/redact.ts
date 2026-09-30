@@ -53,63 +53,88 @@ function sensitiveField(key: string): boolean {
   );
 }
 
-const SENSITIVE_ASSIGNMENT =
-  /(["']?)([a-z0-9_-]+)\1(\s*[:=]\s*)(?:(["'])((?:\\[\s\S]|(?!\4)[^\\])*)\4|\\(["'])((?:\\(?!\6)[\s\S]|[^\\])*)\\\6|([^"'\s,}&]+))/gi;
 const SENSITIVE_QUERY_VALUE = /([?&])([a-z0-9_-]+)=([^&#\s]+)/gi;
 const SENSITIVE_QUERY_ONLY_FIELDS = new Set(["auth", "code"]);
 
-function decodeQuotedValue(value: string): {
-  decoded: string;
-  encode: (decoded: string) => string;
-} {
-  const unchanged = { decoded: value, encode: (updated: string) => updated };
-  try {
-    const decoded: unknown = JSON.parse(`"${value}"`);
-    return typeof decoded === "string"
-      ? {
-          decoded,
-          encode: (updated) => JSON.stringify(updated).slice(1, -1),
+interface SensitiveAssignment {
+  start: number;
+  end: number;
+  value: string;
+}
+
+function sensitiveAssignments(text: string): SensitiveAssignment[] {
+  const assignments: SensitiveAssignment[] = [];
+  for (let separator = 0; separator < text.length; separator += 1) {
+    if (text[separator] !== ":" && text[separator] !== "=") continue;
+
+    let keyCursor = separator - 1;
+    while (/\s/.test(text[keyCursor] ?? "")) keyCursor -= 1;
+    if (text[keyCursor] === '"' || text[keyCursor] === "'") {
+      keyCursor -= 1;
+      while (text[keyCursor] === "\\") keyCursor -= 1;
+    }
+    const keyEnd = keyCursor + 1;
+    while (/[A-Za-z0-9_-]/.test(text[keyCursor] ?? "")) {
+      if (/[nrt]/.test(text[keyCursor] ?? "") && text[keyCursor - 1] === "\\") {
+        break;
+      }
+      keyCursor -= 1;
+    }
+    const key = text.slice(keyCursor + 1, keyEnd);
+    if (!key || !sensitiveField(key)) continue;
+
+    let valueCursor = separator + 1;
+    while (/\s/.test(text[valueCursor] ?? "")) valueCursor += 1;
+    let slashCount = 0;
+    while (text[valueCursor + slashCount] === "\\") slashCount += 1;
+    const quote = text[valueCursor + slashCount];
+    let start = valueCursor;
+    let end = valueCursor;
+
+    if (quote === '"' || quote === "'") {
+      start = valueCursor + slashCount + 1;
+      end = text.length;
+      for (let cursor = start; cursor < text.length; cursor += 1) {
+        if (text[cursor] !== quote) continue;
+        let precedingSlashes = 0;
+        for (
+          let slashCursor = cursor - 1;
+          text[slashCursor] === "\\";
+          slashCursor -= 1
+        ) {
+          precedingSlashes += 1;
         }
-      : unchanged;
-  } catch {
-    return unchanged;
+        if (precedingSlashes === slashCount) {
+          end = cursor - slashCount;
+          separator = cursor;
+          break;
+        }
+      }
+      if (end === text.length) separator = text.length;
+    } else {
+      while (end < text.length && !/[\s,"'\}&;]/.test(text[end] ?? "")) {
+        end += 1;
+      }
+      separator = Math.max(separator, end - 1);
+    }
+
+    if (end > start) {
+      assignments.push({ start, end, value: text.slice(start, end) });
+    }
   }
+  return assignments;
 }
 
 function redactSensitiveAssignments(value: string): string {
-  return value
-    .replace(
-      SENSITIVE_ASSIGNMENT,
-      (
-        match,
-        keyQuote,
-        key,
-        separator,
-        valueQuote,
-        quotedValue,
-        escapedValueQuote,
-        escapedQuotedValue,
-      ) => {
-        const quote = valueQuote ?? escapedValueQuote;
-        const quoted = quotedValue ?? escapedQuotedValue;
-        const delimiter = escapedValueQuote ? `\\${quote}` : (quote ?? "");
-        if (sensitiveField(key)) {
-          return `${keyQuote}${key}${keyQuote}${separator}${delimiter}${REDACTED}${delimiter}`;
-        }
-        if (!quote) return match;
-        const { decoded, encode } = decodeQuotedValue(quoted);
-        const redacted = redactSensitiveAssignments(decoded);
-        return redacted === decoded
-          ? match
-          : `${keyQuote}${key}${keyQuote}${separator}${delimiter}${encode(redacted)}${delimiter}`;
-      },
-    )
-    .replace(SENSITIVE_QUERY_VALUE, (match, prefix, key) =>
-      sensitiveField(key) ||
-      SENSITIVE_QUERY_ONLY_FIELDS.has(normalizedField(key))
-        ? `${prefix}${key}=${REDACTED}`
-        : match,
-    );
+  let redacted = value;
+  for (const assignment of sensitiveAssignments(value).reverse()) {
+    redacted = `${redacted.slice(0, assignment.start)}${REDACTED}${redacted.slice(assignment.end)}`;
+  }
+  return redacted.replace(SENSITIVE_QUERY_VALUE, (match, prefix, key) =>
+    sensitiveField(key) || SENSITIVE_QUERY_ONLY_FIELDS.has(normalizedField(key))
+      ? `${prefix}${key}=${REDACTED}`
+      : match,
+  );
 }
 
 function secretValues(): string[] {
@@ -265,13 +290,8 @@ export function redactValue(value: unknown, maxStringLength = 20_000): unknown {
 export function collectSensitiveValues(value: unknown): string[] {
   const values = new Set<string>();
   const collectString = (text: string) => {
-    for (const match of text.matchAll(new RegExp(SENSITIVE_ASSIGNMENT))) {
-      const value = match[5] ?? match[7] ?? match[8];
-      if (sensitiveField(match[2]) && value.length >= 4) {
-        values.add(value);
-      } else if (match[4] || match[6]) {
-        collectString(decodeQuotedValue(value).decoded);
-      }
+    for (const assignment of sensitiveAssignments(text)) {
+      if (assignment.value.length >= 4) values.add(assignment.value);
     }
     for (const typedValue of typedCallValues(text)) {
       if (typedValue.length >= 4) values.add(typedValue);
@@ -427,24 +447,35 @@ function assertTypedCallsRedacted(value: string): void {
   }
 }
 
+function assertSensitiveAssignmentsRedacted(value: string): void {
+  const assignmentStart =
+    /(?:^|\\[nrt]|[^A-Za-z0-9_-])(?:\\*["'])?([A-Za-z0-9_-]+)(?:\\*["'])?\s*[:=]\s*/gi;
+  for (const match of value.matchAll(assignmentStart)) {
+    if (!sensitiveField(match[1])) continue;
+    const remainder = value.slice((match.index ?? 0) + match[0].length);
+    const unquoted = remainder.replace(/^(?:\\*["'])?/, "");
+    if (!unquoted.startsWith(REDACTED)) {
+      throw new Error(
+        "Braintrust payload still contains a sensitive field value",
+      );
+    }
+    const afterRedaction = unquoted
+      .slice(REDACTED.length)
+      .replace(/^\\*["']/, "");
+    if (/^[A-Za-z0-9]/.test(afterRedaction)) {
+      throw new Error(
+        "Braintrust payload still contains data after a redacted field value",
+      );
+    }
+  }
+}
+
 function assertSafeString(value: string): void {
   if (/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(value)) {
     throw new Error("Braintrust payload still contains an email address");
   }
   assertTypedCallsRedacted(value);
-  for (const match of value.matchAll(new RegExp(SENSITIVE_ASSIGNMENT))) {
-    if (
-      sensitiveField(match[2]) &&
-      (match[5] ?? match[7] ?? match[8]) !== REDACTED
-    ) {
-      throw new Error(
-        "Braintrust payload still contains a sensitive field value",
-      );
-    }
-    if (!sensitiveField(match[2]) && (match[4] || match[6])) {
-      assertSafeString(decodeQuotedValue(match[5] ?? match[7]).decoded);
-    }
-  }
+  assertSensitiveAssignmentsRedacted(value);
   for (const secret of secretValues()) {
     if (value.includes(secret)) {
       throw new Error("Braintrust payload still contains a configured secret");
