@@ -913,14 +913,30 @@ describe("benchmark workflow hardening", () => {
       join(process.cwd(), ".github/workflows/benchmark-clawbench.yml"),
       "utf8",
     );
+    const runner = readFileSync(
+      join(process.cwd(), "benchmarks/harbor/clawbench/run.sh"),
+      "utf8",
+    );
+    const readme = readFileSync(
+      join(process.cwd(), "benchmarks/harbor/README.md"),
+      "utf8",
+    );
+    const refMatch = runner.match(
+      /clawbench_ref=\$\{CLAWBENCH_REF:-([0-9a-f]{40})\}/,
+    );
+    if (!refMatch) throw new Error("runner is missing the ClawBench pin");
+    const clawbenchRef = refMatch[1];
+
     expect(workflow).toContain("github.rest.repos.compareCommits");
     expect(workflow).not.toContain("baseSha = pull.base.sha");
     expect(workflow).toContain('HARBOR_VERSION: "0.21.0"');
     expect(workflow).toContain('HARBOR_HYPEMAN_VERSION: "0.1.2"');
     expect(workflow).toContain('CODEX_BENCHMARK_VERSION: "0.120.0"');
-    expect(
-      workflow.match(/c7feaa2435ca8115c0762c44e13885fe5adf3e98/g),
-    ).toHaveLength(2);
+    expect(workflow.match(new RegExp(clawbenchRef, "g"))).toHaveLength(1);
+    expect(workflow).toContain(`CLAWBENCH_REF: ${clawbenchRef}`);
+    expect(workflow).toContain("ref: ${{ env.CLAWBENCH_REF }}");
+    expect(readme).toContain("https://github.com/kernel/ClawBench");
+    expect(readme).toContain(clawbenchRef);
     expect(workflow).toContain("issues: write\n      pull-requests: write");
     expect(workflow).not.toContain(
       "KERNEL_PROJECT: ${{ vars.KERNEL_PROJECT }}",
@@ -940,10 +956,6 @@ describe("benchmark workflow hardening", () => {
       '"$GITHUB_WORKSPACE/harness/benchmarks/harbor/clawbench/run.sh"',
     );
 
-    const runner = readFileSync(
-      join(process.cwd(), "benchmarks/harbor/clawbench/run.sh"),
-      "utf8",
-    );
     expect(runner).toContain(
       "source_root=${KERNEL_MCP_BENCHMARK_SOURCE_ROOT:-$harness_root}",
     );
@@ -1012,7 +1024,6 @@ describe("benchmark workflow hardening", () => {
     );
     expect(dockerignore.split("\n")).toContain("*.pem");
     expect(runner).not.toContain("KERNEL_PROJECT");
-    expect(runner).toContain("c7feaa2435ca8115c0762c44e13885fe5adf3e98");
     expect(runner).toContain('"${KERNEL_API_BASE_URL%/}/auth/context"');
     expect(runner).toContain('bun "$benchmark_dir/verify-project-scope.ts"');
     expect(taskPreparer).not.toContain("KERNEL_PROJECT");
