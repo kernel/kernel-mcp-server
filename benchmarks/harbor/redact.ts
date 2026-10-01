@@ -87,6 +87,17 @@ function structuredValueEnd(text: string, start: number): number {
   return text.length;
 }
 
+function lineEndsAfter(text: string, start: number): boolean {
+  let cursor = start;
+  while (text[cursor] === " " || text[cursor] === "\t") cursor += 1;
+  return (
+    cursor >= text.length ||
+    text[cursor] === "\n" ||
+    text[cursor] === "\r" ||
+    (text[cursor] === "\\" && /[nr]/.test(text[cursor + 1] ?? ""))
+  );
+}
+
 function sensitiveAssignments(text: string): SensitiveAssignment[] {
   const assignments: SensitiveAssignment[] = [];
   for (let separator = 0; separator < text.length; separator += 1) {
@@ -115,7 +126,7 @@ function sensitiveAssignments(text: string): SensitiveAssignment[] {
     while (/\s/.test(text[valueCursor] ?? "")) valueCursor += 1;
     let slashCount = 0;
     while (text[valueCursor + slashCount] === "\\") slashCount += 1;
-    const quote = text[valueCursor + slashCount];
+    let quote = text[valueCursor + slashCount];
     let start = valueCursor;
     let end = valueCursor;
 
@@ -124,13 +135,29 @@ function sensitiveAssignments(text: string): SensitiveAssignment[] {
       for (let cursor = keyStart - 2; text[cursor] === "\\"; cursor -= 1) {
         openingSlashCount += 1;
       }
-      if (
+      const quotedLabel =
         !keyHasClosingQuote &&
         text[keyStart - 1] === quote &&
-        openingSlashCount === slashCount
-      ) {
+        openingSlashCount === slashCount;
+      if (quotedLabel && lineEndsAfter(text, valueCursor + slashCount + 1)) {
         continue;
       }
+      if (quotedLabel) {
+        valueCursor += slashCount + 1;
+        while (/\s/.test(text[valueCursor] ?? "")) valueCursor += 1;
+        if (text[valueCursor] === ":" || text[valueCursor] === "=") {
+          valueCursor += 1;
+          while (/\s/.test(text[valueCursor] ?? "")) valueCursor += 1;
+        }
+        slashCount = 0;
+        while (text[valueCursor + slashCount] === "\\") slashCount += 1;
+        quote = text[valueCursor + slashCount];
+        start = valueCursor;
+        end = valueCursor;
+      }
+    }
+
+    if (quote === '"' || quote === "'") {
       start = valueCursor + slashCount + 1;
       end = text.length;
       for (let cursor = start; cursor < text.length; cursor += 1) {
@@ -157,7 +184,12 @@ function sensitiveAssignments(text: string): SensitiveAssignment[] {
     } else {
       while (end < text.length) {
         const character = text[end] ?? "";
-        if (/[\s,\}&;]/.test(character)) break;
+        if (
+          /[\s,\}&;]/.test(character) ||
+          (character === "\\" && /[nrt]/.test(text[end + 1] ?? ""))
+        ) {
+          break;
+        }
         if (
           (character === '"' || character === "'") &&
           !(
@@ -512,17 +544,24 @@ function assertSensitiveAssignmentsRedacted(value: string): void {
       match[0].lastIndexOf(":"),
       match[0].lastIndexOf("="),
     );
-    if (
+    const quotedLabel =
       valueQuote &&
       [...match[0].slice(0, separator)].filter(
         (character) => character === valueQuote[2],
       ).length %
         2 ===
-        1
+        1;
+    if (
+      quotedLabel &&
+      lineEndsAfter(
+        value,
+        (match.index ?? 0) + match[0].length + valueQuote[0].length,
+      )
     ) {
       continue;
     }
-    const unquoted = remainder.replace(/^(?:\\*["'])?/, "");
+    let unquoted = remainder.replace(/^(?:\\*["'])?/, "");
+    if (quotedLabel) unquoted = unquoted.replace(/^\s*(?:[:=]\s*)?/, "");
     if (!unquoted.startsWith(REDACTED)) {
       throw new Error(
         "Braintrust payload still contains a sensitive field value",

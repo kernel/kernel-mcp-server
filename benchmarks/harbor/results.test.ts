@@ -623,6 +623,7 @@ describe("Harbor result ingestion", () => {
       result: `- text: "Email:"
 - textbox "Email:"
 - text: "Password:"
+- textbox "Password:": Filled2Pass
 Password: don't reuse one from another site`,
     });
     writeJson(trajectoryPath, trajectory);
@@ -634,6 +635,7 @@ Password: don't reuse one from another site`,
     const published = JSON.stringify(events);
     expect(published).toContain("Password:");
     expect(published).toContain("[REDACTED] reuse one from another site");
+    expect(published).not.toContain("Filled2Pass");
     expect(published).not.toContain("don't");
     expect(() => assertSafeToPublish(events)).not.toThrow();
   });
@@ -850,6 +852,15 @@ describe("Braintrust redaction", () => {
     expect(redacted).toBe("Password: [REDACTED] reuse one from another site");
     expect(collectSensitiveValues(prose)).toContain("don't");
     expect(() => assertSafeToPublish(redacted)).not.toThrow();
+
+    const filledSnapshot = '- textbox "Password:": Filled2Pass';
+    const redactedSnapshot = redactString(filledSnapshot);
+    expect(redactedSnapshot).not.toContain("Filled2Pass");
+    expect(collectSensitiveValues(filledSnapshot)).toContain("Filled2Pass");
+    expect(() => assertSafeToPublish(redactedSnapshot)).not.toThrow();
+    expect(() => assertSafeToPublish(filledSnapshot)).toThrow(
+      "sensitive field value",
+    );
   });
 
   test("redacts complex Playwright typing calls and rejects originals", () => {
