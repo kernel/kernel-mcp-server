@@ -225,6 +225,7 @@ jobs:
       CODEX_BENCHMARK_VERSION: "0.120.0"
       CLAUDE_BENCHMARK_MODEL: claude-sonnet-5
       CLAUDE_BENCHMARK_VERSION: "2.1.238"
+      CLAWBENCH_REF: 187cd252bc60af8ac3a2c98a87c9316e49a5ac75
       HARBOR_N_CONCURRENT: ${{ needs.resolve.outputs.concurrency }}
       BENCHMARK_PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
       BENCHMARK_HEAD_SHA: ${{ needs.resolve.outputs.head_sha }}
@@ -284,7 +285,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: kernel/ClawBench
-          ref: 187cd252bc60af8ac3a2c98a87c9316e49a5ac75
+          ref: ${{ env.CLAWBENCH_REF }}
           path: clawbench
           persist-credentials: false
 
@@ -326,7 +327,6 @@ jobs:
         shell: bash
         env:
           CLAWBENCH_REPO: ${{ github.workspace }}/clawbench
-          CLAWBENCH_REF: 187cd252bc60af8ac3a2c98a87c9316e49a5ac75
           HARBOR_BENCHMARK_TIMEOUT: 4h
           BENCHMARK_AGENT: ${{ needs.resolve.outputs.agent }}
           BENCHMARK_TASK: ${{ needs.resolve.outputs.task }}
