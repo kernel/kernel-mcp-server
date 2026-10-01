@@ -41,7 +41,7 @@ export function registerConfigRegistryTools(
     "manage_config_registry",
     {
       description:
-        'Find browser and proxy configurations for bot-protected sites. Use "lookup" for a side-effect-free read of current knowledge, "resolve" to start or retry a background analysis, "get_analysis" to poll one analysis, "cancel_analysis" to request cancellation, "list_configs" to list targets and their latest recommendations, or "list_analyses" to list analysis history.',
+        'Look up recommended browser and proxy settings for a site the user is authorized to automate. Use "lookup" for a side-effect-free read of current knowledge, "resolve" to start or retry a background analysis, "get_analysis" to poll one analysis, "cancel_analysis" to request cancellation, "list_configs" to list targets and their latest recommendations, or "list_analyses" to list analysis history.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z

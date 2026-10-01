@@ -494,7 +494,7 @@ export function registerBrowserCapabilities(
         stealth: z
           .boolean()
           .describe(
-            "(create) enable browser settings intended to reduce automation detection. site access is not guaranteed.",
+            "(create) apply KERNEL site-compatibility browser settings. use only on sites and accounts the user is authorized to access.",
           )
           .optional(),
         region: z
@@ -558,7 +558,7 @@ export function registerBrowserCapabilities(
         disable_default_proxy: z
           .boolean()
           .describe(
-            "(update) For stealth browsers, connect directly instead of using the default stealth proxy.",
+            "(update) Connect directly instead of through the session's default KERNEL-managed proxy.",
           )
           .optional(),
         kiosk_mode: z

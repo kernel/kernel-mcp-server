@@ -123,10 +123,11 @@ export function throwToolError(
   toolName: string,
   action: string,
   error: unknown,
+  note?: string,
 ): never {
   throw new ToolCallError(
     errorName(error),
-    `Error in ${toolName} (${action}): ${errorMessage(error)}`,
+    `Error in ${toolName} (${action}): ${errorMessage(error)}${note ? ` ${note}` : ""}`,
   );
 }
 

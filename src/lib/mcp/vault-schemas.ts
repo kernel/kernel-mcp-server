@@ -84,7 +84,15 @@ export const providerCredentialsSchema = z
       .min(1)
       .describe(
         "Write-only secret; supply through a trusted client, never chat.",
-      ),
+      )
+      .optional(),
+    publishable_key: z
+      .string()
+      .regex(/^pk_(live|test)_[A-Za-z0-9]+$/)
+      .describe(
+        "(Link only) Public Stripe publishable key Kernel sends when refreshing and revoking imported wallet grants. Without it, imported wallets stop working when their access token expires.",
+      )
+      .optional(),
   })
   .strict();
 
@@ -165,18 +173,6 @@ export const linkCardSpecSchema = z
   .object({
     provider: z.literal("link").optional(),
     wallet: vaultKeySchema(),
-    browser_id: z
-      .string()
-      .min(1)
-      .describe(
-        "Live browser session ID, not a reusable browser name. The browser must have this vault attached.",
-      ),
-    page_url: z
-      .string()
-      .regex(/^https:\/\/[^/?#@*\s]+(?:[/?#][^\s]*)?$/)
-      .describe(
-        "Exact final HTTPS checkout page URL open in that browser, including path, query, and fragment. Kernel inspects it at creation and binds fill to it.",
-      ),
     payment_method_id: z
       .string()
       .min(1)
@@ -186,11 +182,10 @@ export const linkCardSpecSchema = z
     amount: integer()
       .min(1)
       .max(500000)
-      .describe(
-        "Integer minor currency units. Link Pay Token checkouts allow up to 500000; the virtual-card fallback allows up to 50000.",
-      ),
+      .describe("Integer minor currency units."),
     currency: currency(),
     merchant_name: z.string().min(1).max(255),
+    merchant_url: z.string().url(),
     context: z.string().min(100),
     line_items: z.array(linkLineItemSchema).optional(),
     totals: z.array(linkTotalSchema()).optional(),
@@ -199,6 +194,18 @@ export const linkCardSpecSchema = z
   })
   .strict();
 
+export const agentcardCheckoutOriginSchema = z.string().refine((value) => {
+  try {
+    const url = new URL(value);
+    const supportedProtocol =
+      url.protocol === "https:" ||
+      (url.protocol === "http:" && url.hostname === "localhost");
+    return supportedProtocol && value === url.origin;
+  } catch {
+    return false;
+  }
+}, "Expected a canonical HTTPS origin or localhost HTTP origin without a path.");
+
 export const agentcardCardSpecSchema = z
   .object({
     provider: z.literal("agentcard").optional(),
@@ -206,6 +213,11 @@ export const agentcardCardSpecSchema = z
     merchant: z.string().min(1).max(120),
     amount: integer().min(1).describe("Integer minor currency units."),
     currency: currency(),
+    checkout_origin: agentcardCheckoutOriginSchema
+      .describe(
+        "Optional caller-declared checkout origin for eligible AgentCard autopilot rule matching on non-prepared checkout authorizations. Kernel forwards it without comparing it to the browser page. It does not enable autopilot or ensure payment success; omission retains the existing approval flow, and autopilot may fall back to user approval. Prepared checkout uses preparation.merchant_origin.",
+      )
+      .optional(),
     card_id: z
       .string()
       .regex(/^vc_[A-Za-z0-9_]+$/)
@@ -237,6 +249,6 @@ export const browserVaultsSchema = z
     "Duplicate vault references are not allowed.",
   )
   .describe(
-    "(create only) Project-owned vaults to attach, each with exactly one id or name; max 20. Bindings are immutable and unavailable for pooled browsers. Use a separate vault per end user. Attaching grants access to all items, including items added later. Credential fill writes real values into the page; it does not isolate them from an agent with browser access. Link cards are created against a live browser at final checkout and use fill, not aliases or egress substitution. AgentCard aliases remain a separate, explicitly chosen egress path; never fall back to aliases after an uncertain fill.",
+    "(create only) Project-owned vaults to attach, each with exactly one id or name; max 20. Bindings are immutable and unavailable for pooled browsers. Use a separate vault per end user. Attaching grants access to all items, including items added later. Credential fill writes real values into the page; it does not isolate them from an agent with browser access. Link cards use fill, not aliases or egress substitution. AgentCard aliases remain a separate, explicitly chosen egress path; never fall back to aliases after an uncertain fill.",
   )
   .optional();

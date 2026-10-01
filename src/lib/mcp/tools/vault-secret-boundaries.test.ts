@@ -178,7 +178,7 @@ describe("complete vault response boundary", () => {
         ...item,
         available_operations: [
           { type: access, description: "Unsafe echo" },
-          { type: "fill", description: "Safe operation" },
+          { type: "authorize", description: "Safe operation" },
         ],
       }),
     ]);
@@ -192,7 +192,7 @@ describe("complete vault response boundary", () => {
       expect(hints.invocation[0].arguments).toMatchObject({
         key: wallet.key,
         vault: wallet.vault,
-        operation: "fill",
+        operation: "authorize",
       });
     } finally {
       await fixture.close();

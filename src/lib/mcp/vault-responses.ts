@@ -1,9 +1,3 @@
-import {
-  APIConnectionError,
-  APIConnectionTimeoutError,
-  APIError,
-  APIUserAbortError,
-} from "@onkernel/sdk";
 import { z } from "zod";
 import { jsonResponse, throwToolError } from "@/lib/mcp/responses";
 
@@ -15,10 +9,24 @@ function fields(names: string): OutputFields {
 
 export const vaultFields = fields("id name created_at updated_at");
 export const vaultProviderConfigFields = fields(
-  "id name provider client_id test_mode created_at updated_at",
+  "id name provider client_id publishable_key test_mode created_at updated_at",
 );
 const operationFields = fields("type description");
 const totalFields = fields("type display_text amount");
+// Access-request IDs, provider paths, and identities are omitted. Returned
+// entry IDs are kept so 1pw_fill can select among approved logins.
+const onePasswordRequestEntryFields = {
+  ...fields("type reason keywords"),
+  parameters: fields("website"),
+};
+const onePasswordRequestFields = {
+  ...fields("version goal"),
+  entries: onePasswordRequestEntryFields,
+};
+const onePasswordReturnedEntryFields = {
+  ...onePasswordRequestEntryFields,
+  ...fields("id"),
+};
 const paymentMethodFields = {
   ...fields("id provider type is_default"),
   display: fields("label brand last4"),
@@ -28,15 +36,16 @@ const paymentMethodFields = {
 // Allow public metadata, including future operation names, but never unknown
 // provider fields, free-form metadata, or opaque event data.
 export const vaultItemFields: OutputFields = {
-  ...fields("id key type version description created_at updated_at expires_at"),
+  ...fields("id key type version created_at updated_at expires_at"),
   available_operations: operationFields,
   available_expansions: operationFields,
   action: fields("name url expires_at"),
   expanded: { payment_methods: paymentMethodFields },
   spec: {
     ...fields(
-      "provider wallet user_id browser_id page_url payment_method_id card_id amount currency merchant merchant_name context expires_at description",
+      "provider wallet user_id payment_method_id card_id amount currency merchant merchant_name merchant_url context expires_at description account access_token_expires_at",
     ),
+    requests: onePasswordRequestFields,
     fields: fields("name label type required sensitive"),
     provider_config: fields("id name"),
     authorization: {
@@ -54,6 +63,14 @@ export const vaultItemFields: OutputFields = {
   state: {
     ...fields("provider status status_reason user_id domains"),
     fields: { "*": fields("has_value") },
+    access_request: {
+      ...fields("state has_autofill_token granted_count goal"),
+      request: {
+        ...fields("version goal"),
+        entries: onePasswordReturnedEntryFields,
+      },
+      entries: onePasswordReturnedEntryFields,
+    },
     preparation: fields(
       "id status browser_id merchant_origin environment created_at expires_at approval_url",
     ),
@@ -66,7 +83,7 @@ export const vaultItemFields: OutputFields = {
 };
 
 export const vaultOperationResultFields: OutputFields = {
-  ...fields("type status"),
+  ...fields("type status error_code"),
   fields: fields("index status error_code"),
 };
 
@@ -77,10 +94,38 @@ export const vaultEventFields: OutputFields = {
   ),
 };
 
+// Native 1Password approvals are human actions: the account owner opens the link
+// in their 1Password app, and it grants nothing until they approve there. Only a
+// link in the exact native form is forwarded, without the API's free-text
+// instructions; anything else, including legacy nonce approval pages, is reduced
+// to the action name.
+const onePasswordAccessApproval = "1password_access_approval";
+
+function isNativeOnePasswordApprovalLink(value: string): boolean {
+  try {
+    const url = new URL(value);
+    const references = url.searchParams.getAll("access_request_reference");
+    return (
+      url.protocol === "onepassword:" &&
+      url.host === "grant-brokered-access" &&
+      !url.username &&
+      !url.password &&
+      !url.port &&
+      url.pathname === "" &&
+      !url.hash &&
+      [...url.searchParams.keys()].length === 1 &&
+      references.length === 1 &&
+      /^[A-Za-z0-9_-]{1,65536}$/.test(references[0])
+    );
+  } catch {
+    return false;
+  }
+}
+
 const urlFields = new Set([
   "url",
   "approval_url",
-  "page_url",
+  "merchant_url",
   "merchant_origin",
   "image_url",
   "product_url",
@@ -184,6 +229,19 @@ export function projectVaultOutput(
       continue;
     }
     result[key] = projectVaultOutput(field, children);
+  }
+  if (
+    allowed === vaultItemFields &&
+    z
+      .object({ name: z.literal(onePasswordAccessApproval) })
+      .safeParse(result.action).success
+  ) {
+    const url = z
+      .object({ url: z.string().refine(isNativeOnePasswordApprovalLink) })
+      .safeParse(Reflect.get(value, "action"));
+    result.action = url.success
+      ? { name: onePasswordAccessApproval, url: url.data.url }
+      : { name: onePasswordAccessApproval };
   }
   if (allowed === vaultItemFields && result.type === "credential") {
     const credential = credentialValuesSchema.safeParse(value);
@@ -294,11 +352,32 @@ export function vaultItemResponse(
   secrets: (string | undefined)[] = [],
 ) {
   const projected = projectVaultOutput(item, vaultItemFields);
+  const typed = z
+    .object({
+      type: z.string(),
+      spec: z
+        .object({
+          provider: z.string().optional(),
+          account: z.string().optional(),
+        })
+        .optional(),
+    })
+    .safeParse(projected);
+  const onePasswordAccount =
+    typed.success && typed.data.type === "credential_account";
+  const onePasswordCredential =
+    typed.success &&
+    typed.data.type === "credential" &&
+    typed.data.spec?.provider === "1password";
   const credential =
-    projected !== null &&
-    typeof projected === "object" &&
-    "type" in projected &&
-    projected.type === "credential";
+    typed.success && typed.data.type === "credential" && !onePasswordCredential;
+  const onePasswordGuidance = onePasswordAccount
+    ? onePasswordAccountGuidance
+    : onePasswordCredential
+      ? typed.data.spec?.account === undefined
+        ? [...onePasswordCredentialGuidance, onePasswordStoredTokenGuidance]
+        : onePasswordCredentialGuidance
+      : undefined;
   const advertised = advertisedOperationsSchema.safeParse(projected);
   const payment = z
     .object({
@@ -319,130 +398,67 @@ export function vaultItemResponse(
         observation: vaultObservationHints(target).filter(safeHint),
         invocation: advertised.success
           ? advertised.data.available_operations
+              .filter(({ type }) => type !== "1pw_update_access_token")
               .map(({ type }) => ({
                 tool: "manage_vault_items",
                 arguments: { ...target, action: "invoke", operation: type },
-                requires_user_approval: true,
+                requires_user_approval: type !== "1pw_access_request_status",
               }))
               .filter(safeHint)
           : [],
       },
-      guidance: credential
-        ? [
-            "Present the collection URL only to the intended user in a private surface, outside the agent-controlled browser. It is a bearer credential. Never ask for passwords or TOTP seeds in chat; TOTP seeds require trusted backend provisioning, not hosted collection.",
-            "MCP returns field definitions, has_value, version, collection expiry, and explicitly non-sensitive text/email values. Sensitive values and TOTP seeds are never returned. Ready means required values exist, not that login succeeded. Listing does not renew collection links; use get or the advertised collection operation.",
-            'Use manage_vault_items with action: "invoke" and the advertised collection operation to reopen the full form without clearing values or changing readiness or version. wait observes readiness, not edits to ready items. Compare versions with get without wait; a change can also come from an API update, so it does not identify a specific form submission.',
-            "Create or update credentials with manage_vault_credentials. On create, inspect the website and list the named field definitions in its natural top-to-bottom order; that array order directly controls the user-facing collection form. Use optional non-secret labels for human-readable text; stable names remain authoritative for state, updates, and fill. Use a per-user vault, a recognizable site-name-only description, and sensitive:false for usernames/emails. Passwords and TOTP must be sensitive. Updates require the current version; supply expected_item_id when bound to an earlier read. Omitted values remain; null or empty strings clear supported fields, including required text/email/password fields. Hosted forms still require populated required inputs. Do not store payment-card data in credential items.",
-            "Invocation hints are not approval to execute. Invoke the advertised browser field-writing operation with manage_vault_items using an inputs object containing browser_id and ordered fields of field/selector bindings, never values. Bind the vault at browser creation, authorize the destination, and follow the advertised description. Fill does not submit or navigate; real values enter the browser and may be read by an agent with browser access. Never retry an uncertain fill or fall back to aliases.",
-          ]
-        : [
-            "Ask the user to complete returned provider actions. Never request card data or OAuth codes/tokens in chat; imported grants must come from a trusted backend. Read operation descriptions and obtain explicit user approval before invoking.",
-            "Invocation hints are not approval to execute. Availability may change; invoke rechecks the advertised operations. Ready does not mean paid.",
-            ...(payment.success && payment.data.type === "wallet"
-              ? [
-                  "Wallets connect a payment provider; they are not fillable cards. Read item.description for current provider guidance. Create a card with manage_vault_cards (for Link, only after the vault-attached browser reaches final checkout), then inspect that card's state and advertised operations.",
-                ]
-              : []),
-            ...(cardProvider === "link"
-              ? [
-                  "Link cards are immutable and bound to spec.browser_id and spec.page_url. Creation starts approval: while pending_authorization, give the user item.action.url to approve in Link; there is no authorize operation. Kernel uses a Link Pay Token on Stripe Checkout pages that expose one, otherwise a one-time virtual card. To change the payment, delete this card and create a new one; never edit or recreate it to retry a payment.",
-                  "Fill only when advertised, and read its description for the exact inputs: it may need only browser_id and page_url with no fields, or ordered field/selector bindings, never values. The browser must keep this vault attached and stay on the bound checkout page. Fill returns no card or token values and never submits payment or clicks Pay; browser access can expose written values. Failed or unknown fills may leave partial changes. Never automatically retry or fall back to aliases. Completion means the credential was supplied to the page, not that the payment succeeded.",
-                ]
-              : []),
-            ...(cardProvider === "agentcard"
-              ? [
-                  "AgentCard aliases remain supported for explicitly chosen egress-substitution integrations: use only returned state.aliases in a browser created with this vault attached, respecting returned permitted domains. Checkout hold, approval, and replay remain supported; observe checkout authorization and approval URLs. Never fall back to aliases after an uncertain fill or preparation.",
-                  "For checkout preparation, supply the API-required checkout context and deliver the returned approval URL and keep the approval page open. Poll the item until ready_to_submit, then submit native Pay before state.preparation.expires_at. Readiness lasts at most 30 seconds; polling does not extend it. Preparations are single-use even after failure or expiry. Preparation consumed means claimed, not payment success.",
-                ]
-              : []),
-            "Observe get/events for outcomes. Do not retry failed, timed-out, rejected, or indeterminate payments or reconfigure a card to retry them.",
-            "recovery_required is an unresolved original outcome, not decline or expiry. Stop payment attempts; reconcile with the provider or support. No reset exists, and deletion may be blocked for this item and its parents.",
-          ],
+      guidance:
+        onePasswordGuidance ??
+        (credential
+          ? [
+              "Present the collection URL only to the intended user in a private surface, outside the agent-controlled browser. It is a bearer credential. Never ask for passwords or TOTP seeds in chat; TOTP seeds require trusted backend provisioning, not hosted collection.",
+              "MCP returns field definitions, has_value, version, collection expiry, and explicitly non-sensitive text/email values. Sensitive values and TOTP seeds are never returned. Ready means required values exist, not that login succeeded. Listing does not renew collection links; use get or the advertised collection operation.",
+              'Use manage_vault_items with action: "invoke" and the advertised collection operation to reopen the full form without clearing values or changing readiness or version. wait observes readiness, not edits to ready items. Compare versions with get without wait; a change can also come from an API update, so it does not identify a specific form submission.',
+              "Create or update credentials with manage_vault_credentials. On create, inspect the website and list the named field definitions in its natural top-to-bottom order; that array order directly controls the user-facing collection form. Use optional non-secret labels for human-readable text; stable names remain authoritative for state, updates, and fill. Use a per-user vault, a recognizable site-name-only description, and sensitive:false for usernames/emails. Passwords and TOTP must be sensitive. Updates require the current version; supply expected_item_id when bound to an earlier read. Omitted values remain; null or empty strings clear supported fields, including required text/email/password fields. Hosted forms still require populated required inputs. Do not store payment-card data in credential items.",
+              "Invocation hints are not approval to execute. Invoke the advertised browser field-writing operation with manage_vault_items using an inputs object containing browser_id and ordered fields of field/selector bindings, never values. Bind the vault at browser creation, authorize the destination, and follow the advertised description. Fill does not submit or navigate; real values enter the browser and may be read by an agent with browser access. Never retry an uncertain fill or fall back to aliases.",
+            ]
+          : [
+              "Ask the user to complete returned provider actions. Never request card data or OAuth codes/tokens in chat; imported grants must come from a trusted backend. Read operation descriptions and obtain explicit user approval before invoking.",
+              "Invocation hints are not approval to execute. Availability may change; invoke rechecks the advertised operations. Ready does not mean paid.",
+              ...(payment.success && payment.data.type === "wallet"
+                ? [
+                    "Wallets connect a payment provider; they are not fillable cards. Use manage_vault_cards to configure a purchase request, then inspect that card's state and advertised operations.",
+                  ]
+                : []),
+              ...(cardProvider === "link"
+                ? [
+                    "Link cards use browser field writes for checkout only when advertised. Link does not expose aliases or support egress substitution; do not use aliases from older responses, which fail closed on supported payment shapes. The browser must retain this vault attachment in the same project. The exact current HTTPS top-level page URL must have the origin of spec.merchant_url. The card must remain ready and unexpired with stored card material and a non-deleted parent wallet; lifecycle and destination checks still apply.",
+                    "When the field-writing operation is advertised, pass inputs with browser_id, exact current top-level page_url (including path, query, and fragment), and ordered field/selector bindings, never values. A combined expiration field requires format MM/YY or MM/YYYY. Attach the vault at browser creation. The operation returns no card values and does not explicitly submit checkout; browser access can expose written values. Failed or unknown writes may leave partial changes. Never automatically retry or fall back to aliases. Completion means fields were written, not that the payment succeeded.",
+                  ]
+                : []),
+              ...(cardProvider === "agentcard"
+                ? [
+                    "AgentCard aliases remain supported for explicitly chosen egress-substitution integrations: use only returned state.aliases in a browser created with this vault attached, respecting returned permitted domains. Checkout hold, approval, and replay remain supported; observe checkout authorization and approval URLs. Never fall back to aliases after an uncertain fill or preparation.",
+                    "For checkout preparation, supply the API-required checkout context and deliver the returned approval URL and keep the approval page open. Poll the item until ready_to_submit, then submit native Pay before state.preparation.expires_at. Readiness lasts at most 30 seconds; polling does not extend it. Preparations are single-use even after failure or expiry. Preparation consumed means claimed, not payment success.",
+                  ]
+                : []),
+              "Observe get/events for outcomes. Do not retry failed, timed-out, rejected, or indeterminate payments or reconfigure a card to retry them.",
+              "recovery_required is an unresolved original outcome, not decline or expiry. Stop payment attempts; reconcile with the provider or support. No reset exists, and deletion may be blocked for this item and its parents.",
+            ]),
     },
     secrets,
   );
 }
 
-const vaultErrorMessages = new Map([
-  [
-    "invalid_request",
-    "Invalid vault request. Check the tool's documented inputs.",
-  ],
-  [
-    "not_found",
-    "Vault, item, provider configuration, or project not found or unavailable.",
-  ],
-  [
-    "forbidden",
-    "This credential cannot perform the vault operation. Check connection scope and permissions.",
-  ],
-  [
-    "conflict",
-    "The vault request conflicts with the current configuration or state. Inspect the item and its advertised operations and expansions.",
-  ],
-  [
-    "project_error",
-    "Unable to resolve the vault's project. Check connection scope and project selection.",
-  ],
-  ["db_error", "The vault storage request could not be completed."],
-  [
-    "provider_error",
-    "The payment provider could not complete the vault request.",
-  ],
-  [
-    "provider_rate_limited",
-    "The payment provider has rate limited requests. Stop and wait before taking further action.",
-  ],
-  [
-    "spend_request_rate_limited",
-    "The payment provider has rate limited spend requests. Stop and wait before taking further action.",
-  ],
-  [
-    "browser_not_found",
-    "Browser session not found. Use a live browser session ID in the same project with this vault attached.",
-  ],
-  [
-    "browser_unavailable",
-    "The browser is unavailable. Use a live browser session with this vault attached.",
-  ],
-  [
-    "browser_error",
-    "Kernel could not inspect the checkout page in the browser.",
-  ],
-  [
-    "destination_denied",
-    "The page is not an authorized destination for this item.",
-  ],
-  [
-    "page_not_found",
-    "No open page matches page_url. Use the exact current top-level page URL, including path, query, and fragment.",
-  ],
-  [
-    "ambiguous_page",
-    "More than one open page matches, or the checkout page could not be identified. Leave exactly one matching checkout page open.",
-  ],
-  ["target_changed", "The page or target changed during the operation."],
-  ["timeout", "The operation did not finish before its deadline."],
-  [
-    "field_unavailable",
-    "A requested field has no stored value. Request only fields the item can supply.",
-  ],
-  ["element_not_found", "A selector matched no editable element on the page."],
-  [
-    "ambiguous_selector",
-    "A selector matched more than one element. Use a selector that resolves to exactly one editable element.",
-  ],
-  [
-    "element_not_editable",
-    "A selector matched an element that cannot be edited.",
-  ],
-  ["option_not_found", "A select element has no option with the value."],
-  ["invalid_selector", "A selector is not valid CSS."],
-  ["duplicate_target", "Two field bindings resolve to the same element."],
-  ["execution_failed", "The browser could not complete the operation."],
-]);
-const vaultErrorGuidance =
-  "Inspect item state/events before taking further action. Do not replay a payment.";
+const onePasswordAccountGuidance = [
+  "This credential_account connects the end user's 1Password account to this vault only; it is not a fillable credential, and another end user's vault needs its own connection. If an action URL is present, present it only to the account owner, outside the agent-controlled browser, and let them complete 1Password consent. Never ask for 1Password passwords, Secret Keys, OAuth codes, or tokens in chat.",
+  'Observe with manage_vault_items action: "get" until state.status is connected, then create 1Password credentials with manage_vault_credentials, provider: "1password", and account set to this item\'s key. declined or reconnect_required need the user to connect again with connect_account on the same key. 1pw_recover is advertised only when Kernel can recover a failed account link: after explicit user approval, call manage_vault_items with action: "invoke" and operation: "1pw_recover", present the returned link to the account owner the same way, and once recovery completes connect again on the same key. Never delete the account to recover.',
+];
+
+const onePasswordCredentialGuidance = [
+  'Operations use manage_vault_items with action: "invoke", operation set to the advertised 1pw_* type, and inputs for that operation. 1Password credentials hold no values in Kernel; spec.requests.entries lists the 1-5 requested logins and their websites. Only logins in the owner\'s own non-shared 1Password vault are supported, not shared-vault items or passkeys. After explicit user approval, invoke operation: "1pw_create_access_request" with inputs {browser_id} and an optional goal (reason and keywords only for a single-login request), using a browser created with this vault attached; Kernel loads the 1Password extension into that browser on demand. Create that browser before requesting access: the approval link exists only after this request.',
+  'Approval is a human action in the account owner\'s 1Password app. When action.name is 1password_access_approval with a url, give that onepassword:// link unmodified only to the account owner, in a private surface outside the agent-controlled browser, to open on a device with the 1Password app; they choose the login and approve or deny there. The link grants nothing until they approve, but it identifies the request: never open it in a browser, decode it, post it where others can see it, or approve on their behalf. Without a url, MCP received no native link: tell the owner the approval link is unavailable and do not request again while pending. Invoke operation: "1pw_access_request_status" with inputs {browser_id} to observe the decision; it only reads status and needs no user approval. Do not issue a second request while an approval action or 1pw_access_request_status is present.',
+  "declined means the owner denied the request: do not request again unless they ask, and offer Kernel-hosted collection instead. If the item is pending_authorization with no action and 1pw_create_access_request is advertised again, the earlier request finished without a usable login: tell the owner the status_reason and, with their approval, request access once more. failed is a confirmed failure: read status_reason, then ask the end-user before deleting and recreating this credential for at most one new request, or offer Kernel-hosted collection. If the item stays pending_authorization with no action and no advertised operations, first check that the credential_account named by spec.account is connected; if it is, a request may already have reached 1Password: stop, tell the owner to check 1Password, and never delete or recreate the item to retry.",
+  'When ready, invoke operation: "1pw_fill" with inputs {browser_id, page_url}, where page_url is the exact current top-level URL on a requested login origin. If several approved logins share that origin, ask the owner which one to use and add entry_id from state.access_request entries; never guess. The extension selects fields and submits; you cannot supply selectors or values. fill_submitted means the form was submitted, not that login succeeded: check the page. fill_failed with noExistingCredentials means the owner\'s 1Password has no usable login for the page: tell the owner instead of retrying. fill_unknown may have submitted; never retry it in the same browser.',
+];
+
+const onePasswordStoredTokenGuidance =
+  "This credential has no account: it uses a customer-supplied 1Password access token stored encrypted by Kernel, and spec.access_token_expires_at is optional expiry metadata. The integrating developer replaces the token through the Kernel API; 1pw_update_access_token is not available through MCP. Never ask for or accept 1Password tokens or integration keys in chat. While the token is expired, request and fill are unavailable.";
 
 export function throwVaultError(
   tool: string,
@@ -452,80 +468,6 @@ export function throwVaultError(
 ): never {
   const guidance = operationSubmitted
     ? "The operation may have partially completed. Inspect item state, events, and browser before acting. Do not retry automatically."
-    : vaultErrorGuidance;
-  if (error instanceof z.ZodError) {
-    throwToolError(
-      tool,
-      action,
-      new Error("Vault request must match the documented schema."),
-    );
-  }
-  if (error instanceof APIError && typeof error.status === "number") {
-    const body = error.error;
-    const code =
-      body &&
-      typeof body === "object" &&
-      "code" in body &&
-      typeof body.code === "string"
-        ? body.code
-        : undefined;
-    const providerReason = z
-      .object({
-        inner_error: z.object({
-          code: z.literal("provider_rejection_reason"),
-          message: z.string().min(1),
-        }),
-      })
-      .safeParse(body);
-    if (
-      operationSubmitted &&
-      error.status >= 400 &&
-      error.status < 500 &&
-      providerReason.success
-    ) {
-      throwToolError(
-        tool,
-        action,
-        APIError.generate(
-          error.status,
-          {
-            message: `${providerReason.data.inner_error.message} Inspect item state and events before acting. Do not retry automatically.`,
-            ...(code !== undefined &&
-              /^[a-zA-Z0-9_.-]{1,128}$/.test(code) && { code }),
-          },
-          undefined,
-          new Headers(),
-        ),
-      );
-    }
-    const message =
-      code === undefined ? undefined : vaultErrorMessages.get(code);
-    throwToolError(
-      tool,
-      action,
-      APIError.generate(
-        error.status,
-        {
-          message: `${message ?? "Vault request failed."} ${guidance}`,
-          ...(message !== undefined && { code }),
-        },
-        undefined,
-        new Headers(),
-      ),
-    );
-  }
-  if (error instanceof APIConnectionTimeoutError) {
-    throwToolError(
-      tool,
-      action,
-      new APIConnectionTimeoutError({ message: guidance }),
-    );
-  }
-  if (error instanceof APIUserAbortError) {
-    throwToolError(tool, action, new APIUserAbortError({ message: guidance }));
-  }
-  if (error instanceof APIConnectionError) {
-    throwToolError(tool, action, new APIConnectionError({ message: guidance }));
-  }
-  throwToolError(tool, action, new Error(`Vault request failed; ${guidance}`));
+    : "Inspect item state/events before taking further action. Do not replay a payment.";
+  throwToolError(tool, action, error, guidance);
 }

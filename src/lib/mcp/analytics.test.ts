@@ -749,7 +749,7 @@ describe("captureMcpFeedback", () => {
     );
   });
 
-  test("routes structured bot-detection feedback to config registry prioritization", async () => {
+  test("routes structured site-compatibility feedback to config registry prioritization", async () => {
     const captured: unknown[] = [];
     const analytics = {
       capture: async (event: unknown) => {
@@ -760,16 +760,16 @@ describe("captureMcpFeedback", () => {
     await captureMcpFeedback(
       {
         summary: "Stealth sessions were consistently blocked",
-        feedback_type: "bot_detection",
+        feedback_type: "site_compatibility",
         sentiment: "negative",
         task_completed: false,
         tools_used: ["manage_browsers", "execute_playwright_code"],
-        bot_detection: {
+        site_compatibility: {
           registrable_domain: "example.com",
           observed_outcome: "blocked",
-          suspected_vendor: "Akamai Bot Manager",
-          challenge_type: "access_denied",
-          stealth: "enabled",
+          access_provider: "Akamai Bot Manager",
+          challenge_type: "verification_prompt",
+          compatibility_mode: "enabled",
           proxy_type: "isp",
           region: "us-east",
           browser_version: "152.0.7977.42",
@@ -802,7 +802,7 @@ describe("captureMcpFeedback", () => {
           feedback_bot_detection_registrable_domain: "example.com",
           feedback_bot_detection_observed_outcome: "blocked",
           feedback_bot_detection_suspected_vendor: "Akamai Bot Manager",
-          feedback_bot_detection_challenge_type: "access_denied",
+          feedback_bot_detection_challenge_type: "captcha",
           feedback_bot_detection_stealth: "enabled",
           feedback_bot_detection_proxy_type: "isp",
           feedback_bot_detection_region: "us-east",
@@ -827,7 +827,7 @@ describe("captureMcpFeedback", () => {
       feedback_type: "config_registry" as const,
       sentiment: "mixed" as const,
       task_completed: false,
-      bot_detection: {
+      site_compatibility: {
         registrable_domain: "example.com",
         observed_outcome: "blocked" as const,
         reproducibility: "consistent" as const,
@@ -856,8 +856,8 @@ describe("captureMcpFeedback", () => {
     await captureMcpFeedback(
       {
         ...base,
-        bot_detection: {
-          ...base.bot_detection,
+        site_compatibility: {
+          ...base.site_compatibility,
           observed_outcome: "passed",
         },
       },
@@ -867,8 +867,8 @@ describe("captureMcpFeedback", () => {
     await captureMcpFeedback(
       {
         ...base,
-        bot_detection: {
-          ...base.bot_detection,
+        site_compatibility: {
+          ...base.site_compatibility,
           observed_outcome: "passed",
         },
         config_registry: {
@@ -903,7 +903,7 @@ describe("captureMcpFeedback", () => {
         feedback_type: "config_registry",
         sentiment: "negative",
         task_completed: false,
-        bot_detection: {
+        site_compatibility: {
           registrable_domain: "example.com",
           observed_outcome: "blocked",
           challenge_type: "access_denied",
@@ -1370,13 +1370,13 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
         context:
           "Reporting a repeatable site block so the affected domain can be prioritized for a working browser configuration.",
         summary: "Stealth sessions were consistently blocked",
-        feedback_type: "bot_detection",
+        feedback_type: "site_compatibility",
         sentiment: "negative",
         task_completed: false,
-        bot_detection: {
+        site_compatibility: {
           registrable_domain: "example.com",
           observed_outcome: "blocked",
-          suspected_vendor: "Akamai Bot Manager",
+          access_provider: "Akamai Bot Manager",
           reproducibility: "consistent",
         },
       },
@@ -1415,6 +1415,39 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     expect(toolCall.properties[PostHogMCPAnalyticsProperty.Intent]).toBe(
       "Reporting a repeatable site block so the affected domain can be prioritized for a working browser configuration.",
     );
+  });
+
+  test("upgrades previous site outcome names before capture and keeps legacy analytics values", async () => {
+    const captured: { event?: string }[] = [];
+
+    await simulateRequest(captured, "tools/call", {
+      name: KERNEL_FEEDBACK_TOOL_NAME,
+      arguments: {
+        context:
+          "Reporting a site result from a client that still holds the previous feedback schema.",
+        summary: "The site showed a verification step",
+        feedback_type: "bot_detection",
+        sentiment: "mixed",
+        task_completed: true,
+        bot_detection: {
+          registrable_domain: "example.com",
+          observed_outcome: "challenged",
+          challenge_type: "captcha",
+          stealth: "enabled",
+          reproducibility: "single_observation",
+        },
+      },
+    });
+
+    const feedback = captured.find(
+      ({ event }) => event === MCP_FEEDBACK_SUBMITTED_EVENT,
+    ) as { properties: Record<string, unknown> };
+    expect(feedback.properties).toMatchObject({
+      feedback_type: "bot_detection",
+      feedback_destination: "config_registry_prioritization",
+      feedback_bot_detection_challenge_type: "captcha",
+      feedback_bot_detection_stealth: "enabled",
+    });
   });
 
   test("attributes modern requests without a session and preserves the privacy allowlist", async () => {

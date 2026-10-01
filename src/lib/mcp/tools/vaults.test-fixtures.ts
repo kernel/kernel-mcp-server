@@ -17,30 +17,23 @@ export const item = {
   id: "vi_123",
   key: "order-1",
   type: "card",
-  spec: {
-    provider: "link",
-    wallet: "wallet-1",
-    browser_id: "browser-session-id",
-    page_url: "https://shop.example/checkout",
-  },
-  state: { provider: "link", status: "ready" },
+  spec: { provider: "link", wallet: "wallet-1" },
+  state: { provider: "link", status: "requested" },
   available_operations: [
     {
-      type: "fill",
-      description:
-        "Invoke fill with browser_id and page_url exactly as stored in this item's spec, and omit fields.",
+      type: "authorize",
+      description: "Obtain explicit user approval before authorizing.",
     },
   ],
   available_expansions: [],
 };
 export const linkSpec = {
   wallet: "wallet-1",
-  browser_id: "browser-session-id",
-  page_url: "https://shop.example/checkout",
   payment_method_id: "pm_example",
   amount: 1234,
   currency: "USD",
   merchant_name: "Example Shop",
+  merchant_url: "https://shop.example",
   context:
     "Purchase the selected office supplies from Example Shop for the approved order, with a total spending limit of 1234 minor currency units.",
 };

@@ -43,14 +43,42 @@ describe("vault SDK request contracts", () => {
         "Mode is determined by the wallet credentials",
       );
       expect(cards?.description).toContain(
-        "Cards are immutable and cannot be updated",
+        "Pending issuance updates preserve omitted optional fields",
       );
-      expect(cards?.description).toContain("There is no separate authorize");
-      expect(cards?.inputSchema.properties?.action).toMatchObject({
-        enum: ["create"],
-      });
       expect(cards?.description).toContain("recovery_required");
+      expect(JSON.stringify(cards?.inputSchema)).toContain("checkout_origin");
+      expect(cards?.description).toContain(
+        "Kernel does not compare it with the browser page",
+      );
+      expect(cards?.description).toContain(
+        "Prepared checkout uses preparation.merchant_origin",
+      );
       expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("forwards AgentCard checkout_origin in the card specification", async () => {
+    const spec = {
+      ...agentcardSpec,
+      checkout_origin: "https://shop.example",
+    };
+    const fixture = await connectVaultTest([Response.json(item)]);
+    try {
+      const result = await fixture.call("manage_vault_cards", {
+        action: "create",
+        vault: "checkout",
+        key: "order-1",
+        provider: "agentcard",
+        spec,
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[0].body).toMatchObject({
+        type: "card",
+        spec: { ...spec, provider: "agentcard" },
+      });
     } finally {
       await fixture.close();
     }
@@ -163,7 +191,7 @@ describe("vault SDK request contracts", () => {
   );
 
   test.each(["link", "agentcard"])(
-    "creates a %s card with one PUT and has no update path",
+    "creates and fully replaces a %s card without authorizing it",
     async (provider) => {
       const original =
         provider === "link"
@@ -201,29 +229,35 @@ describe("vault SDK request contracts", () => {
               card_id: "vc_chosen",
               amount: Number.MAX_SAFE_INTEGER,
             };
-      const fixture = await connectVaultTest([Response.json(item)]);
+      const replacement = provider === "link" ? linkSpec : agentcardSpec;
+      const fixture = await connectVaultTest([
+        Response.json(item),
+        Response.json(item),
+      ]);
       try {
-        const result = await fixture.call("manage_vault_cards", {
-          action: "create",
-          vault: "checkout",
-          key: "order-1",
-          provider,
-          spec: original,
-        });
-        expect(result.isError).toBeUndefined();
-        const update = await fixture.call("manage_vault_cards", {
-          action: "update",
-          vault: "checkout",
-          key: "order-1",
-          provider,
-          spec: original,
-        });
-        expect(update.isError).toBe(true);
-        expect(fixture.requests).toHaveLength(1);
+        for (const [action, spec] of [
+          ["create", original],
+          ["update", replacement],
+        ]) {
+          const result = await fixture.call("manage_vault_cards", {
+            action,
+            vault: "checkout",
+            key: "order-1",
+            provider,
+            spec,
+          });
+          expect(result.isError).toBeUndefined();
+        }
+        expect(fixture.requests).toHaveLength(2);
         expect(fixture.requests[0]).toMatchObject({
           method: "PUT",
           body: { type: "card", spec: original },
         });
+        expect(fixture.requests[1]).toMatchObject({
+          method: "PATCH",
+          body: { spec: { ...replacement, provider } },
+        });
+        expect(fixture.requests[1].body).not.toHaveProperty("type");
       } finally {
         await fixture.close();
       }
@@ -346,7 +380,7 @@ describe("vault scopes and input validation", () => {
         action: "invoke",
         vault: "checkout",
         key: "order-1",
-        operation: "fill",
+        operation: "authorize",
       },
     ],
   ] as const)(
@@ -458,12 +492,6 @@ describe("vault scopes and input validation", () => {
     { ...linkSpec, number: "hidden", cvc: "hidden" },
     { ...linkSpec, domains: ["shop.example"] },
     { ...linkSpec, authorization: { access_token: "hidden" } },
-    { ...linkSpec, merchant_url: "https://shop.example" },
-    { ...linkSpec, merchant_account_id: "acct_hidden" },
-    { ...linkSpec, browser_id: undefined },
-    { ...linkSpec, page_url: undefined },
-    { ...linkSpec, page_url: "http://shop.example/checkout" },
-    { ...linkSpec, page_url: "https://user@shop.example/checkout" },
     { type: "card", spec: linkSpec },
     JSON.stringify(linkSpec),
     null,

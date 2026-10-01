@@ -92,6 +92,48 @@ describe("vault provider config SDK routing", () => {
     },
   );
 
+  test("sets the Link publishable key on create and update", async () => {
+    const link = {
+      ...config,
+      provider: "link",
+      publishable_key: "pk_live_example",
+    };
+    const fixture = await connectVaultTest(
+      [Response.json(link), Response.json(link)],
+      organizationWideAuthInfo(),
+    );
+    try {
+      const created = await fixture.call(tool, {
+        ...create,
+        provider: "link",
+        credentials: {
+          ...create.credentials,
+          publishable_key: "pk_live_example",
+        },
+      });
+      expectSecretFree(created);
+      expect(toolResultJSON(created)).toEqual(link);
+      await fixture.call(tool, {
+        action: "update",
+        config: config.id,
+        credentials: { publishable_key: "pk_live_example" },
+      });
+      expect(fixture.requests.map(({ body }) => body)).toEqual([
+        {
+          name: config.name,
+          provider: "link",
+          credentials: {
+            ...create.credentials,
+            publishable_key: "pk_live_example",
+          },
+        },
+        { credentials: { publishable_key: "pk_live_example" } },
+      ]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test("gets, paginates a single page, renames, and rotates without defaulting omitted fields", async () => {
     const fixture = await connectVaultTest(
       [
@@ -193,12 +235,15 @@ describe("vault provider config SDK routing", () => {
           config: config.id,
         });
         expect(result.isError === true).toBe(status === 409);
-        expectSecretFree(result);
-        if (status !== 409)
+        if (status === 409) {
+          expect(JSON.stringify(result)).toContain(`409 ${secret}`);
+          expect(JSON.stringify(result)).toContain("[code: conflict]");
+        } else {
           expect(toolResultJSON(result)).toEqual({
             status: "deleted_or_not_found",
             config: config.id,
           });
+        }
         expect(fixture.requests).toHaveLength(1);
         expect(fixture.requests[0].method).toBe("DELETE");
       } finally {
@@ -208,7 +253,7 @@ describe("vault provider config SDK routing", () => {
   );
 
   test.each([400, 403, 409, 429, 500])(
-    "redacts HTTP %s errors and never retries credential writes",
+    "passes through HTTP %s errors and never retries credential writes",
     async (status) => {
       const fixture = await connectVaultTest(
         [
@@ -227,8 +272,8 @@ describe("vault provider config SDK routing", () => {
       try {
         const result = await fixture.call(tool, create);
         expect(result.isError).toBe(true);
-        expect(JSON.stringify(result)).toContain(`${status} `);
-        expectSecretFree(result);
+        expect(JSON.stringify(result)).toContain(`${status} ${secret}`);
+        expect(JSON.stringify(result)).toContain(`[code: ${secret}]`);
         expect(fixture.requests).toHaveLength(1);
       } finally {
         await fixture.close();
@@ -353,6 +398,19 @@ describe("config scope and validation", () => {
     },
     { action: "update", config: config.id, credentials: create.credentials },
     { action: "update", config: config.id },
+    { action: "update", config: config.id, credentials: {} },
+    {
+      action: "update",
+      config: config.id,
+      credentials: { publishable_key: "sk_live_secret" },
+    },
+    {
+      ...create,
+      credentials: {
+        ...create.credentials,
+        publishable_key: "pk_live_example",
+      },
+    },
     { action: "update", name: "renamed" },
     { action: "get" },
     { action: "get", config: "../bad" },
@@ -378,7 +436,7 @@ describe("config scope and validation", () => {
 
 describe("configured wallets and recovery", () => {
   test.each([400, 409, 429, 500])(
-    "does not expose or retry a rejected imported grant (HTTP %s)",
+    "passes through a rejected grant diagnostic without retrying (HTTP %s)",
     async (status) => {
       const fixture = await connectVaultTest([
         Response.json(
@@ -396,7 +454,8 @@ describe("configured wallets and recovery", () => {
           importedCreate,
         );
         expect(result.isError).toBe(true);
-        expectSecretFree(result);
+        expect(JSON.stringify(result)).toContain(`${status} ${access}`);
+        expect(JSON.stringify(result)).toContain("[code: provider_error]");
         expect(fixture.requests).toHaveLength(1);
       } finally {
         await fixture.close();
@@ -404,7 +463,7 @@ describe("configured wallets and recovery", () => {
     },
   );
 
-  test("an identical card PUT returns recovery unchanged without repeating approval", async () => {
+  test("an identical card PUT returns recovery unchanged without authorizing", async () => {
     const recovery = {
       ...item,
       state: { provider: "link", status: "recovery_required" },
@@ -595,7 +654,7 @@ describe("configured wallets and recovery", () => {
     },
   );
 
-  test("forwards omitted vs explicit empty Link card fields unchanged", async () => {
+  test("preserves omitted vs explicit empty pending-card fields", async () => {
     const fixture = await connectVaultTest([
       Response.json(item),
       Response.json(item),
@@ -606,7 +665,7 @@ describe("configured wallets and recovery", () => {
         { ...linkSpec, line_items: [], totals: [], metadata: {} },
       ]) {
         await fixture.call("manage_vault_cards", {
-          action: "create",
+          action: "update",
           vault: "checkout",
           key: "order-1",
           provider: "link",
@@ -614,9 +673,8 @@ describe("configured wallets and recovery", () => {
         });
       }
       expect(fixture.requests.map(({ body }) => body)).toEqual([
-        { type: "card", spec: { ...linkSpec, provider: "link" } },
+        { spec: { ...linkSpec, provider: "link" } },
         {
-          type: "card",
           spec: {
             ...linkSpec,
             provider: "link",

@@ -18,7 +18,7 @@ The image records the current Git SHA, and the generated task records the ClawBe
 
 - `uv`, Harbor 0.21.0, and `harbor-hypeman` 0.1.2
 - Hypeman CLI credentials
-- a ClawBench checkout containing pinned commit `c7feaa2`
+- a [`kernel/ClawBench`](https://github.com/kernel/ClawBench) checkout containing pinned commit `187cd252bc60af8ac3a2c98a87c9316e49a5ac75`
 - `KERNEL_MCP_BENCHMARK_API_KEY` scoped to an isolated evaluation project; its credential scope is the project source of truth
 - `PURELY_MAIL_API_KEY` and `PURELY_MAIL_DOMAIN` for ClawBench account tasks
 - `OPENAI_API_KEY` for Codex, or Anthropic credentials for Claude Code
@@ -57,7 +57,9 @@ Codex defaults to version `0.120.0` with `gpt-5.6-luna`. Claude Code defaults to
 
 Single-task runs have a 40-minute wall-clock limit. Full-suite runs default to six hours. Set `HARBOR_BENCHMARK_TIMEOUT` to override either limit. Set `HARBOR_JOBS_DIR` to choose where Harbor writes results.
 
-The runner retries a whole isolated trial up to five times for transient Hypeman connection, timeout, and exec-stream failures. Set `HARBOR_MAX_RETRIES` to override that limit. Per-request SDK retries remain disabled because transparently retrying instance or image creation can duplicate a request whose first response was lost.
+Before creating the Harbor dataset, the runner creates and deletes one disposable PurelyMail account. API errors stop the run before trials begin, so missing email accounts cannot silently become task failures.
+
+The runner retries a whole isolated trial up to five times for transient Hypeman connection, timeout, exec-stream, and agent setup failures. Harbor step `setup.sh` failures are not retried; the PurelyMail preflight catches the known external setup dependency before trials begin. Set `HARBOR_MAX_RETRIES` to override the trial retry limit. Per-request SDK retries remain disabled because transparently retrying instance or image creation can duplicate a request whose first response was lost.
 
 ## GitHub Actions
 
@@ -102,6 +104,8 @@ BRAINTRUST_PROJECT=kernel-mcp-server-benchmarks \
     --arm baseline=/path/to/baseline-job
 ```
 
-The experiment name and deterministic row/span IDs make it safe to publish the same job directories again. Re-publication replaces the rows and refreshes experiment metadata. Rows contain task identity, numeric rewards, provenance, bounded errors, timing, token, call, and cost metrics. ATIF agent/tool activity is attached as child spans after secret redaction. Task instructions, ground truth, browser session URLs, and recordings are not placed on experiment rows or public pull-request comments.
+The experiment name and deterministic row/span IDs make it safe to publish the same job directories again. Re-publication replaces the rows and refreshes experiment metadata. Rows contain task identity, the redacted instruction, numeric rewards, provenance, bounded errors, and trial timing. Setup, browser lifetime, execution, verification, and finalization are separate timeline spans; the browser span records its timeout and deletion status without its identifiers. ATIF turns include their preceding context, structured tool calls, cached-token metrics, and inferred turn intervals. Browser tool spans record whether the supplied session ID matched the trial's expected session without publishing either ID. Tool durations remain unspecified because ATIF does not record them.
+
+The publisher redacts typed form values, configured secrets, credentials, email addresses, browser session/replay IDs, private-info file contents, and provider URLs. It validates the final payload and aborts before creating an experiment if sensitive content remains. Ground truth, recordings, and raw Harbor jobs are never published.
 
 Reports suppress comparison deltas when either arm has an infrastructure failure or ungraded trial. The workflow fails unless every intended trial is graded, while still retaining the incomplete report for diagnosis.

@@ -20,7 +20,7 @@ source_root=${KERNEL_MCP_BENCHMARK_SOURCE_ROOT:-$harness_root}
 benchmark_dir="$harness_root/benchmarks/harbor"
 image_env="$source_root/benchmarks/harbor/.image.env"
 clawbench_repo=${CLAWBENCH_REPO:-$harness_root/../ClawBench}
-clawbench_ref=${CLAWBENCH_REF:-c7feaa2435ca8115c0762c44e13885fe5adf3e98}
+clawbench_ref=${CLAWBENCH_REF:-187cd252bc60af8ac3a2c98a87c9316e49a5ac75}
 
 [[ -f "$image_env" ]] || {
   echo "Missing $image_env; run benchmarks/harbor/build-image.sh first" >&2
@@ -47,6 +47,8 @@ set +a
 : "${KERNEL_MCP_BENCHMARK_API_KEY:?KERNEL_MCP_BENCHMARK_API_KEY is required}"
 : "${PURELY_MAIL_API_KEY:?PURELY_MAIL_API_KEY is required}"
 : "${PURELY_MAIL_DOMAIN:?PURELY_MAIL_DOMAIN is required}"
+
+bun "$benchmark_dir/verify-purelymail.ts"
 
 case "$agent" in
   claude-code)
@@ -169,5 +171,7 @@ timeout --signal=INT --kill-after=30s "${HARBOR_BENCHMARK_TIMEOUT:-$default_time
   --retry-include InternalServerError \
   --retry-include ConnectionRefusedError \
   --retry-include ExecProtocolError \
+  --retry-include AgentSetupTimeoutError \
+  --retry-include RuntimeError \
   --delete \
   --yes
