@@ -44,13 +44,13 @@ function fallbackOn() {
       "Conditions that advance to the next provider. Defaults to error and timeout; empty also advances after zero results. An empty array disables fallback. Ignored for pinned strategy.",
     );
 }
-const contentRequest = z
+const searchContentOptions = z
   .object({
     source: z
       .enum(["auto", "provider", "browser"])
       .optional()
       .describe(
-        "auto reuses fresh full-page provider content and otherwise fetches through a Kernel browser; provider only reuses provider content and never creates a browser; browser always fetches through a Kernel browser.",
+        "auto reuses retained provider content; deferred retrieval fetches through a Kernel browser when content is unavailable or stale, while inline search never uses a browser. provider only reuses retained provider content. browser requests browser retrieval where supported.",
       ),
     browser: z
       .object({
@@ -65,33 +65,37 @@ const contentRequest = z
           .min(1)
           .optional()
           .describe(
-            "Reuse this authorized browser and its cookies and proxy. Requires source=browser.",
+            "Reuse this authorized browser and its cookies and proxy. Inline search requires source=browser; deferred retrieval also accepts source=auto.",
           ),
       })
       .strict()
-      .optional(),
+      .optional()
+      .describe(
+        "Browser settings. Inline search requires source=browser; deferred retrieval accepts source=auto or source=browser.",
+      ),
     format: z.enum(["markdown", "text"]).optional(),
     max_chars: z.number().int().min(100).max(100000).optional(),
     max_age_hours: z.number().int().min(0).optional(),
     timeout_ms: z.number().int().min(1000).max(60000).optional(),
   })
-  .strict()
-  .refine(
-    ({ source, browser }) => source !== "provider" || browser === undefined,
-    "Browser options are invalid with source=provider.",
-  )
-  .refine(
-    ({ source, browser }) =>
-      browser?.browser_id === undefined || source === "browser",
-    "browser_id requires source=browser.",
-  );
+  .strict();
+
+const inlineSearchContentOptions = searchContentOptions.refine(
+  ({ source, browser }) => browser === undefined || source === "browser",
+  "Inline search browser options require source=browser.",
+);
+
+const deferredSearchContentOptions = searchContentOptions.refine(
+  ({ source, browser }) => source !== "provider" || browser === undefined,
+  "Browser options are invalid with source=provider.",
+);
 
 const searchContentsRequest = z
   .object({
     result_ids: z.array(z.string().min(1)).min(1).max(100).optional(),
     limit: z.number().int().min(1).max(100).optional(),
     timeout_ms: z.number().int().min(1000).max(120000).optional(),
-    content: contentRequest.optional(),
+    content: deferredSearchContentOptions.optional(),
   })
   .strict()
   .refine(
@@ -244,64 +248,9 @@ const searchRequest = z
           .describe(
             "Enable default portable content retrieval: auto source, markdown, and a 10,000-character per-result cap.",
           ),
-        z
-          .object({
-            source: z
-              .enum(["auto", "provider", "browser"])
-              .optional()
-              .describe(
-                "Content source. auto prefers browser retrieval and falls back to provider content; provider requires provider post-hoc support; browser uses Kernel browser retrieval.",
-              ),
-            browser: z
-              .object({
-                mode: z
-                  .enum(["curl", "render"])
-                  .optional()
-                  .describe(
-                    "Browser retrieval mode. curl uses the browser HTTP stack without JavaScript; render navigates and extracts from the DOM.",
-                  ),
-                browser_id: z
-                  .string()
-                  .min(1)
-                  .optional()
-                  .describe(
-                    "Existing browser session to reuse. It must belong to the caller and selected project; Kernel does not delete it.",
-                  ),
-              })
-              .strict()
-              .optional()
-              .describe("Optional browser retrieval settings."),
-            format: z
-              .enum(["markdown", "text"])
-              .optional()
-              .describe("Extracted content format. Defaults to markdown."),
-            max_chars: z
-              .number()
-              .int()
-              .min(100)
-              .max(100000)
-              .optional()
-              .describe("Per-result Unicode character limit after extraction."),
-            max_age_hours: z
-              .number()
-              .int()
-              .min(0)
-              .optional()
-              .describe(
-                "Maximum age of cached page content. Zero forces a live fetch; caller-supplied browser sessions skip this cache.",
-              ),
-            timeout_ms: z
-              .number()
-              .int()
-              .min(1000)
-              .max(60000)
-              .optional()
-              .describe(
-                "Per-result content deadline, including browser capacity, retrieval, and extraction.",
-              ),
-          })
-          .strict()
-          .describe("Portable content retrieval options."),
+        inlineSearchContentOptions.describe(
+          "Portable content retrieval options.",
+        ),
       ])
       .optional()
       .describe(

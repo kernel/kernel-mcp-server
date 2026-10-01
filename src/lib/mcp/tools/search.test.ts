@@ -80,7 +80,11 @@ describe("web_search", () => {
     const f = await fixture();
     const contents = {
       limit: 2,
-      content: { source: "browser", format: "markdown" },
+      content: {
+        source: "auto",
+        browser: { browser_id: "b1", mode: "render" },
+        format: "markdown",
+      },
     };
     try {
       const result = await f.client.callTool({
@@ -144,7 +148,13 @@ describe("web_search", () => {
     {
       action: "contents",
       search_id: "srch_test",
-      contents: { limit: 1, content: { browser: { browser_id: "b1" } } },
+      contents: {
+        limit: 1,
+        content: {
+          source: "provider",
+          browser: { browser_id: "b1" },
+        },
+      },
     },
     { action: "providers", project: "proj_other" },
     { action: "create", request: { query: "" } },
@@ -153,7 +163,14 @@ describe("web_search", () => {
       action: "create",
       request: {
         query: "test",
-        content: { browser: { browser_id: "" } },
+        content: { source: "auto", browser: { browser_id: "b1" } },
+      },
+    },
+    {
+      action: "create",
+      request: {
+        query: "test",
+        content: { source: "browser", browser: { browser_id: "" } },
       },
     },
     {
