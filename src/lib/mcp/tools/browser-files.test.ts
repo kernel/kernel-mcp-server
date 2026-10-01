@@ -1,8 +1,24 @@
 import { describe, expect, test } from "bun:test";
-import { runBrowserFileAction } from "@/lib/mcp/tools/browser-files";
+import { connectTestMcp } from "@/lib/mcp/mcp-test-fixtures";
+import { registerBrowserFileTools } from "@/lib/mcp/tools/browser-files";
 
-function text(result: Awaited<ReturnType<typeof runBrowserFileAction>>) {
-  return result.content[0].type === "text" ? result.content[0].text : undefined;
+async function callBrowserFiles(fs: unknown, args: Record<string, unknown>) {
+  const { client, close } = await connectTestMcp(registerBrowserFileTools, {
+    browsers: { fs },
+  });
+  try {
+    return await client.callTool({
+      name: "manage_browser_files",
+      arguments: args,
+    });
+  } finally {
+    await close();
+  }
+}
+
+function text(result: Awaited<ReturnType<typeof callBrowserFiles>>) {
+  const [content] = result.content as Array<{ type: string; text?: string }>;
+  return content.type === "text" ? content.text : undefined;
 }
 
 describe("manage_browser_files", () => {
@@ -25,7 +41,7 @@ describe("manage_browser_files", () => {
       },
     } as any;
 
-    const result = await runBrowserFileAction(fs, {
+    const result = await callBrowserFiles(fs, {
       action: "list",
       session_id: "session-1",
       path: "/tmp",
@@ -39,7 +55,7 @@ describe("manage_browser_files", () => {
       readFile: async () => new Response("hello\nworld\n"),
     } as any;
 
-    const result = await runBrowserFileAction(fs, {
+    const result = await callBrowserFiles(fs, {
       action: "read",
       session_id: "session-1",
       path: "/tmp/hello.txt",
@@ -56,24 +72,22 @@ describe("manage_browser_files", () => {
         }),
     } as any;
 
-    const result = await runBrowserFileAction(fs, {
+    const result = await callBrowserFiles(fs, {
       action: "download",
       session_id: "session-1",
       path: "/tmp/a file.png",
     });
 
-    expect(result).toEqual({
-      content: [
-        {
-          type: "resource",
-          resource: {
-            uri: "kernel-browser-file://session-1/tmp/a%20file.png",
-            blob: "AAEC",
-            mimeType: "image/png",
-          },
+    expect(result.content).toEqual([
+      {
+        type: "resource",
+        resource: {
+          uri: "kernel-browser-file://session-1/tmp/a%20file.png",
+          blob: "AAEC",
+          mimeType: "image/png",
         },
-      ],
-    });
+      },
+    ]);
   });
 
   test("decodes base64 writes", async () => {
@@ -90,7 +104,7 @@ describe("manage_browser_files", () => {
       },
     } as any;
 
-    const result = await runBrowserFileAction(fs, {
+    const result = await callBrowserFiles(fs, {
       action: "write",
       session_id: "session-1",
       path: "/tmp/file.bin",
@@ -111,7 +125,7 @@ describe("manage_browser_files", () => {
       },
     } as any;
 
-    const result = await runBrowserFileAction(fs, {
+    const result = await callBrowserFiles(fs, {
       action: "write",
       session_id: "session-1",
       path: "/tmp/file.bin",
@@ -120,7 +134,7 @@ describe("manage_browser_files", () => {
     });
 
     expect(called).toBe(false);
-    expect("isError" in result && result.isError).toBe(true);
+    expect(result.isError).toBe(true);
     expect(text(result)).toBe("Error: content is not valid base64.");
   });
 
@@ -133,7 +147,7 @@ describe("manage_browser_files", () => {
       },
     } as any;
 
-    const result = await runBrowserFileAction(fs, {
+    const result = await callBrowserFiles(fs, {
       action: "upload",
       session_id: "session-1",
       files: [
@@ -160,13 +174,13 @@ describe("manage_browser_files", () => {
       downloadDirZip: async () => new Response(new Uint8Array([80, 75])),
     } as any;
 
-    const result = await runBrowserFileAction(fs, {
+    const result = await callBrowserFiles(fs, {
       action: "download_dir_zip",
       session_id: "session-1",
       path: "/tmp/reports/",
     });
 
-    expect(result.content[0]).toEqual({
+    expect((result.content as unknown[])[0]).toEqual({
       type: "resource",
       resource: {
         uri: "kernel-browser-file://session-1/tmp/reports.zip",
@@ -181,13 +195,13 @@ describe("manage_browser_files", () => {
       downloadDirZip: async () => new Response(new Uint8Array([80, 75])),
     } as any;
 
-    const result = await runBrowserFileAction(fs, {
+    const result = await callBrowserFiles(fs, {
       action: "download_dir_zip",
       session_id: "session-1",
       path: "/",
     });
 
-    expect(result.content[0]).toEqual({
+    expect((result.content as unknown[])[0]).toEqual({
       type: "resource",
       resource: {
         uri: "kernel-browser-file://session-1/browser-files.zip",
@@ -212,29 +226,29 @@ describe("manage_browser_files", () => {
         calls.push(["setFilePermissions", params]),
     } as any;
 
-    await runBrowserFileAction(fs, {
+    await callBrowserFiles(fs, {
       action: "create_directory",
       session_id: "session-1",
       path: "/tmp/new",
       mode: "0755",
     });
-    await runBrowserFileAction(fs, {
+    await callBrowserFiles(fs, {
       action: "move",
       session_id: "session-1",
       src_path: "/tmp/old",
       dest_path: "/tmp/new",
     });
-    await runBrowserFileAction(fs, {
+    await callBrowserFiles(fs, {
       action: "delete_file",
       session_id: "session-1",
       path: "/tmp/file",
     });
-    await runBrowserFileAction(fs, {
+    await callBrowserFiles(fs, {
       action: "delete_directory",
       session_id: "session-1",
       path: "/tmp/dir",
     });
-    await runBrowserFileAction(fs, {
+    await callBrowserFiles(fs, {
       action: "set_permissions",
       session_id: "session-1",
       path: "/tmp/file",
@@ -265,13 +279,39 @@ describe("manage_browser_files", () => {
       },
     ) as any;
 
-    const result = await runBrowserFileAction(fs, {
+    const result = await callBrowserFiles(fs, {
       action: "move",
       session_id: "session-1",
       src_path: "/tmp/source",
     });
 
-    expect("isError" in result && result.isError).toBe(true);
+    expect(result.isError).toBe(true);
     expect(text(result)).toBe("Error: dest_path is required for move.");
+  });
+
+  test("rejects empty session IDs and paths before calling the SDK", async () => {
+    const fs = new Proxy(
+      {},
+      {
+        get: () => {
+          throw new Error("unexpected SDK call");
+        },
+      },
+    );
+
+    for (const args of [
+      { action: "list", session_id: "", path: "/tmp" },
+      { action: "list", session_id: "session-1", path: "" },
+      {
+        action: "move",
+        session_id: "session-1",
+        src_path: "",
+        dest_path: "/b",
+      },
+    ]) {
+      const result = await callBrowserFiles(fs, args);
+      expect(result.isError).toBe(true);
+      expect(text(result)).not.toContain("unexpected SDK call");
+    }
   });
 });

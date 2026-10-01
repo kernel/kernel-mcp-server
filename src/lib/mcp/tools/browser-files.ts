@@ -1,7 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { toFile } from "@onkernel/sdk";
 import { z } from "zod";
-import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
+import type { KernelClient } from "@/lib/mcp/kernel-client";
 import {
   projectForOperation,
   projectSelectionInputSchema,
@@ -17,6 +21,7 @@ import {
 const fileContentSchema = z.object({
   dest_path: z
     .string()
+    .min(1)
     .describe("Absolute destination path in the browser VM."),
   content: z.string().describe("File contents, encoded according to encoding."),
   encoding: z
@@ -44,14 +49,22 @@ const browserFileParamsSchema = z.object({
       "set_permissions",
     ])
     .describe("Filesystem operation to perform."),
-  session_id: z.string().describe("Browser session ID."),
+  session_id: z.string().min(1).describe("Browser session ID."),
   path: z
     .string()
-    .describe("Absolute file or directory path in the browser VM.")
+    .min(1)
+    .describe(
+      "(list, get_info, read, download, write, download_dir_zip, create_directory, delete_file, delete_directory, set_permissions) Absolute file or directory path in the browser VM.",
+    )
     .optional(),
-  src_path: z.string().describe("(move) Absolute source path.").optional(),
+  src_path: z
+    .string()
+    .min(1)
+    .describe("(move) Absolute source path.")
+    .optional(),
   dest_path: z
     .string()
+    .min(1)
     .describe("(move, upload_zip) Absolute destination path.")
     .optional(),
   content: z
@@ -150,7 +163,7 @@ async function responseBuffer(response: Response) {
   return Buffer.from(await response.arrayBuffer());
 }
 
-export async function runBrowserFileAction(
+async function runBrowserFileAction(
   fs: BrowserFsClient,
   params: BrowserFileParams,
 ) {
@@ -292,7 +305,12 @@ export async function runBrowserFileAction(
   }
 }
 
-export function registerBrowserFileTools(server: McpServer) {
+export function registerBrowserFileTools(
+  server: McpServer,
+  options: McpDependencies = {
+    ...defaultMcpDependencies,
+  },
+) {
   server.registerTool(
     "manage_browser_files",
     {
@@ -309,7 +327,7 @@ export function registerBrowserFileTools(server: McpServer) {
     },
     async (params, ctx) => {
       if (!ctx.http?.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(
+      const client = options.createKernelClient(
         ctx.http.authInfo.token,
         projectForOperation(ctx.http.authInfo, params),
       );
