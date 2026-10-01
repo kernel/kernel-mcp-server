@@ -61,9 +61,24 @@ export function registerCredentialTools(server: McpServer) {
             "(create, update) Base32 TOTP secret (16-128 characters) or otpauth:// URI. URI parameters override explicit settings. On update, empty string clears it.",
           )
           .optional(),
-        totp_algorithm: z.enum(["SHA1", "SHA256", "SHA512"]).optional(),
-        totp_digits: z.number().int().min(6).max(9).optional(),
-        totp_period: z.number().int().min(15).max(300).optional(),
+        totp_algorithm: z
+          .enum(["SHA1", "SHA256", "SHA512"])
+          .describe("(create, update) TOTP algorithm; update requires a replacement totp_secret.")
+          .optional(),
+        totp_digits: z
+          .number()
+          .int()
+          .min(6)
+          .max(9)
+          .describe("(create, update) TOTP code digits; update requires a replacement totp_secret.")
+          .optional(),
+        totp_period: z
+          .number()
+          .int()
+          .min(15)
+          .max(300)
+          .describe("(create, update) TOTP period in seconds; update requires a replacement totp_secret.")
+          .optional(),
       }),
       annotations: {
         title: "Manage Kernel credentials",
