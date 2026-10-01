@@ -38,6 +38,7 @@ describe("provider-specific vault payment guidance", () => {
       for (const text of [
         "Link cards are immutable",
         "Authorize at the final checkout page",
+        'manage_vault_items with action: "invoke", operation: "authorize"',
         "inputs browser_id and the exact current top-level page_url together",
         "Link Pay Token on Stripe Checkout pages",
         "otherwise a one-time virtual card",
@@ -165,7 +166,7 @@ describe("provider-specific vault payment guidance", () => {
         "Link cards use the advertised fill operation, not aliases or egress substitution",
       );
       expect(items?.description).toContain(
-        "Link card authorize takes inputs browser_id (session ID) and the exact current final checkout page_url together",
+        'Authorize a Link card with action: "invoke", operation: "authorize", and inputs browser_id (session ID) and the exact current final checkout page_url together',
       );
       expect(items?.description).toContain(
         "a Link Pay Token fill omits fields",

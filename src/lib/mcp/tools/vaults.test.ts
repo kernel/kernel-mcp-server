@@ -47,7 +47,7 @@ describe("vault SDK request contracts", () => {
         "Creating a Link card does not contact Link or authorize it",
       );
       expect(cards?.description).toContain(
-        "inputs browser_id (session ID) and the exact current page_url together",
+        'call manage_vault_items with action: "invoke", operation: "authorize", and inputs browser_id (session ID) and the exact current page_url together',
       );
       expect(cards?.inputSchema.properties?.action).toMatchObject({
         enum: ["create"],
