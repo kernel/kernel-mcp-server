@@ -1,6 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { createKernelClient } from "@/lib/mcp/kernel-client";
+import type { CredentialUpdateParams } from "@onkernel/sdk/resources/credentials";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
 import {
   errorResponse,
   jsonResponse,
@@ -14,13 +18,16 @@ import {
   projectSelectionInputSchema,
 } from "@/lib/mcp/project-selection";
 
-export function registerCredentialTools(server: McpServer) {
+export function registerCredentialTools(
+  server: McpServer,
+  dependencies: McpDependencies = defaultMcpDependencies,
+) {
   // manage_credentials -- Manage stored credentials for managed auth
   server.registerTool(
     "manage_credentials",
     {
       description:
-        'Manage credentials stored in Kernel for managed auth. "list" discovers credentials (optionally filtered by domain), "get" returns a credential\'s metadata (values are never returned), "totp_code" returns the current TOTP for credentials with a configured totp_secret, "create" stores a new credential, "update" changes its name/values/sso_provider/totp_secret (values are merged with existing). "delete" removes a credential by ID or name. TOTP secrets accept 16-128 base32 characters or an otpauth:// URI; algorithm, digits, and period are optional settings.',
+        'Manage credentials stored in Kernel for managed auth. "list" discovers credentials (optionally filtered by domain), "get" returns a credential\'s metadata (values are never returned), "totp_code" returns the current TOTP for credentials with a configured totp_secret, "create" stores a new credential, "update" changes its name/values/sso_provider/totp_secret (values are merged with existing). "delete" removes a credential by ID or name. TOTP secrets accept a base32 secret (16-128 characters) or an otpauth:// URI; algorithm, digits, and period are optional settings.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z
@@ -58,26 +65,32 @@ export function registerCredentialTools(server: McpServer) {
         totp_secret: z
           .string()
           .describe(
-            "(create, update) Base32 TOTP secret (16-128 characters) or otpauth:// URI. URI parameters override explicit settings. On update, empty string clears it.",
+            "(create, update) base32 secret (16-128 characters) or otpauth:// URI. URI parameters override explicit settings. On update, empty string clears it.",
           )
           .optional(),
         totp_algorithm: z
           .enum(["SHA1", "SHA256", "SHA512"])
-          .describe("(create, update) TOTP algorithm; update requires a replacement totp_secret.")
+          .describe(
+            "(create, update) TOTP algorithm; update requires a replacement totp_secret.",
+          )
           .optional(),
         totp_digits: z
           .number()
           .int()
           .min(6)
           .max(9)
-          .describe("(create, update) TOTP code digits; update requires a replacement totp_secret.")
+          .describe(
+            "(create, update) TOTP code digits; update requires a replacement totp_secret.",
+          )
           .optional(),
         totp_period: z
           .number()
           .int()
           .min(15)
           .max(300)
-          .describe("(create, update) TOTP period in seconds; update requires a replacement totp_secret.")
+          .describe(
+            "(create, update) TOTP period in seconds; update requires a replacement totp_secret.",
+          )
           .optional(),
       }),
       annotations: {
@@ -90,7 +103,7 @@ export function registerCredentialTools(server: McpServer) {
     },
     async (params, ctx) => {
       if (!ctx.http?.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(
+      const client = dependencies.createKernelClient(
         ctx.http.authInfo.token,
         projectForOperation(ctx.http.authInfo, params),
       );
@@ -179,7 +192,7 @@ export function registerCredentialTools(server: McpServer) {
             }
             if (!params.id_or_name)
               return errorResponse("Error: id_or_name is required for update.");
-            const updateParams = {
+            const updateParams: CredentialUpdateParams = {
               ...(params.name !== undefined && { name: params.name }),
               ...(params.values !== undefined && { values: params.values }),
               ...(params.sso_provider !== undefined && {
