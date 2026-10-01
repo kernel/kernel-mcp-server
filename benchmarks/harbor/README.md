@@ -23,7 +23,7 @@ The image records the current Git SHA, and the generated task records the ClawBe
 - `PURELY_MAIL_API_KEY` and `PURELY_MAIL_DOMAIN` for ClawBench account tasks
 - `OPENAI_API_KEY` for Codex, or Anthropic credentials for Claude Code
 - the ClawBench judge variables when using a hosted judge: `CLAWBENCH_JUDGE_BASE_URL`, `CLAWBENCH_JUDGE_API_KEY`, `CLAWBENCH_JUDGE_MODEL`, and `CLAWBENCH_JUDGE_API_TYPE`
-- `BRAINTRUST_API_KEY` and `BRAINTRUST_PROJECT` when publishing results
+- `BRAINTRUST_API_KEY` and `BRAINTRUST_PROJECT` when publishing results (in CI, also the `BENCHMARK_PUBLISH_BRAINTRUST=true` repository variable)
 
 The runner checks `/auth/context` before generating trials and stops unless the benchmark credential and effective connection resolve to the same non-empty project scope.
 
@@ -71,7 +71,7 @@ An organization member or repository collaborator can also start the full PR com
 /benchmark clawbench
 ```
 
-The command parser does not execute comment text. It accepts only the exact command, rejects fork pull requests and untrusted commenters, and resolves the candidate and merge-base SHAs through GitHub's API. The workflow uses the `benchmarks` environment for credentials, updates one benchmark comment on the pull request, and publishes the same results to Braintrust.
+The command parser does not execute comment text. It accepts only the exact command, rejects fork pull requests and untrusted commenters, and resolves the candidate and merge-base SHAs through GitHub's API. The workflow uses the `benchmarks` environment for credentials, updates one benchmark comment on the pull request, and publishes the same results to Braintrust when the `BENCHMARK_PUBLISH_BRAINTRUST` repository variable is `true`.
 
 ## Results
 

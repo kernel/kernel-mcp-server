@@ -379,8 +379,11 @@ jobs:
           if ((candidate_status != 0)); then tail -100 "$RUNNER_TEMP/candidate.log" >&2; fi
           if ((baseline_status != 0)); then tail -100 "$RUNNER_TEMP/baseline.log" >&2; fi
 
+      # Opt-in: the report below renders from the Harbor job directories, so
+      # an unpublished run still gets its job summary and PR comment.
       - name: Publish Braintrust experiment
         id: publish
+        if: vars.BENCHMARK_PUBLISH_BRAINTRUST == 'true'
         continue-on-error: true
         shell: bash
         env:
@@ -478,6 +481,6 @@ jobs:
         run: |
           [[ "$CANDIDATE_STATUS" == "0" ]]
           [[ "$BASELINE_STATUS" == "0" ]]
-          [[ "$PUBLISH_OUTCOME" == "success" ]]
+          [[ "$PUBLISH_OUTCOME" == "success" || "$PUBLISH_OUTCOME" == "skipped" ]]
           [[ "$REPORT_OUTCOME" == "success" ]]
           jq -e 'all(.arms[]; .complete == true)' "$RUNNER_TEMP/benchmark-summary.json" >/dev/null
