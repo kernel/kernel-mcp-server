@@ -1,20 +1,16 @@
 import { Kernel } from "@onkernel/sdk";
 
-export function createKernelClient(apiKey: string) {
-  const headers: Record<string, string> = {
-    "X-Source": "mcp-server",
-    "X-Referral-Source": "mcp.onkernel.com",
-  };
-
-  const projectId = process.env.KERNEL_PROJECT;
-  if (projectId) {
-    headers["X-Kernel-Project-Id"] = projectId;
-  }
-
+export function createKernelClient(apiKey: string, project?: string) {
   return new Kernel({
     apiKey,
+    // SDK debug logging includes request bodies, which can contain vault secrets.
+    logLevel: "off",
+    project: project ?? process.env.KERNEL_PROJECT,
     baseURL: process.env.API_BASE_URL,
-    defaultHeaders: headers,
+    defaultHeaders: {
+      "X-Source": "mcp-server",
+      "X-Referral-Source": "mcp.onkernel.com",
+    },
   });
 }
 

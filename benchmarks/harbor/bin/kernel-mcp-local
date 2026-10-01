@@ -1,0 +1,18 @@
+#!/bin/sh
+# Harbor launches MCP servers as stdio subprocesses of the benchmark agent.
+# This wrapper turns that stdio connection into an authenticated connection to
+# the kernel-mcp-server HTTP endpoint running locally in the same Hypeman task.
+# The setup script writes the project-scoped key to /run so it never appears in
+# the generated agent configuration.
+set -eu
+
+key_file=/run/kernel-mcp-benchmark/api-key
+if [ -z "${KERNEL_API_KEY:-}" ] && [ -r "$key_file" ]; then
+  KERNEL_API_KEY=$(cat "$key_file")
+  export KERNEL_API_KEY
+fi
+: "${KERNEL_API_KEY:?KERNEL_API_KEY is required}"
+
+exec mcp-remote \
+  http://127.0.0.1:3002/mcp \
+  --header "Authorization: Bearer ${KERNEL_API_KEY}"

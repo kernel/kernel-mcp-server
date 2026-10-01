@@ -1,19 +1,35 @@
 import { MCP_SESSION_HEADER } from "@posthog/mcp";
 import {
   createMcpHandler,
-  experimental_withMcpAuth as withMcpAuth,
-} from "mcp-handler";
+  isLegacyRequest,
+  McpServer,
+} from "@modelcontextprotocol/server";
 import { verifyToken } from "@clerk/nextjs/server";
 import { after, NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
-import { flushMcpAnalytics, instrumentMcpAnalytics } from "@/lib/mcp/analytics";
+import { oauthResourceMetadataUrl } from "@/lib/oauth-discovery";
+import {
+  captureMcpConnectionScopeFailure,
+  flushMcpAnalytics,
+  instrumentMcpAnalytics,
+  isMcpAnalyticsEnabled,
+} from "@/lib/mcp/analytics";
+import {
+  connectionAnalyticsFromContext,
+  resolveMcpConnectionContext,
+  type McpConnectionContextFailure,
+} from "@/lib/mcp/auth-context";
 import { mcpAppsAuthSubject } from "@/lib/mcp-apps-marker";
 import { requestUsesMcpApps } from "@/lib/mcp-apps-request";
 import {
   createMcpTransportSession,
   verifyMcpTransportSession,
 } from "@/lib/mcp-transport-session";
-import { registerMcpCapabilities } from "@/lib/mcp/register";
+import {
+  mcpToolsetEnabledByConfig,
+  registerMcpCapabilities,
+} from "@/lib/mcp/register";
+import { resolveMcpEntitlements } from "@/lib/mcp/entitlements";
 import { name, version } from "../../../server.json";
 
 export async function OPTIONS(_req: NextRequest): Promise<Response> {
@@ -22,50 +38,208 @@ export async function OPTIONS(_req: NextRequest): Promise<Response> {
     headers: {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": `Content-Type, Authorization, ${MCP_SESSION_HEADER}`,
-      "Access-Control-Expose-Headers": MCP_SESSION_HEADER,
+      "Access-Control-Allow-Headers": `Content-Type, Authorization, Accept, MCP-Protocol-Version, Mcp-Method, Mcp-Name, ${MCP_SESSION_HEADER}`,
+      "Access-Control-Expose-Headers": `${MCP_SESSION_HEADER}, WWW-Authenticate`,
     },
   });
 }
 
-// Helper function to create authentication error response
-function createAuthErrorResponse(
-  error: string = "invalid_token",
-  description: string = "Missing or invalid access token",
-): Response {
-  return new Response(
-    JSON.stringify({
-      error,
-      error_description: description,
-    }),
-    {
-      status: 401,
-      headers: {
-        "WWW-Authenticate": `Bearer realm="OAuth", error="${error}", error_description="${description}"`,
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-      },
-    },
+const ENTITLEMENT_GATED_TOOLS = new Set([
+  "web_search",
+  "manage_vaults",
+  "manage_vault_wallets",
+  "manage_vault_cards",
+  "manage_vault_credentials",
+  "manage_vault_items",
+  "manage_vault_provider_configs",
+]);
+
+const CORS_HEADERS = {
+  "Content-Type": "application/json",
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+};
+
+async function requestRequiresMcpEntitlements(req: Request): Promise<boolean> {
+  if (req.method !== "POST") return false;
+  const payload = (await req
+    .clone()
+    .json()
+    .catch(() => null)) as {
+    method?: unknown;
+    params?: { name?: unknown };
+  } | null;
+  if (payload?.method === "tools/list") return true;
+  return (
+    payload?.method === "tools/call" &&
+    typeof payload.params?.name === "string" &&
+    ENTITLEMENT_GATED_TOOLS.has(payload.params.name)
   );
 }
 
-// The base tool set is unchanged. Capability negotiation only adds the
-// Managed Auth launcher, its resource, and its app-only implementation tools.
-const serverInfo = { serverInfo: { name, version } };
-const handler = createMcpHandler((server) => {
+function errorResponse(
+  status: number,
+  error: string,
+  description: string,
+  headers: Record<string, string> = {},
+): Response {
+  return new Response(
+    JSON.stringify({ error, error_description: description }),
+    { status, headers: { ...CORS_HEADERS, ...headers } },
+  );
+}
+
+// Helper function to create authentication error response
+function createAuthErrorResponse(
+  req: Request,
+  error: string = "invalid_token",
+  description: string = "Missing or invalid access token",
+): Response {
+  return errorResponse(401, error, description, {
+    "WWW-Authenticate": `Bearer realm="OAuth", error="${error}", error_description="${description}", resource_metadata="${oauthResourceMetadataUrl(req)}"`,
+  });
+}
+
+export function connectionScopeFailureResponse(
+  req: Request,
+  failure: Exclude<McpConnectionContextFailure, { status: "invalid" }>,
+): Response {
+  if (failure.status === "rejected") {
+    switch (failure.statusCode) {
+      case 403:
+        return errorResponse(
+          403,
+          "insufficient_scope",
+          "This credential is not scoped to the requested Kernel project",
+          {
+            "WWW-Authenticate": `Bearer realm="OAuth", error="insufficient_scope"`,
+          },
+        );
+      case 404:
+        return errorResponse(
+          404,
+          "project_not_found",
+          "The Kernel project for this connection was not found or is inactive",
+        );
+      case 401:
+        return createAuthErrorResponse(
+          req,
+          "invalid_token",
+          "The Kernel API rejected this credential",
+        );
+    }
+  }
+  return errorResponse(
+    503,
+    "temporarily_unavailable",
+    "Unable to resolve Kernel connection scope",
+    { "Retry-After": "1" },
+  );
+}
+
+const handler = createMcpHandler(({ authInfo }) => {
+  const server = new McpServer({ name, version });
   instrumentMcpAnalytics(server);
-  registerMcpCapabilities(server);
-}, serverInfo);
-const mcpAppsHandler = createMcpHandler((server) => {
-  instrumentMcpAnalytics(server);
-  registerMcpCapabilities(server, { mcpApps: true });
-}, serverInfo);
+  registerMcpCapabilities(server, {
+    mcpApps: authInfo?.extra?.mcpApps === true,
+    vaults: authInfo?.extra?.vaults === true,
+    search: authInfo?.extra?.search === true,
+  });
+  return server;
+});
+
+type AuthInfoExtra = {
+  userId: string | null;
+  clerkToken: string | null;
+};
+
+async function handleMcpRequestWithIdentity({
+  req,
+  token,
+  authSubject,
+  scopes,
+  authInfoExtra,
+  credentialType,
+  transportSessionId,
+  connectionContextCacheIdentity,
+  observeConnection,
+}: {
+  req: NextRequest;
+  token: string;
+  authSubject: string;
+  scopes: string[];
+  authInfoExtra: AuthInfoExtra;
+  credentialType: "api_key" | "oauth";
+  transportSessionId: string | null;
+  connectionContextCacheIdentity?: string;
+  observeConnection: boolean;
+}) {
+  const [mcpApps, connection] = await Promise.all([
+    requestUsesMcpApps(req, {
+      authSubject,
+      transportSessionId,
+      ttlSeconds: 24 * 60 * 60,
+    }),
+    resolveMcpConnectionContext({
+      token,
+      signal: req.signal,
+      cacheIdentity: connectionContextCacheIdentity,
+    }),
+  ]);
+  if (connection.status !== "ok") {
+    captureMcpConnectionScopeFailure({
+      outcome: connection.status,
+      credentialType,
+      upstreamStatusCode:
+        connection.status === "invalid" ? undefined : connection.statusCode,
+    });
+    if (connection.status === "invalid") {
+      throw new Error("Unable to resolve Kernel connection scope");
+    }
+    return connectionScopeFailureResponse(req, connection);
+  }
+  // Resolve entitlements only for tool discovery and gated tool calls.
+  const entitlements = (await requestRequiresMcpEntitlements(req))
+    ? await resolveMcpEntitlements({
+        token,
+        signal: req.signal,
+        cacheIdentity: [
+          authSubject,
+          connection.context.authContext.organization.id,
+          transportSessionId ?? "stateless",
+          token,
+        ].join("\0"),
+      })
+    : { vaults: false, search: false };
+  const { vaults } = entitlements;
+  const search = mcpToolsetEnabledByConfig("search") && entitlements.search;
+  const connectionContext = connection.context;
+  const connectionAnalytics =
+    observeConnection && isMcpAnalyticsEnabled()
+      ? connectionAnalyticsFromContext(connectionContext)
+      : null;
+  return handler.fetch(req, {
+    authInfo: {
+      token,
+      scopes,
+      clientId: "mcp-server",
+      extra: {
+        ...authInfoExtra,
+        mcpApps,
+        vaults,
+        search,
+        connectionContext,
+        connectionAnalytics,
+      },
+    },
+  });
+}
 
 async function handleAuthenticatedRequest(
   req: NextRequest,
   transportSessionId: string | null = null,
+  observeConnection = false,
 ): Promise<Response> {
   const authHeader = req.headers.get("Authorization");
   const token = authHeader?.startsWith("Bearer ")
@@ -73,6 +247,7 @@ async function handleAuthenticatedRequest(
     : null;
   if (!token) {
     return createAuthErrorResponse(
+      req,
       "invalid_token",
       "Missing or invalid access token",
     );
@@ -80,90 +255,85 @@ async function handleAuthenticatedRequest(
 
   if (!isValidJwtFormat(token)) {
     // Opaque API keys are authenticated by the Kernel API rather than Clerk.
-    const authSubject = mcpAppsAuthSubject({ token });
-    const selectedHandler = (await requestUsesMcpApps(req, {
-      authSubject,
+    // Do not cache their context: /auth/context must revalidate the credential
+    // on every request so revoked keys cannot keep using a cached scope.
+    return await handleMcpRequestWithIdentity({
+      req,
+      token,
+      authSubject: mcpAppsAuthSubject({ token }),
+      scopes: ["apikey"],
+      authInfoExtra: { userId: null, clerkToken: null },
+      credentialType: "api_key",
       transportSessionId,
-      ttlSeconds: 24 * 60 * 60,
-    }))
-      ? mcpAppsHandler
-      : handler;
-    const authHandler = withMcpAuth(
-      selectedHandler,
-      async () => ({
-        token,
-        scopes: ["apikey"],
-        clientId: "mcp-server",
-        extra: { userId: null, clerkToken: null },
-      }),
-      {
-        required: true,
-        resourceMetadataPath: "/.well-known/oauth-protected-resource/mcp",
-      },
-    );
-    return await authHandler(req);
+      observeConnection,
+    });
   }
 
+  let userId: string;
   try {
     const payload = await verifyToken(token, {
       secretKey: process.env.CLERK_SECRET_KEY,
     });
-
     if (!payload.sub) {
       return createAuthErrorResponse(
+        req,
         "invalid_token",
         "Invalid token: No user ID found in token payload",
       );
     }
-
-    // Capability state is keyed only after Clerk verifies the JWT, and uses
-    // the verified user plus this signed MCP transport session.
-    const authSubject = mcpAppsAuthSubject({ token, userId: payload.sub });
-    const selectedHandler = (await requestUsesMcpApps(req, {
-      authSubject,
-      transportSessionId,
-      ttlSeconds: 24 * 60 * 60,
-    }))
-      ? mcpAppsHandler
-      : handler;
-
-    // Create authenticated handler with auth info
-    const authHandler = withMcpAuth(
-      selectedHandler,
-      async (_req, _providedToken) => {
-        // Return auth info with validated user data
-        return {
-          token: token, // Use the validated token
-          scopes: ["openid"],
-          clientId: "mcp-server",
-          extra: {
-            userId: payload.sub,
-            clerkToken: token,
-          },
-        };
-      },
-      {
-        required: true,
-        resourceMetadataPath: "/.well-known/oauth-protected-resource/mcp",
-      },
-    );
-
-    return await authHandler(req);
+    userId = payload.sub;
   } catch (authError) {
     return createAuthErrorResponse(
+      req,
       "invalid_token",
       `Invalid token: ${authError instanceof Error ? authError.message : "Authentication failed"}`,
     );
   }
+
+  // Capability state is keyed only after Clerk verifies the JWT, and uses
+  // the verified user plus this signed MCP transport session.
+  const authSubject = mcpAppsAuthSubject({ token, userId });
+  return await handleMcpRequestWithIdentity({
+    req,
+    token,
+    authSubject,
+    scopes: ["openid"],
+    authInfoExtra: { userId, clerkToken: token },
+    credentialType: "oauth",
+    transportSessionId,
+    connectionContextCacheIdentity: transportSessionId
+      ? `${authSubject}\0${transportSessionId}`
+      : undefined,
+    observeConnection,
+  });
+}
+
+function withCors(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set("Access-Control-Allow-Origin", "*");
+  headers.set(
+    "Access-Control-Expose-Headers",
+    `${MCP_SESSION_HEADER}, WWW-Authenticate`,
+  );
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 export async function GET(req: NextRequest): Promise<Response> {
   after(flushMcpAnalytics);
-  return await handleAuthenticatedRequest(req);
+  return withCors(await handleAuthenticatedRequest(req));
 }
 
 export async function POST(req: NextRequest): Promise<Response> {
   after(flushMcpAnalytics);
+
+  // Modern requests carry capabilities per call and must never acquire a session.
+  if (!(await isLegacyRequest(req))) {
+    return withCors(await handleAuthenticatedRequest(req));
+  }
 
   const body = await req.text();
   type InitializeRequest = {
@@ -182,11 +352,10 @@ export async function POST(req: NextRequest): Promise<Response> {
   } catch {
     // Let the MCP transport return its normal parse error.
   }
-  const initializeParams =
-    parsed?.method === "initialize" ? parsed.params : undefined;
+  const isInitialize = parsed?.method === "initialize";
+  const initializeParams = isInitialize ? parsed?.params : undefined;
   const isStreamableInitialize =
-    new URL(req.url).pathname.endsWith("/mcp") &&
-    parsed?.method === "initialize";
+    new URL(req.url).pathname.endsWith("/mcp") && isInitialize;
   const session = isStreamableInitialize
     ? createMcpTransportSession({
         clientName: initializeParams?.clientInfo?.name,
@@ -208,17 +377,19 @@ export async function POST(req: NextRequest): Promise<Response> {
       signal: req.signal,
     }),
     session?.id ?? null,
+    isInitialize,
   );
 
-  if (!session) return response;
+  if (!session) return withCors(response);
   const headers = new Headers(response.headers);
   if (isStreamableInitialize || headers.has(MCP_SESSION_HEADER)) {
     headers.set(MCP_SESSION_HEADER, session.token);
   }
-  headers.set("Access-Control-Expose-Headers", MCP_SESSION_HEADER);
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
+  return withCors(
+    new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    }),
+  );
 }

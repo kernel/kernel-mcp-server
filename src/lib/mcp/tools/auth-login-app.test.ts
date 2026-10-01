@@ -1,8 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
 import { encodeSessionId } from "@posthog/mcp";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { MANAGED_AUTH_APP_HTML } from "@/lib/mcp/apps/generated/managed-auth-app";
+import { projectScopedExtra } from "@/lib/mcp/auth-context.test-fixtures";
+import {
+  kernelClientMock,
+  resetKernelClientFactory,
+} from "@/lib/mcp/kernel-client.test-fixtures";
 import { verifyAuthFlowCheckpoint } from "@/lib/mcp/tools/managed-auth-checkpoint";
 import {
   initializeDeclaresMcpApps,
@@ -14,21 +18,6 @@ import {
 
 process.env.CLERK_SECRET_KEY ??= "test-clerk-secret";
 
-// Tests that exercise API-backed handlers substitute a fake Kernel client.
-// The default stub errors if any API method is actually invoked.
-const unusedKernelClient = new Proxy(
-  {},
-  {
-    get: () => {
-      throw new Error("unexpected Kernel client use");
-    },
-  },
-);
-let kernelClientFactory: (token: string) => any = () => unusedKernelClient;
-function resetKernelClientFactory() {
-  kernelClientFactory = () => unusedKernelClient;
-}
-
 // The capability gate falls back to a Redis marker (recorded by the route
 // layer at initialize) on stateless transports. Tests control it directly.
 let redisMarkerPresent = false;
@@ -36,10 +25,6 @@ mock.module("@/lib/redis", () => ({
   hasMcpAppsClient: async () => redisMarkerPresent,
   markMcpAppsClient: async () => {},
 }));
-mock.module("@/lib/mcp/kernel-client", () => ({
-  createKernelClient: (token: string) => kernelClientFactory(token),
-}));
-
 type ToolRegistration = {
   config: Record<string, any>;
   handler: (params: any, extra: any) => Promise<any>;
@@ -138,15 +123,13 @@ describe("managed-auth MCP App registration", () => {
       "open_auth_login",
     ]);
     expect(
-      tools.get("open_auth_login")!.config.inputSchema.text_only,
+      tools.get("open_auth_login")!.config.inputSchema.shape.text_only,
     ).toBeUndefined();
   });
 
   test("app-only tool schema rejects an empty connection identifier", () => {
     const { tools } = captureRegistration();
-    const beginSchema = z.object(
-      tools.get("begin_auth_login")!.config.inputSchema,
-    );
+    const beginSchema = tools.get("begin_auth_login")!.config.inputSchema;
     expect(
       beginSchema.safeParse({ mode: "reauth", connection_id: "" }).success,
     ).toBe(false);
@@ -160,12 +143,16 @@ describe("managed-auth MCP App registration", () => {
       profile_name: "work",
     };
     for (const name of ["open_auth_login", "begin_auth_login"]) {
-      const schema = z.object(tools.get(name)!.config.inputSchema);
+      const schema = tools.get(name)!.config.inputSchema;
       expect(schema.safeParse({ ...base, proxy_id: "" }).success).toBe(false);
       expect(schema.safeParse({ ...base, proxy_name: "" }).success).toBe(false);
       expect(schema.safeParse({ ...base, proxy_id: "proxy_1" }).success).toBe(
         true,
       );
+      expect(schema.safeParse({ ...base, region: "eu-west" }).success).toBe(
+        true,
+      );
+      expect(schema.safeParse({ ...base, region: "emea" }).success).toBe(false);
       const defaults = schema.parse(base);
       expect(defaults.record_session).toBe(true);
       expect(defaults.browser_telemetry).toEqual({ enabled: true });
@@ -202,7 +189,7 @@ describe("managed-auth MCP App registration", () => {
         domain: "example.com",
         profile_name: "work",
       },
-      { authInfo: { token: "unused-api-key" } },
+      projectScopedExtra("proj_test", "unused-api-key"),
     );
     expect(result.structuredContent).toEqual({
       kind: "kernel.managed_auth.launcher",
@@ -216,6 +203,7 @@ describe("managed-auth MCP App registration", () => {
           domain_filter: "example.com",
           profile_name: "work",
           wait_seconds: 25,
+          project: "proj_test",
         },
       },
     });
@@ -231,7 +219,7 @@ describe("managed-auth MCP App registration", () => {
       .get("begin_auth_login")!
       .handler(
         { mode: "reauth", connection_id: "conn_1" },
-        { authInfo: { token: "unused-api-key" } },
+        projectScopedExtra("proj_test", "unused-api-key"),
       );
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("MCP Apps-capable hosts");
@@ -239,63 +227,117 @@ describe("managed-auth MCP App registration", () => {
     expect(JSON.stringify(result)).not.toContain("hosted_url");
   });
 
-  test("stateless transports pass the gate via the recorded initialize marker", async () => {
-    // Simulates the streamable-HTTP path: no client capabilities on the
-    // per-request server, but the route layer recorded the capability.
-    redisMarkerPresent = true;
-    kernelClientFactory = () => ({
-      auth: {
-        connections: {
-          retrieve: async () => ({
-            id: "conn_1",
-            domain: "example.com",
-            profile_name: "work",
-            status: "AUTHENTICATED",
-            flow_expires_at: "2026-01-01T00:00:00Z",
-          }),
-          login: async () => ({
-            id: "conn_1",
-            flow_type: "REAUTH",
-            flow_expires_at: "2099-01-01T00:00:00Z",
-            hosted_url:
-              "https://managed-auth.onkernel.com/login/conn_1?code=handoff-secret",
-            handoff_code: "handoff-secret",
-          }),
-          timeline: async () => ({ getPaginatedItems: () => [] }),
+  test.each(["legacy", "modern"])(
+    "%s stateless requests pass the App gate",
+    async (era) => {
+      redisMarkerPresent = era === "legacy";
+      kernelClientMock.factory = () => ({
+        auth: {
+          connections: {
+            retrieve: async () => ({
+              id: "conn_1",
+              domain: "example.com",
+              profile_name: "work",
+              status: "AUTHENTICATED",
+              flow_expires_at: "2026-01-01T00:00:00Z",
+            }),
+            login: async () => ({
+              id: "conn_1",
+              flow_type: "REAUTH",
+              flow_expires_at: "2099-01-01T00:00:00Z",
+              hosted_url:
+                "https://managed-auth.onkernel.com/login/conn_1?code=handoff-secret",
+              handoff_code: "handoff-secret",
+            }),
+            timeline: async () => ({ getPaginatedItems: () => [] }),
+          },
         },
-      },
-    });
+      });
+      try {
+        const { tools } = captureRegistration({ appsSupport: false });
+        const result = await tools.get("begin_auth_login")!.handler(
+          { mode: "reauth", connection_id: "conn_1" },
+          {
+            ...projectScopedExtra("proj_test", "unused-api-key"),
+            mcpReq: {
+              signal: new AbortController().signal,
+              envelope:
+                era === "modern"
+                  ? {
+                      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                      "io.modelcontextprotocol/clientCapabilities": {
+                        extensions: { "io.modelcontextprotocol/ui": {} },
+                      },
+                    }
+                  : {},
+            },
+            http: {
+              ...projectScopedExtra("proj_test", "unused-api-key").http,
+              req: new Request("https://mcp.example.test/mcp", {
+                headers:
+                  era === "legacy"
+                    ? {
+                        "mcp-session-id": encodeSessionId({
+                          sessionId: "mcp_session_apps",
+                        }),
+                      }
+                    : {},
+              }),
+            },
+          },
+        );
+        expect(result.isError).toBeUndefined();
+        expect(result.structuredContent.kind).toBe("kernel.managed_auth.begin");
+        expect(result.structuredContent.next_action).toMatchObject({
+          tool: "manage_auth_connections",
+          arguments: {
+            action: "wait",
+            id: "conn_1",
+            flow_checkpoint: expect.any(String),
+            wait_seconds: 5,
+          },
+        });
+        // Capability-bearing material stays in App-private channels only.
+        expect(JSON.stringify(result.content)).not.toContain("handoff-secret");
+      } finally {
+        redisMarkerPresent = false;
+        resetKernelClientFactory();
+      }
+    },
+  );
+
+  test("modern App execution cannot fall back to a legacy capability marker", async () => {
+    redisMarkerPresent = true;
     try {
-      const { tools } = captureRegistration({ appsSupport: false });
+      const { tools } = captureRegistration({ appsSupport: true });
+      const ctx = projectScopedExtra();
       const result = await tools.get("begin_auth_login")!.handler(
         { mode: "reauth", connection_id: "conn_1" },
         {
-          authInfo: { token: "unused-api-key" },
-          requestInfo: {
-            headers: {
-              "mcp-session-id": encodeSessionId({
-                sessionId: "mcp_session_apps",
-              }),
+          ...ctx,
+          http: {
+            ...ctx.http,
+            req: new Request("https://mcp.example.test/mcp", {
+              headers: {
+                "mcp-session-id": encodeSessionId({
+                  sessionId: "mcp_session_apps",
+                }),
+              },
+            }),
+          },
+          mcpReq: {
+            ...ctx.mcpReq,
+            envelope: {
+              "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+              "io.modelcontextprotocol/clientCapabilities": {},
             },
           },
         },
       );
-      expect(result.isError).toBeUndefined();
-      expect(result.structuredContent.kind).toBe("kernel.managed_auth.begin");
-      expect(result.structuredContent.next_action).toMatchObject({
-        tool: "manage_auth_connections",
-        arguments: {
-          action: "wait",
-          id: "conn_1",
-          flow_checkpoint: expect.any(String),
-          wait_seconds: 5,
-        },
-      });
-      // Capability-bearing material stays in App-private channels only.
-      expect(JSON.stringify(result.content)).not.toContain("handoff-secret");
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("MCP Apps-capable hosts");
     } finally {
       redisMarkerPresent = false;
-      resetKernelClientFactory();
     }
   });
 
@@ -318,6 +360,18 @@ describe("managed-auth MCP App registration", () => {
         },
       }),
     ).toBe(true);
+    expect(
+      initializeDeclaresMcpApps({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          capabilities: {
+            extensions: { "io.modelcontextprotocol/ui": null },
+          },
+        },
+      }),
+    ).toBe(false);
     expect(
       initializeDeclaresMcpApps([
         { jsonrpc: "2.0", method: "notifications/initialized" },
@@ -361,7 +415,7 @@ describe("managed-auth MCP App registration", () => {
   });
 
   test("reauth launcher issues a signed server checkpoint, never a guessed flow type", async () => {
-    kernelClientFactory = () => ({
+    kernelClientMock.factory = () => ({
       auth: {
         connections: {
           retrieve: async () => ({
@@ -392,7 +446,7 @@ describe("managed-auth MCP App registration", () => {
         .get("open_auth_login")!
         .handler(
           { mode: "reauth", connection_id: "conn_1" },
-          { authInfo: { token: "unused-api-key" } },
+          projectScopedExtra("proj_test", "unused-api-key"),
         );
       const args = result.structuredContent.next_action.arguments;
       expect(args).toMatchObject({
@@ -416,7 +470,7 @@ describe("managed-auth MCP App registration", () => {
   });
 
   test("reauth launcher preserves an explicitly empty timeline baseline", async () => {
-    kernelClientFactory = () => ({
+    kernelClientMock.factory = () => ({
       auth: {
         connections: {
           retrieve: async () => ({
@@ -438,7 +492,7 @@ describe("managed-auth MCP App registration", () => {
         .get("open_auth_login")!
         .handler(
           { mode: "reauth", connection_id: "conn_1" },
-          { authInfo: { token: "unused-api-key" } },
+          projectScopedExtra("proj_test", "unused-api-key"),
         );
       const token =
         result.structuredContent.next_action.arguments.flow_checkpoint;
@@ -454,7 +508,7 @@ describe("managed-auth MCP App registration", () => {
   });
 
   test("reauth launcher identifies an already-live flow", async () => {
-    kernelClientFactory = () => ({
+    kernelClientMock.factory = () => ({
       auth: {
         connections: {
           retrieve: async () => ({
@@ -485,7 +539,7 @@ describe("managed-auth MCP App registration", () => {
         .get("open_auth_login")!
         .handler(
           { mode: "reauth", connection_id: "conn_1" },
-          { authInfo: { token: "unused-api-key" } },
+          projectScopedExtra("proj_test", "unused-api-key"),
         );
       const token =
         result.structuredContent.next_action.arguments.flow_checkpoint;
@@ -510,6 +564,9 @@ describe("managed-auth MCP App registration", () => {
     expect(MANAGED_AUTH_APP_HTML).not.toContain("kernel-app-loading");
     expect(MANAGED_AUTH_APP_HTML).toContain("MutationObserver");
     expect(MANAGED_AUTH_APP_HTML).toContain("preventScroll");
+    expect(MANAGED_AUTH_APP_HTML).toContain("interaction_id");
+    expect(MANAGED_AUTH_APP_HTML).toContain("field_values");
+    expect(MANAGED_AUTH_APP_HTML).toContain("selected_choice_id");
     expect(MANAGED_AUTH_APP_HTML).toContain(
       'input:not([type="hidden"]):not([type="submit"])',
     );
@@ -519,6 +576,7 @@ describe("managed-auth MCP App registration", () => {
     expect(MANAGED_AUTH_APP_HTML).toContain("profile_name");
     expect(MANAGED_AUTH_APP_HTML).toContain("record_session");
     expect(MANAGED_AUTH_APP_HTML).toContain("browser_telemetry");
+    expect(MANAGED_AUTH_APP_HTML).toContain("region");
     expect(MANAGED_AUTH_APP_HTML).toContain("manage_auth_connections");
     expect(MANAGED_AUTH_APP_HTML).not.toContain("flow_wait_started_at");
     expect(MANAGED_AUTH_APP_HTML).toContain(

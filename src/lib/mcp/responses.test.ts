@@ -1,8 +1,7 @@
 /// <reference types="bun-types" />
+import { Client } from "@modelcontextprotocol/client";
+import { McpServer, InMemoryTransport } from "@modelcontextprotocol/server";
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
   APIConnectionError,
   APIConnectionTimeoutError,
@@ -12,9 +11,14 @@ import {
 import { describe, expect, test } from "bun:test";
 
 import { errorResponse, throwToolError } from "@/lib/mcp/responses";
+import { z } from "zod";
 
 function apiError(status: number, message: string) {
   return APIError.generate(status, undefined, message, new Headers());
+}
+
+function codedApiError(status: number, code: string, message: string) {
+  return APIError.generate(status, { code, message }, undefined, new Headers());
 }
 
 function caught(error: unknown) {
@@ -62,22 +66,77 @@ describe("throwToolError classification", () => {
       "Error in manage_browsers (get): plain string",
     );
   });
+
+  test("keeps stable API codes visible", () => {
+    expect(
+      caught(
+        codedApiError(
+          409,
+          "project_not_empty",
+          "Project still contains resources",
+        ),
+      ).message,
+    ).toBe(
+      "Error in manage_browsers (get): 409 Project still contains resources [code: project_not_empty]",
+    );
+    expect(
+      caught(
+        codedApiError(
+          409,
+          "last_active_project",
+          "Cannot delete the last active project",
+        ),
+      ).message,
+    ).toContain("[code: last_active_project]");
+  });
+
+  test("ignores absent and non-string API codes", () => {
+    const absent = apiError(409, "conflict");
+    expect(caught(absent).message).not.toContain("[code:");
+
+    const numeric = codedApiError(409, "temporary", "conflict");
+    (numeric as unknown as { error: { code: number } }).error.code = 123;
+    expect(caught(numeric).message).not.toContain("[code:");
+  });
 });
 
 describe("what the client receives", () => {
   async function callTool(name: string) {
     const server = new McpServer({ name: "test", version: "0.0.0" });
 
-    server.tool("api_failure", {}, async () => {
-      throwToolError(
-        "manage_browsers",
-        "get",
-        apiError(404, "browser session not found"),
-      );
-    });
+    server.registerTool(
+      "api_failure",
+      { inputSchema: z.object({}) },
+      async () => {
+        throwToolError(
+          "manage_browsers",
+          "get",
+          apiError(404, "browser session not found"),
+        );
+      },
+    );
 
-    server.tool("input_guard", {}, async () =>
-      errorResponse("Error: session_id is required for get action."),
+    server.registerTool(
+      "coded_api_failure",
+      { inputSchema: z.object({}) },
+      async () => {
+        throwToolError(
+          "manage_projects",
+          "delete",
+          codedApiError(
+            409,
+            "project_not_empty",
+            "Project still contains resources",
+          ),
+        );
+      },
+    );
+
+    server.registerTool(
+      "input_guard",
+      { inputSchema: z.object({}) },
+      async () =>
+        errorResponse("Error: session_id is required for get action."),
     );
 
     const client = new Client({ name: "test-client", version: "0.0.0" });
@@ -111,6 +170,18 @@ describe("what the client receives", () => {
     expect(result.isError).toBe(true);
     expect(result.content).toEqual([
       { type: "text", text: "Error: session_id is required for get action." },
+    ]);
+  });
+
+  test("returns coded API rejections to the client", async () => {
+    const result = await callTool("coded_api_failure");
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: "Error in manage_projects (delete): 409 Project still contains resources [code: project_not_empty]",
+      },
     ]);
   });
 });

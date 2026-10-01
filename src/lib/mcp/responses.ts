@@ -67,8 +67,23 @@ export function errorResponse(text: string) {
   return { ...textResponse(text), isError: true as const };
 }
 
+function apiErrorCode(error: APIError) {
+  if (
+    error.error &&
+    typeof error.error === "object" &&
+    "code" in error.error &&
+    typeof error.error.code === "string"
+  ) {
+    return error.error.code;
+  }
+}
+
 function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : String(error);
+  if (!(error instanceof APIError)) return message;
+
+  const code = apiErrorCode(error);
+  return code ? `${message} [code: ${code}]` : message;
 }
 
 // Named after what the API said, so a stale session id (404) is distinguishable from an
@@ -108,9 +123,26 @@ export function throwToolError(
   toolName: string,
   action: string,
   error: unknown,
+  note?: string,
 ): never {
   throw new ToolCallError(
     errorName(error),
-    `Error in ${toolName} (${action}): ${errorMessage(error)}`,
+    `Error in ${toolName} (${action}): ${errorMessage(error)}${note ? ` ${note}` : ""}`,
+  );
+}
+
+export function throwToolErrorWithApiBody(
+  toolName: string,
+  action: string,
+  error: unknown,
+  fallbackNote?: string,
+): never {
+  const body = error instanceof APIError ? error.error : undefined;
+  const structuredBody = body && typeof body === "object";
+  const detail = structuredBody ? JSON.stringify(body) : errorMessage(error);
+  const note = !structuredBody && fallbackNote ? ` ${fallbackNote}` : "";
+  throw new ToolCallError(
+    errorName(error),
+    `Error in ${toolName} (${action}): ${detail}${note}`,
   );
 }

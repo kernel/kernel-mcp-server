@@ -1,5 +1,7 @@
 # Dependencies
 node_modules/
+__pycache__/
+*.py[cod]
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -106,6 +108,10 @@ Makefile
 
 # private key
 mcp-key.pem
+
+# Harbor benchmark runtime data
+benchmarks/harbor/.image.env
+benchmarks/harbor/image/source-sha
 
 # TypeScript incremental build cache
 tsconfig.tsbuildinfo

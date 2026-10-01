@@ -1,196 +1,259 @@
+import { auth } from "@clerk/nextjs/server";
 import { NextRequest, NextResponse } from "next/server";
-import { setOrgIdForClientId } from "../../lib/redis";
-import { SHARED_CLIENT_IDS } from "../../lib/const";
+import {
+  setAuthorizationContextForClientId,
+  setAuthorizationContextForRequest,
+} from "@/lib/redis";
+import { isLegacyNonPkceClient, SHARED_CLIENT_IDS } from "@/lib/const";
+import {
+  authorizationContextFromSelection,
+  type OAuthAuthorizationContext,
+  PROJECT_ACCESS_SCOPE,
+} from "@/lib/oauth-context";
+import {
+  OAuthProjectsError,
+  requireActiveOAuthProject,
+} from "@/lib/oauth-projects";
+
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+};
+
+const INTERNAL_AUTHORIZATION_PARAMS = new Set([
+  "org_id",
+  "access_scope",
+  "project_id",
+]);
 
 export async function OPTIONS(): Promise<NextResponse> {
-  return new NextResponse(null, {
-    status: 204,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    },
-  });
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
 }
 
-export async function GET(request: NextRequest): Promise<NextResponse> {
-  const searchParams = request.nextUrl.searchParams;
+function errorResponse(
+  error: string,
+  errorDescription: string,
+  status = 400,
+): NextResponse {
+  return NextResponse.json(
+    { error, error_description: errorDescription },
+    { status, headers: CORS_HEADERS },
+  );
+}
 
-  // Step 1: Extract and validate required OAuth parameters
+function sharedClientState({
+  originalState,
+  orgId,
+  accessScope,
+  projectId,
+}: {
+  originalState: string | null;
+  orgId: string;
+  accessScope: string;
+  projectId?: string;
+}): string {
+  let csrf = originalState || "";
+  if (originalState) {
+    try {
+      const parsed = JSON.parse(
+        Buffer.from(originalState, "base64").toString(),
+      ) as { csrf?: string };
+      if (parsed.csrf) csrf = parsed.csrf;
+    } catch {
+      // Older clients may send a plain CSRF value.
+    }
+  }
+
+  return Buffer.from(
+    JSON.stringify({
+      csrf,
+      org_id: orgId,
+      access_scope: accessScope,
+      ...(projectId ? { project_id: projectId } : {}),
+    }),
+  ).toString("base64");
+}
+
+export interface AuthorizeDependencies {
+  getAuth: () => Promise<{
+    userId: string | null | undefined;
+    orgId: string | null | undefined;
+    getToken: () => Promise<string | null>;
+  }>;
+  setRequestContext: (input: {
+    clientId: string;
+    codeChallenge: string;
+    authorizationContext: OAuthAuthorizationContext;
+    ttlSeconds: number;
+  }) => Promise<void>;
+  setClientContext: (input: {
+    clientId: string;
+    authorizationContext: OAuthAuthorizationContext;
+    ttlSeconds: number;
+  }) => Promise<void>;
+  requireProject: typeof requireActiveOAuthProject;
+}
+
+const authorizeDependencies: AuthorizeDependencies = {
+  getAuth: async () => auth(),
+  setRequestContext: setAuthorizationContextForRequest,
+  setClientContext: setAuthorizationContextForClientId,
+  requireProject: requireActiveOAuthProject,
+};
+
+export async function authorizeRequest(
+  request: NextRequest,
+  dependencies: AuthorizeDependencies = authorizeDependencies,
+): Promise<NextResponse> {
+  const searchParams = request.nextUrl.searchParams;
   const clientId = searchParams.get("client_id");
   const selectedOrgId = searchParams.get("org_id");
   const originalState = searchParams.get("state");
+  const accessScope = searchParams.get("access_scope");
+  const projectId = searchParams.get("project_id");
+  const codeChallenge = searchParams.get("code_challenge");
+  const codeChallengeMethod = searchParams.get("code_challenge_method");
 
-  console.debug("[authorize] start", {
-    hasClientId: Boolean(clientId),
-    hasSelectedOrgId: Boolean(selectedOrgId),
-    hasState: Boolean(originalState),
-  });
-
-  // Step 2: Validate minimum required parameters
   if (!clientId) {
-    return NextResponse.json(
-      {
-        error: "invalid_request",
-        error_description: "Missing required parameter: client_id",
-      },
-      {
-        status: 400,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        },
-      },
+    return errorResponse(
+      "invalid_request",
+      "Missing required parameter: client_id",
     );
   }
 
-  // Step 3: Redirect to organization selector if no org chosen yet
   if (!selectedOrgId) {
-    console.debug(
-      "[authorize] no org selected yet, redirecting to /select-org",
-    );
     const selectOrgUrl = new URL("/select-org", request.nextUrl.origin);
-
-    // Pass all OAuth parameters to the org selector
     searchParams.forEach((value, key) => {
       selectOrgUrl.searchParams.set(key, value);
     });
-
-    return NextResponse.redirect(selectOrgUrl.toString());
+    return NextResponse.redirect(selectOrgUrl);
   }
 
-  // Step 4: Validate server configuration
   const clerkDomain = process.env.NEXT_PUBLIC_CLERK_DOMAIN;
-
   if (!clerkDomain) {
-    return NextResponse.json(
-      {
-        error: "server_error",
-        error_description: "Server configuration error",
-      },
-      {
-        status: 500,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        },
-      },
+    return errorResponse("server_error", "Server configuration error", 500);
+  }
+
+  const { userId, orgId, getToken } = await dependencies.getAuth();
+  if (!userId || orgId !== selectedOrgId) {
+    return errorResponse(
+      "access_denied",
+      "The selected organization is not active for this user",
+      403,
     );
   }
 
-  // Step 5: Store organization context for ephemeral clients
-  // Skip Redis storage for shared clients to avoid cross-user overwrites
-  if (!SHARED_CLIENT_IDS.includes(clientId)) {
-    try {
-      // TTL only needs to last through the OAuth flow (authorization_code exchange)
-      await setOrgIdForClientId({
-        clientId,
-        orgId: selectedOrgId,
-        ttlSeconds: 60 * 60, // 1 hour
-      });
-      console.debug("[authorize] stored org_id for ephemeral client", {
-        clientIdMasked: clientId?.slice(0, 4) + "...",
-      });
-    } catch (error) {
-      console.error("[authorize] failed to store org_id in Redis", { error });
-      return NextResponse.json(
-        {
-          error: "server_error",
-          error_description: "Failed to store organization context",
-        },
-        {
-          status: 500,
-          headers: {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
-          },
-        },
+  const hasPKCEParameters = Boolean(codeChallenge || codeChallengeMethod);
+  if (hasPKCEParameters && (!codeChallenge || codeChallengeMethod !== "S256")) {
+    return errorResponse(
+      "invalid_request",
+      "PKCE requires code_challenge and code_challenge_method=S256",
+    );
+  }
+  if (!codeChallenge && !isLegacyNonPkceClient(clientId)) {
+    return errorResponse(
+      "invalid_request",
+      "OAuth clients require PKCE with S256",
+    );
+  }
+
+  let authorizationContext;
+  try {
+    authorizationContext = authorizationContextFromSelection({
+      clerkUserId: userId,
+      clerkOrgId: selectedOrgId,
+      accessScope,
+      projectId,
+    });
+  } catch (error) {
+    return errorResponse(
+      "invalid_request",
+      error instanceof Error ? error.message : "Invalid access scope",
+    );
+  }
+
+  if (authorizationContext.access_scope === PROJECT_ACCESS_SCOPE) {
+    if (!codeChallenge) {
+      return errorResponse(
+        "invalid_request",
+        "Project-scoped authorization requires PKCE with S256",
       );
     }
-  } else {
-    console.debug("[authorize] shared client, skipping Redis store", {
-      clientIdMasked: clientId?.slice(0, 4) + "...",
+    const clerkSessionToken = await getToken();
+    if (!clerkSessionToken) {
+      return errorResponse("access_denied", "Authentication required", 401);
+    }
+    try {
+      await dependencies.requireProject({
+        clerkSessionToken,
+        projectId: authorizationContext.project_id,
+      });
+    } catch (error) {
+      console.warn("[authorize] project validation failed", { error });
+      if (error instanceof OAuthProjectsError && error.status >= 500) {
+        return errorResponse(
+          "server_error",
+          "Project validation is temporarily unavailable",
+          503,
+        );
+      }
+      return errorResponse(
+        "access_denied",
+        "Project not found or inactive",
+        403,
+      );
+    }
+  }
+
+  try {
+    if (codeChallenge) {
+      await dependencies.setRequestContext({
+        clientId,
+        codeChallenge,
+        authorizationContext,
+        ttlSeconds: 60 * 60,
+      });
+    } else {
+      // Compatibility is limited to explicitly allowlisted legacy clients.
+      await dependencies.setClientContext({
+        clientId,
+        authorizationContext,
+        ttlSeconds: 60 * 60,
+      });
+    }
+  } catch (error) {
+    console.error("[authorize] failed to store authorization context", {
+      error,
+    });
+    return errorResponse(
+      "server_error",
+      "Failed to store authorization context",
+      500,
+    );
+  }
+
+  let state = originalState;
+  if (SHARED_CLIENT_IDS.includes(clientId)) {
+    state = sharedClientState({
+      originalState,
+      orgId: selectedOrgId,
+      accessScope: authorizationContext.access_scope,
+      projectId: authorizationContext.project_id,
     });
   }
 
-  // Step 6: Handle state parameter based on client type
-  let modifiedState = originalState;
-
-  // Only modify state for shared clients (CLI), not ephemeral clients (MCP)
-  if (selectedOrgId && SHARED_CLIENT_IDS.includes(clientId)) {
-    try {
-      // Extract CSRF token from original state if it's base64-encoded JSON
-      let csrfToken = originalState || "";
-
-      if (originalState) {
-        try {
-          // Try to decode originalState as base64-encoded JSON (from CLI)
-          const decodedState = Buffer.from(originalState, "base64").toString();
-          const parsedState = JSON.parse(decodedState);
-          if (parsedState.csrf) {
-            csrfToken = parsedState.csrf;
-            console.debug("[authorize] extracted CSRF from CLI state param");
-          }
-        } catch (decodeError) {
-          // If decoding fails, treat originalState as plain CSRF token
-          csrfToken = originalState;
-          console.debug("[authorize] using original state as plain CSRF token");
-        }
-      }
-
-      const stateData = {
-        csrf: csrfToken,
-        org_id: selectedOrgId,
-      };
-      modifiedState = Buffer.from(JSON.stringify(stateData)).toString("base64");
-      console.debug("[authorize] encoded org_id into state for shared client", {
-        clientIdMasked: clientId?.slice(0, 4) + "...",
-      });
-    } catch (error) {
-      console.error("[authorize] failed to encode org_id into state", {
-        error,
-      });
-      return NextResponse.json(
-        {
-          error: "server_error",
-          error_description: "Failed to encode organization context",
-        },
-        {
-          status: 500,
-          headers: {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
-          },
-        },
-      );
-    }
-  } else if (selectedOrgId) {
-    // For ephemeral clients, don't modify state - rely on Redis storage
-    console.debug("[authorize] ephemeral client: preserving original state");
-  }
-
-  // Step 7: Build Clerk authorization URL with OAuth parameters
   const clerkAuthUrl = new URL(`https://${clerkDomain}/oauth/authorize`);
-
-  // Pass through all original parameters except our custom org_id
   searchParams.forEach((value, key) => {
-    if (key !== "org_id") {
+    if (!INTERNAL_AUTHORIZATION_PARAMS.has(key)) {
       clerkAuthUrl.searchParams.set(key, value);
     }
   });
+  if (state) clerkAuthUrl.searchParams.set("state", state);
 
-  // Use the modified state parameter that includes org_id
-  if (modifiedState) {
-    clerkAuthUrl.searchParams.set("state", modifiedState);
-  }
+  return NextResponse.redirect(clerkAuthUrl);
+}
 
-  // Step 8: Redirect to Clerk for actual OAuth authentication
-  console.debug("[authorize] redirecting to clerk /oauth/authorize", {
-    hasModifiedState: Boolean(modifiedState),
-  });
-  return NextResponse.redirect(clerkAuthUrl.toString());
+export async function GET(request: NextRequest): Promise<NextResponse> {
+  return authorizeRequest(request);
 }

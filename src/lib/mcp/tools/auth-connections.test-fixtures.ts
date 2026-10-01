@@ -1,34 +1,17 @@
-import { expect, mock } from "bun:test";
+import { expect } from "bun:test";
+import { projectScopedAuthInfo } from "@/lib/mcp/auth-context.test-fixtures";
 import type { KernelClient } from "@/lib/mcp/kernel-client";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import type {
   ManagedAuth,
   ManagedAuthTimelineEvent,
 } from "@onkernel/sdk/resources/auth/connections";
+export {
+  kernelClientMock,
+  resetKernelClientFactory,
+  unusedKernelClient,
+} from "@/lib/mcp/kernel-client.test-fixtures";
 import { registerAuthConnectionTools } from "./auth-connections";
-
-export const unusedKernelClient = new Proxy(
-  {},
-  {
-    get: () => {
-      throw new Error("unexpected Kernel client use");
-    },
-  },
-);
-
-export const kernelClientMock: {
-  factory: (token: string) => any;
-} = {
-  factory: () => unusedKernelClient,
-};
-
-mock.module("@/lib/mcp/kernel-client", () => ({
-  createKernelClient: (token: string) => kernelClientMock.factory(token),
-}));
-
-export function resetKernelClientFactory() {
-  kernelClientMock.factory = () => unusedKernelClient;
-}
 
 export function connection(overrides: Partial<ManagedAuth> = {}): ManagedAuth {
   return {
@@ -42,6 +25,22 @@ export function connection(overrides: Partial<ManagedAuth> = {}): ManagedAuth {
     hosted_url: "https://managed-auth.onkernel.com/login/conn_1?code=secret",
     live_view_url: "https://live.example/secret",
     browser_session_id: "browser_secret",
+    interaction_id: "mai_secret",
+    fields: [
+      {
+        id: "field_password",
+        ref: "password",
+        type: "password",
+        reason: "missing",
+      },
+    ],
+    choices: [
+      {
+        id: "work-account",
+        label: "Work account",
+        type: "account",
+      },
+    ],
     discovered_fields: [
       {
         label: "Password",
@@ -146,6 +145,9 @@ const forbiddenKeys = [
   "jwt",
   "authorization",
   "credential",
+  "interaction_id",
+  "fields",
+  "choices",
   "discovered_fields",
   "mfa_options",
   "pending_sso_buttons",
@@ -164,14 +166,28 @@ export function captureHandler() {
   let handler: ((params: any, extra: any) => Promise<any>) | undefined;
   let schema: Record<string, any> | undefined;
   const server = {
-    tool(
+    registerTool(
       _name: string,
-      _description: string,
-      inputSchema: Record<string, any>,
+      config: { inputSchema: { shape: Record<string, any> } },
       ...rest: any[]
     ) {
-      schema = inputSchema;
-      handler = rest[rest.length - 1];
+      schema = config.inputSchema.shape;
+      const capturedHandler = rest[rest.length - 1];
+      handler = (params, extra) =>
+        capturedHandler(params, {
+          ...extra,
+          http: {
+            authInfo: extra.authInfo
+              ? {
+                  ...projectScopedAuthInfo(
+                    params.project ?? params.project_id ?? "proj_test",
+                  ),
+                  ...extra.authInfo,
+                }
+              : undefined,
+          },
+          mcpReq: { signal: new AbortController().signal },
+        });
     },
   } as unknown as McpServer;
   registerAuthConnectionTools(server);

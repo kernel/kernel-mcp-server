@@ -1,12 +1,16 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
   buildBrowserCreateConfig,
+  buildBrowserSharedConfig,
   type BrowserConfigResult,
   type BrowserCreateConfigParams,
 } from "@/lib/mcp/browser-config";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
-import { registerJsonResourceTemplate } from "@/lib/mcp/resource-templates";
+import {
+  registerJsonResourceCollection,
+  registerJsonResourceTemplate,
+} from "@/lib/mcp/resource-templates";
 import {
   jsonResponse,
   errorResponse,
@@ -15,6 +19,10 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
+import {
+  projectForOperation,
+  projectSelectionInputSchema,
+} from "@/lib/mcp/project-selection";
 
 type BrowserPoolCreateParams = Parameters<
   KernelClient["browserPools"]["create"]
@@ -42,11 +50,32 @@ type PoolConfigParams = Omit<
   fill_rate_per_minute?: number;
   chrome_policy?: Record<string, unknown>;
   kiosk_mode?: boolean;
+  clear_profile?: boolean;
+  clear_extensions?: boolean;
 };
 
-function buildPoolConfigParams(
+const browserPoolTimeoutSchema = z.number().int().min(10).max(259200);
+const browserPoolFillRateSchema = z.number().int().min(0);
+
+function buildPoolCreateParams(
   params: PoolConfigParams,
-): BrowserConfigResult<BrowserPoolUpdateParams> {
+): BrowserConfigResult<BrowserPoolCreateParams> {
+  if (params.size === undefined) {
+    return { ok: false, error: "Error: size is required for create." };
+  }
+  if (params.clear_profile || params.clear_extensions) {
+    return {
+      ok: false,
+      error: "Error: clear_profile and clear_extensions are update-only.",
+    };
+  }
+  if (params.start_url === "") {
+    return {
+      ok: false,
+      error: "Error: an empty start_url is update-only.",
+    };
+  }
+
   const browserConfig = buildBrowserCreateConfig(params);
   if (!browserConfig.ok) return browserConfig;
   const chromePolicy =
@@ -57,7 +86,7 @@ function buildPoolConfigParams(
   return {
     ok: true,
     value: {
-      ...(params.size !== undefined && { size: params.size }),
+      size: params.size,
       ...(params.name && { name: params.name }),
       ...(params.headless !== undefined && { headless: params.headless }),
       ...(params.stealth !== undefined && { stealth: params.stealth }),
@@ -75,29 +104,59 @@ function buildPoolConfigParams(
   };
 }
 
-function buildPoolCreateParams(
-  params: PoolConfigParams,
-): BrowserConfigResult<BrowserPoolCreateParams> {
-  if (params.size === undefined) {
-    return { ok: false, error: "Error: size is required for create." };
-  }
-
-  const config = buildPoolConfigParams(params);
-  if (!config.ok) return config;
-
-  return { ok: true, value: { ...config.value, size: params.size } };
-}
-
 function buildPoolUpdateParams(
   params: PoolConfigParams & { discard_all_idle?: boolean },
 ): BrowserConfigResult<BrowserPoolUpdateParams> {
-  const config = buildPoolConfigParams(params);
-  if (!config.ok) return config;
+  if (params.clear_profile && (params.profile_id || params.profile_name)) {
+    return {
+      ok: false,
+      error:
+        "Error: clear_profile cannot be combined with profile_id or profile_name.",
+    };
+  }
+  if (
+    params.clear_extensions &&
+    (params.extension_id || params.extension_name)
+  ) {
+    return {
+      ok: false,
+      error:
+        "Error: clear_extensions cannot be combined with extension_id or extension_name.",
+    };
+  }
+
+  const browserConfig = buildBrowserSharedConfig(params);
+  if (!browserConfig.ok) return browserConfig;
+  if (params.start_url) {
+    try {
+      new URL(params.start_url);
+    } catch {
+      return { ok: false, error: "Error: start_url must be a valid URL." };
+    }
+  }
 
   return {
     ok: true,
     value: {
-      ...config.value,
+      ...(params.size !== undefined && { size: params.size }),
+      ...(params.name && { name: params.name }),
+      ...(params.headless !== undefined && { headless: params.headless }),
+      ...(params.stealth !== undefined && { stealth: params.stealth }),
+      ...(params.timeout_seconds !== undefined && {
+        timeout_seconds: params.timeout_seconds,
+      }),
+      ...(params.proxy_id !== undefined && { proxy_id: params.proxy_id }),
+      ...(params.fill_rate_per_minute !== undefined && {
+        fill_rate_per_minute: params.fill_rate_per_minute,
+      }),
+      ...(params.chrome_policy !== undefined && {
+        chrome_policy: params.chrome_policy,
+      }),
+      ...(params.kiosk_mode !== undefined && { kiosk_mode: params.kiosk_mode }),
+      ...(params.start_url !== undefined && { start_url: params.start_url }),
+      ...browserConfig.value,
+      ...(params.clear_profile && { profile: { id: "" } }),
+      ...(params.clear_extensions && { extensions: [] }),
       ...(params.discard_all_idle !== undefined && {
         discard_all_idle: params.discard_all_idle,
       }),
@@ -123,10 +182,10 @@ function summarizeBrowserPool(pool: BrowserPool) {
       timeout_seconds: config.timeout_seconds,
       fill_rate_per_minute: config.fill_rate_per_minute,
       start_url: config.start_url,
-      profile: config.profile,
+      profile_id: pool.profile_id,
       proxy_id: config.proxy_id,
       viewport: config.viewport,
-      extensions: config.extensions,
+      extension_ids: pool.extension_ids,
       chrome_policy_keys: config.chrome_policy
         ? Object.keys(config.chrome_policy)
         : undefined,
@@ -158,197 +217,207 @@ function summarizeAcquiredBrowser(browser: BrowserPoolAcquireResponse) {
 }
 
 export function registerBrowserPoolCapabilities(server: McpServer) {
-  server.resource("browser_pools", "browser-pools://", async (uri, extra) => {
-    if (!extra.authInfo) {
-      throw new Error("Authentication required");
-    }
-
-    const client = createKernelClient(extra.authInfo.token);
-    const pools = [];
-    for await (const pool of client.browserPools.list()) {
-      pools.push(pool);
-    }
-    return {
-      contents: [
-        {
-          uri: uri.toString(),
-          mimeType: "application/json",
-          text:
-            pools.length > 0
-              ? JSON.stringify(pools.map(summarizeBrowserPool), null, 2)
-              : "No browser pools found",
-        },
-      ],
-    };
+  registerJsonResourceCollection(server, {
+    name: "browser_pools",
+    uriTemplate:
+      "kernel://orgs/{organizationId}/projects/{projectId}/browser-pools",
+    emptyText: "No browser pools found",
+    read: async (client) => {
+      const pools = [];
+      for await (const pool of client.browserPools.list()) {
+        pools.push(summarizeBrowserPool(pool));
+      }
+      return pools;
+    },
   });
 
   registerJsonResourceTemplate(server, {
     name: "browser_pool",
-    uriTemplate: "browser-pools://{idOrName}",
+    uriTemplate:
+      "kernel://orgs/{organizationId}/projects/{projectId}/browser-pools/{idOrName}",
     variableName: "idOrName",
     resourceLabel: "Browser pool",
     read: (client, idOrName) => client.browserPools.retrieve(idOrName),
   });
 
   // manage_browser_pools -- Create, update, list, get, delete, flush, acquire, and release browser pools
-  server.tool(
+  server.registerTool(
     "manage_browser_pools",
-    'Manage pre-warmed browser pools when an agent needs fast browser acquisition or reusable session capacity. Use "list" for a compact pool inventory, "get" for full details, "acquire" before controlling a pooled browser, and "release" when the browser should return to the pool.',
     {
-      action: z
-        .enum([
-          "create",
-          "update",
-          "list",
-          "get",
-          "delete",
-          "flush",
-          "acquire",
-          "release",
-        ])
-        .describe("Operation to perform."),
-      id_or_name: z
-        .string()
-        .describe(
-          "Pool ID or name. Required for update/get/delete/flush/acquire/release.",
-        )
-        .optional(),
-      size: z
-        .number()
-        .int()
-        .min(1)
-        .describe(
-          "(create, update) Number of browsers to maintain in the pool.",
-        )
-        .optional(),
-      name: z
-        .string()
-        .describe("(create, update) Unique pool name.")
-        .optional(),
-      headless: z
-        .boolean()
-        .describe("(create, update) Headless mode for pool browsers.")
-        .optional(),
-      stealth: z
-        .boolean()
-        .describe("(create, update) Stealth mode for pool browsers.")
-        .optional(),
-      timeout_seconds: z
-        .number()
-        .int()
-        .min(1)
-        .describe(
-          "(create, update) Idle timeout for acquired browsers. Default 600.",
-        )
-        .optional(),
-      profile_name: z
-        .string()
-        .describe(
-          "(create, update) Profile name to load into pool browsers. Cannot use with profile_id.",
-        )
-        .optional(),
-      profile_id: z
-        .string()
-        .describe(
-          "(create, update) Profile ID to load into pool browsers. Cannot use with profile_name.",
-        )
-        .optional(),
-      proxy_id: z
-        .string()
-        .describe("(create, update) Proxy for pool browsers.")
-        .optional(),
-      // Percentage rate, not a count — the API accepts fractional values, so
-      // intentionally no .int() (unlike the size/timeout count fields).
-      fill_rate_per_minute: z
-        .number()
-        .min(0)
-        .describe(
-          "(create, update) Pool fill rate percentage per minute. Default 10%.",
-        )
-        .optional(),
-      start_url: z
-        .string()
-        .url()
-        .describe(
-          "(create, update) URL to open when a browser is warmed into the pool. Navigation is best-effort.",
-        )
-        .optional(),
-      chrome_policy: z
-        .record(z.string(), z.unknown())
-        .describe(
-          "(create, update) Chrome enterprise policy overrides for all browsers in the pool. Kernel-managed policies such as extensions, proxy, CDP, and automation are blocked by the API.",
-        )
-        .optional(),
-      kiosk_mode: z
-        .boolean()
-        .describe("(create, update) Hide address bar/tabs in live view.")
-        .optional(),
-      extension_id: z
-        .string()
-        .describe("(create, update) Extension ID to load.")
-        .optional(),
-      extension_name: z
-        .string()
-        .describe("(create, update) Extension name to load.")
-        .optional(),
-      viewport_width: z
-        .number()
-        .int()
-        .min(1)
-        .describe(
-          "(create, update) Window width in pixels. Must pair with viewport_height.",
-        )
-        .optional(),
-      viewport_height: z
-        .number()
-        .int()
-        .min(1)
-        .describe(
-          "(create, update) Window height in pixels. Must pair with viewport_width.",
-        )
-        .optional(),
-      viewport_refresh_rate: z
-        .number()
-        .int()
-        .min(1)
-        .describe("(create, update) Display refresh rate in Hz.")
-        .optional(),
-      discard_all_idle: z
-        .boolean()
-        .describe(
-          "(update) Discard idle browsers and rebuild the pool immediately.",
-        )
-        .optional(),
-      force: z
-        .boolean()
-        .describe("(delete) Force delete even if browsers are leased.")
-        .optional(),
-      acquire_timeout_seconds: z
-        .number()
-        .int()
-        .min(0)
-        .describe("(acquire) Max seconds to wait for a browser.")
-        .optional(),
-      session_id: z
-        .string()
-        .describe("(release) Session ID of browser to release.")
-        .optional(),
-      reuse: z
-        .boolean()
-        .describe("(release) Reuse browser instance or recreate. Default true.")
-        .optional(),
-      ...paginationParams,
+      description:
+        'Manage pre-warmed browser pools when an agent needs fast browser acquisition or reusable session capacity. Use "list" for a compact pool inventory, "get" for full details, "acquire" before controlling a pooled browser, and "release" when the browser should return to the pool.',
+      inputSchema: z.object({
+        ...projectSelectionInputSchema(),
+        action: z
+          .enum([
+            "create",
+            "update",
+            "list",
+            "get",
+            "delete",
+            "flush",
+            "acquire",
+            "release",
+          ])
+          .describe("Operation to perform."),
+        id_or_name: z
+          .string()
+          .describe(
+            "Pool ID or name. Required for update/get/delete/flush/acquire/release.",
+          )
+          .optional(),
+        size: z
+          .number()
+          .int()
+          .min(1)
+          .describe(
+            "(create, update) Number of browsers to maintain in the pool.",
+          )
+          .optional(),
+        name: z
+          .string()
+          .describe("(create, update) Unique pool name.")
+          .optional(),
+        headless: z
+          .boolean()
+          .describe("(create, update) Headless mode for pool browsers.")
+          .optional(),
+        stealth: z
+          .boolean()
+          .describe(
+            "(create, update) Apply site-compatibility settings to pool browsers.",
+          )
+          .optional(),
+        timeout_seconds: browserPoolTimeoutSchema
+          .describe(
+            "(create, update) Idle timeout for acquired browsers. Default 600.",
+          )
+          .optional(),
+        profile_name: z
+          .string()
+          .describe(
+            "(create, update) Profile name to load into pool browsers. Cannot use with profile_id.",
+          )
+          .optional(),
+        profile_id: z
+          .string()
+          .describe(
+            "(create, update) Profile ID to load into pool browsers. Cannot use with profile_name.",
+          )
+          .optional(),
+        clear_profile: z
+          .boolean()
+          .describe(
+            "(update) Remove the profile from the pool. Cannot use with profile_id or profile_name.",
+          )
+          .optional(),
+        proxy_id: z
+          .string()
+          .describe(
+            "(create, update) Proxy for pool browsers. On update, an empty string clears the proxy.",
+          )
+          .optional(),
+        fill_rate_per_minute: browserPoolFillRateSchema
+          .describe(
+            "(create, update) Pool fill rate percentage per minute. Default 25%.",
+          )
+          .optional(),
+        start_url: z
+          .union([z.literal(""), z.string().url()])
+          .describe(
+            "(create, update) URL to open when a browser is warmed into the pool. On update, an empty string clears it. Navigation is best-effort.",
+          )
+          .optional(),
+        chrome_policy: z
+          .record(z.string(), z.unknown())
+          .describe(
+            "(create, update) Chrome enterprise policy overrides for all browsers in the pool. On update, an empty object clears the policy. Kernel-managed policies such as extensions, proxy, CDP, and automation are blocked by the API.",
+          )
+          .optional(),
+        kiosk_mode: z
+          .boolean()
+          .describe("(create, update) Hide address bar/tabs in live view.")
+          .optional(),
+        extension_id: z
+          .string()
+          .describe("(create, update) Extension ID to load.")
+          .optional(),
+        extension_name: z
+          .string()
+          .describe("(create, update) Extension name to load.")
+          .optional(),
+        clear_extensions: z
+          .boolean()
+          .describe(
+            "(update) Remove all extensions from the pool. Cannot use with extension_id or extension_name.",
+          )
+          .optional(),
+        viewport_width: z
+          .number()
+          .int()
+          .min(1)
+          .describe(
+            "(create, update) Window width in pixels. Must pair with viewport_height.",
+          )
+          .optional(),
+        viewport_height: z
+          .number()
+          .int()
+          .min(1)
+          .describe(
+            "(create, update) Window height in pixels. Must pair with viewport_width.",
+          )
+          .optional(),
+        viewport_refresh_rate: z
+          .number()
+          .int()
+          .min(1)
+          .describe("(create, update) Display refresh rate in Hz.")
+          .optional(),
+        discard_all_idle: z
+          .boolean()
+          .describe(
+            "(update) Discard idle browsers and rebuild the pool immediately.",
+          )
+          .optional(),
+        force: z
+          .boolean()
+          .describe("(delete) Force delete even if browsers are leased.")
+          .optional(),
+        acquire_timeout_seconds: z
+          .number()
+          .int()
+          .min(0)
+          .describe("(acquire) Max seconds to wait for a browser.")
+          .optional(),
+        session_id: z
+          .string()
+          .describe(
+            "(release) Session ID of the browser to release. Must be the ID, not the session name.",
+          )
+          .optional(),
+        reuse: z
+          .boolean()
+          .describe(
+            "(release) Reuse browser instance or recreate. Default true.",
+          )
+          .optional(),
+        ...paginationParams,
+      }),
+      annotations: {
+        title: "Manage Kernel browser pools",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
     },
-    {
-      title: "Manage Kernel browser pools",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      const client = createKernelClient(
+        ctx.http.authInfo.token,
+        projectForOperation(ctx.http.authInfo, params),
+      );
 
       try {
         switch (params.action) {

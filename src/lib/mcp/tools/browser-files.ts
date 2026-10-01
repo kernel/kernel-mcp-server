@@ -1,7 +1,11 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { toFile } from "@onkernel/sdk";
 import { z } from "zod";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
+import {
+  projectForOperation,
+  projectSelectionInputSchema,
+} from "@/lib/mcp/project-selection";
 import {
   errorResponse,
   itemsJsonResponse,
@@ -22,6 +26,7 @@ const fileContentSchema = z.object({
 });
 
 const browserFileParamsSchema = z.object({
+  ...projectSelectionInputSchema(),
   action: z
     .enum([
       "list",
@@ -288,20 +293,26 @@ export async function runBrowserFileAction(
 }
 
 export function registerBrowserFileTools(server: McpServer) {
-  server.tool(
+  server.registerTool(
     "manage_browser_files",
-    'Read, write, upload, download, and manage files in a running browser VM. Use "read" for text content and "download" for binary files returned as an embedded MCP resource. Local files must be supplied as utf8 or base64 content because the remote MCP server cannot access paths on the caller\'s machine.',
-    browserFileParamsSchema.shape,
     {
-      title: "Manage browser VM files",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: false,
+      description:
+        'Read, write, upload, download, and manage files in a running browser VM. Use "read" for text content and "download" for binary files returned as an embedded MCP resource. Local files must be supplied as utf8 or base64 content because the remote MCP server cannot access paths on the caller\'s machine.',
+      inputSchema: browserFileParamsSchema,
+      annotations: {
+        title: "Manage browser VM files",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
     },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      const client = createKernelClient(
+        ctx.http.authInfo.token,
+        projectForOperation(ctx.http.authInfo, params),
+      );
 
       try {
         return await runBrowserFileAction(client.browsers.fs, params);
