@@ -87,15 +87,28 @@ function structuredValueEnd(text: string, start: number): number {
   return text.length;
 }
 
-function lineEndsAfter(text: string, start: number): boolean {
+function skipHorizontalWhitespace(text: string, start: number): number {
   let cursor = start;
   while (text[cursor] === " " || text[cursor] === "\t") cursor += 1;
+  return cursor;
+}
+
+function lineEndsAfter(text: string, start: number): boolean {
+  const cursor = skipHorizontalWhitespace(text, start);
   return (
     cursor >= text.length ||
     text[cursor] === "\n" ||
     text[cursor] === "\r" ||
     (text[cursor] === "\\" && /[nr]/.test(text[cursor + 1] ?? ""))
   );
+}
+
+function skipSnapshotAttributes(text: string, start: number): number {
+  let cursor = skipHorizontalWhitespace(text, start);
+  while (text[cursor] === "[") {
+    cursor = skipHorizontalWhitespace(text, structuredValueEnd(text, cursor));
+  }
+  return cursor;
 }
 
 function sensitiveAssignments(text: string): SensitiveAssignment[] {
@@ -143,11 +156,13 @@ function sensitiveAssignments(text: string): SensitiveAssignment[] {
         continue;
       }
       if (quotedLabel) {
-        valueCursor += slashCount + 1;
-        while (/\s/.test(text[valueCursor] ?? "")) valueCursor += 1;
+        valueCursor = skipSnapshotAttributes(
+          text,
+          valueCursor + slashCount + 1,
+        );
+        if (lineEndsAfter(text, valueCursor)) continue;
         if (text[valueCursor] === ":" || text[valueCursor] === "=") {
-          valueCursor += 1;
-          while (/\s/.test(text[valueCursor] ?? "")) valueCursor += 1;
+          valueCursor = skipHorizontalWhitespace(text, valueCursor + 1);
         }
         slashCount = 0;
         while (text[valueCursor + slashCount] === "\\") slashCount += 1;
@@ -538,7 +553,8 @@ function assertSensitiveAssignmentsRedacted(value: string): void {
     /(?:^|\\[nrt]|[^A-Za-z0-9_-])(?:\\*["'])?([A-Za-z0-9_-]+)(?:\\*["'])?\s*[:=]\s*/gi;
   for (const match of value.matchAll(assignmentStart)) {
     if (!sensitiveField(match[1])) continue;
-    const remainder = value.slice((match.index ?? 0) + match[0].length);
+    const remainderStart = (match.index ?? 0) + match[0].length;
+    const remainder = value.slice(remainderStart);
     const valueQuote = remainder.match(/^(\\*)(["'])/);
     const separator = Math.max(
       match[0].lastIndexOf(":"),
@@ -561,7 +577,17 @@ function assertSensitiveAssignmentsRedacted(value: string): void {
       continue;
     }
     let unquoted = remainder.replace(/^(?:\\*["'])?/, "");
-    if (quotedLabel) unquoted = unquoted.replace(/^\s*(?:[:=]\s*)?/, "");
+    if (quotedLabel && valueQuote) {
+      let valueStart = skipSnapshotAttributes(
+        value,
+        remainderStart + valueQuote[0].length,
+      );
+      if (lineEndsAfter(value, valueStart)) continue;
+      if (value[valueStart] === ":" || value[valueStart] === "=") {
+        valueStart = skipHorizontalWhitespace(value, valueStart + 1);
+      }
+      unquoted = value.slice(valueStart).replace(/^(?:\\*["'])?/, "");
+    }
     if (!unquoted.startsWith(REDACTED)) {
       throw new Error(
         "Braintrust payload still contains a sensitive field value",

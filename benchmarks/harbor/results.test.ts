@@ -623,7 +623,7 @@ describe("Harbor result ingestion", () => {
       result: `- text: "Email:"
 - textbox "Email:"
 - text: "Password:"
-- textbox "Password:": Filled2Pass
+- textbox "Password:" [disabled] [ref=e12]: Filled2Pass
 Password: don't reuse one from another site`,
     });
     writeJson(trajectoryPath, trajectory);
@@ -839,7 +839,8 @@ describe("Braintrust redaction", () => {
   test("keeps aria labels publishable and redacts prose values", () => {
     const ariaSnapshot = `- text: "Email:"
 - textbox "Email:"
-- text: "Password:"`;
+- text: "Password:"
+- textbox "Password:" [disabled] [ref=e12]`;
     const escapedLabel = String.raw`- text: \"Password:\"`;
     for (const label of [ariaSnapshot, escapedLabel]) {
       expect(redactString(label)).toBe(label);
@@ -853,7 +854,8 @@ describe("Braintrust redaction", () => {
     expect(collectSensitiveValues(prose)).toContain("don't");
     expect(() => assertSafeToPublish(redacted)).not.toThrow();
 
-    const filledSnapshot = '- textbox "Password:": Filled2Pass';
+    const filledSnapshot =
+      '- textbox "Password:" [disabled] [ref=e12]: Filled2Pass';
     const redactedSnapshot = redactString(filledSnapshot);
     expect(redactedSnapshot).not.toContain("Filled2Pass");
     expect(collectSensitiveValues(filledSnapshot)).toContain("Filled2Pass");
