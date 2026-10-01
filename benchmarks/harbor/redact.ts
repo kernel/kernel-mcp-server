@@ -94,7 +94,9 @@ function sensitiveAssignments(text: string): SensitiveAssignment[] {
 
     let keyCursor = separator - 1;
     while (/\s/.test(text[keyCursor] ?? "")) keyCursor -= 1;
-    if (text[keyCursor] === '"' || text[keyCursor] === "'") {
+    const keyHasClosingQuote =
+      text[keyCursor] === '"' || text[keyCursor] === "'";
+    if (keyHasClosingQuote) {
       keyCursor -= 1;
       while (text[keyCursor] === "\\") keyCursor -= 1;
     }
@@ -105,7 +107,8 @@ function sensitiveAssignments(text: string): SensitiveAssignment[] {
       }
       keyCursor -= 1;
     }
-    const key = text.slice(keyCursor + 1, keyEnd);
+    const keyStart = keyCursor + 1;
+    const key = text.slice(keyStart, keyEnd);
     if (!key || !sensitiveField(key)) continue;
 
     let valueCursor = separator + 1;
@@ -117,6 +120,17 @@ function sensitiveAssignments(text: string): SensitiveAssignment[] {
     let end = valueCursor;
 
     if (quote === '"' || quote === "'") {
+      let openingSlashCount = 0;
+      for (let cursor = keyStart - 2; text[cursor] === "\\"; cursor -= 1) {
+        openingSlashCount += 1;
+      }
+      if (
+        !keyHasClosingQuote &&
+        text[keyStart - 1] === quote &&
+        openingSlashCount === slashCount
+      ) {
+        continue;
+      }
       start = valueCursor + slashCount + 1;
       end = text.length;
       for (let cursor = start; cursor < text.length; cursor += 1) {
@@ -141,7 +155,19 @@ function sensitiveAssignments(text: string): SensitiveAssignment[] {
       end = structuredValueEnd(text, start);
       separator = end - 1;
     } else {
-      while (end < text.length && !/[\s,"'\}&;]/.test(text[end] ?? "")) {
+      while (end < text.length) {
+        const character = text[end] ?? "";
+        if (/[\s,\}&;]/.test(character)) break;
+        if (
+          (character === '"' || character === "'") &&
+          !(
+            character === "'" &&
+            /[A-Za-z0-9]/.test(text[end - 1] ?? "") &&
+            /[A-Za-z0-9]/.test(text[end + 1] ?? "")
+          )
+        ) {
+          break;
+        }
         end += 1;
       }
       separator = Math.max(separator, end - 1);
@@ -481,6 +507,21 @@ function assertSensitiveAssignmentsRedacted(value: string): void {
   for (const match of value.matchAll(assignmentStart)) {
     if (!sensitiveField(match[1])) continue;
     const remainder = value.slice((match.index ?? 0) + match[0].length);
+    const valueQuote = remainder.match(/^(\\*)(["'])/);
+    const separator = Math.max(
+      match[0].lastIndexOf(":"),
+      match[0].lastIndexOf("="),
+    );
+    if (
+      valueQuote &&
+      [...match[0].slice(0, separator)].filter(
+        (character) => character === valueQuote[2],
+      ).length %
+        2 ===
+        1
+    ) {
+      continue;
+    }
     const unquoted = remainder.replace(/^(?:\\*["'])?/, "");
     if (!unquoted.startsWith(REDACTED)) {
       throw new Error(

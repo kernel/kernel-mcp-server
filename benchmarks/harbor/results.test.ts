@@ -606,6 +606,38 @@ describe("Harbor result ingestion", () => {
     ]);
   });
 
+  test("keeps login-page snapshots publishable", () => {
+    const root = fixture();
+    const trajectoryPath = join(
+      root,
+      "task-one__abc",
+      "steps/run/agent/trajectory.json",
+    );
+    const trajectory = JSON.parse(readFileSync(trajectoryPath, "utf8")) as {
+      steps: Array<{
+        observation?: { results?: Array<{ content?: string }> };
+      }>;
+    };
+    trajectory.steps[2].observation!.results![0].content = JSON.stringify({
+      success: true,
+      result: `- text: "Email:"
+- textbox "Email:"
+- text: "Password:"
+Password: don't reuse one from another site`,
+    });
+    writeJson(trajectoryPath, trajectory);
+
+    const events = buildExperimentEvents(
+      [readBenchmarkArm({ name: "candidate", path: root })],
+      "login-snapshot",
+    );
+    const published = JSON.stringify(events);
+    expect(published).toContain("Password:");
+    expect(published).toContain("[REDACTED] reuse one from another site");
+    expect(published).not.toContain("don't");
+    expect(() => assertSafeToPublish(events)).not.toThrow();
+  });
+
   test("harvests only sensitive values from private-info output", () => {
     const root = fixture();
     writeJson(join(root, "task-one__abc", "steps/run/agent/trajectory.json"), {
@@ -800,6 +832,24 @@ describe("Braintrust redaction", () => {
     }
     expect(collectSensitiveValues(objectValue)).toContain("Nested2Pass");
     expect(collectSensitiveValues(arrayValue)).toContain("NestedToken");
+  });
+
+  test("keeps aria labels publishable and redacts prose values", () => {
+    const ariaSnapshot = `- text: "Email:"
+- textbox "Email:"
+- text: "Password:"`;
+    const escapedLabel = String.raw`- text: \"Password:\"`;
+    for (const label of [ariaSnapshot, escapedLabel]) {
+      expect(redactString(label)).toBe(label);
+      expect(collectSensitiveValues(label)).toEqual([]);
+      expect(() => assertSafeToPublish(label)).not.toThrow();
+    }
+
+    const prose = "Password: don't reuse one from another site";
+    const redacted = redactString(prose);
+    expect(redacted).toBe("Password: [REDACTED] reuse one from another site");
+    expect(collectSensitiveValues(prose)).toContain("don't");
+    expect(() => assertSafeToPublish(redacted)).not.toThrow();
   });
 
   test("redacts complex Playwright typing calls and rejects originals", () => {
