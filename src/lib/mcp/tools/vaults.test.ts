@@ -42,10 +42,16 @@ describe("vault SDK request contracts", () => {
       expect(cards?.description).toContain(
         "Mode is determined by the wallet credentials",
       );
+      expect(cards?.description).toContain("Cards cannot be updated");
       expect(cards?.description).toContain(
-        "Pending issuance updates preserve omitted optional fields",
+        "Creating a Link card does not contact Link or authorize it",
       );
-      expect(cards?.description).toContain("recovery_required");
+      expect(cards?.description).toContain(
+        "inputs browser_id (session ID) and the exact current page_url together",
+      );
+      expect(cards?.inputSchema.properties?.action).toMatchObject({
+        enum: ["create"],
+      });
       expect(JSON.stringify(cards?.inputSchema)).toContain("checkout_origin");
       expect(cards?.description).toContain(
         "Kernel does not compare it with the browser page",
@@ -191,7 +197,7 @@ describe("vault SDK request contracts", () => {
   );
 
   test.each(["link", "agentcard"])(
-    "creates and fully replaces a %s card without authorizing it",
+    "creates a %s card with one PUT and has no update path",
     async (provider) => {
       const original =
         provider === "link"
@@ -229,35 +235,26 @@ describe("vault SDK request contracts", () => {
               card_id: "vc_chosen",
               amount: Number.MAX_SAFE_INTEGER,
             };
-      const replacement = provider === "link" ? linkSpec : agentcardSpec;
-      const fixture = await connectVaultTest([
-        Response.json(item),
-        Response.json(item),
-      ]);
+      const fixture = await connectVaultTest([Response.json(item)]);
       try {
-        for (const [action, spec] of [
-          ["create", original],
-          ["update", replacement],
-        ]) {
+        for (const [action, isError] of [
+          ["create", undefined],
+          ["update", true],
+        ] as const) {
           const result = await fixture.call("manage_vault_cards", {
             action,
             vault: "checkout",
             key: "order-1",
             provider,
-            spec,
+            spec: original,
           });
-          expect(result.isError).toBeUndefined();
+          expect(result.isError).toBe(isError);
         }
-        expect(fixture.requests).toHaveLength(2);
+        expect(fixture.requests).toHaveLength(1);
         expect(fixture.requests[0]).toMatchObject({
           method: "PUT",
           body: { type: "card", spec: original },
         });
-        expect(fixture.requests[1]).toMatchObject({
-          method: "PATCH",
-          body: { spec: { ...replacement, provider } },
-        });
-        expect(fixture.requests[1].body).not.toHaveProperty("type");
       } finally {
         await fixture.close();
       }

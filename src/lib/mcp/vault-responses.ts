@@ -36,7 +36,7 @@ const paymentMethodFields = {
 // Allow public metadata, including future operation names, but never unknown
 // provider fields, free-form metadata, or opaque event data.
 export const vaultItemFields: OutputFields = {
-  ...fields("id key type version created_at updated_at expires_at"),
+  ...fields("id key type version description created_at updated_at expires_at"),
   available_operations: operationFields,
   available_expansions: operationFields,
   action: fields("name url expires_at"),
@@ -422,13 +422,13 @@ export function vaultItemResponse(
               "Invocation hints are not approval to execute. Availability may change; invoke rechecks the advertised operations. Ready does not mean paid.",
               ...(payment.success && payment.data.type === "wallet"
                 ? [
-                    "Wallets connect a payment provider; they are not fillable cards. Use manage_vault_cards to configure a purchase request, then inspect that card's state and advertised operations.",
+                    "Wallets connect a payment provider; they are not fillable cards. Read item.description for current provider guidance. Use manage_vault_cards to create a purchase request, then inspect that card's state and advertised operations.",
                   ]
                 : []),
               ...(cardProvider === "link"
                 ? [
-                    "Link cards use browser field writes for checkout only when advertised. Link does not expose aliases or support egress substitution; do not use aliases from older responses, which fail closed on supported payment shapes. The browser must retain this vault attachment in the same project. The exact current HTTPS top-level page URL must have the origin of spec.merchant_url. The card must remain ready and unexpired with stored card material and a non-deleted parent wallet; lifecycle and destination checks still apply.",
-                    "When the field-writing operation is advertised, pass inputs with browser_id, exact current top-level page_url (including path, query, and fragment), and ordered field/selector bindings, never values. A combined expiration field requires format MM/YY or MM/YYYY. Attach the vault at browser creation. The operation returns no card values and does not explicitly submit checkout; browser access can expose written values. Failed or unknown writes may leave partial changes. Never automatically retry or fall back to aliases. Completion means fields were written, not that the payment succeeded.",
+                    "Link cards are immutable. Authorize at the final checkout page, after explicit user approval, with inputs browser_id and the exact current top-level page_url together: Kernel uses a Link Pay Token on Stripe Checkout pages that expose one, otherwise a one-time virtual card, and binds fill to that browser and page. Omitting both issues an unbound virtual card. Re-check a pending card with the same values or none; different values return 409. While pending_authorization, give the user item.action.url to approve in Link. If authorize rejects the amount for a virtual-card checkout, delete this card and create a smaller request; never create a new card to retry a payment.",
+                    "Fill only when advertised, and read its description for the exact inputs: the browser_id and page_url used to authorize, plus ordered field/selector bindings (never values) only when it asks for them; a Link Pay Token fill omits fields. A combined expiration field requires format MM/YY or MM/YYYY. The browser must keep this vault attached in the same project. An unbound card fills only at the exact current HTTPS top-level page URL with the origin of spec.merchant_url. Link does not expose aliases or support egress substitution; do not use aliases from older responses, which fail closed on supported payment shapes. The card must remain ready and unexpired with a non-deleted parent wallet. Fill returns no card or token values and never submits payment or clicks Pay; browser access can expose written values. Failed or unknown fills may leave partial changes. Never automatically retry or fall back to aliases. Completion means the credential was supplied to the page, not that the payment succeeded.",
                   ]
                 : []),
               ...(cardProvider === "agentcard"
@@ -437,7 +437,7 @@ export function vaultItemResponse(
                     "For checkout preparation, supply the API-required checkout context and deliver the returned approval URL and keep the approval page open. Poll the item until ready_to_submit, then submit native Pay before state.preparation.expires_at. Readiness lasts at most 30 seconds; polling does not extend it. Preparations are single-use even after failure or expiry. Preparation consumed means claimed, not payment success.",
                   ]
                 : []),
-              "Observe get/events for outcomes. Do not retry failed, timed-out, rejected, or indeterminate payments or reconfigure a card to retry them.",
+              "Observe get/events for outcomes. Do not retry failed, timed-out, rejected, or indeterminate payments or create a new card to retry them.",
               "recovery_required is an unresolved original outcome, not decline or expiry. Stop payment attempts; reconcile with the provider or support. No reset exists, and deletion may be blocked for this item and its parents.",
             ]),
     },

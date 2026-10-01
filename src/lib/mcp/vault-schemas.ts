@@ -182,7 +182,9 @@ export const linkCardSpecSchema = z
     amount: integer()
       .min(1)
       .max(500000)
-      .describe("Integer minor currency units."),
+      .describe(
+        "Integer minor currency units. Link Pay Token checkouts allow up to 500000; virtual-card checkouts allow up to 50000, and authorization rejects a larger amount when the checkout needs a virtual card.",
+      ),
     currency: currency(),
     merchant_name: z.string().min(1).max(255),
     merchant_url: z.string().url(),
