@@ -17,8 +17,17 @@ The released Node SDK dependency is pinned in `bun.lock`.
 
 ## Credential collection and observation
 
-Use one vault per end user, such as `user-123`. Create credential definitions with
-`manage_vault_credentials`: use only the recognizable site name for `description`, and
+Credentials have two paths. Before creating a credential, ask the user which they
+prefer and pass it as `provider`; never choose for them:
+
+- `provider: "kernel"` (Kernel-hosted collection): the user enters values in a
+  Kernel-hosted form, and the agent fills them with value-free bindings.
+- `provider: "1password"` (1Password brokered approval): the user connects their
+  1Password account once and approves each login request in the 1Password app. See
+  [1Password brokered approval](#1password-brokered-approval).
+
+Use one vault per end user, such as `user-123`. For Kernel-hosted collection, create
+credential definitions with `manage_vault_credentials`: use only the recognizable site name for `description`, and
 set `sensitive: false` explicitly for ordinary usernames/emails. Passwords and TOTP
 seeds must be sensitive. Payment-card data belongs in wallet/card items, not credentials.
 
@@ -51,14 +60,25 @@ fall back to payment aliases.
    ```json
    {
      "action": "create",
+     "provider": "kernel",
      "vault": "user-123",
      "key": "login",
      "spec": {
        "description": "Example",
-       "fields": {
-         "username": { "type": "text", "required": true, "sensitive": false },
-         "password": { "type": "password", "required": true, "sensitive": true }
-       }
+       "fields": [
+         {
+           "name": "username",
+           "type": "text",
+           "required": true,
+           "sensitive": false
+         },
+         {
+           "name": "password",
+           "type": "password",
+           "required": true,
+           "sensitive": true
+         }
+       ]
      }
    }
    ```
@@ -105,6 +125,89 @@ Definitions cannot be changed. Never solicit secret replacement values in chat;
 prefer `collect` for human edits. Requests are not automatically retried.
 `prepare_checkout` remains API/CLI-only.
 
+### 1Password brokered approval
+
+Before creating anything, list the vault and reuse a ready credential whose
+`spec.requests.entries` websites cover the login page, or a connected
+`credential_account`. A `credential_account` belongs to one vault, so each end
+user's vault connects its own 1Password account. If none fits, ask where the
+user's login lives, for example: "Is your example.com login saved in your own
+1Password, or would you rather enter it in a secure Kernel form?" 1Password
+supports only logins in the owner's own non-shared vault, not shared-vault items or
+passkeys; use Kernel-hosted collection for those, or when the user declines
+1Password or that path fails.
+
+1. Connect the account with `manage_vault_credentials`, `action: "connect_account"`,
+   `provider: "1password"`, the user's vault, and a new key. Give the returned
+   1Password authorization URL only to the account owner, outside the
+   agent-controlled browser, to complete 1Password consent. If the account later reports `declined` or `reconnect_required`, connect again on the
+   same key. When `1pw_recover` is advertised, Kernel can recover a failed account
+   link: after explicit user approval, invoke it, give the returned link to the
+   account owner the same way, and connect again on the same key once recovery
+   completes. Never delete the account to recover.
+2. Observe the account with `manage_vault_items` `get` until `state.status` is
+   `connected`. Confirm with the owner which site logins to request (1-5, approved
+   together), then create the credential:
+
+   ```json
+   {
+     "action": "create",
+     "provider": "1password",
+     "vault": "user-123",
+     "key": "example-login",
+     "spec": {
+       "account": "<credential_account item key>",
+       "logins": [{ "website": "https://example.com/login" }]
+     }
+   }
+   ```
+
+   Optional `goal`, and per-login `reason` and `keywords`, describe the request to
+   the account owner. 1Password credentials store no values or selectors and cannot
+   be updated.
+
+3. Create a browser with the vault attached before asking the owner to approve
+   anything: the approval link exists only after this request. After explicit user
+   approval, invoke the advertised `1pw_create_access_request` with
+   `inputs: {"browser_id": "..."}`.
+   Kernel loads the 1Password extension into that browser on demand. Request-time
+   `reason` and `keywords` apply only to a single-login credential.
+4. Approval is a human action in the account owner's 1Password app. The pending item
+   returns `action: {"name": "1password_access_approval", "url": "onepassword://grant-brokered-access?access_request_reference=..."}`.
+   Give that link, unmodified, only to the account owner in a private surface outside
+   the agent-controlled browser; they open it on a device with the 1Password app and
+   choose, approve, or deny the login there. The link grants nothing until they
+   approve, but it identifies the request, so the agent must never open, decode, or
+   approve it. MCP forwards only links in that exact native form, without the API's
+   free-text instructions. Invoke the advertised `1pw_access_request_status` with
+   `browser_id` to observe the decision; it only reads status, so its hint has
+   `requires_user_approval: false`.
+   - `declined`: the owner denied the request. Do not request again unless they
+     ask; offer Kernel-hosted collection.
+   - `failed`: a confirmed failure. Ask the end-user before deleting and recreating
+     the credential for at most one new request, or offer Kernel-hosted collection.
+   - `pending_authorization` with no action and no advertised operations: check that
+     the `credential_account` named by `spec.account` is connected. If it is, a
+     request may already have reached 1Password. There is no reset: stop, ask the
+     owner to check 1Password, and never delete or recreate the item to retry.
+5. When the item is ready, invoke the advertised `1pw_fill` with `browser_id` and the
+   exact current `page_url`. When several approved logins share the page origin, ask
+   the owner which one to use and pass its `entry_id` from `state.access_request`
+   entries. The extension selects fields and submits the form. `fill_submitted`
+   means the form was submitted, not that login succeeded, so check the page.
+   `fill_failed` and `fill_unknown` are tool errors; `noExistingCredentials` means the
+   owner's 1Password has no usable login for the page, and `fill_unknown` must not be
+   retried in the same browser.
+
+The Kernel API also supports 1Password credentials backed by a customer-supplied
+access token and integration key instead of a connected account. The integrating
+developer creates them and replaces tokens (`1pw_update_access_token`) through the
+Kernel API. MCP accepts neither secret: it rejects them in create specs, refuses
+`1pw_update_access_token`, and never returns them. It can read such credentials,
+including optional `access_token_expires_at`, and request, observe, and fill them like
+account-backed credentials; request and fill are unavailable while the token is
+expired.
+
 ## Tools and scope
 
 The six vault tools are exposed only when the current credential's
@@ -121,7 +224,7 @@ The `vaults` toolset configuration can further restrict access, never grant it.
 | `manage_vaults`                 | `create`, `list`, `get`, `delete`           |
 | `manage_vault_wallets`          | `create`, `payment_methods`                 |
 | `manage_vault_cards`            | `create`, `update`                          |
-| `manage_vault_credentials`      | `create`, `update`                          |
+| `manage_vault_credentials`      | `create`, `update`, `connect_account`       |
 | `manage_vault_items`            | `list`, `get`, `invoke`, `events`, `delete` |
 
 Provider configurations are organization-owned and do not accept a project
@@ -427,7 +530,8 @@ A reusable card remaining `ready` does not establish that the last payment succe
   There is no raw-output or raw-card tool.
 - `hints.observation` contains `{tool, arguments}` entries for non-blocking `get`
   and `events` calls. `hints.invocation` contains only currently advertised
-  operations, each with `requires_user_approval: true`. Hints preserve the resolved
+  operations, each with `requires_user_approval: true` except the read-only
+  `1pw_access_request_status`. Hints preserve the resolved
   project selector (when present), vault, and item key. Pass `tool` as the MCP
   call's `name` and `arguments` unchanged. Provider-hosted actions remain separate
   in `item.action` and approval URLs; they are not callable operation hints.

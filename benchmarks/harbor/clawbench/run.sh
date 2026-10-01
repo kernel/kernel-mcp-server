@@ -48,6 +48,8 @@ set +a
 : "${PURELY_MAIL_API_KEY:?PURELY_MAIL_API_KEY is required}"
 : "${PURELY_MAIL_DOMAIN:?PURELY_MAIL_DOMAIN is required}"
 
+bun "$benchmark_dir/verify-purelymail.ts"
+
 case "$agent" in
   claude-code)
     if [[ -z "${ANTHROPIC_API_KEY:-}" && -z "${ANTHROPIC_AUTH_TOKEN:-}" && -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
@@ -169,5 +171,7 @@ timeout --signal=INT --kill-after=30s "${HARBOR_BENCHMARK_TIMEOUT:-$default_time
   --retry-include InternalServerError \
   --retry-include ConnectionRefusedError \
   --retry-include ExecProtocolError \
+  --retry-include AgentSetupTimeoutError \
+  --retry-include RuntimeError \
   --delete \
   --yes
