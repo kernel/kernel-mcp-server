@@ -194,6 +194,18 @@ export const linkCardSpecSchema = z
   })
   .strict();
 
+export const agentcardCheckoutOriginSchema = z.string().refine((value) => {
+  try {
+    const url = new URL(value);
+    const supportedProtocol =
+      url.protocol === "https:" ||
+      (url.protocol === "http:" && url.hostname === "localhost");
+    return supportedProtocol && value === url.origin;
+  } catch {
+    return false;
+  }
+}, "Expected a canonical HTTPS origin or localhost HTTP origin without a path.");
+
 export const agentcardCardSpecSchema = z
   .object({
     provider: z.literal("agentcard").optional(),
@@ -201,6 +213,11 @@ export const agentcardCardSpecSchema = z
     merchant: z.string().min(1).max(120),
     amount: integer().min(1).describe("Integer minor currency units."),
     currency: currency(),
+    checkout_origin: agentcardCheckoutOriginSchema
+      .describe(
+        "Optional caller-declared checkout origin for eligible AgentCard autopilot rule matching on non-prepared checkout authorizations. Kernel forwards it without comparing it to the browser page. It does not enable autopilot or ensure payment success; omission retains the existing approval flow, and autopilot may fall back to user approval. Prepared checkout uses preparation.merchant_origin.",
+      )
+      .optional(),
     card_id: z
       .string()
       .regex(/^vc_[A-Za-z0-9_]+$/)
