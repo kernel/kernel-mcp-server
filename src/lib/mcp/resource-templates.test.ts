@@ -99,7 +99,7 @@ describe("project-qualified resources", () => {
         client.readResource({
           uri: "kernel://orgs/org_other/projects/proj_123/widgets",
         }),
-      ).rejects.toThrow("Resource organization must match");
+      ).rejects.toThrow("resource organization must match");
     } finally {
       await client.close();
       await server.close();

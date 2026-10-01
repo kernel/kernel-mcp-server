@@ -19,18 +19,18 @@ export function registerExtensionTools(server: McpServer) {
     "manage_extensions",
     {
       description:
-        'Manage browser extensions uploaded to Kernel. Use "list" to see all extensions available to the current project or "delete" to remove one by ID or name.',
+        'manage browser extensions uploaded to KERNEL. use "list" to see all extensions available to the current project or "delete" to remove one by id or name.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
-        action: z.enum(["list", "delete"]).describe("Operation to perform."),
+        action: z.enum(["list", "delete"]).describe("operation to perform."),
         id_or_name: z
           .string()
-          .describe("(delete) Extension ID or name to delete.")
+          .describe("(delete) extension id or name to delete.")
           .optional(),
         ...paginationParams,
       }),
       annotations: {
-        title: "Manage Kernel browser extensions",
+        title: "manage KERNEL browser extensions",
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false,
@@ -38,7 +38,7 @@ export function registerExtensionTools(server: McpServer) {
       },
     },
     async (params, ctx) => {
-      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
       const client = createKernelClient(
         ctx.http.authInfo.token,
         projectForOperation(ctx.http.authInfo, params),
@@ -52,15 +52,15 @@ export function registerExtensionTools(server: McpServer) {
               ...(params.offset !== undefined && { offset: params.offset }),
             });
             return paginatedJsonResponse(page, {
-              emptyText: "No extensions found",
+              emptyText: "no extensions found",
             });
           }
           case "delete": {
             if (!params.id_or_name) {
-              return errorResponse("Error: id_or_name is required for delete.");
+              return errorResponse("error: id_or_name is required for delete.");
             }
             await client.extensions.delete(params.id_or_name);
-            return textResponse("Extension deleted successfully");
+            return textResponse("extension deleted successfully");
           }
         }
       } catch (error) {

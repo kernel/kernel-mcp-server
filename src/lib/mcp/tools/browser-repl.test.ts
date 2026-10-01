@@ -201,15 +201,17 @@ test("browser_repl advertises persistent semantics and native, CDP, and Playwrig
     const { tools } = await client.listTools();
     const tool = tools.find((candidate) => candidate.name === "browser_repl");
     expect(tool).toBeDefined();
-    expect(tool?.description).toContain("persistent Node.js Browser REPL");
+    expect(tool?.description).toContain("persistent node.js browser repl");
     expect(tool?.description).not.toContain("execute_playwright_code");
-    expect(tool?.description).toContain("JavaScript only");
-    expect(tool?.description).toContain("Expression values are ignored");
-    expect(tool?.description).toContain("filter accessibilitySnapshot().nodes");
+    expect(tool?.description).toContain("javascript only");
+    expect(tool?.description).toContain("expression values are ignored");
+    expect(tool?.description).toContain(
+      "filter `accessibilitySnapshot().nodes`",
+    );
     expect(tool?.description).toContain(
       'pwPage.locator("main").ariaSnapshot()',
     );
-    expect(tool?.description).toContain("Do not dump the full DOM");
+    expect(tool?.description).toContain("do not dump the full dom");
     expect(tool?.description).toContain('repl.help("click")');
     const description = tool?.description ?? "";
     expect(description).toContain('await gotoUrl("https://example.com")');
@@ -218,10 +220,10 @@ test("browser_repl advertises persistent semantics and native, CDP, and Playwrig
       "await repl.emitImage({ path: await captureScreenshot(",
     );
     expect(
-      description.indexOf("FULL NATIVE BROWSER REPL EXAMPLE"),
-    ).toBeLessThan(description.indexOf("FULL RAW CDP-ONLY EXAMPLE"));
-    expect(description.indexOf("FULL RAW CDP-ONLY EXAMPLE")).toBeLessThan(
-      description.indexOf("FULL PATCHRIGHT/PLAYWRIGHT EXAMPLE"),
+      description.indexOf("full native browser repl example"),
+    ).toBeLessThan(description.indexOf("full raw cdp-only example"));
+    expect(description.indexOf("full raw cdp-only example")).toBeLessThan(
+      description.indexOf("full patchright/playwright example"),
     );
     expect(tool?.description).toContain(
       'var playwright = await import("patchright")',
@@ -242,7 +244,7 @@ test("browser_repl advertises persistent semantics and native, CDP, and Playwrig
       >;
     };
     expect(schema.properties.code.description).toContain(
-      "region-scoped Playwright ariaSnapshot()",
+      "region-scoped playwright `ariaSnapshot()`",
     );
     expect(schema.properties.code.default).toBe("");
     expect(schema.properties.reset.default).toBe(false);
@@ -272,7 +274,7 @@ test("browser_repl reports transport failures through the shared classifier", as
     });
     expect(result.isError).toBe(true);
     const text = (result.content as Array<{ text: string }>)[0].text;
-    expect(text).toStartWith("Error in browser_repl (execute):");
+    expect(text).toStartWith("error in browser_repl (execute):");
   } finally {
     await close();
   }

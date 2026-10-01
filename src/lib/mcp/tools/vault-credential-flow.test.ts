@@ -172,8 +172,8 @@ describe("MCP credential flow", () => {
         expect(result.isError).toBe(true);
         expect(text).toContain(`${status} ${message}`);
         expect(text).toContain(`[code: ${code}]`);
-        expect(text).toContain("The operation may have partially completed");
-        expect(text).toContain("Do not retry automatically.");
+        expect(text).toContain("the operation may have partially completed");
+        expect(text).toContain("do not retry automatically.");
         expect(text).not.toContain("private-");
         expect(fixture.requests.map((request) => request.method)).toEqual([
           "GET",
@@ -204,7 +204,7 @@ describe("MCP credential flow", () => {
         const text = JSON.stringify(result);
         expect(result.isError).toBe(true);
         expect(text).toContain(String(status));
-        expect(text).toContain("The operation may have partially completed");
+        expect(text).toContain("the operation may have partially completed");
         expect(text).toContain("API diagnostic message");
         expect(text).toContain(`[code: ${code}]`);
         expect(
@@ -226,7 +226,7 @@ describe("MCP credential flow", () => {
       expect(credentials?.inputSchema.properties).toHaveProperty("spec");
       expect(JSON.stringify(credentials?.inputSchema)).toContain('"label"');
       expect(JSON.stringify(credentials?.inputSchema)).toContain(
-        "128 UTF-8 bytes",
+        "128 utf-8 bytes",
       );
       expect(credentials?.inputSchema.properties).toHaveProperty(
         "expected_item_id",
@@ -653,7 +653,7 @@ describe("MCP credential flow", () => {
           ).toHaveLength(1);
           if (operation === "fill")
             expect(JSON.stringify(result)).toContain(
-              "Do not retry automatically",
+              "do not retry automatically",
             );
         } finally {
           await fixture.close();

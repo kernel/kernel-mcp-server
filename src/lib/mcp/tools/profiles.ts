@@ -43,8 +43,8 @@ function fullProfileListResponse(profiles: Profile[], query?: string) {
     // A search that matches nothing shouldn't claim the inventory is empty or
     // suggest setup — other profiles may exist that just don't match the query.
     emptyText: query
-      ? `No profiles match "${query}".`
-      : "No profiles found. Use manage_profiles with action 'setup' to create one.",
+      ? `no profiles match "${query}".`
+      : "no profiles found. use manage_profiles with action 'setup' to create one.",
   });
 }
 
@@ -55,7 +55,7 @@ function requireProfileIdentifier(
   if (params.profile_name && params.profile_id) {
     return {
       ok: false as const,
-      error: "Error: Cannot specify both profile_name and profile_id.",
+      error: "error: cannot specify both profile_name and profile_id.",
     };
   }
 
@@ -63,7 +63,7 @@ function requireProfileIdentifier(
   if (!identifier) {
     return {
       ok: false as const,
-      error: `Error: profile_name or profile_id is required for ${action}.`,
+      error: `error: profile_name or profile_id is required for ${action}.`,
     };
   }
 
@@ -82,7 +82,7 @@ export function registerProfileCapabilities(
       name: "profiles",
       uriTemplate:
         "kernel://orgs/{organizationId}/projects/{projectId}/profiles",
-      emptyText: "No profiles found",
+      emptyText: "no profiles found",
       read: (client) => listProfiles(client),
     },
     options,
@@ -95,7 +95,7 @@ export function registerProfileCapabilities(
       uriTemplate:
         "kernel://orgs/{organizationId}/projects/{projectId}/profiles/{profileName}",
       variableName: "profileName",
-      resourceLabel: "Profile",
+      resourceLabel: "profile",
       read: (client, profileName) => client.profiles.retrieve(profileName),
     },
     options,
@@ -105,37 +105,37 @@ export function registerProfileCapabilities(
     "manage_profiles",
     {
       description:
-        'Manage browser profiles when an agent needs persistent cookies, login state, or reusable browser state. Use "setup" for a guided login session, "list" to find a profile, "get" to retrieve one, "rename" to change its name, and "delete" only when a profile should be removed. Do not rename a profile while a browser is using it because that session may no longer save changes back to the profile.',
+        'manage browser profiles when an agent needs persistent cookies, login state, or reusable browser state. use "setup" for a guided login session, "list" to find a profile, "get" to retrieve one, "rename" to change its name, and "delete" only when a profile should be removed. do not rename a profile while a browser is using it because that session may no longer save changes back to the profile.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z
           .enum(["setup", "list", "get", "rename", "delete"])
-          .describe("Operation to perform."),
+          .describe("operation to perform."),
         profile_name: z
           .string()
           .describe(
-            "(setup, get, rename, delete) Profile name. For setup: 1-255 chars.",
+            "(setup, get, rename, delete) profile name. for setup: 1-255 chars.",
           )
           .optional(),
         profile_id: z
           .string()
           .describe(
-            "(get, rename, delete) Profile ID. Alternative to profile_name.",
+            "(get, rename, delete) profile id. alternative to profile_name.",
           )
           .optional(),
-        new_name: z.string().describe("(rename) New profile name.").optional(),
+        new_name: z.string().describe("(rename) new profile name.").optional(),
         update_existing: z
           .boolean()
-          .describe("(setup) If true, update existing profile. Default false.")
+          .describe("(setup) if true, update existing profile. default false.")
           .optional(),
         query: z
           .string()
-          .describe("(list) Search profiles by name or ID.")
+          .describe("(list) search profiles by name or id.")
           .optional(),
         ...paginationParams,
       }),
       annotations: {
-        title: "Manage Kernel browser profiles",
+        title: "manage KERNEL browser profiles",
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false,
@@ -143,7 +143,7 @@ export function registerProfileCapabilities(
       },
     },
     async (params, ctx) => {
-      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
       const client = options.createKernelClient(
         ctx.http.authInfo.token,
         projectForOperation(ctx.http.authInfo, params),
@@ -154,23 +154,23 @@ export function registerProfileCapabilities(
           case "setup": {
             if (!params.profile_name)
               return errorResponse(
-                "Error: profile_name is required for setup.",
+                "error: profile_name is required for setup.",
               );
             const existingProfiles = await listProfiles(client, {
               name: params.profile_name,
             });
             if (existingProfiles.length > 1) {
               const matches = existingProfiles
-                .map((profile) => `${profile.name} (ID: ${profile.id})`)
+                .map((profile) => `${profile.name} (id: ${profile.id})`)
                 .join(", ");
               return errorResponse(
-                `Error: multiple profiles match the exact name "${params.profile_name}": ${matches}. Rename or delete duplicate profiles by ID, then retry setup.`,
+                `error: multiple profiles match the exact name "${params.profile_name}": ${matches}. rename or delete duplicate profiles by id, then retry setup.`,
               );
             }
             const existingProfile = existingProfiles[0];
             if (!existingProfile && params.update_existing) {
               return errorResponse(
-                `Error: profile "${params.profile_name}" does not exist. Omit update_existing to create it.`,
+                `error: profile "${params.profile_name}" does not exist. omit update_existing to create it.`,
               );
             }
             let profile;
@@ -179,7 +179,7 @@ export function registerProfileCapabilities(
             if (existingProfile) {
               if (!params.update_existing) {
                 return errorResponse(
-                  `Profile "${params.profile_name}" already exists (ID: ${existingProfile.id}). Set update_existing: true to update it, or choose a different name.`,
+                  `profile "${params.profile_name}" already exists (id: ${existingProfile.id}). set update_existing: true to update it, or choose a different name.`,
                 );
               }
               profile = existingProfile;
@@ -187,7 +187,7 @@ export function registerProfileCapabilities(
               profile = await client.profiles.create({
                 name: params.profile_name,
               });
-              if (!profile) return errorResponse("Failed to create profile");
+              if (!profile) return errorResponse("failed to create profile");
               isNewProfile = true;
             }
 
@@ -198,14 +198,14 @@ export function registerProfileCapabilities(
             });
             if (!browser)
               return errorResponse(
-                "Failed to create browser for profile setup",
+                "failed to create browser for profile setup",
               );
 
             return textResponse(
-              `Profile "${params.profile_name}" ${isNewProfile ? "created" : "loaded for update"}.\n\n` +
-                `**Setup:** Open ${browser.browser_live_view_url} and sign into accounts to save.\n` +
-                `**When done:** Use manage_browsers with action "delete" and session_id "${browser.session_id}" to save the profile.\n\n` +
-                `Profile ID: ${profile.id} | Session ID: ${browser.session_id}`,
+              `profile "${params.profile_name}" ${isNewProfile ? "created" : "loaded for update"}.\n\n` +
+                `**setup:** open ${browser.browser_live_view_url} and sign into accounts to save.\n` +
+                `**when done:** use manage_browsers with action "delete" and session_id "${browser.session_id}" to save the profile.\n\n` +
+                `profile id: ${profile.id} | session id: ${browser.session_id}`,
             );
           }
           case "list": {
@@ -233,7 +233,7 @@ export function registerProfileCapabilities(
             return paginatedJsonResponse(
               page,
               emptySearch
-                ? { note: `No profiles match "${params.query}".` }
+                ? { note: `no profiles match "${params.query}".` }
                 : {},
             );
           }
@@ -247,7 +247,7 @@ export function registerProfileCapabilities(
             const identifier = requireProfileIdentifier(params, "rename");
             if (!identifier.ok) return errorResponse(identifier.error);
             if (!params.new_name) {
-              return errorResponse("Error: new_name is required for rename.");
+              return errorResponse("error: new_name is required for rename.");
             }
             const profile = await client.profiles.update(identifier.value, {
               name: params.new_name,
@@ -259,7 +259,7 @@ export function registerProfileCapabilities(
             if (!identifier.ok) return errorResponse(identifier.error);
             await client.profiles.delete(identifier.value);
             return textResponse(
-              `Profile "${identifier.value}" deleted successfully.`,
+              `profile "${identifier.value}" deleted successfully.`,
             );
           }
         }

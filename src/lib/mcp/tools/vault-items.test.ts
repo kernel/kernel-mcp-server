@@ -352,9 +352,9 @@ describe("advertised vault operations", () => {
           `Payment provider rejected card authorization: ${reason}`,
         );
         expect(text).toContain(
-          "Inspect item state, events, and browser before acting.",
+          "inspect item state, events, and browser before acting.",
         );
-        expect(text).toContain("Do not retry automatically.");
+        expect(text).toContain("do not retry automatically.");
         expect(text).toContain("[code: invalid_spend_request]");
         expect(text).not.toContain("hidden");
         expect(text).not.toContain(

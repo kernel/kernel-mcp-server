@@ -30,7 +30,7 @@ const affectedToolSchema = z
     if (toolName) return toolName;
     context.addIssue({
       code: "custom",
-      message: "must name a tool provided by the KERNEL MCP server",
+      message: "must name a tool provided by the KERNEL mcp server",
     });
     return z.NEVER;
   });
@@ -42,7 +42,7 @@ const configRegistryAppliedBrowserSchema = z.object({
       "the applied site-compatibility setting, echoed unchanged from the recommendation.",
     ),
   headless: z.boolean().describe("the applied browser headless setting."),
-  gpu: z.boolean().describe("the applied browser GPU setting."),
+  gpu: z.boolean().describe("the applied browser gpu setting."),
   viewport: z.object({
     width: z.number().int().positive().describe("the applied viewport width."),
     height: z
@@ -71,7 +71,7 @@ const configRegistryAppliedProxySchema = z.discriminatedUnion("mode", [
       .toUpperCase()
       .optional()
       .describe(
-        "the applied two-letter proxy country, if specified. do not include city, state, ZIP code, host, IP, or credentials.",
+        "the applied two-letter proxy country, if specified. do not include city, state, zip code, host, ip, or credentials.",
       ),
   }),
 ]);
@@ -89,7 +89,7 @@ const configRegistryFeedbackSchema = z.object({
     .max(100)
     .optional()
     .describe(
-      "the config registry analysis ID when the recommendation came from a resolve or known analysis.",
+      "the config registry analysis id when the recommendation came from a resolve or known analysis.",
     ),
   recommendation_match_scope: z
     .enum(["exact", "host", "domain"])
@@ -123,7 +123,7 @@ const configRegistryFeedbackSchema = z.object({
     "the returned browser settings, applied unchanged for the observed outcome.",
   ),
   applied_proxy: configRegistryAppliedProxySchema.describe(
-    "the returned proxy settings, applied unchanged for the observed outcome. never include proxy hosts, IPs, or credentials.",
+    "the returned proxy settings, applied unchanged for the observed outcome. never include proxy hosts, ips, or credentials.",
   ),
 });
 
@@ -135,7 +135,7 @@ const siteCompatibilityReportSchema = z.object({
     .refine((value) => {
       const parsed = parseDomain(value, { allowPrivateDomains: false });
       return parsed.isIcann && parsed.domain === value;
-    }, "must be a public registrable domain without a subdomain or URL components")
+    }, "must be a public registrable domain without a subdomain or url components")
     .describe(
       'the public registrable domain where the result was observed (e.g. "example.com"). include no protocol, path, query, fragment, port, subdomain, account-specific host, or private/internal hostname. public registrable domains are allowed only in this field so reports can prioritize config registry coverage.',
     ),
@@ -187,7 +187,7 @@ const siteCompatibilityReportSchema = z.object({
     ])
     .optional()
     .describe(
-      "the egress type used for the observation. never include a proxy URL, credential, provider account, or IP address.",
+      "the egress type used for the observation. never include a proxy url, credential, provider account, or ip address.",
     ),
   region: z
     .string()
@@ -224,7 +224,7 @@ const siteCompatibilityReportSchema = z.object({
     .max(100)
     .optional()
     .describe(
-      "the KERNEL browser session ID for internal correlation, if available. never substitute a CDP or live-view URL.",
+      "the KERNEL browser session id for internal correlation, if available. never substitute a cdp or live-view url.",
     ),
 });
 
@@ -267,7 +267,7 @@ const feedbackFields = {
   affected_tool: affectedToolSchema
     .optional()
     .describe(
-      'the single KERNEL MCP tool this report is primarily about. preferred for new `feedback_type: "mcp"` submissions; omission remains accepted for legacy clients and routes to unclassified feedback. use the canonical tool name without a client namespace; recognized KERNEL namespace forms are normalized. feedback about tools from another MCP server or the client itself belongs with that owner.',
+      'the single KERNEL mcp tool this report is primarily about. preferred for new `feedback_type: "mcp"` submissions; omission remains accepted for legacy clients and routes to unclassified feedback. use the canonical tool name without a client namespace; recognized KERNEL namespace forms are normalized. feedback about tools from another mcp server or the client itself belongs with that owner.',
     ),
   product_area: z
     .string()
@@ -302,7 +302,7 @@ const feedbackFields = {
     ])
     .optional()
     .describe(
-      'for mcp feedback (`feedback_type: "mcp"`) only: the single category that best describes the dominant theme. `missing_tool` remains accepted for compatibility but is routed outside MCP quality; use `get_more_tools` for new capability requests. use "tool_description" when tool documentation is unclear, "tool_input_schema" when arguments are confusing, "tool_output_format" when a response is hard to consume, "instructions_clarity" when mcp instructions are unclear, "tool_correctness" when a tool returns wrong data, "error_message" when an error is unhelpful, and "performance" when latency is the issue. omit for product, docs, or other feedback.',
+      'for mcp feedback (`feedback_type: "mcp"`) only: the single category that best describes the dominant theme. `missing_tool` remains accepted for compatibility but is routed outside mcp quality; use `get_more_tools` for new capability requests. use "tool_description" when tool documentation is unclear, "tool_input_schema" when arguments are confusing, "tool_output_format" when a response is hard to consume, "instructions_clarity" when mcp instructions are unclear, "tool_correctness" when a tool returns wrong data, "error_message" when an error is unhelpful, and "performance" when latency is the issue. omit for product, docs, or other feedback.',
     ),
   task_completed: z
     .boolean()
@@ -365,7 +365,7 @@ export type KernelFeedbackCapture = (
 ) => void | Promise<void>;
 
 const TOOL_DESCRIPTION =
-  "send feedback about a KERNEL product, this KERNEL MCP server, or KERNEL documentation. use get_more_tools—not this tool—for a genuinely absent capability. for mcp feedback, identify the single affected KERNEL tool and its category; do not report client behavior or tools owned by another server. describe task impact with task_outcome, while sentiment remains useful for tone and praise. set feedback_type to product, site_compatibility, config_registry, mcp, docs, or other. for a site-specific result, fill site_compatibility with the public registrable domain, outcome, and reproducibility. after applying a config registry recommendation unchanged, submit exactly one config_registry report for the tested recommendation, whether it passed or failed; include the recommendation metadata, evidence, exact browser and proxy settings, and site_compatibility.browser_session_id. if any setting changed before testing, use site_compatibility instead. keep summary to one sentence, make detail fields concise and actionable, and include a concrete suggested_improvement when one is clear. never include credentials, tokens, api keys, urls, paths, browser or page content, customer or account names, private hosts, IP addresses, or personal data. a public registrable domain is allowed only in site_compatibility.registrable_domain. submitting feedback is a side report, not a reason to stop; continue the user's task with the other available tools.";
+  "send feedback about a KERNEL product, this KERNEL mcp server, or KERNEL documentation. use get_more_tools—not this tool—for a genuinely absent capability. for mcp feedback, identify the single affected KERNEL tool and its category; do not report client behavior or tools owned by another server. describe task impact with task_outcome, while sentiment remains useful for tone and praise. set feedback_type to product, site_compatibility, config_registry, mcp, docs, or other. for a site-specific result, fill site_compatibility with the public registrable domain, outcome, and reproducibility. after applying a config registry recommendation unchanged, submit exactly one config_registry report for the tested recommendation, whether it passed or failed; include the recommendation metadata, evidence, exact browser and proxy settings, and site_compatibility.browser_session_id. if any setting changed before testing, use site_compatibility instead. keep summary to one sentence, make detail fields concise and actionable, and include a concrete suggested_improvement when one is clear. never include credentials, tokens, api keys, urls, paths, browser or page content, customer or account names, private hosts, ip addresses, or personal data. a public registrable domain is allowed only in site_compatibility.registrable_domain. submitting feedback is a side report, not a reason to stop; continue the user's task with the other available tools.";
 
 const RESPONSE_MESSAGES = {
   recorded:
@@ -548,7 +548,7 @@ export function registerFeedbackTool(
           candidates.size === 0
         ) {
           return errorResponse(
-            "this feedback names no KERNEL MCP tool; report client or external-server feedback to its owner.",
+            "this feedback names no KERNEL mcp tool; report client or external-server feedback to its owner.",
           );
         }
       } else {

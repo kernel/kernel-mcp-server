@@ -60,10 +60,10 @@ describe("throwToolError classification", () => {
 
   test("keeps the message the tool already produced", () => {
     expect(caught(apiError(404, "not found")).message).toBe(
-      "Error in manage_browsers (get): 404 not found",
+      "error in manage_browsers (get): 404 not found",
     );
     expect(caught("plain string").message).toBe(
-      "Error in manage_browsers (get): plain string",
+      "error in manage_browsers (get): plain string",
     );
   });
 
@@ -77,7 +77,7 @@ describe("throwToolError classification", () => {
         ),
       ).message,
     ).toBe(
-      "Error in manage_browsers (get): 409 Project still contains resources [code: project_not_empty]",
+      "error in manage_browsers (get): 409 Project still contains resources [code: project_not_empty]",
     );
     expect(
       caught(
@@ -159,7 +159,7 @@ describe("what the client receives", () => {
     expect(result.content).toEqual([
       {
         type: "text",
-        text: "Error in manage_browsers (get): 404 browser session not found",
+        text: "error in manage_browsers (get): 404 browser session not found",
       },
     ]);
   });
@@ -180,7 +180,7 @@ describe("what the client receives", () => {
     expect(result.content).toEqual([
       {
         type: "text",
-        text: "Error in manage_projects (delete): 409 Project still contains resources [code: project_not_empty]",
+        text: "error in manage_projects (delete): 409 Project still contains resources [code: project_not_empty]",
       },
     ]);
   });

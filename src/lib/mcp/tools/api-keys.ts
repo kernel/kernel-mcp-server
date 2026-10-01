@@ -16,21 +16,21 @@ export function registerAPIKeyCapabilities(server: McpServer) {
     "manage_api_keys",
     {
       description:
-        'Manage Kernel API keys. Use "create" to create an org-wide or project-scoped key, "list" to discover masked keys, "get" to retrieve one masked key, "update" to rename a key, or "delete" to revoke a key. Created keys include the plaintext key once.',
+        'manage KERNEL api keys. use "create" to create an org-wide or project-scoped key, "list" to discover masked keys, "get" to retrieve one masked key, "update" to rename a key, or "delete" to revoke a key. created keys include the plaintext key once.',
       inputSchema: z.object({
         action: z
           .enum(["create", "list", "get", "update", "delete"])
-          .describe("Operation to perform."),
+          .describe("operation to perform."),
         api_key_id: z
           .string()
-          .describe("API key ID. Required for get, update, and delete.")
+          .describe("api key id. required for get, update, and delete.")
           .optional(),
-        name: z.string().describe("(create, update) API key name.").optional(),
+        name: z.string().describe("(create, update) api key name.").optional(),
         project_id: z
           .string()
           .nullable()
           .describe(
-            "(create) Project ID for project-scoped keys. Omit or use null for org-wide keys.",
+            "(create) project id for project-scoped keys. omit or use null for org-wide keys.",
           )
           .optional(),
         days_to_expire: z
@@ -40,13 +40,13 @@ export function registerAPIKeyCapabilities(server: McpServer) {
           .max(3650)
           .nullable()
           .describe(
-            "(create) Days until expiry, up to 3650. Use null for no expiry.",
+            "(create) days until expiry, up to 3650. use null for no expiry.",
           )
           .optional(),
         ...paginationParams,
       }),
       annotations: {
-        title: "Manage Kernel API keys",
+        title: "manage KERNEL api keys",
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false,
@@ -54,14 +54,14 @@ export function registerAPIKeyCapabilities(server: McpServer) {
       },
     },
     async (params, ctx) => {
-      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
       const client = createKernelClient(ctx.http.authInfo.token);
 
       try {
         switch (params.action) {
           case "create": {
             if (!params.name) {
-              return errorResponse("Error: name is required for create.");
+              return errorResponse("error: name is required for create.");
             }
             const createParams: Parameters<typeof client.apiKeys.create>[0] = {
               name: params.name,
@@ -84,17 +84,17 @@ export function registerAPIKeyCapabilities(server: McpServer) {
           }
           case "get": {
             if (!params.api_key_id) {
-              return errorResponse("Error: api_key_id is required for get.");
+              return errorResponse("error: api_key_id is required for get.");
             }
             const apiKey = await client.apiKeys.retrieve(params.api_key_id);
             return jsonResponse(apiKey);
           }
           case "update": {
             if (!params.api_key_id) {
-              return errorResponse("Error: api_key_id is required for update.");
+              return errorResponse("error: api_key_id is required for update.");
             }
             if (!params.name) {
-              return errorResponse("Error: name is required for update.");
+              return errorResponse("error: name is required for update.");
             }
             const apiKey = await client.apiKeys.update(params.api_key_id, {
               name: params.name,
@@ -103,10 +103,10 @@ export function registerAPIKeyCapabilities(server: McpServer) {
           }
           case "delete": {
             if (!params.api_key_id) {
-              return errorResponse("Error: api_key_id is required for delete.");
+              return errorResponse("error: api_key_id is required for delete.");
             }
             await client.apiKeys.delete(params.api_key_id);
-            return textResponse("API key deleted successfully");
+            return textResponse("api key deleted successfully");
           }
         }
       } catch (error) {

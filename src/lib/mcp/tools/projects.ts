@@ -26,7 +26,7 @@ export function registerProjectCapabilities(
     "manage_projects",
     {
       description:
-        'Manage Kernel projects for resource isolation within an organization. Use "create" to create a project, "list" to discover projects, "get" to retrieve one, "update" to rename or archive one, "delete" to remove an empty project, "get_limits" to inspect project caps, or "update_limits" to change project caps.',
+        'manage KERNEL projects for resource isolation within an organization. use "create" to create a project, "list" to discover projects, "get" to retrieve one, "update" to rename or archive one, "delete" to remove an empty project, "get_limits" to inspect project caps, or "update_limits" to change project caps.',
       inputSchema: z.object({
         action: z
           .enum([
@@ -38,22 +38,22 @@ export function registerProjectCapabilities(
             "get_limits",
             "update_limits",
           ])
-          .describe("Operation to perform."),
+          .describe("operation to perform."),
         ...projectSelectionInputSchema({
           project:
-            "Project name or ID. Required for get, update, delete, get_limits, and update_limits.",
+            "project name or id. required for get, update, delete, get_limits, and update_limits.",
           project_id:
-            "Deprecated: use `project` instead. Project ID. Required for get, update, delete, get_limits, and update_limits.",
+            "deprecated: use `project` instead. project id. required for get, update, delete, get_limits, and update_limits.",
         }),
-        name: z.string().describe("(create, update) Project name.").optional(),
+        name: z.string().describe("(create, update) project name.").optional(),
         status: z
           .enum(["active", "archived"])
-          .describe('(update) Project status. Use "archived" to archive.')
+          .describe('(update) project status. use "archived" to archive.')
           .optional(),
         query: z
           .string()
           .describe(
-            "(list) Case-insensitive substring match against project name.",
+            "(list) case-insensitive substring match against project name.",
           )
           .optional(),
         ...paginationParams,
@@ -62,7 +62,7 @@ export function registerProjectCapabilities(
           .int()
           .min(0)
           .describe(
-            "(update_limits) Maximum concurrent app invocations for this project. Set 0 to remove the cap.",
+            "(update_limits) maximum concurrent app invocations for this project. set 0 to remove the cap.",
           )
           .optional(),
         max_concurrent_sessions: z
@@ -70,7 +70,7 @@ export function registerProjectCapabilities(
           .int()
           .min(0)
           .describe(
-            "(update_limits) Maximum concurrent browser sessions for this project. Set 0 to remove the cap.",
+            "(update_limits) maximum concurrent browser sessions for this project. set 0 to remove the cap.",
           )
           .optional(),
         max_pooled_sessions: z
@@ -78,12 +78,12 @@ export function registerProjectCapabilities(
           .int()
           .min(0)
           .describe(
-            "(update_limits) Maximum pooled sessions capacity for this project. Set 0 to remove the cap.",
+            "(update_limits) maximum pooled sessions capacity for this project. set 0 to remove the cap.",
           )
           .optional(),
       }),
       annotations: {
-        title: "Manage Kernel projects",
+        title: "manage KERNEL projects",
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false,
@@ -91,14 +91,14 @@ export function registerProjectCapabilities(
       },
     },
     async (params, ctx) => {
-      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
       const client = dependencies.createKernelClient(ctx.http.authInfo.token);
 
       try {
         switch (params.action) {
           case "create": {
             if (!params.name) {
-              return errorResponse("Error: name is required for create.");
+              return errorResponse("error: name is required for create.");
             }
             const project = await client.projects.create({ name: params.name });
             return jsonResponse(project);
@@ -115,7 +115,7 @@ export function registerProjectCapabilities(
             const idOrName = requestedProject(params);
             if (!idOrName) {
               return errorResponse(
-                "Error: project or project_id is required for get.",
+                "error: project or project_id is required for get.",
               );
             }
             const project = await client.projects.retrieve(idOrName);
@@ -125,12 +125,12 @@ export function registerProjectCapabilities(
             const idOrName = requestedProject(params);
             if (!idOrName) {
               return errorResponse(
-                "Error: project or project_id is required for update.",
+                "error: project or project_id is required for update.",
               );
             }
             if (!params.name && !params.status) {
               return errorResponse(
-                "Error: name or status is required for update.",
+                "error: name or status is required for update.",
               );
             }
             const updateParams: Parameters<typeof client.projects.update>[1] =
@@ -147,17 +147,17 @@ export function registerProjectCapabilities(
             const idOrName = requestedProject(params);
             if (!idOrName) {
               return errorResponse(
-                "Error: project or project_id is required for delete.",
+                "error: project or project_id is required for delete.",
               );
             }
             await client.projects.delete(idOrName);
-            return textResponse("Project deleted successfully");
+            return textResponse("project deleted successfully");
           }
           case "get_limits": {
             const idOrName = requestedProject(params);
             if (!idOrName) {
               return errorResponse(
-                "Error: project or project_id is required for get_limits.",
+                "error: project or project_id is required for get_limits.",
               );
             }
             const limits = await client.projects.limits.retrieve(idOrName);
@@ -167,7 +167,7 @@ export function registerProjectCapabilities(
             const idOrName = requestedProject(params);
             if (!idOrName) {
               return errorResponse(
-                "Error: project or project_id is required for update_limits.",
+                "error: project or project_id is required for update_limits.",
               );
             }
             const updateParams: Parameters<
@@ -186,7 +186,7 @@ export function registerProjectCapabilities(
             }
             if (Object.keys(updateParams).length === 0) {
               return errorResponse(
-                "Error: at least one limit field is required for update_limits.",
+                "error: at least one limit field is required for update_limits.",
               );
             }
             const limits = await client.projects.limits.update(
