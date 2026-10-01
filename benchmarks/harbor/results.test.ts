@@ -441,7 +441,7 @@ describe("benchmark workflow hardening", () => {
     expect(workflow).toContain('HARBOR_HYPEMAN_VERSION: "0.1.2"');
     expect(workflow).toContain('CODEX_BENCHMARK_VERSION: "0.120.0"');
     expect(
-      workflow.match(/9dd9d442c8ec720ba4d6d4c95f2bbc0ff2a2d0df/g),
+      workflow.match(/187cd252bc60af8ac3a2c98a87c9316e49a5ac75/g),
     ).toHaveLength(2);
     expect(workflow).toContain("issues: write\n      pull-requests: write");
     expect(workflow).not.toContain(
@@ -531,7 +531,7 @@ describe("benchmark workflow hardening", () => {
     );
     expect(dockerignore.split("\n")).toContain("*.pem");
     expect(runner).not.toContain("KERNEL_PROJECT");
-    expect(runner).toContain("9dd9d442c8ec720ba4d6d4c95f2bbc0ff2a2d0df");
+    expect(runner).toContain("187cd252bc60af8ac3a2c98a87c9316e49a5ac75");
     expect(runner).toContain('"${KERNEL_API_BASE_URL%/}/auth/context"');
     expect(runner).toContain('bun "$benchmark_dir/verify-project-scope.ts"');
     expect(taskPreparer).not.toContain("KERNEL_PROJECT");
