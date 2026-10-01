@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
   defaultMcpDependencies,
@@ -59,67 +59,73 @@ export function registerAppCapabilities(
   );
 
   // manage_apps -- List apps, invoke actions, manage deployments, check invocations
-  server.tool(
+  server.registerTool(
     "manage_apps",
-    'Manage Kernel apps when an agent needs to discover deployed app actions, invoke an app, or inspect deployment/invocation state. Use "list_apps" before invoking an unknown app. "invoke" starts an action asynchronously and returns an invocation_id immediately. Use "list_invocation_browsers" with that ID to discover browser sessions created by the invocation, and use "get_invocation" after a short delay to inspect its state. Do not poll indefinitely; if the invocation is still running, report its ID. Use get/list actions to inspect results and "delete_deployment" to remove a deployment.',
     {
-      ...projectSelectionInputSchema(),
-      action: z
-        .enum([
-          "list_apps",
-          "invoke",
-          "get_deployment",
-          "list_deployments",
-          "delete_deployment",
-          "get_invocation",
-          "list_invocation_browsers",
-        ])
-        .describe("Operation to perform."),
-      app_name: z
-        .string()
-        .describe(
-          "(list_apps, invoke, list_deployments) App name filter or target.",
-        )
-        .optional(),
-      version: z
-        .string()
-        .describe(
-          "(list_apps, invoke, list_deployments) App version filter. Defaults to 'latest' for invoke. Deployment version filtering requires app_name.",
-        )
-        .optional(),
-      query: z.string().describe("(list_apps) Search apps by name.").optional(),
-      action_name: z
-        .string()
-        .describe("(invoke) Action to execute within the app.")
-        .optional(),
-      payload: z
-        .string()
-        .describe("(invoke) JSON string with action parameters.")
-        .optional(),
-      deployment_id: z
-        .string()
-        .describe("(get_deployment, delete_deployment) Deployment ID.")
-        .optional(),
-      invocation_id: z
-        .string()
-        .describe(
-          "(get_invocation, list_invocation_browsers) Invocation ID to inspect.",
-        )
-        .optional(),
-      ...paginationParams,
+      description:
+        'Manage Kernel apps when an agent needs to discover deployed app actions, invoke an app, or inspect deployment/invocation state. Use "list_apps" before invoking an unknown app. "invoke" starts an action asynchronously and returns an invocation_id immediately. Use "list_invocation_browsers" with that ID to discover browser sessions created by the invocation, and use "get_invocation" after a short delay to inspect its state. Do not poll indefinitely; if the invocation is still running, report its ID. Use get/list actions to inspect results and "delete_deployment" to remove a deployment.',
+      inputSchema: z.object({
+        ...projectSelectionInputSchema(),
+        action: z
+          .enum([
+            "list_apps",
+            "invoke",
+            "get_deployment",
+            "list_deployments",
+            "delete_deployment",
+            "get_invocation",
+            "list_invocation_browsers",
+          ])
+          .describe("Operation to perform."),
+        app_name: z
+          .string()
+          .describe(
+            "(list_apps, invoke, list_deployments) App name filter or target.",
+          )
+          .optional(),
+        version: z
+          .string()
+          .describe(
+            "(list_apps, invoke, list_deployments) App version filter. Defaults to 'latest' for invoke. Deployment version filtering requires app_name.",
+          )
+          .optional(),
+        query: z
+          .string()
+          .describe("(list_apps) Search apps by name.")
+          .optional(),
+        action_name: z
+          .string()
+          .describe("(invoke) Action to execute within the app.")
+          .optional(),
+        payload: z
+          .string()
+          .describe("(invoke) JSON string with action parameters.")
+          .optional(),
+        deployment_id: z
+          .string()
+          .describe("(get_deployment, delete_deployment) Deployment ID.")
+          .optional(),
+        invocation_id: z
+          .string()
+          .describe(
+            "(get_invocation, list_invocation_browsers) Invocation ID to inspect.",
+          )
+          .optional(),
+        ...paginationParams,
+      }),
+      annotations: {
+        title: "Manage Kernel apps and invocations",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    {
-      title: "Manage Kernel apps and invocations",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
       const client = dependencies.createKernelClient(
-        extra.authInfo.token,
-        projectForOperation(extra.authInfo, params),
+        ctx.http.authInfo.token,
+        projectForOperation(ctx.http.authInfo, params),
       );
 
       try {

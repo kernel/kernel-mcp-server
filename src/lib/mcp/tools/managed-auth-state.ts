@@ -10,6 +10,12 @@ import {
 } from "@/lib/mcp/tools/managed-auth-checkpoint";
 import type { ManagedAuthBrowserTelemetry } from "@/lib/mcp/tools/managed-auth-telemetry";
 
+export type ManagedAuthRegion = "us-east" | "eu-west" | "ap-southeast";
+
+type ManagedAuthBrowserWithRegion = NonNullable<ManagedAuth["browser"]> & {
+  region?: ManagedAuthRegion;
+};
+
 export interface SafeAuthConnection {
   id: string;
   domain: string;
@@ -33,6 +39,7 @@ export interface SafeAuthConnection {
   flow_expires_at: string | null;
   can_reauth: boolean | null;
   can_reauth_reason: string | null;
+  region: ManagedAuthRegion;
   error_code: string | null;
   error_message: string | null;
 }
@@ -47,6 +54,7 @@ export interface AuthLoginInput {
   save_credentials?: boolean;
   record_session?: boolean;
   browser_telemetry?: ManagedAuthBrowserTelemetry;
+  region?: ManagedAuthRegion;
   proxy_id?: string;
   proxy_name?: string;
 }
@@ -97,6 +105,9 @@ const TERMINAL_ERROR_MESSAGES: Partial<
 export function toSafeAuthConnection(
   connection: ManagedAuth,
 ): SafeAuthConnection {
+  const browser = connection.browser as
+    | ManagedAuthBrowserWithRegion
+    | undefined;
   return {
     id: connection.id,
     domain: connection.domain,
@@ -108,6 +119,7 @@ export function toSafeAuthConnection(
     flow_expires_at: connection.flow_expires_at ?? null,
     can_reauth: connection.can_reauth ?? null,
     can_reauth_reason: connection.can_reauth_reason ?? null,
+    region: browser?.region ?? "us-east",
     error_code: connection.error_code ?? null,
     error_message: connection.flow_status
       ? (TERMINAL_ERROR_MESSAGES[connection.flow_status] ?? null)
@@ -466,6 +478,7 @@ export async function beginAuthLogin(
         record_session: recordSession,
         browser: {
           telemetry: browserTelemetry,
+          ...(input.region && { region: input.region }),
           ...(proxy && { proxy }),
         },
       });
@@ -516,6 +529,7 @@ export async function beginAuthLogin(
       record_session: recordSession,
       browser: {
         telemetry: browserTelemetry,
+        ...(input.region && { region: input.region }),
         ...(proxy && { proxy }),
       },
     });

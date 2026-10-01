@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
@@ -12,47 +12,50 @@ import { paginationParams } from "@/lib/mcp/schemas";
 
 export function registerAPIKeyCapabilities(server: McpServer) {
   // manage_api_keys -- Create, list, get, update, and delete Kernel API keys
-  server.tool(
+  server.registerTool(
     "manage_api_keys",
-    'Manage Kernel API keys. Use "create" to create an org-wide or project-scoped key, "list" to discover masked keys, "get" to retrieve one masked key, "update" to rename a key, or "delete" to revoke a key. Created keys include the plaintext key once.',
     {
-      action: z
-        .enum(["create", "list", "get", "update", "delete"])
-        .describe("Operation to perform."),
-      api_key_id: z
-        .string()
-        .describe("API key ID. Required for get, update, and delete.")
-        .optional(),
-      name: z.string().describe("(create, update) API key name.").optional(),
-      project_id: z
-        .string()
-        .nullable()
-        .describe(
-          "(create) Project ID for project-scoped keys. Omit or use null for org-wide keys.",
-        )
-        .optional(),
-      days_to_expire: z
-        .number()
-        .int()
-        .min(1)
-        .max(3650)
-        .nullable()
-        .describe(
-          "(create) Days until expiry, up to 3650. Use null for no expiry.",
-        )
-        .optional(),
-      ...paginationParams,
+      description:
+        'Manage Kernel API keys. Use "create" to create an org-wide or project-scoped key, "list" to discover masked keys, "get" to retrieve one masked key, "update" to rename a key, or "delete" to revoke a key. Created keys include the plaintext key once.',
+      inputSchema: z.object({
+        action: z
+          .enum(["create", "list", "get", "update", "delete"])
+          .describe("Operation to perform."),
+        api_key_id: z
+          .string()
+          .describe("API key ID. Required for get, update, and delete.")
+          .optional(),
+        name: z.string().describe("(create, update) API key name.").optional(),
+        project_id: z
+          .string()
+          .nullable()
+          .describe(
+            "(create) Project ID for project-scoped keys. Omit or use null for org-wide keys.",
+          )
+          .optional(),
+        days_to_expire: z
+          .number()
+          .int()
+          .min(1)
+          .max(3650)
+          .nullable()
+          .describe(
+            "(create) Days until expiry, up to 3650. Use null for no expiry.",
+          )
+          .optional(),
+        ...paginationParams,
+      }),
+      annotations: {
+        title: "Manage Kernel API keys",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
     },
-    {
-      title: "Manage Kernel API keys",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
-      const client = createKernelClient(extra.authInfo.token);
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      const client = createKernelClient(ctx.http.authInfo.token);
 
       try {
         switch (params.action) {

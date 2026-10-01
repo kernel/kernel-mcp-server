@@ -34,33 +34,105 @@ export const vaultWaitSchema = z
   .min(0)
   .max(60)
   .describe(
-    "(get, events) One bounded server-side observation, in seconds (0-60). Not supported for invoke, list, or delete. Pending state is returned as-is; this never retries a payment or guarantees readiness.",
+    "(get, events) One bounded server-side observation, in seconds (0-60). Not supported for invoke, list, or delete. Pending state is returned as-is; this never retries an operation or guarantees readiness. For credentials, wait observes required-value readiness, not edits to an already-ready item; compare version using get without wait.",
   )
   .optional();
 
 const integer = () => z.number().int().safe();
 const currency = () => z.string().regex(/^[A-Za-z]{3}$/);
 
+export function providerConfigReferenceSchema() {
+  return z
+    .object({
+      id: vaultSelectorSchema().optional(),
+      name: vaultSelectorSchema().optional(),
+    })
+    .strict()
+    .refine(
+      (value) => (value.id !== undefined) !== (value.name !== undefined),
+      "Provide exactly one provider config id or name.",
+    );
+}
+
+// Preserve the advertised schema and parsed values, but never serialize rejected
+// vault values or nested keys into MCP validation errors.
+export function vaultToolInput<Shape extends z.ZodRawShape>(shape: Shape) {
+  const schema = z.object(shape);
+  return {
+    "~standard": {
+      ...schema["~standard"],
+      vendor: "kernel",
+      validate(value: unknown) {
+        const result = schema.safeParse(value);
+        if (result.success) return { value: result.data };
+        return {
+          issues: result.error.issues.map((issue) => ({
+            message: "Invalid vault tool input. Check the documented schema.",
+            path: issue.path.slice(0, 1),
+          })),
+        };
+      },
+    },
+  };
+}
+
+export const providerCredentialsSchema = z
+  .object({
+    client_id: z.string().min(1).optional(),
+    client_secret: z
+      .string()
+      .min(1)
+      .describe(
+        "Write-only secret; supply through a trusted client, never chat.",
+      ),
+  })
+  .strict();
+
 // Keep provider specifications in sync with https://api.onkernel.com/spec.yaml.
 export const linkWalletSpecSchema = z
   .object({
     provider: z.literal("link").optional(),
-    authorization: z
-      .object({
-        method: z.literal("oauth"),
-        client: z.object({ type: z.literal("kernel_managed") }).strict(),
-      })
-      .strict(),
+    authorization: z.union([
+      z
+        .object({
+          method: z.literal("oauth"),
+          client: z.object({ type: z.literal("kernel_managed") }).strict(),
+        })
+        .strict(),
+      z
+        .object({
+          method: z.literal("oauth"),
+          client: z
+            .object({
+              type: z.literal("customer_managed"),
+              provider_config: providerConfigReferenceSchema(),
+            })
+            .strict(),
+          tokens: z
+            .object({
+              access_token: z.string().min(1),
+              refresh_token: z.string().min(1),
+            })
+            .strict()
+            .describe(
+              "Write-only token pair from the same grant. Supply through a trusted backend, never chat. Kernel owns subsequent refresh rotation.",
+            ),
+        })
+        .strict(),
+    ]),
   })
   .strict();
 
 export const agentcardWalletSpecSchema = z
   .object({
     provider: z.literal("agentcard").optional(),
+    provider_config: providerConfigReferenceSchema().optional(),
     user_id: z
       .string()
       .regex(/^usr_[A-Za-z0-9_]+$/)
-      .describe("An AgentCard user already enrolled in this organization.")
+      .describe(
+        "An AgentCard user already enrolled in this organization under the same provider configuration.",
+      )
       .optional(),
   })
   .strict();
@@ -109,7 +181,7 @@ export const linkCardSpecSchema = z
     context: z.string().min(100),
     line_items: z.array(linkLineItemSchema).optional(),
     totals: z.array(linkTotalSchema()).optional(),
-    metadata: z.record(z.string()).optional(),
+    metadata: z.record(z.string(), z.string()).optional(),
     expires_at: integer().optional(),
   })
   .strict();
@@ -152,6 +224,6 @@ export const browserVaultsSchema = z
     "Duplicate vault references are not allowed.",
   )
   .describe(
-    "(create only) Project-owned vaults to attach, each with exactly one id or name; max 20. Bindings are immutable and unavailable for pooled browsers. Use only returned non-secret payment aliases in this browser.",
+    "(create only) Project-owned vaults to attach, each with exactly one id or name; max 20. Bindings are immutable and unavailable for pooled browsers. Use a separate vault per end user. Attaching grants access to all items, including items added later. Credential fill writes real values into the page; it does not isolate them from an agent with browser access. Link cards use fill, not aliases or egress substitution. AgentCard aliases remain a separate, explicitly chosen egress path; never fall back to aliases after an uncertain fill.",
   )
   .optional();

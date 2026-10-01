@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
   defaultMcpDependencies,
@@ -25,37 +25,43 @@ export function registerShellTool(
   },
 ) {
   // exec_command -- Execute shell commands inside a browser VM
-  server.tool(
+  server.registerTool(
     "exec_command",
-    'Execute a command synchronously inside a browser VM. Returns stdout, stderr, and exit code. The command field is the executable; use args for its arguments. Common uses: read files (command: "cat", args: ["/var/log/supervisord.log"]), list dirs (command: "ls", args: ["/var/log"]), check DNS (command: "cat", args: ["/etc/resolv.conf"]), test connectivity (command: "curl", args: ["-I", "https://example.com"]).',
     {
-      ...projectSelectionInputSchema(),
-      session_id: z.string().describe("Browser session ID or name."),
-      command: z
-        .string()
-        .describe("Executable to run (e.g., 'cat', 'ls', 'curl')."),
-      args: z
-        .array(z.string())
-        .describe("Arguments to pass to the command.")
-        .optional(),
-      cwd: z.string().describe("Working directory (absolute path).").optional(),
-      timeout_sec: z
-        .number()
-        .int()
-        .min(1)
-        .max(MAX_TIMEOUT_SEC)
-        .describe(
-          `Max execution time in seconds (1-${MAX_TIMEOUT_SEC}). The command is killed at the deadline. Defaults to ${DEFAULT_TIMEOUT_SEC}.`,
-        )
-        .default(DEFAULT_TIMEOUT_SEC),
-      as_root: z.boolean().describe("Run with root privileges.").optional(),
-    },
-    {
-      title: "Run shell command in browser VM",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: true,
+      description:
+        'Execute a command synchronously inside a browser VM. Returns stdout, stderr, and exit code. The command field is the executable; use args for its arguments. Common uses: read files (command: "cat", args: ["/var/log/supervisord.log"]), list dirs (command: "ls", args: ["/var/log"]), check DNS (command: "cat", args: ["/etc/resolv.conf"]), test connectivity (command: "curl", args: ["-I", "https://example.com"]).',
+      inputSchema: z.object({
+        ...projectSelectionInputSchema(),
+        session_id: z.string().describe("Browser session ID or name."),
+        command: z
+          .string()
+          .describe("Executable to run (e.g., 'cat', 'ls', 'curl')."),
+        args: z
+          .array(z.string())
+          .describe("Arguments to pass to the command.")
+          .optional(),
+        cwd: z
+          .string()
+          .describe("Working directory (absolute path).")
+          .optional(),
+        timeout_sec: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_TIMEOUT_SEC)
+          .describe(
+            `Max execution time in seconds (1-${MAX_TIMEOUT_SEC}). The command is killed at the deadline. Defaults to ${DEFAULT_TIMEOUT_SEC}.`,
+          )
+          .default(DEFAULT_TIMEOUT_SEC),
+        as_root: z.boolean().describe("Run with root privileges.").optional(),
+      }),
+      annotations: {
+        title: "Run shell command in browser VM",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
     async (
       {
@@ -68,12 +74,12 @@ export function registerShellTool(
         project,
         project_id,
       },
-      extra,
+      ctx,
     ) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
       const client = options.createKernelClient(
-        extra.authInfo.token,
-        projectForOperation(extra.authInfo, { project, project_id }),
+        ctx.http.authInfo.token,
+        projectForOperation(ctx.http.authInfo, { project, project_id }),
       );
 
       try {

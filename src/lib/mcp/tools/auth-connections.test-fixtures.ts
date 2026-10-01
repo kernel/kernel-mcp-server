@@ -1,7 +1,7 @@
 import { expect } from "bun:test";
 import { projectScopedAuthInfo } from "@/lib/mcp/auth-context.test-fixtures";
 import type { KernelClient } from "@/lib/mcp/kernel-client";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import type {
   ManagedAuth,
   ManagedAuthTimelineEvent,
@@ -166,25 +166,27 @@ export function captureHandler() {
   let handler: ((params: any, extra: any) => Promise<any>) | undefined;
   let schema: Record<string, any> | undefined;
   const server = {
-    tool(
+    registerTool(
       _name: string,
-      _description: string,
-      inputSchema: Record<string, any>,
+      config: { inputSchema: { shape: Record<string, any> } },
       ...rest: any[]
     ) {
-      schema = inputSchema;
+      schema = config.inputSchema.shape;
       const capturedHandler = rest[rest.length - 1];
       handler = (params, extra) =>
         capturedHandler(params, {
           ...extra,
-          authInfo: extra.authInfo
-            ? {
-                ...projectScopedAuthInfo(
-                  params.project ?? params.project_id ?? "proj_test",
-                ),
-                ...extra.authInfo,
-              }
-            : undefined,
+          http: {
+            authInfo: extra.authInfo
+              ? {
+                  ...projectScopedAuthInfo(
+                    params.project ?? params.project_id ?? "proj_test",
+                  ),
+                  ...extra.authInfo,
+                }
+              : undefined,
+          },
+          mcpReq: { signal: new AbortController().signal },
         });
     },
   } as unknown as McpServer;

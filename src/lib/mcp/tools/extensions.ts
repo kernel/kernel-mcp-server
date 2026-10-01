@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
@@ -15,30 +15,33 @@ import {
 
 export function registerExtensionTools(server: McpServer) {
   // manage_extensions -- List and delete browser extensions
-  server.tool(
+  server.registerTool(
     "manage_extensions",
-    'Manage browser extensions uploaded to Kernel. Use "list" to see all extensions available to the current project or "delete" to remove one by ID or name.',
     {
-      ...projectSelectionInputSchema(),
-      action: z.enum(["list", "delete"]).describe("Operation to perform."),
-      id_or_name: z
-        .string()
-        .describe("(delete) Extension ID or name to delete.")
-        .optional(),
-      ...paginationParams,
+      description:
+        'Manage browser extensions uploaded to Kernel. Use "list" to see all extensions available to the current project or "delete" to remove one by ID or name.',
+      inputSchema: z.object({
+        ...projectSelectionInputSchema(),
+        action: z.enum(["list", "delete"]).describe("Operation to perform."),
+        id_or_name: z
+          .string()
+          .describe("(delete) Extension ID or name to delete.")
+          .optional(),
+        ...paginationParams,
+      }),
+      annotations: {
+        title: "Manage Kernel browser extensions",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
     },
-    {
-      title: "Manage Kernel browser extensions",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(
-        extra.authInfo.token,
-        projectForOperation(extra.authInfo, params),
+        ctx.http.authInfo.token,
+        projectForOperation(ctx.http.authInfo, params),
       );
 
       try {

@@ -2,6 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 
 describe("createKernelClient", () => {
+  test("disables SDK payload logging even when KERNEL_LOG requests debug", () => {
+    const previous = process.env.KERNEL_LOG;
+    process.env.KERNEL_LOG = "debug";
+    try {
+      expect(createKernelClient("test-key").logLevel).toBe("off");
+    } finally {
+      if (previous === undefined) delete process.env.KERNEL_LOG;
+      else process.env.KERNEL_LOG = previous;
+    }
+  });
   test("uses an explicit project before the server default", () => {
     const previous = process.env.KERNEL_PROJECT;
     process.env.KERNEL_PROJECT = "proj_default";

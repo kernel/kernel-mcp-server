@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
@@ -16,62 +16,65 @@ import {
 
 export function registerCredentialTools(server: McpServer) {
   // manage_credentials -- Manage stored credentials for managed auth
-  server.tool(
+  server.registerTool(
     "manage_credentials",
-    'Manage credentials stored in Kernel for managed auth. "list" discovers credentials (optionally filtered by domain), "get" returns a credential\'s metadata (values are never returned), "totp_code" returns the current 6-digit TOTP for credentials with a configured totp_secret, "create" stores a new credential, "update" changes its name/values/sso_provider/totp_secret (values are merged with existing), and "delete" removes a credential by ID or name.',
     {
-      ...projectSelectionInputSchema(),
-      action: z
-        .enum(["list", "get", "totp_code", "create", "update", "delete"])
-        .describe("Operation to perform."),
-      id_or_name: z
-        .string()
-        .describe("(get, totp_code, update, delete) Credential ID or name.")
-        .optional(),
-      ...paginationParams,
-      domain: z
-        .string()
-        .describe(
-          "(list) Filter by domain. (create) Target domain this credential is for.",
-        )
-        .optional(),
-      name: z
-        .string()
-        .describe(
-          "(create) Unique name for the credential within the organization. (update) New name.",
-        )
-        .optional(),
-      values: z
-        .record(z.string(), z.string())
-        .describe(
-          "(create, update) Field name to value mapping (e.g. username, password). On update, merged with existing values.",
-        )
-        .optional(),
-      sso_provider: z
-        .string()
-        .describe(
-          "(create, update) SSO provider to use (e.g. google, github, microsoft). On update, empty string clears it.",
-        )
-        .optional(),
-      totp_secret: z
-        .string()
-        .describe(
-          "(create, update) Base32-encoded TOTP secret for automatic 2FA. On update, empty string clears it.",
-        )
-        .optional(),
+      description:
+        'Manage credentials stored in Kernel for managed auth. "list" discovers credentials (optionally filtered by domain), "get" returns a credential\'s metadata (values are never returned), "totp_code" returns the current 6-digit TOTP for credentials with a configured totp_secret, "create" stores a new credential, "update" changes its name/values/sso_provider/totp_secret (values are merged with existing), and "delete" removes a credential by ID or name.',
+      inputSchema: z.object({
+        ...projectSelectionInputSchema(),
+        action: z
+          .enum(["list", "get", "totp_code", "create", "update", "delete"])
+          .describe("Operation to perform."),
+        id_or_name: z
+          .string()
+          .describe("(get, totp_code, update, delete) Credential ID or name.")
+          .optional(),
+        ...paginationParams,
+        domain: z
+          .string()
+          .describe(
+            "(list) Filter by domain. (create) Target domain this credential is for.",
+          )
+          .optional(),
+        name: z
+          .string()
+          .describe(
+            "(create) Unique name for the credential within the organization. (update) New name.",
+          )
+          .optional(),
+        values: z
+          .record(z.string(), z.string())
+          .describe(
+            "(create, update) Field name to value mapping (e.g. username, password). On update, merged with existing values.",
+          )
+          .optional(),
+        sso_provider: z
+          .string()
+          .describe(
+            "(create, update) SSO provider to use (e.g. google, github, microsoft). On update, empty string clears it.",
+          )
+          .optional(),
+        totp_secret: z
+          .string()
+          .describe(
+            "(create, update) Base32-encoded TOTP secret for automatic 2FA. On update, empty string clears it.",
+          )
+          .optional(),
+      }),
+      annotations: {
+        title: "Manage Kernel credentials",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
     },
-    {
-      title: "Manage Kernel credentials",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: false,
-    },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("Authentication required");
       const client = createKernelClient(
-        extra.authInfo.token,
-        projectForOperation(extra.authInfo, params),
+        ctx.http.authInfo.token,
+        projectForOperation(ctx.http.authInfo, params),
       );
 
       try {

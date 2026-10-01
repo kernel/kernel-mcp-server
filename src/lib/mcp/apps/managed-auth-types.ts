@@ -14,6 +14,7 @@ export type SafeConnection = {
     | null;
   flow_type: "LOGIN" | "REAUTH" | null;
   flow_expires_at: string | null;
+  region?: "us-east" | "eu-west" | "ap-southeast";
   error_code: string | null;
 };
 

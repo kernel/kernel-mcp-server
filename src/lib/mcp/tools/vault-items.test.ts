@@ -80,6 +80,221 @@ describe("advertised vault operations", () => {
     },
   );
 
+  test.each(["prepare_checkout", "future_operation"])(
+    "discovers and invokes advertised %s with operation-specific inputs",
+    async (operation) => {
+      const advertisedItem = {
+        ...item,
+        available_operations: [
+          { type: "authorize", description: "Require user approval." },
+          { type: operation, description: "Requires additional inputs." },
+        ],
+      };
+      const inputs = {
+        checkout: {
+          browser_id: "browser-1",
+          merchant_origin: "https://shop.example",
+        },
+      };
+      const fixture = await connectVaultTest([
+        Response.json(advertisedItem),
+        Response.json(advertisedItem),
+        Response.json({ ...item, available_operations: [] }),
+      ]);
+      try {
+        const observed = toolResultJSON(
+          await fixture.call("manage_vault_items", {
+            action: "get",
+            vault: "checkout",
+            key: "order-1",
+          }),
+        );
+        expect(observed.item.available_operations).toEqual(
+          advertisedItem.available_operations,
+        );
+        expect(
+          observed.hints.invocation.map(
+            (hint: { arguments: { operation: string } }) =>
+              hint.arguments.operation,
+          ),
+        ).toEqual(["authorize", operation]);
+        const result = await fixture.call("manage_vault_items", {
+          action: "invoke",
+          vault: "checkout",
+          key: "order-1",
+          operation,
+          inputs,
+        });
+        expect(result.isError).toBeUndefined();
+        expect(fixture.requests.map((request) => request.method)).toEqual([
+          "GET",
+          "GET",
+          "POST",
+        ]);
+        expect(fixture.requests[2].body).toEqual({
+          type: operation,
+          ...inputs,
+        });
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test("handles field results for newly advertised operation types", async () => {
+    const inputs = {
+      browser_id: "browser-1",
+      fields: [{ field: "username", selector: "#username" }],
+    };
+    const fixture = await connectVaultTest([
+      Response.json({
+        ...item,
+        available_operations: [
+          { type: "future_operation", description: "Write fields." },
+        ],
+      }),
+      Response.json({
+        type: "future_operation",
+        status: "completed",
+        fields: [{ index: 0, status: "filled" }],
+        opaque: "hidden",
+      }),
+    ]);
+    try {
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_items", {
+          action: "invoke",
+          vault: "checkout",
+          key: "order-1",
+          operation: "future_operation",
+          inputs,
+        }),
+      );
+      expect(result.result).toMatchObject({
+        type: "future_operation",
+        status: "completed",
+      });
+      expect(JSON.stringify(result)).not.toContain("hidden");
+      expect(fixture.requests[1].body).toEqual({
+        type: "future_operation",
+        ...inputs,
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("does not select a response type from input field names", async () => {
+    const fixture = await connectVaultTest([
+      Response.json({
+        ...item,
+        available_operations: [
+          { type: "future_operation", description: "Do work." },
+        ],
+      }),
+      Response.json({
+        type: "future_operation",
+        status: "pending",
+        opaque: "hidden",
+      }),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "invoke",
+        vault: "checkout",
+        key: "order-1",
+        operation: "future_operation",
+        inputs: { fields: [{ name: "example" }] },
+      });
+      expect(result.isError).toBeUndefined();
+      expect(toolResultJSON(result).result).toEqual({
+        type: "future_operation",
+        status: "pending",
+      });
+      expect(JSON.stringify(result)).not.toContain("hidden");
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("projects unknown operation results without exposing opaque fields", async () => {
+    const fixture = await connectVaultTest([
+      Response.json({
+        ...item,
+        available_operations: [
+          { type: "future_operation", description: "Run it." },
+        ],
+      }),
+      Response.json({
+        type: "future_operation",
+        status: "pending",
+        opaque: "hidden",
+      }),
+    ]);
+    try {
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_items", {
+          action: "invoke",
+          vault: "checkout",
+          key: "order-1",
+          operation: "future_operation",
+        }),
+      );
+      expect(result.result).toEqual({
+        type: "future_operation",
+        status: "pending",
+      });
+      expect(JSON.stringify(result)).not.toContain("hidden");
+      expect(fixture.requests.map((request) => request.method)).toEqual([
+        "GET",
+        "POST",
+      ]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("does not report an unrecognized operation response as success", async () => {
+    const fixture = await connectVaultTest([
+      Response.json(item),
+      Response.json({ opaque: "hidden" }),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "invoke",
+        vault: "checkout",
+        key: "order-1",
+        operation: "authorize",
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain("unrecognized response");
+      expect(JSON.stringify(result)).not.toContain("hidden");
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each(["type", "id_or_name"])(
+    "does not let invocation inputs override %s",
+    async (field) => {
+      const fixture = await connectVaultTest([]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          action: "invoke",
+          vault: "checkout",
+          key: "order-1",
+          operation: "authorize",
+          inputs: { [field]: "hidden" },
+        });
+        expect(result.isError).toBe(true);
+        expect(JSON.stringify(result)).not.toContain("hidden");
+        expect(fixture.requests).toHaveLength(0);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
   test("re-fetches availability rather than trusting an earlier get", async () => {
     const fixture = await connectVaultTest([
       Response.json(item),
@@ -103,6 +318,145 @@ describe("advertised vault operations", () => {
         "GET",
         "GET",
       ]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([400, 403, 409, 422])(
+    "returns the exact provider message for authorize HTTP %s",
+    async (status) => {
+      const reason = `Funding method cannot be used for this purchase (${status}).`;
+      const fixture = await connectVaultTest([
+        Response.json(item),
+        Response.json(
+          {
+            code: "invalid_spend_request",
+            message: `Payment provider rejected card authorization: ${reason}`,
+            inner_error: { code: "provider_rejection_reason", message: reason },
+            opaque: "hidden",
+          },
+          { status },
+        ),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          action: "invoke",
+          vault: "checkout",
+          key: "order-1",
+          operation: "authorize",
+        });
+        const text = JSON.stringify(result);
+        expect(result.isError).toBe(true);
+        expect(text).toContain(
+          `Payment provider rejected card authorization: ${reason}`,
+        );
+        expect(text).toContain(
+          "Inspect item state, events, and browser before acting.",
+        );
+        expect(text).toContain("Do not retry automatically.");
+        expect(text).toContain("[code: invalid_spend_request]");
+        expect(text).not.toContain("hidden");
+        expect(text).not.toContain(
+          "The payment provider could not complete the vault request.",
+        );
+        expect(fixture.requests.map((request) => request.method)).toEqual([
+          "GET",
+          "POST",
+        ]);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test("passes through rate limit diagnostics", async () => {
+    const fixture = await connectVaultTest([
+      Response.json(item),
+      Response.json(
+        {
+          code: "spend_request_rate_limited",
+          message: "Provider rate limit diagnostic",
+        },
+        { status: 429 },
+      ),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "invoke",
+        vault: "checkout",
+        key: "order-1",
+        operation: "authorize",
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain(
+        "Provider rate limit diagnostic",
+      );
+      expect(JSON.stringify(result)).toContain(
+        "[code: spend_request_rate_limited]",
+      );
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("preserves the API message instead of substituting inner errors", async () => {
+    const fixture = await connectVaultTest([
+      Response.json({
+        ...item,
+        available_operations: [{ type: "future_operation", description: "" }],
+      }),
+      Response.json(
+        {
+          code: "future_decline",
+          message: "Public error wrapper",
+          inner_error: {
+            code: "provider_rejection_reason",
+            message: "Provider declined the request.",
+          },
+        },
+        { status: 400 },
+      ),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "invoke",
+        vault: "checkout",
+        key: "order-1",
+        operation: "future_operation",
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain("Public error wrapper");
+      expect(JSON.stringify(result)).toContain("[code: future_decline]");
+      expect(JSON.stringify(result)).not.toContain(
+        "Provider declined the request.",
+      );
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("passes through provider errors for other operations", async () => {
+    const fixture = await connectVaultTest([
+      Response.json({
+        ...item,
+        available_operations: [{ type: "future_operation", description: "" }],
+      }),
+      Response.json(
+        { code: "provider_error", message: "Provider diagnostic" },
+        { status: 400 },
+      ),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "invoke",
+        vault: "checkout",
+        key: "order-1",
+        operation: "future_operation",
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain("400 Provider diagnostic");
+      expect(JSON.stringify(result)).toContain("[code: provider_error]");
     } finally {
       await fixture.close();
     }
