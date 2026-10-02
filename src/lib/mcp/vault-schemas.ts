@@ -38,6 +38,29 @@ export const vaultWaitSchema = z
   )
   .optional();
 
+export const webmcpInvokeInputsSchema = z
+  .object({
+    browser_id: z.string().min(1),
+    tool_ref: z.string().min(1).max(128),
+    page_url: z.string().min(1),
+    input: z.record(z.string(), z.unknown()),
+    bindings: z
+      .array(
+        z
+          .object({
+            field: z.string().min(1),
+            input_path: z.string().min(1),
+            format: z.string().min(1).optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(32),
+    timeout_sec: z.number().int().min(1).max(120).default(15),
+  })
+  .strict();
+export type WebmcpInvokeInputs = z.infer<typeof webmcpInvokeInputsSchema>;
+
 const integer = () => z.number().int().safe();
 const currency = () => z.string().regex(/^[A-Za-z]{3}$/);
 
