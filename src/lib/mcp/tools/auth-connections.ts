@@ -92,7 +92,7 @@ export function registerAuthConnectionTools(server: McpServer) {
         credential_path: z
           .string()
           .describe(
-            "(create, update) provider-specific item path (e.g. 'vault-name/item-name').",
+            "(create, update) provider-specific item path (e.g. `VaultName/ItemName`).",
           )
           .optional(),
         credential_auto: z
