@@ -148,6 +148,11 @@ describe("web_search", () => {
     {
       action: "contents",
       search_id: "srch_test",
+      contents: { result_ids: ["r1", "r1"] },
+    },
+    {
+      action: "contents",
+      search_id: "srch_test",
       contents: {
         limit: 1,
         content: {
@@ -200,6 +205,28 @@ describe("web_search", () => {
       });
       expect(result.isError).toBe(true);
       expect(f.requests).toHaveLength(1);
+    } finally {
+      await f.close();
+    }
+  });
+
+  test("does not retry billable content retrieval on upstream failure", async () => {
+    const f = await fixture(503);
+    try {
+      const result = await f.client.callTool({
+        name: "web_search",
+        arguments: {
+          action: "contents",
+          search_id: "srch_test",
+          contents: { limit: 1 },
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(f.requests).toHaveLength(1);
+      expect(f.requests[0].method).toBe("POST");
+      expect(f.requests[0].url).toBe(
+        "https://api.example.test/search/srch_test/contents",
+      );
     } finally {
       await f.close();
     }

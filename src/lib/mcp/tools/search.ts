@@ -65,7 +65,7 @@ const searchContentOptions = z
           .min(1)
           .optional()
           .describe(
-            "Reuse this authorized browser and its cookies and proxy. Inline search requires source=browser; deferred retrieval also accepts source=auto.",
+            "Existing browser session to reuse. It must belong to the caller and selected project; Kernel does not delete it. Inline search requires source=browser; deferred retrieval also accepts source=auto.",
           ),
       })
       .strict()
@@ -73,10 +73,34 @@ const searchContentOptions = z
       .describe(
         "Browser settings. Inline search requires source=browser; deferred retrieval accepts source=auto or source=browser.",
       ),
-    format: z.enum(["markdown", "text"]).optional(),
-    max_chars: z.number().int().min(100).max(100000).optional(),
-    max_age_hours: z.number().int().min(0).optional(),
-    timeout_ms: z.number().int().min(1000).max(60000).optional(),
+    format: z
+      .enum(["markdown", "text"])
+      .optional()
+      .describe("Extracted content format. Defaults to markdown."),
+    max_chars: z
+      .number()
+      .int()
+      .min(100)
+      .max(100000)
+      .optional()
+      .describe("Per-result Unicode character limit after extraction."),
+    max_age_hours: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe(
+        "Maximum age of cached page content. Zero forces a live fetch; caller-supplied browser sessions skip this cache.",
+      ),
+    timeout_ms: z
+      .number()
+      .int()
+      .min(1000)
+      .max(60000)
+      .optional()
+      .describe(
+        "Per-result content deadline, including browser capacity, retrieval, and extraction. The outer contents timeout_ms sets the overall deadline.",
+      ),
   })
   .strict();
 
@@ -92,9 +116,32 @@ const deferredSearchContentOptions = searchContentOptions.refine(
 
 const searchContentsRequest = z
   .object({
-    result_ids: z.array(z.string().min(1)).min(1).max(100).optional(),
-    limit: z.number().int().min(1).max(100).optional(),
-    timeout_ms: z.number().int().min(1000).max(120000).optional(),
+    result_ids: z
+      .array(z.string().min(1))
+      .min(1)
+      .max(100)
+      .refine(
+        (ids) => new Set(ids).size === ids.length,
+        "Result IDs must be unique.",
+      )
+      .optional()
+      .describe("Retrieve content for these unique result IDs."),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .optional()
+      .describe("Retrieve content for up to this many results."),
+    timeout_ms: z
+      .number()
+      .int()
+      .min(1000)
+      .max(120000)
+      .optional()
+      .describe(
+        "Overall deadline for retrieving content across all selected results, up to 120 seconds. Each result has a separate timeout_ms capped at 60 seconds.",
+      ),
     content: deferredSearchContentOptions.optional(),
   })
   .strict()
