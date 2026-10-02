@@ -1,6 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { createKernelClient } from "@/lib/mcp/kernel-client";
+import type { CredentialUpdateParams } from "@onkernel/sdk/resources/credentials";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
 import {
   errorResponse,
   jsonResponse,
@@ -14,13 +18,16 @@ import {
   projectSelectionInputSchema,
 } from "@/lib/mcp/project-selection";
 
-export function registerCredentialTools(server: McpServer) {
+export function registerCredentialTools(
+  server: McpServer,
+  dependencies: McpDependencies = defaultMcpDependencies,
+) {
   // manage_credentials -- Manage stored credentials for managed auth
   server.registerTool(
     "manage_credentials",
     {
       description:
-        'manage credentials stored in KERNEL for managed auth. "list" discovers credentials (optionally filtered by domain), "get" returns a credential\'s metadata (values are never returned), "totp_code" returns the current 6-digit totp for credentials with a configured totp_secret, "create" stores a new credential, "update" changes its name/values/sso_provider/totp_secret (values are merged with existing), and "delete" removes a credential by id or name.',
+        'manage credentials stored in KERNEL for managed auth. "list" discovers credentials (optionally filtered by domain), "get" returns a credential\'s metadata (values are never returned), "totp_code" returns the current totp for credentials with a configured totp_secret, "create" stores a new credential, "update" changes its name/values/sso_provider/totp_secret (values are merged with existing). "delete" removes a credential by id or name. totp secrets accept a base32 secret (16-128 characters) or an otpauth:// uri; algorithm, digits, and period are optional settings.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z
@@ -58,7 +65,31 @@ export function registerCredentialTools(server: McpServer) {
         totp_secret: z
           .string()
           .describe(
-            "(create, update) base32-encoded totp secret for automatic 2fa. on update, empty string clears it.",
+            "(create, update) base32 secret (16-128 characters) or otpauth:// uri. uri parameters override explicit settings. on update, empty string clears it.",
+          )
+          .optional(),
+        totp_algorithm: z
+          .enum(["SHA1", "SHA256", "SHA512"])
+          .describe(
+            "(create, update) totp algorithm; update requires a replacement totp_secret.",
+          )
+          .optional(),
+        totp_digits: z
+          .number()
+          .int()
+          .min(6)
+          .max(9)
+          .describe(
+            "(create, update) totp code digits; update requires a replacement totp_secret.",
+          )
+          .optional(),
+        totp_period: z
+          .number()
+          .int()
+          .min(15)
+          .max(300)
+          .describe(
+            "(create, update) totp period in seconds; update requires a replacement totp_secret.",
           )
           .optional(),
       }),
@@ -72,7 +103,7 @@ export function registerCredentialTools(server: McpServer) {
     },
     async (params, ctx) => {
       if (!ctx.http?.authInfo) throw new Error("authentication required");
-      const client = createKernelClient(
+      const client = dependencies.createKernelClient(
         ctx.http.authInfo.token,
         projectForOperation(ctx.http.authInfo, params),
       );
@@ -116,6 +147,14 @@ export function registerCredentialTools(server: McpServer) {
                 "error: domain, name, and non-empty values are required for create.",
               );
             }
+            if (
+              !params.totp_secret &&
+              (params.totp_algorithm ||
+                params.totp_digits !== undefined ||
+                params.totp_period !== undefined)
+            ) {
+              return errorResponse("error: totp settings require totp_secret.");
+            }
             const credential = await client.credentials.create({
               domain: params.domain,
               name: params.name,
@@ -126,15 +165,34 @@ export function registerCredentialTools(server: McpServer) {
               ...(params.totp_secret !== undefined && {
                 totp_secret: params.totp_secret,
               }),
+              ...(params.totp_algorithm !== undefined && {
+                totp_algorithm: params.totp_algorithm,
+              }),
+              ...(params.totp_digits !== undefined && {
+                totp_digits: params.totp_digits,
+              }),
+              ...(params.totp_period !== undefined && {
+                totp_period: params.totp_period,
+              }),
             });
             if (!credential)
               return errorResponse("failed to create credential");
             return jsonResponse(credential);
           }
           case "update": {
+            if (
+              !params.totp_secret &&
+              (params.totp_algorithm ||
+                params.totp_digits !== undefined ||
+                params.totp_period !== undefined)
+            ) {
+              return errorResponse(
+                "error: totp settings require a new totp_secret.",
+              );
+            }
             if (!params.id_or_name)
               return errorResponse("error: id_or_name is required for update.");
-            const updateParams = {
+            const updateParams: CredentialUpdateParams = {
               ...(params.name !== undefined && { name: params.name }),
               ...(params.values !== undefined && { values: params.values }),
               ...(params.sso_provider !== undefined && {
@@ -142,6 +200,15 @@ export function registerCredentialTools(server: McpServer) {
               }),
               ...(params.totp_secret !== undefined && {
                 totp_secret: params.totp_secret,
+              }),
+              ...(params.totp_algorithm !== undefined && {
+                totp_algorithm: params.totp_algorithm,
+              }),
+              ...(params.totp_digits !== undefined && {
+                totp_digits: params.totp_digits,
+              }),
+              ...(params.totp_period !== undefined && {
+                totp_period: params.totp_period,
               }),
             };
             if (Object.keys(updateParams).length === 0) {
