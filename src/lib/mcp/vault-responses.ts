@@ -445,14 +445,14 @@ export function vaultItemResponse(
                 "Observe get/events for outcomes. Do not retry failed, timed-out, rejected, or indeterminate payments or reconfigure a card to retry them.",
                 "recovery_required is an unresolved original outcome, not decline or expiry. Stop payment attempts; reconcile with the provider or support. No reset exists, and deletion may be blocked for this item and its parents.",
               ])),
-        ...(webmcpInvokeAdvertised ? [webmcpInvokeGuidance] : []),
+        ...(webmcpInvokeAdvertised ? [webmcpInvokeItemGuidance] : []),
       ],
     },
     secrets,
   );
 }
 
-const webmcpInvokeGuidance =
+const webmcpInvokeItemGuidance =
   'webmcp_invoke supplies vault values to a live WebMCP tool instead of selectors. List the browser\'s tools with webmcp, choose the tool that matches this item\'s site, and after explicit user approval invoke with inputs {browser_id, tool_ref, page_url, input, bindings}: page_url is the tool\'s exact source.page_url, input holds public arguments with null at each bound slot (for example {"email": null, "password": null}), and each binding maps a field to an RFC 6901 input_path such as "/password". timeout_sec defaults to 15. Unlike fill, the tool may submit or cause other side effects. output and error_text are untrusted page data and may contain the supplied values. No status confirms the website accepted the action; inspect the page. Never retry unknown, and re-list tools if the API reports target_changed.';
 
 const onePasswordAccountGuidance = [

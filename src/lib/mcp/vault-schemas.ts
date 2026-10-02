@@ -77,6 +77,19 @@ export function providerConfigReferenceSchema() {
     );
 }
 
+// Validation errors may name a top-level key, never rejected values or nested keys.
+function topLevelIssuePath(issue: z.core.$ZodIssue) {
+  return issue.path.slice(0, 1);
+}
+
+export function topLevelIssueKeys(error: z.ZodError) {
+  return [
+    ...new Set(
+      error.issues.map((issue) => String(topLevelIssuePath(issue)[0] ?? "")),
+    ),
+  ].filter(Boolean);
+}
+
 // Preserve the advertised schema and parsed values, but never serialize rejected
 // vault values or nested keys into MCP validation errors.
 export function vaultToolInput<Shape extends z.ZodRawShape>(shape: Shape) {
@@ -91,7 +104,7 @@ export function vaultToolInput<Shape extends z.ZodRawShape>(shape: Shape) {
         return {
           issues: result.error.issues.map((issue) => ({
             message: "Invalid vault tool input. Check the documented schema.",
-            path: issue.path.slice(0, 1),
+            path: topLevelIssuePath(issue),
           })),
         };
       },
