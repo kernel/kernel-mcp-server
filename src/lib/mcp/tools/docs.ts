@@ -14,16 +14,16 @@ export function registerDocsTools(server: McpServer) {
     "search_docs",
     {
       description:
-        "Search Kernel platform documentation for guides, tutorials, and API references. Use when you need to understand how Kernel features work or troubleshoot issues.",
+        "search KERNEL platform documentation for guides, tutorials, and api references. use when you need to understand how KERNEL features work or troubleshoot issues.",
       inputSchema: z.object({
         query: z
           .string()
           .describe(
-            'Natural language search query (e.g., "how to deploy an app", "browser automation examples").',
+            'natural language search query (e.g., "how to deploy an app", "browser automation examples").',
           ),
       }),
       annotations: {
-        title: "Search Kernel documentation",
+        title: "search KERNEL documentation",
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
@@ -36,7 +36,7 @@ export function registerDocsTools(server: McpServer) {
         !process.env.MINTLIFY_DOMAIN
       ) {
         return errorResponse(
-          "Error: Documentation search is not configured (missing MINTLIFY_ASSISTANT_API_TOKEN or MINTLIFY_DOMAIN).",
+          "error: documentation search is not configured (missing MINTLIFY_ASSISTANT_API_TOKEN or MINTLIFY_DOMAIN).",
         );
       }
 
@@ -55,26 +55,26 @@ export function registerDocsTools(server: McpServer) {
 
         if (!searchResponse.ok) {
           throw new Error(
-            `Search failed: ${searchResponse.status} ${searchResponse.statusText}`,
+            `search failed: ${searchResponse.status} ${searchResponse.statusText}`,
           );
         }
 
         const searchResults: MintlifySearchResult[] =
           await searchResponse.json();
-        let formatted = "# Documentation Search Results\n\n";
+        let formatted = "# documentation search results\n\n";
 
         if (searchResults?.length > 0) {
           searchResults.forEach((result, index) => {
             formatted += `## ${index + 1}. ${result.path}\n\n${result.content}\n\n---\n\n`;
           });
         } else {
-          formatted += "No results found for your query.";
+          formatted += "no results found for your query.";
         }
 
         return { content: [{ type: "text", text: formatted }] };
       } catch (error) {
         return errorResponse(
-          `Error searching documentation: ${error instanceof Error ? error.message : "Unknown error"}`,
+          `error searching documentation: ${error instanceof Error ? error.message : "unknown error"}`,
         );
       }
     },

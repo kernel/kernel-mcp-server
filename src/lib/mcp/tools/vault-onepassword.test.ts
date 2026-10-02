@@ -111,15 +111,15 @@ describe("1Password vault credentials", () => {
       const credentials = descriptionOf("manage_vault_credentials");
       expect(credentials).toContain("two credential paths");
       expect(credentials).toContain("ask the user which they prefer");
-      expect(credentials).toContain("Kernel-hosted collection");
-      expect(credentials).toContain("1Password brokered approval");
+      expect(credentials).toContain("KERNEL-hosted collection");
+      expect(credentials).toContain("1password brokered approval");
       expect(credentials).toContain("never open, decode, or approve");
       expect(credentials).toContain("where their login for the site lives");
-      expect(credentials).toContain("First list the vault");
+      expect(credentials).toContain("first list the vault");
       expect(credentials).toContain("not shared-vault items or passkeys");
-      expect(credentials).toContain("not through MCP");
+      expect(credentials).toContain("not through mcp");
       expect(descriptionOf("manage_vaults")).toContain(
-        "Reuse an existing credential for the site first",
+        "reuse an existing credential for the site first",
       );
       const items = descriptionOf("manage_vault_items");
       expect(items).toContain("1pw_create_access_request");
@@ -134,7 +134,7 @@ describe("1Password vault credentials", () => {
       );
       for (const { description } of tools) {
         expect(description).not.toContain("reconcile_access");
-        expect(description).not.toContain("never returns access-request IDs");
+        expect(description).not.toContain("never returns access-request ids");
         expect(description).not.toMatch(/confirms it is their account/);
         expect(description).not.toMatch(/Family/i);
       }
@@ -155,7 +155,7 @@ describe("1Password vault credentials", () => {
         ...args,
       });
       expect(result.isError).toBe(true);
-      expect(JSON.stringify(result)).toContain("Ask the user");
+      expect(JSON.stringify(result)).toContain("ask the user");
       expect(fixture.requests).toHaveLength(0);
     } finally {
       await fixture.close();
@@ -282,7 +282,7 @@ describe("1Password vault credentials", () => {
         });
         expect(result.isError).toBe(true);
         const text = JSON.stringify(result);
-        expect(text).toContain("No request was sent");
+        expect(text).toContain("no request was sent");
         expect(text).not.toContain("hunter2");
         expect(text).not.toContain("payment");
         expect(fixture.requests).toHaveLength(0);
@@ -369,7 +369,7 @@ describe("1Password vault credentials", () => {
         "another end user's vault needs its own connection",
       );
       expect(result.guidance.join(" ")).not.toContain(
-        "their 1Password account",
+        "their 1password account",
       );
     } finally {
       await fixture.close();
@@ -484,9 +484,9 @@ describe("1Password vault credentials", () => {
       expect(guidance).toContain('operation: "1pw_access_request_status"');
       expect(guidance).toContain("needs no user approval");
       expect(guidance).toContain(
-        "Create that browser before requesting access",
+        "create that browser before requesting access",
       );
-      expect(guidance).not.toContain("collection URL");
+      expect(guidance).not.toContain("collection url");
       expect(result.hints.invocation).toEqual([
         expect.objectContaining({
           arguments: expect.objectContaining({
@@ -749,7 +749,7 @@ describe("1Password vault credentials", () => {
         );
         const guidance = read.guidance.join(" ");
         expect(guidance).toContain(expected);
-        expect(guidance).toContain("offer Kernel-hosted collection");
+        expect(guidance).toContain("offer KERNEL-hosted collection");
         expect(fixture.requests).toHaveLength(1);
       } finally {
         await fixture.close();
@@ -785,7 +785,7 @@ describe("1Password vault credentials", () => {
         access_token_expires_at: "2026-10-01T00:00:00Z",
       });
       expect(body.guidance.join(" ")).toContain(
-        "1pw_update_access_token is not available through MCP",
+        "1pw_update_access_token is not available through mcp",
       );
       expect(
         body.hints.invocation.map(
@@ -941,7 +941,7 @@ describe("1Password vault credentials", () => {
       expect(result.isError).toBe(true);
       const text = JSON.stringify(result.content);
       expect(text).toContain("1Password access request is already in progress");
-      expect(text).toContain("Do not retry automatically");
+      expect(text).toContain("do not retry automatically");
       expect(fixture.requests).toHaveLength(2);
     } finally {
       await fixture.close();

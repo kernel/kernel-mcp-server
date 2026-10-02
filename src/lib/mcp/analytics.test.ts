@@ -1030,7 +1030,7 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       });
       expect(rejectedVaultInput.isError).toBe(true);
       expect(JSON.stringify(rejectedVaultInput)).toContain(
-        "Invalid vault tool input",
+        "invalid vault tool input",
       );
       expect(JSON.stringify(rejectedVaultInput)).not.toContain(
         "never-echo-this",

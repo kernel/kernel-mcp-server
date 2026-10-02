@@ -129,7 +129,7 @@ describe("durable profile contracts", () => {
       content: [
         {
           type: "text",
-          text: 'Error: multiple profiles match the exact name "Acme": Acme (ID: profile-1), Acme (ID: profile-2). Rename or delete duplicate profiles by ID, then retry setup.',
+          text: 'error: multiple profiles match the exact name "Acme": Acme (id: profile-1), Acme (id: profile-2). rename or delete duplicate profiles by id, then retry setup.',
         },
       ],
       isError: true,
@@ -171,7 +171,7 @@ describe("durable profile contracts", () => {
       content: [
         {
           type: "text",
-          text: 'Error: profile "Missing" does not exist. Omit update_existing to create it.',
+          text: 'error: profile "Missing" does not exist. omit update_existing to create it.',
         },
       ],
       isError: true,
@@ -219,9 +219,9 @@ describe("durable profile contracts", () => {
       },
     ]);
     expect(result.content[0].text).toContain(
-      'Profile "Acme" loaded for update.',
+      'profile "Acme" loaded for update.',
     );
-    expect(result.content[0].text).toContain("Profile ID: profile-1");
+    expect(result.content[0].text).toContain("profile id: profile-1");
   });
 
   test("discovers and renames a profile through the MCP boundary", async () => {
@@ -290,17 +290,17 @@ describe("durable profile contracts", () => {
     [
       "both profile identifiers",
       { profile_id: "profile-1", profile_name: "Acme", new_name: "New" },
-      "Error: Cannot specify both profile_name and profile_id.",
+      "error: cannot specify both profile_name and profile_id.",
     ],
     [
       "no profile identifier",
       { new_name: "New" },
-      "Error: profile_name or profile_id is required for rename.",
+      "error: profile_name or profile_id is required for rename.",
     ],
     [
       "no new name",
       { profile_id: "profile-1" },
-      "Error: new_name is required for rename.",
+      "error: new_name is required for rename.",
     ],
   ])("rejects rename with %s", async (_name, params, wantError) => {
     let updated = false;
@@ -331,25 +331,25 @@ describe("durable profile contracts", () => {
       "get",
       "both identifiers",
       { profile_id: "profile-1", profile_name: "Acme" },
-      "Error: Cannot specify both profile_name and profile_id.",
+      "error: cannot specify both profile_name and profile_id.",
     ],
     [
       "get",
       "no identifier",
       {},
-      "Error: profile_name or profile_id is required for get.",
+      "error: profile_name or profile_id is required for get.",
     ],
     [
       "delete",
       "both identifiers",
       { profile_id: "profile-1", profile_name: "Acme" },
-      "Error: Cannot specify both profile_name and profile_id.",
+      "error: cannot specify both profile_name and profile_id.",
     ],
     [
       "delete",
       "no identifier",
       {},
-      "Error: profile_name or profile_id is required for delete.",
+      "error: profile_name or profile_id is required for delete.",
     ],
   ])(
     "preserves %s validation for %s",
@@ -441,9 +441,9 @@ describe("durable proxy contracts", () => {
     [
       "no proxy ID",
       { name: "Renamed" },
-      "Error: proxy_id is required for rename.",
+      "error: proxy_id is required for rename.",
     ],
-    ["no name", { proxy_id: "proxy-1" }, "Error: name is required for rename."],
+    ["no name", { proxy_id: "proxy-1" }, "error: name is required for rename."],
   ])("rejects rename with %s", async (_name, params, wantError) => {
     let updated = false;
     const client = {

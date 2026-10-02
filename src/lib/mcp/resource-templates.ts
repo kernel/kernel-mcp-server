@@ -45,13 +45,13 @@ function projectScopedClient(
   const organizationId = templateVariableValue(variables, "organizationId");
   const projectId = templateVariableValue(variables, "projectId");
   if (!organizationId || !projectId) {
-    throw new Error(`Invalid project-scoped resource URI: ${uri}`);
+    throw new Error(`invalid project-scoped resource uri: ${uri}`);
   }
 
   const { scope } = connectionContextFromAuthInfo(authInfo);
   if (organizationId !== scope.organizationId) {
     throw new Error(
-      `Resource organization must match this connection (${scope.organizationId})`,
+      `resource organization must match this connection (${scope.organizationId})`,
     );
   }
   return dependencies.createKernelClient(
@@ -70,7 +70,7 @@ export function registerJsonResourceCollection(
     new ResourceTemplate(options.uriTemplate, { list: undefined }),
     {},
     async (uri, variables, ctx) => {
-      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
       const client = projectScopedClient(
         uri,
         variables,
@@ -104,11 +104,11 @@ export function registerJsonResourceTemplate(
     new ResourceTemplate(options.uriTemplate, { list: undefined }),
     {},
     async (uri, variables, ctx) => {
-      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
 
       const identifier = templateVariableValue(variables, options.variableName);
       if (!identifier) {
-        throw new Error(`Invalid ${options.resourceLabel} URI: ${uri}`);
+        throw new Error(`invalid ${options.resourceLabel} uri: ${uri}`);
       }
 
       const client = projectScopedClient(

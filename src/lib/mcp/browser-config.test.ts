@@ -9,7 +9,7 @@ import {
 test("browser create config rejects an empty start URL", () => {
   expect(buildBrowserCreateConfig({ start_url: "" })).toEqual({
     ok: false,
-    error: "Error: start_url must be a valid URL.",
+    error: "error: start_url must be a valid url.",
   });
 });
 

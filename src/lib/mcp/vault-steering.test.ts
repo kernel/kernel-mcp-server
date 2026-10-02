@@ -137,7 +137,7 @@ describe("vault OpenAPI steering", () => {
       expect(vaults?.description).toContain("sensitive:false");
       expect(items?.description).toContain("without renewing collection links");
       expect(items?.description).toContain(
-        "Reopen collection using its advertised operation",
+        "reopen collection using its advertised operation",
       );
       const credentials = tools.find(
         ({ name }) => name === "manage_vault_credentials",
@@ -194,10 +194,10 @@ describe("vault OpenAPI steering", () => {
         "natural top-to-bottom order",
         "wait observes readiness",
         "manage_vault_credentials",
-        "Never retry an uncertain fill",
+        "never retry an uncertain fill",
       ])
         expect(guidance).toContain(text);
-      expect(guidance).not.toContain("Ready does not mean paid");
+      expect(guidance).not.toContain("ready does not mean paid");
     },
   );
 
@@ -283,8 +283,8 @@ describe("vault OpenAPI steering", () => {
     expect(result.hints.invocation[0].arguments.operation).toBe(
       "prepare_checkout",
     );
-    expect(result.guidance.join(" ")).toContain("Preparations are single-use");
-    expect(result.guidance.join(" ")).toContain("Never fall back to aliases");
+    expect(result.guidance.join(" ")).toContain("preparations are single-use");
+    expect(result.guidance.join(" ")).toContain("never fall back to aliases");
     expect(JSON.stringify(result)).not.toContain("private-token");
   });
 

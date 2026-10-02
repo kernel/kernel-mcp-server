@@ -29,7 +29,7 @@ const httpUrlSchema = z
         return false;
       }
     },
-    { message: "URL must use http or https." },
+    { message: "url must use http or https." },
   );
 
 export function registerProxyTools(
@@ -43,63 +43,63 @@ export function registerProxyTools(
     "manage_proxies",
     {
       description:
-        'Manage proxy configurations for routing browser traffic. Use "create" to add a proxy, "list" to see all proxies, "get" to retrieve one, "rename" to change its name, "check" to test connectivity (optionally against a target URL), or "delete" to remove one. Choose a proxy type that fits the workload and the terms of the target site.',
+        'manage proxy configurations for routing browser traffic. use "create" to add a proxy, "list" to see all proxies, "get" to retrieve one, "rename" to change its name, "check" to test connectivity (optionally against a target url), or "delete" to remove one. choose a proxy type that fits the workload and the terms of the target site.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z
           .enum(["create", "list", "get", "rename", "check", "delete"])
-          .describe("Operation to perform."),
+          .describe("operation to perform."),
         proxy_id: z
           .string()
-          .describe("(get, rename, check, delete) Proxy ID.")
+          .describe("(get, rename, check, delete) proxy id.")
           .optional(),
         check_url: httpUrlSchema
           .describe(
-            "(check) Optional HTTP(S) URL to test through the proxy instead of Kernel's default check target.",
+            "(check) optional http(s) url to test through the proxy instead of KERNEL's default check target.",
           )
           .optional(),
         type: z
           .enum(["datacenter", "isp", "residential", "mobile", "custom"])
-          .describe("(create) Proxy type.")
+          .describe("(create) proxy type.")
           .optional(),
         name: z
           .string()
-          .describe("(create, rename) Readable name for the proxy.")
+          .describe("(create, rename) readable name for the proxy.")
           .optional(),
         country: z
           .string()
-          .describe("(create) ISO 3166 country code (e.g., 'US').")
+          .describe('(create) iso 3166 country code (e.g., "US").')
           .optional(),
         city: z
           .string()
           .describe(
-            "(create) City name without spaces (e.g., 'sanfrancisco'). Requires country.",
+            "(create) city name without spaces (e.g., 'sanfrancisco'). requires country.",
           )
           .optional(),
         state: z
           .string()
-          .describe("(create) Two-letter state code.")
+          .describe("(create) two-letter state code.")
           .optional(),
         custom_host: z
           .string()
-          .describe("(create, custom type) Proxy host address.")
+          .describe("(create, custom type) proxy host address.")
           .optional(),
         custom_port: z
           .number()
-          .describe("(create, custom type) Proxy port.")
+          .describe("(create, custom type) proxy port.")
           .optional(),
         custom_username: z
           .string()
-          .describe("(create, custom type) Auth username.")
+          .describe("(create, custom type) auth username.")
           .optional(),
         custom_password: z
           .string()
-          .describe("(create, custom type) Auth password.")
+          .describe("(create, custom type) auth password.")
           .optional(),
         ...paginationParams,
       }),
       annotations: {
-        title: "Manage Kernel proxy configurations",
+        title: "manage KERNEL proxy configurations",
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false,
@@ -107,7 +107,7 @@ export function registerProxyTools(
       },
     },
     async (params, ctx) => {
-      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
       const client = options.createKernelClient(
         ctx.http.authInfo.token,
         projectForOperation(ctx.http.authInfo, params),
@@ -117,13 +117,13 @@ export function registerProxyTools(
         switch (params.action) {
           case "create": {
             if (!params.type)
-              return errorResponse("Error: type is required for create.");
+              return errorResponse("error: type is required for create.");
             if (
               params.type === "custom" &&
               (!params.custom_host || !params.custom_port)
             ) {
               return errorResponse(
-                "Error: custom_host and custom_port are required for custom proxy type.",
+                "error: custom_host and custom_port are required for custom proxy type.",
               );
             }
             const createParams: Parameters<typeof client.proxies.create>[0] =
@@ -154,7 +154,7 @@ export function registerProxyTools(
                     }),
                   };
             const proxy = await client.proxies.create(createParams);
-            if (!proxy) return errorResponse("Failed to create proxy");
+            if (!proxy) return errorResponse("failed to create proxy");
             return jsonResponse(proxy);
           }
           case "list": {
@@ -163,22 +163,22 @@ export function registerProxyTools(
               ...(params.offset !== undefined && { offset: params.offset }),
             });
             return paginatedJsonResponse(page, {
-              emptyText: "No proxies found",
+              emptyText: "no proxies found",
             });
           }
           case "get": {
             if (!params.proxy_id) {
-              return errorResponse("Error: proxy_id is required for get.");
+              return errorResponse("error: proxy_id is required for get.");
             }
             const proxy = await client.proxies.retrieve(params.proxy_id);
             return jsonResponse(proxy);
           }
           case "rename": {
             if (!params.proxy_id) {
-              return errorResponse("Error: proxy_id is required for rename.");
+              return errorResponse("error: proxy_id is required for rename.");
             }
             if (!params.name) {
-              return errorResponse("Error: name is required for rename.");
+              return errorResponse("error: name is required for rename.");
             }
             const proxy = await client.proxies.update(params.proxy_id, {
               name: params.name,
@@ -187,7 +187,7 @@ export function registerProxyTools(
           }
           case "check": {
             if (!params.proxy_id) {
-              return errorResponse("Error: proxy_id is required for check.");
+              return errorResponse("error: proxy_id is required for check.");
             }
             const result = await client.proxies.check(
               params.proxy_id,
@@ -197,9 +197,9 @@ export function registerProxyTools(
           }
           case "delete": {
             if (!params.proxy_id)
-              return errorResponse("Error: proxy_id is required for delete.");
+              return errorResponse("error: proxy_id is required for delete.");
             await client.proxies.delete(params.proxy_id);
-            return textResponse("Proxy deleted successfully");
+            return textResponse("proxy deleted successfully");
           }
         }
       } catch (error) {

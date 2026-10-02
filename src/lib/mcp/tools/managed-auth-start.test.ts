@@ -138,7 +138,7 @@ describe("managed-auth start/resume state machine", () => {
         mode: "reauth",
         connection_id: initial.id,
       }),
-    ).rejects.toThrow("Too many managed-auth sessions are pending");
+    ).rejects.toThrow("too many managed-auth sessions are pending");
     expect(calls.login).toBe(1);
     expect(calls.retrieve).toBe(1);
   });

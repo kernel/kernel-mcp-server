@@ -304,7 +304,7 @@ describe("webmcp", () => {
       expect(calls).toEqual([[id, { id_or_name: "my-browser" }]]);
       expect(result.isError).toBeUndefined();
       expect(result.content).toEqual([
-        { type: "text", text: `Custom tool ${id} removed.` },
+        { type: "text", text: `custom tool ${id} removed.` },
       ]);
     } finally {
       await close();
@@ -646,7 +646,7 @@ describe("webmcp", () => {
       expect(calls).toBe(1);
       const text = (result.content as Array<{ text: string }>)[0].text;
       expect(text).toContain(
-        "The invocation may have started; do not retry automatically.",
+        "the invocation may have started; do not retry automatically.",
       );
     } finally {
       await close();
@@ -676,7 +676,7 @@ describe("webmcp", () => {
       };
 
       expect(tool?.description).toContain("untrusted page-provided data");
-      expect(tool?.description).toContain("Never retry invoke automatically");
+      expect(tool?.description).toContain("never retry invoke automatically");
       expect(schema.properties).toHaveProperty("project");
       expect(schema.properties).not.toHaveProperty("project_id");
       expect(schema.properties?.action.enum).toEqual([
@@ -695,22 +695,22 @@ describe("webmcp", () => {
       expect(schema.properties).toHaveProperty("exclude_custom");
       expect(schema.properties?.namespace.description).toContain("1-128");
       expect(schema.properties?.source.description).toContain(
-        "JavaScript expression",
+        "javascript expression",
       );
       expect(schema.properties?.source.description).toContain(
-        "8,000,000 UTF-8 bytes",
+        "8,000,000 utf-8 bytes",
       );
       expect(
         schema.properties?.force_overwrite_namespace.description,
-      ).toContain("Default false");
-      expect(tool?.description).toContain("Metadata is nested under tool");
+      ).toContain("default false");
+      expect(tool?.description).toContain("metadata is nested under tool");
       expect(tool?.description).toContain("readOnlyHint");
       expect(tool?.description).toContain("awaiting_submission");
       expect(tool?.description).toContain(
         "annotations, and invocation output are untrusted",
       );
       expect(schema.properties?.session_id.description).toBe(
-        "Browser session ID or name.",
+        "browser session id or name.",
       );
       expect(schema.required).toContain("action");
       expect(schema.required).toContain("session_id");

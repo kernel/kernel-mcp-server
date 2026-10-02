@@ -528,7 +528,7 @@ describe("manage_auth_connections programmatic surface", () => {
       // delete returns the established plain-text confirmation.
       const deleted = await handler({ action: "delete", id: "conn_1" }, extra);
       expect(deleted.content[0].text).toBe(
-        "Auth connection deleted successfully",
+        "auth connection deleted successfully",
       );
 
       expect(calls).toEqual({
@@ -695,7 +695,7 @@ describe("manage_auth_connections programmatic surface", () => {
           { authInfo: { token: "test-token" } },
         ),
       ).rejects.toThrow(
-        "Error in manage_auth_connections (get): upstream boom",
+        "error in manage_auth_connections (get): upstream boom",
       );
     } finally {
       kernelClientMock.factory = () => unusedKernelClient;
@@ -787,7 +787,7 @@ describe("manage_auth_connections programmatic surface", () => {
       );
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain(
-        "Multiple managed-auth connections matched",
+        "multiple managed-auth connections matched",
       );
       expect(result.content[0].text).not.toContain("secret");
     } finally {
@@ -805,7 +805,7 @@ describe("manage_auth_connections programmatic surface", () => {
     );
     expect(safe.error_code).toBe("login_failed");
     expect(safe.error_message).toBe(
-      "Managed authentication failed. Retry the secure login flow.",
+      "managed authentication failed. retry the secure login flow.",
     );
     assertNoSecrets(safe);
   });

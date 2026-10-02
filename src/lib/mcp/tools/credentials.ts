@@ -27,51 +27,51 @@ export function registerCredentialTools(
     "manage_credentials",
     {
       description:
-        'Manage credentials stored in Kernel for managed auth. "list" discovers credentials (optionally filtered by domain), "get" returns a credential\'s metadata (values are never returned), "totp_code" returns the current TOTP for credentials with a configured totp_secret, "create" stores a new credential, "update" changes its name/values/sso_provider/totp_secret (values are merged with existing). "delete" removes a credential by ID or name. TOTP secrets accept a base32 secret (16-128 characters) or an otpauth:// URI; algorithm, digits, and period are optional settings.',
+        'manage credentials stored in KERNEL for managed auth. "list" discovers credentials (optionally filtered by domain), "get" returns a credential\'s metadata (values are never returned), "totp_code" returns the current totp for credentials with a configured totp_secret, "create" stores a new credential, "update" changes its name/values/sso_provider/totp_secret (values are merged with existing). "delete" removes a credential by id or name. totp secrets accept a base32 secret (16-128 characters) or an otpauth:// uri; algorithm, digits, and period are optional settings.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z
           .enum(["list", "get", "totp_code", "create", "update", "delete"])
-          .describe("Operation to perform."),
+          .describe("operation to perform."),
         id_or_name: z
           .string()
-          .describe("(get, totp_code, update, delete) Credential ID or name.")
+          .describe("(get, totp_code, update, delete) credential id or name.")
           .optional(),
         ...paginationParams,
         domain: z
           .string()
           .describe(
-            "(list) Filter by domain. (create) Target domain this credential is for.",
+            "(list) filter by domain. (create) target domain this credential is for.",
           )
           .optional(),
         name: z
           .string()
           .describe(
-            "(create) Unique name for the credential within the organization. (update) New name.",
+            "(create) unique name for the credential within the organization. (update) new name.",
           )
           .optional(),
         values: z
           .record(z.string(), z.string())
           .describe(
-            "(create, update) Field name to value mapping (e.g. username, password). On update, merged with existing values.",
+            "(create, update) field name to value mapping (e.g. username, password). on update, merged with existing values.",
           )
           .optional(),
         sso_provider: z
           .string()
           .describe(
-            "(create, update) SSO provider to use (e.g. google, github, microsoft). On update, empty string clears it.",
+            "(create, update) sso provider to use (e.g. google, github, microsoft). on update, empty string clears it.",
           )
           .optional(),
         totp_secret: z
           .string()
           .describe(
-            "(create, update) base32 secret (16-128 characters) or otpauth:// URI. URI parameters override explicit settings. On update, empty string clears it.",
+            "(create, update) base32 secret (16-128 characters) or otpauth:// uri. uri parameters override explicit settings. on update, empty string clears it.",
           )
           .optional(),
         totp_algorithm: z
           .enum(["SHA1", "SHA256", "SHA512"])
           .describe(
-            "(create, update) TOTP algorithm; update requires a replacement totp_secret.",
+            "(create, update) totp algorithm; update requires a replacement totp_secret.",
           )
           .optional(),
         totp_digits: z
@@ -80,7 +80,7 @@ export function registerCredentialTools(
           .min(6)
           .max(9)
           .describe(
-            "(create, update) TOTP code digits; update requires a replacement totp_secret.",
+            "(create, update) totp code digits; update requires a replacement totp_secret.",
           )
           .optional(),
         totp_period: z
@@ -89,12 +89,12 @@ export function registerCredentialTools(
           .min(15)
           .max(300)
           .describe(
-            "(create, update) TOTP period in seconds; update requires a replacement totp_secret.",
+            "(create, update) totp period in seconds; update requires a replacement totp_secret.",
           )
           .optional(),
       }),
       annotations: {
-        title: "Manage Kernel credentials",
+        title: "manage KERNEL credentials",
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false,
@@ -102,7 +102,7 @@ export function registerCredentialTools(
       },
     },
     async (params, ctx) => {
-      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
       const client = dependencies.createKernelClient(
         ctx.http.authInfo.token,
         projectForOperation(ctx.http.authInfo, params),
@@ -120,7 +120,7 @@ export function registerCredentialTools(
           }
           case "get": {
             if (!params.id_or_name)
-              return errorResponse("Error: id_or_name is required for get.");
+              return errorResponse("error: id_or_name is required for get.");
             const credential = await client.credentials.retrieve(
               params.id_or_name,
             );
@@ -129,7 +129,7 @@ export function registerCredentialTools(
           case "totp_code": {
             if (!params.id_or_name)
               return errorResponse(
-                "Error: id_or_name is required for totp_code.",
+                "error: id_or_name is required for totp_code.",
               );
             const response = await client.credentials.totpCode(
               params.id_or_name,
@@ -144,7 +144,7 @@ export function registerCredentialTools(
               Object.keys(params.values).length === 0
             ) {
               return errorResponse(
-                "Error: domain, name, and non-empty values are required for create.",
+                "error: domain, name, and non-empty values are required for create.",
               );
             }
             if (
@@ -153,7 +153,7 @@ export function registerCredentialTools(
                 params.totp_digits !== undefined ||
                 params.totp_period !== undefined)
             ) {
-              return errorResponse("Error: TOTP settings require totp_secret.");
+              return errorResponse("error: totp settings require totp_secret.");
             }
             const credential = await client.credentials.create({
               domain: params.domain,
@@ -176,7 +176,7 @@ export function registerCredentialTools(
               }),
             });
             if (!credential)
-              return errorResponse("Failed to create credential");
+              return errorResponse("failed to create credential");
             return jsonResponse(credential);
           }
           case "update": {
@@ -187,11 +187,11 @@ export function registerCredentialTools(
                 params.totp_period !== undefined)
             ) {
               return errorResponse(
-                "Error: TOTP settings require a new totp_secret.",
+                "error: totp settings require a new totp_secret.",
               );
             }
             if (!params.id_or_name)
-              return errorResponse("Error: id_or_name is required for update.");
+              return errorResponse("error: id_or_name is required for update.");
             const updateParams: CredentialUpdateParams = {
               ...(params.name !== undefined && { name: params.name }),
               ...(params.values !== undefined && { values: params.values }),
@@ -213,7 +213,7 @@ export function registerCredentialTools(
             };
             if (Object.keys(updateParams).length === 0) {
               return errorResponse(
-                "Error: at least one update field is required.",
+                "error: at least one update field is required.",
               );
             }
             const credential = await client.credentials.update(
@@ -224,9 +224,9 @@ export function registerCredentialTools(
           }
           case "delete": {
             if (!params.id_or_name)
-              return errorResponse("Error: id_or_name is required for delete.");
+              return errorResponse("error: id_or_name is required for delete.");
             await client.credentials.delete(params.id_or_name);
-            return textResponse(`Credential ${params.id_or_name} deleted.`);
+            return textResponse(`credential ${params.id_or_name} deleted.`);
           }
         }
       } catch (error) {
