@@ -240,6 +240,35 @@ describe("MCP credential flow", () => {
     }
   });
 
+  test("distinguishes fill from webmcp_invoke after a credential is ready", async () => {
+    const fixture = await connectVaultTest([]);
+    try {
+      const { tools } = await fixture.client.listTools();
+      const credentials =
+        tools.find((tool) => tool.name === "manage_vault_credentials")
+          ?.description ?? "";
+      expect(credentials).toContain(
+        "choosing an operation is separate from the provider choice",
+      );
+      expect(credentials).toContain(
+        "invoke fill to write fields into an ordinary web form without submitting it",
+      );
+      expect(credentials).toContain(
+        "webmcp_invoke, only when listed in available_operations",
+      );
+      expect(credentials).toContain("null input slots of a live WebMCP tool");
+      expect(credentials).toContain(
+        "may submit the form or have other side effects",
+      );
+      expect(credentials).toContain("Obtain explicit user approval");
+      expect(credentials).toContain(
+        "never automatically retry an uncertain fill or an unknown webmcp_invoke outcome",
+      );
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test("fills TOTP by field name without a value or explicit page URL", async () => {
     const fixture = await connectVaultTest([
       Response.json({
