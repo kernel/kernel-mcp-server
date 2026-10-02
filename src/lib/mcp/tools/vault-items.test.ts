@@ -731,7 +731,7 @@ describe("vault observation and deletion", () => {
     [
       "manage_vault_cards",
       {
-        action: "update",
+        action: "create",
         vault: "checkout",
         key: "order-1",
         provider: "agentcard",

@@ -113,10 +113,6 @@ describe("vault next-step hints", () => {
       name: "manage_vault_cards",
       args: { action: "create", provider: "link", spec: linkSpec },
     },
-    {
-      name: "manage_vault_cards",
-      args: { action: "update", provider: "link", spec: linkSpec },
-    },
     { name: "manage_vault_items", args: { action: "get" } },
     {
       name: "manage_vault_items",
