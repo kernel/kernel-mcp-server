@@ -117,7 +117,7 @@ describe("vault WebMCP invocation", () => {
         invocation_id: "inv_2",
         output: null,
       });
-      expect(body.guidance[0]).toContain("Do not invoke the tool again");
+      expect(body.guidance[0]).toContain("do not invoke the tool again");
     } finally {
       await fixture.close();
     }
@@ -127,11 +127,11 @@ describe("vault WebMCP invocation", () => {
     {
       status: "error",
       error_text: "Invalid email or password",
-      guidance: "The tool reported an error",
+      guidance: "the tool reported an error",
     },
-    { status: "canceled", guidance: "The invocation was canceled" },
-    { status: "unknown", guidance: "Never retry automatically" },
-    { status: "future_status", guidance: "Never retry automatically" },
+    { status: "canceled", guidance: "the invocation was canceled" },
+    { status: "unknown", guidance: "never retry automatically" },
+    { status: "future_status", guidance: "never retry automatically" },
   ])(
     "reports $status as an error without retrying",
     async ({ status, error_text, guidance }) => {
@@ -182,7 +182,7 @@ describe("vault WebMCP invocation", () => {
         const text = JSON.stringify(result);
         expect(result.isError).toBe(true);
         expect(text).toContain(`[code: ${code}]`);
-        expect(text).toContain("Do not retry automatically.");
+        expect(text).toContain("do not retry automatically.");
         expect(
           fixture.requests.filter((request) => request.method === "POST"),
         ).toHaveLength(1);
@@ -201,7 +201,7 @@ describe("vault WebMCP invocation", () => {
       const result = await fixture.call("manage_vault_items", invoke);
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result)).toContain(
-        "The operation may have partially completed",
+        "the operation may have partially completed",
       );
       expect(
         fixture.requests.filter((request) => request.method === "POST"),
@@ -255,7 +255,7 @@ describe("vault WebMCP invocation", () => {
         });
         expect(result.isError).toBe(true);
         expect(JSON.stringify(result)).toContain(
-          "Invalid webmcp_invoke inputs",
+          "invalid webmcp_invoke inputs",
         );
         expect(JSON.stringify(result)).not.toContain("private-");
         expect(fixture.requests).toHaveLength(0);

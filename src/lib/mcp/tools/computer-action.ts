@@ -33,7 +33,7 @@ const computerActionSchema = z.object({
       "screenshot",
       "get_mouse_position",
     ])
-    .describe("Action type."),
+    .describe("action type."),
   click_mouse: z
     .object({
       x: z.number(),
@@ -43,7 +43,7 @@ const computerActionSchema = z.object({
       num_clicks: z.number().int().min(1).optional(),
       hold_keys: z.array(z.string()).optional(),
     })
-    .describe("Params for click_mouse action.")
+    .describe("params for click_mouse action.")
     .optional(),
   move_mouse: z
     .object({
@@ -51,67 +51,67 @@ const computerActionSchema = z.object({
       y: z.number(),
       hold_keys: z.array(z.string()).optional(),
     })
-    .describe("Params for move_mouse action.")
+    .describe("params for move_mouse action.")
     .optional(),
   type_text: z
     .object({
       text: z.string(),
       delay: z.number().int().min(0).optional(),
     })
-    .describe("Params for type_text action.")
+    .describe("params for type_text action.")
     .optional(),
   press_key: z
     .object({
       keys: z
         .array(z.string())
         .describe(
-          'Each item must be one X11 keysym or chord, such as "Return", "Ctrl+t", or "Ctrl+minus". For sequential or repeated key presses, use separate array items; do not combine keys with spaces or commas. Use type_text to enter text.',
+          'each item must be one x11 keysym or chord, such as "Return", "Ctrl+t", or "Ctrl+minus". for sequential or repeated key presses, use separate array items; do not combine keys with spaces or commas. use type_text to enter text.',
         ),
       duration: z.number().int().min(0).optional(),
       hold_keys: z.array(z.string()).optional(),
     })
-    .describe("Params for press_key action.")
+    .describe("params for press_key action.")
     .optional(),
   scroll: z
     .object({
       x: z.number(),
       y: z.number(),
-      delta_x: z.number().describe("Positive=right, negative=left.").optional(),
-      delta_y: z.number().describe("Positive=down, negative=up.").optional(),
+      delta_x: z.number().describe("positive=right, negative=left.").optional(),
+      delta_y: z.number().describe("positive=down, negative=up.").optional(),
       hold_keys: z.array(z.string()).optional(),
     })
-    .describe("Params for scroll action.")
+    .describe("params for scroll action.")
     .optional(),
   drag_mouse: z
     .object({
       path: z
         .array(z.array(z.number()))
-        .describe("Ordered [x,y] pairs, at least 2 points."),
+        .describe("ordered [x,y] pairs, at least 2 points."),
       button: z.enum(["left", "middle", "right"]).optional(),
       delay: z.number().int().min(0).optional(),
       steps_per_segment: z.number().int().min(1).optional(),
       step_delay_ms: z.number().int().min(0).optional(),
       hold_keys: z.array(z.string()).optional(),
     })
-    .describe("Params for drag_mouse action.")
+    .describe("params for drag_mouse action.")
     .optional(),
   set_cursor: z
     .object({
       hidden: z.boolean(),
     })
-    .describe("Params for set_cursor action.")
+    .describe("params for set_cursor action.")
     .optional(),
   sleep: z
     .object({
       duration_ms: z.number().int().min(0),
     })
-    .describe("Params for sleep action.")
+    .describe("params for sleep action.")
     .optional(),
   write_clipboard: z
     .object({
       text: z.string(),
     })
-    .describe("Params for write_clipboard action.")
+    .describe("params for write_clipboard action.")
     .optional(),
   screenshot: z
     .object({
@@ -125,7 +125,7 @@ const computerActionSchema = z.object({
         .optional(),
     })
     .describe(
-      "Params for screenshot action. Omit or pass {} for full-page screenshot.",
+      "params for screenshot action. omit or pass {} for full-page screenshot.",
     )
     .optional(),
 });
@@ -176,7 +176,7 @@ function isBatchAction(
 function terminalActionPlacementError(actions: ComputerActionParams[]) {
   for (let i = 0; i < actions.length - 1; i++) {
     if (isTerminalAction(actions[i])) {
-      return `Error: ${actions[i].type} must be the last action in the sequence.`;
+      return `error: ${actions[i].type} must be the last action in the sequence.`;
     }
   }
 }
@@ -187,7 +187,7 @@ function executionSummaryContent(executedActionCount: number) {
   return [
     {
       type: "text" as const,
-      text: `Executed ${executedActionCount} action(s).`,
+      text: `executed ${executedActionCount} action(s).`,
     },
   ];
 }
@@ -219,7 +219,7 @@ async function executeComputerActionPrefix(
       if (text === undefined) {
         return {
           ok: false,
-          error: "Error: write_clipboard action requires write_clipboard.text.",
+          error: "error: write_clipboard action requires write_clipboard.text.",
         };
       }
 
@@ -240,7 +240,7 @@ async function executeComputerActionPrefix(
 
     return {
       ok: false,
-      error: `Error: ${action.type} must be the last action in the sequence.`,
+      error: `error: ${action.type} must be the last action in the sequence.`,
     };
   }
 
@@ -258,19 +258,19 @@ export function registerComputerActionTool(server: McpServer) {
     "computer_action",
     {
       description:
-        "Execute computer actions on a browser session. Pass a single action for simple operations (e.g. one click or one screenshot), or pass multiple actions to batch them into a single request for lower latency (e.g. click, type, press_key in one call). Use sleep actions between steps when the page needs time to react (e.g. after a click that triggers navigation or animation). IMPORTANT: Always include a screenshot as the last action so you can see the result of your actions. Action types: click_mouse, move_mouse, type_text, press_key, scroll, drag_mouse, set_cursor, sleep, write_clipboard, read_clipboard, screenshot, get_mouse_position. screenshot, read_clipboard, and get_mouse_position return data, so they must be the last action if included.",
+        "execute computer actions on a browser session. pass a single action for simple operations (e.g. one click or one screenshot), or pass multiple actions to batch them into a single request for lower latency (e.g. click, type, press_key in one call). use sleep actions between steps when the page needs time to react (e.g. after a click that triggers navigation or animation). important: always include a screenshot as the last action so you can see the result of your actions. action types: click_mouse, move_mouse, type_text, press_key, scroll, drag_mouse, set_cursor, sleep, write_clipboard, read_clipboard, screenshot, get_mouse_position. screenshot, read_clipboard, and get_mouse_position return data, so they must be the last action if included.",
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
-        session_id: z.string().describe("Browser session ID or name."),
+        session_id: z.string().describe("browser session id or name."),
         actions: z
           .array(computerActionSchema)
           .min(1)
           .describe(
-            "Ordered list of actions. Use one action for simple operations or multiple for batched sequences.",
+            "ordered list of actions. use one action for simple operations or multiple for batched sequences.",
           ),
       }),
       annotations: {
-        title: "Control browser (mouse, keyboard, screenshot)",
+        title: "control browser (mouse, keyboard, screenshot)",
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false,
@@ -278,7 +278,7 @@ export function registerComputerActionTool(server: McpServer) {
       },
     },
     async ({ session_id, actions, project, project_id }, ctx) => {
-      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
       const client = createKernelClient(
         ctx.http.authInfo.token,
         projectForOperation(ctx.http.authInfo, { project, project_id }),
@@ -323,14 +323,14 @@ export function registerComputerActionTool(server: McpServer) {
           if (executedActionCount > 0) {
             content.push({
               type: "text",
-              text: `Executed ${executedActionCount} action(s), then captured screenshot.`,
+              text: `executed ${executedActionCount} action(s), then captured screenshot.`,
             });
           }
           content.push({
             type: "text",
             text: viewport
-              ? `Viewport: ${viewport.width}x${viewport.height}. Use these dimensions as the coordinate space for click, scroll, and move actions.`
-              : "Could not determine viewport dimensions. Use manage_browsers with action 'get' to check the browser's viewport.",
+              ? `viewport: ${viewport.width}x${viewport.height}. use these dimensions as the coordinate space for click, scroll, and move actions.`
+              : "could not determine viewport dimensions. use manage_browsers with action 'get' to check the browser's viewport.",
           });
           content.push({
             type: "image",
@@ -363,7 +363,7 @@ export function registerComputerActionTool(server: McpServer) {
         }
 
         return textResponse(
-          `Executed ${executedActionCount} action(s) successfully`,
+          `executed ${executedActionCount} action(s) successfully`,
         );
       } catch (error) {
         throwToolError("computer_action", "actions", error);

@@ -30,29 +30,29 @@ export function registerVaultProviderConfigTools(
     "manage_vault_provider_configs",
     {
       description:
-        'Manage organization-owned Link and AgentCard application credentials, not user OAuth grants. "create" requires name, provider, and credentials (client_id/client_secret, plus publishable_key for Link); duplicate names conflict without replacing secrets. "list" and "get" return public configuration metadata only. "update" renames, rotates client_secret, or sets the Link publishable_key across all bound wallets; omitted fields stay unchanged. Provider, client_id, mode, and wallet bindings are immutable. "delete" requires user confirmation and fails while any non-deleted item references the config; it does not revoke unrelated grants. Writes require an organization-scoped connection. Supply write-only secrets through a trusted client, never chat. No automatic retries.',
+        'manage organization-owned link and agentcard application credentials, not user oauth grants. "create" requires name, provider, and credentials (client_id/client_secret, plus publishable_key for link); duplicate names conflict without replacing secrets. "list" and "get" return public configuration metadata only. "update" renames, rotates client_secret, or sets the link publishable_key across all bound wallets; omitted fields stay unchanged. provider, client_id, mode, and wallet bindings are immutable. "delete" requires user confirmation and fails while any non-deleted item references the config; it does not revoke unrelated grants. writes require an organization-scoped connection. supply write-only secrets through a trusted client, never chat. no automatic retries.',
       inputSchema: vaultToolInput({
         action: z.enum(["create", "list", "get", "update", "delete"]),
         config: vaultSelectorSchema()
           .describe(
-            "(get, update, delete) Configuration ID or name within the organization.",
+            "(get, update, delete) configuration id or name within the organization.",
           )
           .optional(),
         name: vaultSelectorSchema()
-          .describe("(create, update) Unique organization-wide name.")
+          .describe("(create, update) unique organization-wide name.")
           .optional(),
         provider: vaultProviderSchema
-          .describe("(create only) Immutable provider.")
+          .describe("(create only) immutable provider.")
           .optional(),
         credentials: providerCredentialsSchema
           .describe(
-            "(create) client_id, client_secret, and for Link publishable_key. (update) client_secret and/or publishable_key. Never user access/refresh tokens.",
+            "(create) client_id, client_secret, and for link publishable_key. (update) client_secret and/or publishable_key. never user access/refresh tokens.",
           )
           .optional(),
         ...paginationParams,
       }),
       annotations: {
-        title: "Manage Kernel vault provider configurations",
+        title: "manage KERNEL vault provider configurations",
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false,
@@ -60,7 +60,7 @@ export function registerVaultProviderConfigTools(
       },
     },
     async (params, ctx) => {
-      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
       const write = ["create", "update", "delete"].includes(params.action);
       if (
         write &&
@@ -68,7 +68,7 @@ export function registerVaultProviderConfigTools(
           "organization"
       ) {
         return errorResponse(
-          "Provider configuration writes require an organization-scoped connection.",
+          "provider configuration writes require an organization-scoped connection.",
         );
       }
       if (
@@ -84,7 +84,7 @@ export function registerVaultProviderConfigTools(
         params.provider !== "link" &&
         params.credentials?.publishable_key !== undefined
       ) {
-        return errorResponse("publishable_key is only supported for Link.");
+        return errorResponse("publishable_key is only supported for link.");
       }
       const client = dependencies
         .createKernelClient(ctx.http.authInfo.token)
@@ -147,7 +147,7 @@ export function registerVaultProviderConfigTools(
               has_more: page.has_more,
               next_offset: page.next_offset,
               ...(items.length === 0 && {
-                note: "No provider configurations found in the organization.",
+                note: "no provider configurations found in the organization.",
               }),
             });
           }

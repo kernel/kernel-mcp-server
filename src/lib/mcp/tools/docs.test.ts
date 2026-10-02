@@ -44,7 +44,7 @@ test("search_docs reports missing configuration as a failure", async () => {
   expect(result.content).toEqual([
     {
       type: "text",
-      text: "Error: Documentation search is not configured (missing MINTLIFY_ASSISTANT_API_TOKEN or MINTLIFY_DOMAIN).",
+      text: "error: documentation search is not configured (missing MINTLIFY_ASSISTANT_API_TOKEN or MINTLIFY_DOMAIN).",
     },
   ]);
 });

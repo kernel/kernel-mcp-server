@@ -222,7 +222,7 @@ describe("managed-auth MCP App registration", () => {
         projectScopedExtra("proj_test", "unused-api-key"),
       );
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("MCP Apps-capable hosts");
+    expect(result.content[0].text).toContain("mcp apps-capable hosts");
     expect(JSON.stringify(result)).not.toContain("handoff_code");
     expect(JSON.stringify(result)).not.toContain("hosted_url");
   });
@@ -335,7 +335,7 @@ describe("managed-auth MCP App registration", () => {
         },
       );
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain("MCP Apps-capable hosts");
+      expect(result.content[0].text).toContain("mcp apps-capable hosts");
     } finally {
       redisMarkerPresent = false;
     }

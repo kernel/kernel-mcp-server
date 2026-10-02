@@ -305,7 +305,7 @@ describe("manage_browsers telemetry", () => {
 
       expect(result.isError).toBeTrue();
       expect(toolResultText(result)).toContain(
-        "Raw screenshot PNGs are not available",
+        "raw screenshot pngs are not available",
       );
       expect(queries).toHaveLength(1);
     } finally {
@@ -335,7 +335,7 @@ describe("manage_browsers telemetry", () => {
         "late events or retention may change results",
       );
       expect(compact?.description).toContain("limit<=5");
-      expect(compact?.description).toContain("1 MiB");
+      expect(compact?.description).toContain("1 mib");
     } finally {
       await close();
     }

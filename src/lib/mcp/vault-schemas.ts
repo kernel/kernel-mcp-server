@@ -8,23 +8,23 @@ export function vaultSelectorSchema() {
     .regex(/^[a-zA-Z0-9._-]{1,255}$/)
     .refine(
       (value) => value !== "." && value !== "..",
-      "Invalid vault selector.",
+      "invalid vault selector.",
     );
 }
 
 export const vaultProjectSchema = projectSelectionInputSchema({
   project:
-    "Optional project name or ID. Vaults are project-owned: omit to use the API's effective default project, not all projects. A project-scoped connection cannot select a different project.",
+    "optional project name or id. vaults are project-owned: omit to use the api's effective default project, not all projects. a project-scoped connection cannot select a different project.",
 });
 
 export const vaultItemSchema = {
   ...vaultProjectSchema,
-  vault: vaultSelectorSchema().describe("Vault ID or immutable name."),
+  vault: vaultSelectorSchema().describe("vault id or immutable name."),
 };
 
 export function vaultKeySchema() {
   return vaultSelectorSchema().describe(
-    "Immutable item key within the vault, not the item ID.",
+    "immutable item key within the vault, not the item id.",
   );
 }
 export const vaultProviderSchema = z.enum(["link", "agentcard"]);
@@ -34,7 +34,7 @@ export const vaultWaitSchema = z
   .min(0)
   .max(60)
   .describe(
-    "(get, events) One bounded server-side observation, in seconds (0-60). Not supported for invoke, list, or delete. Pending state is returned as-is; this never retries an operation or guarantees readiness. For credentials, wait observes required-value readiness, not edits to an already-ready item; compare version using get without wait.",
+    "(get, events) one bounded server-side observation, in seconds (0-60). not supported for invoke, list, or delete. pending state is returned as-is; this never retries an operation or guarantees readiness. for credentials, wait observes required-value readiness, not edits to an already-ready item; compare version using get without wait.",
   )
   .optional();
 
@@ -73,7 +73,7 @@ export function providerConfigReferenceSchema() {
     .strict()
     .refine(
       (value) => (value.id !== undefined) !== (value.name !== undefined),
-      "Provide exactly one provider config id or name.",
+      "provide exactly one provider config id or name.",
     );
 }
 
@@ -103,7 +103,7 @@ export function vaultToolInput<Shape extends z.ZodRawShape>(shape: Shape) {
         if (result.success) return { value: result.data };
         return {
           issues: result.error.issues.map((issue) => ({
-            message: "Invalid vault tool input. Check the documented schema.",
+            message: "invalid vault tool input. check the documented schema.",
             path: topLevelIssuePath(issue),
           })),
         };
@@ -119,14 +119,14 @@ export const providerCredentialsSchema = z
       .string()
       .min(1)
       .describe(
-        "Write-only secret; supply through a trusted client, never chat.",
+        "write-only secret; supply through a trusted client, never chat.",
       )
       .optional(),
     publishable_key: z
       .string()
       .regex(/^pk_(live|test)_[A-Za-z0-9]+$/)
       .describe(
-        "(Link only) Public Stripe publishable key Kernel sends when refreshing and revoking imported wallet grants. Without it, imported wallets stop working when their access token expires.",
+        "(link only) public stripe publishable key KERNEL sends when refreshing and revoking imported wallet grants. without it, imported wallets stop working when their access token expires.",
       )
       .optional(),
   })
@@ -159,7 +159,7 @@ export const linkWalletSpecSchema = z
             })
             .strict()
             .describe(
-              "Write-only token pair from the same grant. Supply through a trusted backend, never chat. Kernel owns subsequent refresh rotation.",
+              "write-only token pair from the same grant. supply through a trusted backend, never chat. KERNEL owns subsequent refresh rotation.",
             ),
         })
         .strict(),
@@ -175,7 +175,7 @@ export const agentcardWalletSpecSchema = z
       .string()
       .regex(/^usr_[A-Za-z0-9_]+$/)
       .describe(
-        "An AgentCard user already enrolled in this organization under the same provider configuration.",
+        "an agentcard user already enrolled in this organization under the same provider configuration.",
       )
       .optional(),
   })
@@ -186,7 +186,7 @@ function linkTotalSchema() {
     .object({
       type: z.string(),
       display_text: z.string(),
-      amount: integer().describe("Integer minor currency units."),
+      amount: integer().describe("integer minor currency units."),
     })
     .strict();
 }
@@ -213,12 +213,12 @@ export const linkCardSpecSchema = z
       .string()
       .min(1)
       .describe(
-        "Explicitly selected ID from the wallet's payment_methods expansion.",
+        "explicitly selected id from the wallet's payment_methods expansion.",
       ),
     amount: integer()
       .min(1)
       .max(500000)
-      .describe("Integer minor currency units."),
+      .describe("integer minor currency units."),
     currency: currency(),
     merchant_name: z.string().min(1).max(255),
     merchant_url: z.string().url(),
@@ -240,25 +240,25 @@ export const agentcardCheckoutOriginSchema = z.string().refine((value) => {
   } catch {
     return false;
   }
-}, "Expected a canonical HTTPS origin or localhost HTTP origin without a path.");
+}, "expected a canonical https origin or localhost http origin without a path.");
 
 export const agentcardCardSpecSchema = z
   .object({
     provider: z.literal("agentcard").optional(),
     wallet: vaultKeySchema(),
     merchant: z.string().min(1).max(120),
-    amount: integer().min(1).describe("Integer minor currency units."),
+    amount: integer().min(1).describe("integer minor currency units."),
     currency: currency(),
     checkout_origin: agentcardCheckoutOriginSchema
       .describe(
-        "Optional caller-declared checkout origin for eligible AgentCard autopilot rule matching on non-prepared checkout authorizations. Kernel forwards it without comparing it to the browser page. It does not enable autopilot or ensure payment success; omission retains the existing approval flow, and autopilot may fall back to user approval. Prepared checkout uses preparation.merchant_origin.",
+        "optional caller-declared checkout origin for eligible agentcard autopilot rule matching on non-prepared checkout authorizations. KERNEL forwards it without comparing it to the browser page. it does not enable autopilot or ensure payment success; omission retains the existing approval flow, and autopilot may fall back to user approval. prepared checkout uses preparation.merchant_origin.",
       )
       .optional(),
     card_id: z
       .string()
       .regex(/^vc_[A-Za-z0-9_]+$/)
       .describe(
-        "Optional funding card. Omit for cardholder selection at approval.",
+        "optional funding card. omit for cardholder selection at approval.",
       )
       .optional(),
   })
@@ -274,7 +274,7 @@ export const browserVaultsSchema = z
       .strict()
       .refine(
         (value) => (value.id !== undefined) !== (value.name !== undefined),
-        "Provide exactly one of id or name for each vault.",
+        "provide exactly one of id or name for each vault.",
       ),
   )
   .max(20)
@@ -282,9 +282,9 @@ export const browserVaultsSchema = z
     (values) =>
       new Set(values.map((value) => value.id ?? value.name)).size ===
       values.length,
-    "Duplicate vault references are not allowed.",
+    "duplicate vault references are not allowed.",
   )
   .describe(
-    "(create only) Project-owned vaults to attach, each with exactly one id or name; max 20. Bindings are immutable and unavailable for pooled browsers. Use a separate vault per end user. Attaching grants access to all items, including items added later. Credential fill writes real values into the page; it does not isolate them from an agent with browser access. Link cards use fill, not aliases or egress substitution. AgentCard aliases remain a separate, explicitly chosen egress path; never fall back to aliases after an uncertain fill.",
+    "(create only) project-owned vaults to attach, each with exactly one id or name; max 20. bindings are immutable and unavailable for pooled browsers. use a separate vault per end user. attaching grants access to all items, including items added later. credential fill writes real values into the page; it does not isolate them from an agent with browser access. link cards use fill, not aliases or egress substitution. agentcard aliases remain a separate, explicitly chosen egress path; never fall back to aliases after an uncertain fill.",
   )
   .optional();
