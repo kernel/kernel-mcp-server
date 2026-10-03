@@ -38,6 +38,29 @@ export const vaultWaitSchema = z
   )
   .optional();
 
+export const webmcpInvokeInputsSchema = z
+  .object({
+    browser_id: z.string().min(1),
+    tool_ref: z.string().min(1).max(128),
+    page_url: z.string().min(1),
+    input: z.record(z.string(), z.unknown()),
+    bindings: z
+      .array(
+        z
+          .object({
+            field: z.string().min(1),
+            input_path: z.string().min(1),
+            format: z.string().min(1).optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(32),
+    timeout_sec: z.number().int().min(1).max(120).default(15),
+  })
+  .strict();
+export type WebmcpInvokeInputs = z.infer<typeof webmcpInvokeInputsSchema>;
+
 const integer = () => z.number().int().safe();
 const currency = () => z.string().regex(/^[A-Za-z]{3}$/);
 
@@ -54,6 +77,19 @@ export function providerConfigReferenceSchema() {
     );
 }
 
+// Validation errors may name a top-level key, never rejected values or nested keys.
+function topLevelIssuePath(issue: z.core.$ZodIssue) {
+  return issue.path.slice(0, 1);
+}
+
+export function topLevelIssueKeys(error: z.ZodError) {
+  return [
+    ...new Set(
+      error.issues.map((issue) => String(topLevelIssuePath(issue)[0] ?? "")),
+    ),
+  ].filter(Boolean);
+}
+
 // Preserve the advertised schema and parsed values, but never serialize rejected
 // vault values or nested keys into MCP validation errors.
 export function vaultToolInput<Shape extends z.ZodRawShape>(shape: Shape) {
@@ -68,7 +104,7 @@ export function vaultToolInput<Shape extends z.ZodRawShape>(shape: Shape) {
         return {
           issues: result.error.issues.map((issue) => ({
             message: "invalid vault tool input. check the documented schema.",
-            path: issue.path.slice(0, 1),
+            path: topLevelIssuePath(issue),
           })),
         };
       },
