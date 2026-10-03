@@ -187,6 +187,26 @@ export async function getAuthorizationContextForClientId({
 
 export { client as redisClient };
 
+export async function setOAuthClientMetadataValue({
+  key,
+  value,
+  ttlSeconds,
+}: {
+  key: string;
+  value: string;
+  ttlSeconds: number;
+}): Promise<void> {
+  await ensureConnected();
+  await withReconnect(() => client.setEx(key, ttlSeconds, value));
+}
+
+export async function getOAuthClientMetadataValue(
+  key: string,
+): Promise<string | null> {
+  await ensureConnected();
+  return withReconnect(() => client.get(key));
+}
+
 // MCP Apps capability markers. Streamable HTTP creates one McpServer per
 // request, so initialize capability must survive in Redis. The key combines
 // the authenticated subject with the server-signed MCP transport session;
