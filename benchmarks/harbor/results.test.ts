@@ -303,7 +303,11 @@ describe("Harbor result ingestion", () => {
         event.span_attributes.type === "eval" &&
         (event.output as { error?: string }).error,
     );
-    expect(infra?.scores).toEqual({ infra_error_rate: 1, ungraded_rate: 1 });
+    expect(infra).not.toHaveProperty("scores");
+    expect(infra?.metadata?.scores).toEqual({
+      infra_error_rate: 1,
+      ungraded_rate: 1,
+    });
     expect(infra?.output).not.toHaveProperty("reward", 0);
     const success = first.find(
       (event) =>
