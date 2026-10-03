@@ -530,10 +530,20 @@ export function registerBrowserCapabilities(
             "(create, update) save session changes back to profile on close.",
           )
           .optional(),
+        proxy: z
+          .object({
+            id: z.string().min(1).optional(),
+            name: z.string().min(1).optional(),
+            mode: z.enum(["direct", "default"]).optional(),
+          })
+          .describe(
+            "(create, update) proxy egress, set with exactly one of id, name, or mode. id or name selects that proxy. mode direct forces direct egress; mode default restores the browser's default egress. on create, omit for the browser default; on update, omit to leave unchanged. cannot be combined with proxy_id, clear_proxy, or disable_default_proxy.",
+          )
+          .optional(),
         proxy_id: z
           .string()
           .describe(
-            "(create, update) proxy id for traffic routing. for update, omit to leave unchanged.",
+            "(create, update) deprecated: use proxy.id. proxy id for traffic routing. for update, omit to leave unchanged.",
           )
           .optional(),
         proxy_routes: z
@@ -552,13 +562,13 @@ export function registerBrowserCapabilities(
         clear_proxy: z
           .boolean()
           .describe(
-            "(update) remove the current proxy from the browser session.",
+            "(update) deprecated: use proxy.mode=default. remove the current proxy from the browser session.",
           )
           .optional(),
         disable_default_proxy: z
           .boolean()
           .describe(
-            "(update) connect directly instead of through the session's default KERNEL-managed proxy.",
+            "(update) deprecated: use proxy.mode=direct. connect directly instead of through the session's default KERNEL-managed proxy.",
           )
           .optional(),
         kiosk_mode: z
@@ -711,6 +721,23 @@ export function registerBrowserCapabilities(
             "proxy routes are creation-only; they cannot be added to an existing browser.",
           );
         }
+        if (params.proxy !== undefined) {
+          const { id, name, mode } = params.proxy;
+          if ([id, name, mode].filter(Boolean).length !== 1) {
+            return errorResponse(
+              "error: proxy requires exactly one of id, name, or mode.",
+            );
+          }
+          if (
+            params.proxy_id !== undefined ||
+            params.clear_proxy !== undefined ||
+            params.disable_default_proxy !== undefined
+          ) {
+            return errorResponse(
+              "error: proxy cannot be combined with proxy_id, clear_proxy, or disable_default_proxy.",
+            );
+          }
+        }
         switch (params.action) {
           case "create": {
             const createParams: Kernel.BrowserCreateParams = {};
@@ -733,6 +760,7 @@ export function registerBrowserCapabilities(
             ) {
               createParams.chrome_policy = params.chrome_policy;
             }
+            if (params.proxy !== undefined) createParams.proxy = params.proxy;
             if (params.proxy_id) createParams.proxy_id = params.proxy_id;
             if (params.proxy_routes !== undefined) {
               const proxyRoutes: Array<BrowserNetworkConfig.ProxyRoute> = [];
@@ -799,6 +827,7 @@ export function registerBrowserCapabilities(
             }
 
             const updateParams: BrowserUpdateParams = {};
+            if (params.proxy !== undefined) updateParams.proxy = params.proxy;
             if (params.disable_default_proxy !== undefined) {
               updateParams.disable_default_proxy = params.disable_default_proxy;
             }

@@ -501,6 +501,101 @@ describe("manage_browsers proxy routes", () => {
   });
 });
 
+describe("manage_browsers proxy", () => {
+  test("passes the proxy config through SDK create and update", async () => {
+    const creates: unknown[] = [];
+    const updates: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (params: unknown) => {
+            creates.push(params);
+            return { session_id: "brr_123" };
+          },
+          update: async (sessionId: string, params: unknown) => {
+            updates.push([sessionId, params]);
+            return { session_id: sessionId };
+          },
+        },
+      },
+    );
+    try {
+      for (const proxy of [{ name: "residential" }, { id: "prx_123" }]) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "create", proxy },
+        });
+        expect(result.isError).toBeFalsy();
+      }
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "update",
+          session_id: "brr_123",
+          proxy: { mode: "direct" },
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(creates).toEqual([
+        { proxy: { name: "residential" } },
+        { proxy: { id: "prx_123" } },
+      ]);
+      expect(updates).toEqual([["brr_123", { proxy: { mode: "direct" } }]]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects ambiguous proxy selection without calling the SDK", async () => {
+    let calls = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+          update: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+    try {
+      const invalid = [
+        { action: "create", proxy: {} },
+        { action: "create", proxy: { id: "prx_123", name: "residential" } },
+        { action: "create", proxy: { name: "residential" }, proxy_id: "prx_123" },
+        {
+          action: "update",
+          session_id: "brr_123",
+          proxy: { name: "residential" },
+          clear_proxy: true,
+        },
+        {
+          action: "update",
+          session_id: "brr_123",
+          proxy: { mode: "default" },
+          disable_default_proxy: false,
+        },
+      ];
+      for (const args of invalid) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: args,
+        });
+        expect(result.isError).toBe(true);
+      }
+      expect(calls).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+});
+
 describe("manage_browsers region", () => {
   test("passes region to create and list", async () => {
     const createCalls: unknown[] = [];
