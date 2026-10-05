@@ -9,6 +9,7 @@ import {
   verifyAuthFlowCheckpoint,
 } from "@/lib/mcp/tools/managed-auth-checkpoint";
 import type { ManagedAuthBrowserTelemetry } from "@/lib/mcp/tools/managed-auth-telemetry";
+import { proxyConfigError, type ProxyConfig } from "@/lib/mcp/proxy-config";
 
 export type ManagedAuthRegion = "us-east" | "eu-west" | "ap-southeast";
 
@@ -55,8 +56,8 @@ export interface AuthLoginInput {
   record_session?: boolean;
   browser_telemetry?: ManagedAuthBrowserTelemetry;
   region?: ManagedAuthRegion;
-  proxy_id?: string;
-  proxy_name?: string;
+  stealth?: boolean;
+  proxy?: ProxyConfig;
 }
 
 export class AuthLoginStartError extends Error {
@@ -346,9 +347,8 @@ export async function waitForAuthConnection(
 }
 
 export function validateAuthLoginInput(input: AuthLoginInput): string | null {
-  if (input.proxy_id && input.proxy_name) {
-    return "proxy_id and proxy_name cannot be used together.";
-  }
+  const proxyError = input.proxy && proxyConfigError("proxy", input.proxy);
+  if (proxyError) return proxyError;
 
   if (input.mode === "new_login") {
     if (!input.domain || !input.profile_name) {
@@ -458,13 +458,6 @@ export async function beginAuthLogin(
 
   const recordSession = input.record_session ?? true;
   const browserTelemetry = input.browser_telemetry ?? { enabled: true };
-  const proxy =
-    input.proxy_id || input.proxy_name
-      ? {
-          ...(input.proxy_id && { id: input.proxy_id }),
-          ...(input.proxy_name && { name: input.proxy_name }),
-        }
-      : undefined;
 
   let connection: ManagedAuth;
   if (input.mode === "new_login") {
@@ -479,7 +472,8 @@ export async function beginAuthLogin(
         browser: {
           telemetry: browserTelemetry,
           ...(input.region && { region: input.region }),
-          ...(proxy && { proxy }),
+          ...(input.stealth !== undefined && { stealth: input.stealth }),
+          ...(input.proxy && { proxy: input.proxy }),
         },
       });
     } catch (error) {
@@ -530,7 +524,8 @@ export async function beginAuthLogin(
       browser: {
         telemetry: browserTelemetry,
         ...(input.region && { region: input.region }),
-        ...(proxy && { proxy }),
+        ...(input.stealth !== undefined && { stealth: input.stealth }),
+        ...(input.proxy && { proxy: input.proxy }),
       },
     });
     let current = withLoginState(connection, login);

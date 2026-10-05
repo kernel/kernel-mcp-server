@@ -15,6 +15,11 @@ import {
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 import {
+  DEPRECATED_TOOL_PARAMS,
+  deprecatedParamConflict,
+} from "@/lib/mcp/deprecated-params";
+import { proxyConfigError, proxyConfigSchema } from "@/lib/mcp/proxy-config";
+import {
   projectForOperation,
   projectSelectionInputSchema,
 } from "@/lib/mcp/project-selection";
@@ -140,41 +145,70 @@ export function registerAuthConnectionTools(server: McpServer) {
             "(create, update) set the connection default for recording replay video of future login, reauth, and health-check browser sessions. (login) override that default for this login only. omitted preserves the api default or inherited value.",
           )
           .optional(),
+        browser: z
+          .object({
+            proxy: proxyConfigSchema()
+              .describe(
+                "proxy egress, set with exactly one of id, name, or mode. id or name selects that proxy; mode direct forces direct egress; mode default restores the default egress. omitted on create derives the default; omitted on update or login preserves or inherits the connection setting.",
+              )
+              .optional(),
+            region: z
+              .enum(["us-east", "eu-west", "ap-southeast"])
+              .describe(
+                "region for managed-auth browser sessions. defaults to us-east on create; omitted on update or login preserves or inherits the connection setting.",
+              )
+              .optional(),
+            stealth: z
+              .boolean()
+              .describe(
+                "whether managed-auth browser sessions use site-compatibility settings. defaults to true on create; omitted on update or login preserves or inherits the connection setting.",
+              )
+              .optional(),
+            telemetry: managedAuthBrowserTelemetrySchema
+              .describe(
+                "use { enabled: true } for the default operational categories (control, connection, system, captcha); browser category settings can opt into console, network, page, interaction, screenshot, or platform capture, tune control cdp exclusions, and configure otlp export. omitted preserves the api default or inherited value.",
+              )
+              .optional(),
+          })
+          .describe(
+            "(create, update) set the connection defaults for future managed-auth browser sessions. (login) override them for this login only. cannot be combined with the deprecated browser_*, proxy_id, proxy_name, or proxy_mode fields.",
+          )
+          .optional(),
         browser_telemetry: managedAuthBrowserTelemetrySchema
           .describe(
-            "(create, update) set the connection default for browser telemetry. (login) override it for this login only. use { enabled: true } for the default operational categories (control, connection, system, captcha); browser category settings can opt into console, network, page, interaction, screenshot, or platform capture, tune control cdp exclusions, and configure otlp export. omitted preserves the api default or inherited value.",
+            "deprecated: use `browser.telemetry` instead. (create, update) set the connection default for browser telemetry. (login) override it for this login only. use { enabled: true } for the default operational categories (control, connection, system, captcha); browser category settings can opt into console, network, page, interaction, screenshot, or platform capture, tune control cdp exclusions, and configure otlp export. omitted preserves the api default or inherited value.",
           )
           .optional(),
         browser_region: z
           .enum(["us-east", "eu-west", "ap-southeast"])
           .describe(
-            "(create, update) set the region for future managed-auth browser sessions. (login) override the region for this login only. defaults to us-east on create; omitted on update or login preserves or inherits the connection setting.",
+            "deprecated: use `browser.region` instead. (create, update) set the region for future managed-auth browser sessions. (login) override the region for this login only. defaults to us-east on create; omitted on update or login preserves or inherits the connection setting.",
           )
           .optional(),
         browser_stealth: z
           .boolean()
           .describe(
-            "(create, update, login) whether managed-auth browser sessions use site-compatibility settings. defaults to true on create; omitted on update or login preserves or inherits the connection setting.",
+            "deprecated: use the site-compatibility setting in `browser` instead. (create, update, login) whether managed-auth browser sessions use site-compatibility settings. defaults to true on create; omitted on update or login preserves or inherits the connection setting.",
           )
           .optional(),
         proxy_id: z
           .string()
           .min(1)
           .describe(
-            "(create, update, login) proxy id to route managed-auth browser sessions through.",
+            "deprecated: use `browser.proxy.id` instead. (create, update, login) proxy id to route managed-auth browser sessions through.",
           )
           .optional(),
         proxy_name: z
           .string()
           .min(1)
           .describe(
-            "(create, update, login) proxy name to route managed-auth browser sessions through.",
+            "deprecated: use `browser.proxy.name` instead. (create, update, login) proxy name to route managed-auth browser sessions through.",
           )
           .optional(),
         proxy_mode: z
           .enum(["direct", "default"])
           .describe(
-            "(create, update, login) proxy mode. direct disables proxy egress; default restores the session's default proxy setting. cannot be combined with proxy_id or proxy_name.",
+            "deprecated: use `browser.proxy.mode` instead. (create, update, login) proxy mode. direct disables proxy egress; default restores the session's default proxy setting. cannot be combined with proxy_id or proxy_name.",
           )
           .optional(),
         domain_filter: z
@@ -289,6 +323,11 @@ export function registerAuthConnectionTools(server: McpServer) {
             }
           : undefined;
       const buildBrowser = () => {
+        if (params.browser !== undefined) {
+          return Object.keys(params.browser).length > 0
+            ? params.browser
+            : undefined;
+        }
         const proxy = buildProxy();
         return params.browser_region !== undefined ||
           params.browser_stealth !== undefined ||
@@ -351,6 +390,17 @@ export function registerAuthConnectionTools(server: McpServer) {
       };
 
       try {
+        if (params.browser !== undefined) {
+          const error =
+            deprecatedParamConflict(
+              "browser",
+              params,
+              DEPRECATED_TOOL_PARAMS.manage_auth_connections,
+            ) ??
+            (params.browser.proxy &&
+              proxyConfigError("browser.proxy", params.browser.proxy));
+          if (error) return errorResponse(`error: ${error}`);
+        }
         if (proxySelectors.length > 1) {
           return errorResponse(
             "error: provide exactly one of proxy_id, proxy_name, or proxy_mode.",

@@ -135,3 +135,26 @@ export function waitArgumentsFromBegin(
   }
   return action.arguments;
 }
+
+export function sanitizeBeginArguments(input: JsonObject): JsonObject {
+  const allowed = [
+    "mode",
+    "connection_id",
+    "domain",
+    "profile_name",
+    "project",
+    "project_id",
+    "save_credentials",
+    "record_session",
+    "browser",
+    "browser_telemetry",
+    "region",
+    "proxy_id",
+    "proxy_name",
+  ];
+  return Object.fromEntries(
+    allowed
+      .filter((key) => input[key] !== undefined)
+      .map((key) => [key, input[key]]),
+  );
+}
