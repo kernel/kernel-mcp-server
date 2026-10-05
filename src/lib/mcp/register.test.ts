@@ -76,6 +76,73 @@ describe("MCP tool ownership", () => {
   });
 });
 
+// [readOnlyHint, destructiveHint, openWorldHint], per the ChatGPT plugin
+// submission guidelines: read-only only for pure retrieval, destructive for any
+// delete/overwrite/cancel/stop, open world for public or arbitrary destinations.
+const EXPECTED_ANNOTATIONS: Record<string, [boolean, boolean, boolean]> = {
+  get_more_tools: [false, false, false],
+  submit_feedback: [false, false, false],
+  get_connection_context: [true, false, false],
+  search_docs: [true, false, false],
+  web_search: [true, false, true],
+  manage_profiles: [false, true, true],
+  manage_browsers: [false, true, false],
+  manage_projects: [false, true, false],
+  manage_api_keys: [false, true, false],
+  manage_browser_pools: [false, true, false],
+  manage_config_registry: [false, true, true],
+  browser_curl: [false, true, true],
+  manage_proxies: [false, true, true],
+  manage_extensions: [false, true, false],
+  manage_apps: [false, true, true],
+  computer_action: [false, true, true],
+  exec_command: [false, true, true],
+  execute_playwright_code: [false, true, true],
+  browser_repl: [false, true, true],
+  webmcp: [false, true, true],
+  manage_replays: [false, true, false],
+  manage_auth_connections: [false, true, true],
+  open_auth_login: [false, false, true],
+  begin_auth_login: [false, false, true],
+  manage_credentials: [false, true, false],
+  manage_credential_providers: [false, true, true],
+  manage_vaults: [false, true, true],
+  manage_vault_items: [false, true, true],
+  manage_vault_credentials: [false, true, true],
+  manage_vault_cards: [false, true, true],
+  manage_vault_wallets: [false, false, true],
+  manage_vault_provider_configs: [false, true, true],
+};
+
+describe("MCP tool annotations", () => {
+  test("sets every hint explicitly to the reviewed value", async () => {
+    const mcp = await connectTestMcp((server) => {
+      registerMcpCapabilities(server, {
+        mcpApps: true,
+        vaults: true,
+        search: true,
+      });
+      instrumentMcpAnalytics(server, null);
+    }, {});
+    try {
+      const { tools } = await mcp.client.listTools();
+      const actual = Object.fromEntries(
+        tools.map((tool) => [
+          tool.name,
+          [
+            tool.annotations?.readOnlyHint,
+            tool.annotations?.destructiveHint,
+            tool.annotations?.openWorldHint,
+          ],
+        ]),
+      );
+      expect(actual).toEqual(EXPECTED_ANNOTATIONS);
+    } finally {
+      await mcp.close();
+    }
+  });
+});
+
 describe("MCP Apps additive registration", () => {
   test("keeps managed auth unchanged and only adds the App tools for capable clients", async () => {
     const previous = process.env.KERNEL_MCP_DISABLED_TOOLSETS;

@@ -200,7 +200,7 @@ export function registerProxyTools(
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false,
-        openWorldHint: false,
+        openWorldHint: true,
       },
     },
     async (params, ctx) => {
