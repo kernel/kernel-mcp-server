@@ -487,6 +487,7 @@ describe("manage_browsers proxy routes", () => {
     );
     try {
       const network = {
+        private_hosts: ["_.preview.example.ts.net", "100.64.0.0/10"],
         proxy_routes: [
           { hosts: ["example.com"], proxy: { id: "prx_route" } },
           { hosts: ["*.example.org"], proxy: { name: "backup" } },

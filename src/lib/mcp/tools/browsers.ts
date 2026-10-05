@@ -550,6 +550,12 @@ export function registerBrowserCapabilities(
           .optional(),
         network: z
           .object({
+            private_hosts: z
+              .array(z.string().min(1))
+              .describe(
+                "(create only) destinations to route directly through the session network. accepts private hostnames, IP addresses, CIDRs, and patterns supported by the API. an explicit list replaces the default private ranges; an empty list disables direct private-host routing. omit to keep the defaults.",
+              )
+              .optional(),
             proxy_routes: z
               .array(
                 z.object({
