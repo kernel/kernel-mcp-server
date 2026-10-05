@@ -4,7 +4,7 @@ import { connectTestMcp } from "@/lib/mcp/mcp-test-fixtures";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
 
 describe("deprecated tool params", () => {
-  test("every tracked param is advertised and described as deprecated", async () => {
+  test("tracked tools advertise each deprecated param without schema references", async () => {
     const mcp = await connectTestMcp((server) => {
       registerMcpCapabilities(server, {
         mcpApps: true,
@@ -19,6 +19,10 @@ describe("deprecated tool params", () => {
           ?.inputSchema.properties as
           | Record<string, { description?: string }>
           | undefined;
+        expect(
+          JSON.stringify(properties),
+          `${toolName} input schema`,
+        ).not.toContain('"$ref"');
         for (const param of params) {
           expect(
             properties?.[param]?.description,

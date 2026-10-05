@@ -97,7 +97,7 @@ describe("manage_auth_connections programmatic surface", () => {
       }
 
       expect(browserTelemetry).toBeDefined();
-      expect(JSON.stringify(browserTelemetry)).not.toContain('"$ref"');
+      expect(JSON.stringify(tool?.inputSchema)).not.toContain('"$ref"');
     } finally {
       await close();
     }
