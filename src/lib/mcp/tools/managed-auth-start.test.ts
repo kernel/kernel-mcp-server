@@ -109,7 +109,7 @@ describe("managed-auth start/resume state machine", () => {
     });
   });
 
-  test("secure App login forwards the selected proxy", async () => {
+  test("secure App login forwards the selected proxy and site-compatibility setting", async () => {
     const initial = connection();
     const { client, calls } = fakeClient({ initial });
     await beginAuthLogin(client, {
@@ -117,12 +117,13 @@ describe("managed-auth start/resume state machine", () => {
       domain: "example.com",
       profile_name: "work",
       proxy: { mode: "direct" },
+      stealth: false,
     });
     expect(calls.createParams).toMatchObject({
-      browser: { proxy: { mode: "direct" } },
+      browser: { proxy: { mode: "direct" }, stealth: false },
     });
     expect(calls.loginParams).toMatchObject({
-      browser: { proxy: { mode: "direct" } },
+      browser: { proxy: { mode: "direct" }, stealth: false },
     });
   });
 

@@ -487,17 +487,26 @@ describe("manage_browsers proxy routes", () => {
     );
     try {
       const network = {
+        private_hosts: ["*.preview.example.ts.net", "100.64.0.0/10"],
         proxy_routes: [
           { hosts: ["example.com"], proxy: { id: "prx_route" } },
           { hosts: ["*.example.org"], proxy: { name: "backup" } },
         ],
       };
-      const result = await client.callTool({
-        name: "manage_browsers",
-        arguments: { action: "create", proxy: { name: "default" }, network },
-      });
-      expect(result.isError).toBeFalsy();
-      expect(requests).toEqual([{ proxy: { name: "default" }, network }]);
+      for (const args of [
+        { proxy: { name: "default" }, network },
+        { network: { private_hosts: [] } },
+      ]) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "create", ...args },
+        });
+        expect(result.isError).toBeFalsy();
+      }
+      expect(requests).toEqual([
+        { proxy: { name: "default" }, network },
+        { network: { private_hosts: [] } },
+      ]);
     } finally {
       await close();
     }

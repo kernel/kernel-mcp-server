@@ -82,6 +82,12 @@ const authLoginInputSchema = () =>
           .enum(["us-east", "eu-west", "ap-southeast"])
           .describe("region for the managed-auth browser session.")
           .optional(),
+        stealth: z
+          .boolean()
+          .describe(
+            "whether the managed-auth browser session uses site-compatibility settings. defaults to true for a new login; omitted on reauth inherits the connection setting.",
+          )
+          .optional(),
         telemetry: managedAuthBrowserTelemetrySchema
           .describe(
             "defaults to { enabled: true }, which captures the operational categories (control, connection, system, captcha).",
@@ -147,6 +153,7 @@ function inputFromParams(params: AuthLoginParams): AuthLoginInput {
   const { browser } = params;
   const telemetry = browser ? browser.telemetry : params.browser_telemetry;
   const region = browser ? browser.region : params.region;
+  const stealth = browser?.stealth;
   const proxy = browser
     ? browser.proxy
     : params.proxy_id || params.proxy_name
@@ -166,6 +173,7 @@ function inputFromParams(params: AuthLoginParams): AuthLoginInput {
     record_session: params.record_session ?? true,
     browser_telemetry: telemetry ?? { enabled: true },
     ...(region && { region }),
+    ...(stealth !== undefined && { stealth }),
     ...(proxy && { proxy }),
   };
 }

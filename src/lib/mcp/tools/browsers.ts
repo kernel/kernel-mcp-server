@@ -550,6 +550,12 @@ export function registerBrowserCapabilities(
           .optional(),
         network: z
           .object({
+            private_hosts: z
+              .array(z.string().min(1))
+              .describe(
+                "destinations the browser reaches directly through the session's own network instead of KERNEL-managed egress, such as private hosts on a vpn or tailnet the session joined. entries are hostname patterns or private ip and cidr literals. an explicit list replaces the default private ranges (rfc1918, cgnat, and ipv6 ula); an empty list disables them; omit to keep the defaults.",
+              )
+              .optional(),
             proxy_routes: z
               .array(
                 z.object({

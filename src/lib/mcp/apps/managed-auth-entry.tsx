@@ -15,12 +15,12 @@ import { useManagedAuthAutofocus } from "./managed-auth-focus";
 import {
   initialManagedAuthFlowState,
   managedAuthFlowReducer,
+  sanitizeBeginArguments,
   waitArgumentsFromBegin,
 } from "./managed-auth-flow";
 import { ManagedAuthHostBridge } from "./managed-auth-host";
 import type {
   BeginResult,
-  JsonObject,
   LauncherResult,
   WaitToolResult,
 } from "./managed-auth-types";
@@ -29,28 +29,6 @@ import { ConsentView, MessageView, TerminalView } from "./managed-auth-views";
 const FAILURE_CONTEXT =
   "Managed authentication stopped. Verify its terminal state and report the recovery option; do not continue the protected action.";
 const host = new ManagedAuthHostBridge();
-
-function sanitizeBeginArguments(input: JsonObject): JsonObject {
-  const allowed = [
-    "mode",
-    "connection_id",
-    "domain",
-    "profile_name",
-    "project_id",
-    "save_credentials",
-    "record_session",
-    "browser",
-    "browser_telemetry",
-    "region",
-    "proxy_id",
-    "proxy_name",
-  ];
-  return Object.fromEntries(
-    allowed
-      .filter((key) => input[key] !== undefined)
-      .map((key) => [key, input[key]]),
-  );
-}
 
 function ManagedAuthApp() {
   const launcher = useSyncExternalStore(

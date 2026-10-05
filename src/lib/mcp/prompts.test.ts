@@ -17,6 +17,8 @@ const API_FIELD_NAMES = new Set([
   "manage_browser_pools:stealth",
   "manage_auth_connections:browser_stealth",
   "manage_auth_connections:stealth",
+  "open_auth_login:stealth",
+  "begin_auth_login:stealth",
   "manage_proxies:bypass_hosts",
   "manage_auth_connections:captcha",
   "open_auth_login:captcha",

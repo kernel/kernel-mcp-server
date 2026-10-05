@@ -241,12 +241,17 @@ describe("managed-auth MCP App registration", () => {
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain(message);
     }
-    const ok = await tools
-      .get("open_auth_login")!
-      .handler(
-        { ...base, browser: { proxy: { mode: "direct" }, region: "eu-west" } },
-        projectScopedExtra("proj_test", "unused-api-key"),
-      );
+    const ok = await tools.get("open_auth_login")!.handler(
+      {
+        ...base,
+        browser: {
+          proxy: { mode: "direct" },
+          region: "eu-west",
+          stealth: false,
+        },
+      },
+      projectScopedExtra("proj_test", "unused-api-key"),
+    );
     expect(ok.isError).toBeUndefined();
   });
 

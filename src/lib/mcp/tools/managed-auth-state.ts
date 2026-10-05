@@ -56,6 +56,7 @@ export interface AuthLoginInput {
   record_session?: boolean;
   browser_telemetry?: ManagedAuthBrowserTelemetry;
   region?: ManagedAuthRegion;
+  stealth?: boolean;
   proxy?: ProxyConfig;
 }
 
@@ -471,6 +472,7 @@ export async function beginAuthLogin(
         browser: {
           telemetry: browserTelemetry,
           ...(input.region && { region: input.region }),
+          ...(input.stealth !== undefined && { stealth: input.stealth }),
           ...(input.proxy && { proxy: input.proxy }),
         },
       });
@@ -522,6 +524,7 @@ export async function beginAuthLogin(
       browser: {
         telemetry: browserTelemetry,
         ...(input.region && { region: input.region }),
+        ...(input.stealth !== undefined && { stealth: input.stealth }),
         ...(input.proxy && { proxy: input.proxy }),
       },
     });
