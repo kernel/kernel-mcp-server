@@ -153,9 +153,6 @@ describe("managed-auth MCP App registration", () => {
         true,
       );
       expect(schema.safeParse({ ...base, region: "emea" }).success).toBe(false);
-      expect(
-        schema.safeParse({ ...base, browser: { stealth: false } }).success,
-      ).toBe(true);
       const defaults = schema.parse(base);
       expect(defaults.record_session).toBe(true);
       expect(defaults.browser_telemetry).toBeUndefined();
@@ -244,17 +241,12 @@ describe("managed-auth MCP App registration", () => {
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain(message);
     }
-    const ok = await tools.get("open_auth_login")!.handler(
-      {
-        ...base,
-        browser: {
-          proxy: { mode: "direct" },
-          region: "eu-west",
-          stealth: false,
-        },
-      },
-      projectScopedExtra("proj_test", "unused-api-key"),
-    );
+    const ok = await tools
+      .get("open_auth_login")!
+      .handler(
+        { ...base, browser: { proxy: { mode: "direct" }, region: "eu-west" } },
+        projectScopedExtra("proj_test", "unused-api-key"),
+      );
     expect(ok.isError).toBeUndefined();
   });
 
@@ -276,7 +268,6 @@ describe("managed-auth MCP App registration", () => {
     "%s stateless requests pass the App gate",
     async (era) => {
       redisMarkerPresent = era === "legacy";
-      let loginParams: unknown;
       kernelClientMock.factory = () => ({
         auth: {
           connections: {
@@ -287,17 +278,14 @@ describe("managed-auth MCP App registration", () => {
               status: "AUTHENTICATED",
               flow_expires_at: "2026-01-01T00:00:00Z",
             }),
-            login: async (_connectionId: string, params: unknown) => {
-              loginParams = params;
-              return {
-                id: "conn_1",
-                flow_type: "REAUTH",
-                flow_expires_at: "2099-01-01T00:00:00Z",
-                hosted_url:
-                  "https://managed-auth.onkernel.com/login/conn_1?code=handoff-secret",
-                handoff_code: "handoff-secret",
-              };
-            },
+            login: async () => ({
+              id: "conn_1",
+              flow_type: "REAUTH",
+              flow_expires_at: "2099-01-01T00:00:00Z",
+              hosted_url:
+                "https://managed-auth.onkernel.com/login/conn_1?code=handoff-secret",
+              handoff_code: "handoff-secret",
+            }),
             timeline: async () => ({ getPaginatedItems: () => [] }),
           },
         },
@@ -305,11 +293,7 @@ describe("managed-auth MCP App registration", () => {
       try {
         const { tools } = captureRegistration({ appsSupport: false });
         const result = await tools.get("begin_auth_login")!.handler(
-          {
-            mode: "reauth",
-            connection_id: "conn_1",
-            browser: { stealth: false },
-          },
+          { mode: "reauth", connection_id: "conn_1" },
           {
             ...projectScopedExtra("proj_test", "unused-api-key"),
             mcpReq: {
@@ -340,7 +324,6 @@ describe("managed-auth MCP App registration", () => {
           },
         );
         expect(result.isError).toBeUndefined();
-        expect(loginParams).toMatchObject({ browser: { stealth: false } });
         expect(result.structuredContent.kind).toBe("kernel.managed_auth.begin");
         expect(result.structuredContent.next_action).toMatchObject({
           tool: "manage_auth_connections",
