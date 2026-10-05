@@ -102,7 +102,7 @@ export function registerConfigRegistryTools(
       annotations: {
         title: "manage KERNEL config registry",
         readOnlyHint: false,
-        destructiveHint: false,
+        destructiveHint: true,
         idempotentHint: false,
         openWorldHint: true,
       },
