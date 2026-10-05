@@ -225,6 +225,99 @@ describe("manage_auth_connections programmatic surface", () => {
     }
   });
 
+  test("forwards the nested browser object on create, update, and login", async () => {
+    const { handler } = captureHandler();
+    const bodies: unknown[] = [];
+    kernelClientMock.factory = () => ({
+      auth: {
+        connections: {
+          create: async (body: unknown) => {
+            bodies.push(body);
+            return connection();
+          },
+          update: async (_id: string, body: unknown) => {
+            bodies.push(body);
+            return connection();
+          },
+          login: async (_id: string, body: unknown) => {
+            bodies.push(body);
+            return { id: "conn_1" };
+          },
+        },
+      },
+    });
+    try {
+      const extra = { authInfo: { token: "test-token" } };
+      const browser = {
+        proxy: { name: "residential" },
+        region: "eu-west",
+        stealth: false,
+        telemetry: { enabled: true },
+      };
+      await handler(
+        {
+          action: "create",
+          domain: "example.com",
+          profile_name: "work",
+          browser,
+        },
+        extra,
+      );
+      await handler(
+        {
+          action: "update",
+          id: "conn_1",
+          browser: { proxy: { mode: "direct" } },
+        },
+        extra,
+      );
+      await handler(
+        {
+          action: "login",
+          id: "conn_1",
+          browser: { proxy: { id: "proxy_1" } },
+        },
+        extra,
+      );
+      expect(bodies).toEqual([
+        { domain: "example.com", profile_name: "work", browser },
+        { browser: { proxy: { mode: "direct" } } },
+        { browser: { proxy: { id: "proxy_1" } } },
+      ]);
+    } finally {
+      kernelClientMock.factory = () => unusedKernelClient;
+    }
+  });
+
+  test("rejects a nested browser object mixed with deprecated fields", async () => {
+    const { handler } = captureHandler();
+    const extra = { authInfo: { token: "test-token" } };
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [
+        {
+          action: "login",
+          id: "conn_1",
+          browser: { region: "eu-west" },
+          proxy_name: "residential",
+        },
+        "browser cannot be combined with proxy_name",
+      ],
+      [
+        {
+          action: "update",
+          id: "conn_1",
+          browser: { proxy: { id: "proxy_1", mode: "direct" } },
+        },
+        "browser.proxy requires exactly one of id, name, or mode",
+      ],
+    ];
+    for (const [params, message] of cases) {
+      const result = await handler(params, extra);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(message);
+    }
+  });
+
   test("forwards current connection settings on update", async () => {
     const { handler } = captureHandler();
     let updateBody: unknown;

@@ -39,6 +39,7 @@ function sanitizeBeginArguments(input: JsonObject): JsonObject {
     "project_id",
     "save_credentials",
     "record_session",
+    "browser",
     "browser_telemetry",
     "region",
     "proxy_id",

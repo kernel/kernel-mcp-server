@@ -13,6 +13,10 @@ import {
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 import {
+  DEPRECATED_TOOL_PARAMS,
+  deprecatedParamConflict,
+} from "@/lib/mcp/deprecated-params";
+import {
   projectForOperation,
   projectSelectionInputSchema,
 } from "@/lib/mcp/project-selection";
@@ -31,6 +35,64 @@ const httpUrlSchema = z
     },
     { message: "url must use http or https." },
   );
+
+const proxyCreateConfigSchema = z.object({
+  country: z
+    .string()
+    .describe('iso 3166 country code (e.g., "US").')
+    .optional(),
+  state: z.string().describe("two-letter state code.").optional(),
+  city: z
+    .string()
+    .describe(
+      "city name without spaces (e.g., 'sanfrancisco'). requires country.",
+    )
+    .optional(),
+  zip: z.string().describe("(residential) us zip code.").optional(),
+  asn: z
+    .string()
+    .describe("(residential) autonomous system number.")
+    .optional(),
+  host: z.string().describe("(custom) proxy host address.").optional(),
+  port: z.number().int().describe("(custom) proxy port.").optional(),
+  username: z.string().describe("(custom) auth username.").optional(),
+  password: z.string().describe("(custom) auth password.").optional(),
+  ca_bundle: z
+    .string()
+    .describe(
+      "(custom) pem-encoded ca certificate bundle the proxy re-signs upstream tls with. provide when the proxy terminates tls.",
+    )
+    .optional(),
+});
+
+function legacyProxyConfig(params: {
+  type?: string;
+  country?: string;
+  city?: string;
+  state?: string;
+  custom_host?: string;
+  custom_port?: number;
+  custom_username?: string;
+  custom_password?: string;
+}): z.infer<typeof proxyCreateConfigSchema> | undefined {
+  if (params.type === "custom") {
+    return params.custom_host || params.custom_port
+      ? {
+          host: params.custom_host,
+          port: params.custom_port,
+          ...(params.custom_username && { username: params.custom_username }),
+          ...(params.custom_password && { password: params.custom_password }),
+        }
+      : undefined;
+  }
+  return params.country || params.city || params.state
+    ? {
+        ...(params.country && { country: params.country }),
+        ...(params.city && { city: params.city }),
+        ...(params.state && { state: params.state }),
+      }
+    : undefined;
+}
 
 export function registerProxyTools(
   server: McpServer,
@@ -64,37 +126,72 @@ export function registerProxyTools(
           .optional(),
         name: z
           .string()
-          .describe("(create, rename) readable name for the proxy.")
+          .describe(
+            "(create, rename) readable name for the proxy. (list) exact-match name filter; names are not unique, so several proxies can match.",
+          )
+          .optional(),
+        query: z
+          .string()
+          .describe(
+            "(list) case-insensitive substring match against proxy name, host, or ip address. ids match by exact value.",
+          )
+          .optional(),
+        config: proxyCreateConfigSchema
+          .describe(
+            "(create) settings for the selected type. datacenter and isp accept country; residential accepts country, state, city, zip, and asn; mobile accepts country, state, and city; custom requires host and port. cannot be combined with the deprecated country, city, state, or custom_* fields.",
+          )
+          .optional(),
+        bypass_hosts: z
+          .array(z.string().min(1))
+          .describe(
+            "(create) hostnames that connect directly instead of through this proxy.",
+          )
+          .optional(),
+        protocol: z
+          .enum(["http", "https"])
+          .describe("(create) protocol for the proxy connection.")
           .optional(),
         country: z
           .string()
-          .describe('(create) iso 3166 country code (e.g., "US").')
+          .describe(
+            'deprecated: use `config.country` instead. (create) iso 3166 country code (e.g., "US").',
+          )
           .optional(),
         city: z
           .string()
           .describe(
-            "(create) city name without spaces (e.g., 'sanfrancisco'). requires country.",
+            "deprecated: use `config.city` instead. (create) city name without spaces (e.g., 'sanfrancisco'). requires country.",
           )
           .optional(),
         state: z
           .string()
-          .describe("(create) two-letter state code.")
+          .describe(
+            "deprecated: use `config.state` instead. (create) two-letter state code.",
+          )
           .optional(),
         custom_host: z
           .string()
-          .describe("(create, custom type) proxy host address.")
+          .describe(
+            "deprecated: use `config.host` instead. (create, custom type) proxy host address.",
+          )
           .optional(),
         custom_port: z
           .number()
-          .describe("(create, custom type) proxy port.")
+          .describe(
+            "deprecated: use `config.port` instead. (create, custom type) proxy port.",
+          )
           .optional(),
         custom_username: z
           .string()
-          .describe("(create, custom type) auth username.")
+          .describe(
+            "deprecated: use `config.username` instead. (create, custom type) auth username.",
+          )
           .optional(),
         custom_password: z
           .string()
-          .describe("(create, custom type) auth password.")
+          .describe(
+            "deprecated: use `config.password` instead. (create, custom type) auth password.",
+          )
           .optional(),
         ...paginationParams,
       }),
@@ -118,47 +215,39 @@ export function registerProxyTools(
           case "create": {
             if (!params.type)
               return errorResponse("error: type is required for create.");
-            if (
-              params.type === "custom" &&
-              (!params.custom_host || !params.custom_port)
-            ) {
+            if (params.config !== undefined) {
+              const conflict = deprecatedParamConflict(
+                "config",
+                params,
+                DEPRECATED_TOOL_PARAMS.manage_proxies,
+              );
+              if (conflict) return errorResponse(`error: ${conflict}`);
+            }
+            const config = params.config ?? legacyProxyConfig(params);
+            if (params.type === "custom" && (!config?.host || !config.port)) {
               return errorResponse(
-                "error: custom_host and custom_port are required for custom proxy type.",
+                params.config
+                  ? "error: config.host and config.port are required for custom proxy type."
+                  : "error: custom_host and custom_port are required for custom proxy type.",
               );
             }
-            const createParams: Parameters<typeof client.proxies.create>[0] =
-              params.type === "custom"
-                ? {
-                    type: params.type,
-                    ...(params.name && { name: params.name }),
-                    config: {
-                      host: params.custom_host!,
-                      port: params.custom_port!,
-                      ...(params.custom_username && {
-                        username: params.custom_username,
-                      }),
-                      ...(params.custom_password && {
-                        password: params.custom_password,
-                      }),
-                    },
-                  }
-                : {
-                    type: params.type,
-                    ...(params.name && { name: params.name }),
-                    ...((params.country || params.city || params.state) && {
-                      config: {
-                        ...(params.country && { country: params.country }),
-                        ...(params.city && { city: params.city }),
-                        ...(params.state && { state: params.state }),
-                      },
-                    }),
-                  };
+            const createParams: Parameters<typeof client.proxies.create>[0] = {
+              type: params.type,
+              ...(params.name && { name: params.name }),
+              ...(config && { config }),
+              ...(params.bypass_hosts !== undefined && {
+                bypass_hosts: params.bypass_hosts,
+              }),
+              ...(params.protocol && { protocol: params.protocol }),
+            };
             const proxy = await client.proxies.create(createParams);
             if (!proxy) return errorResponse("failed to create proxy");
             return jsonResponse(proxy);
           }
           case "list": {
             const page = await client.proxies.list({
+              ...(params.name && { name: params.name }),
+              ...(params.query && { query: params.query }),
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });

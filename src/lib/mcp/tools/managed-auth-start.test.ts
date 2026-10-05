@@ -109,6 +109,23 @@ describe("managed-auth start/resume state machine", () => {
     });
   });
 
+  test("secure App login forwards the selected proxy", async () => {
+    const initial = connection();
+    const { client, calls } = fakeClient({ initial });
+    await beginAuthLogin(client, {
+      mode: "new_login",
+      domain: "example.com",
+      profile_name: "work",
+      proxy: { mode: "direct" },
+    });
+    expect(calls.createParams).toMatchObject({
+      browser: { proxy: { mode: "direct" } },
+    });
+    expect(calls.loginParams).toMatchObject({
+      browser: { proxy: { mode: "direct" } },
+    });
+  });
+
   test("explicit reauth starts login even when authenticated", async () => {
     const initial = connection({ status: "AUTHENTICATED" });
     const { client, calls } = fakeClient({ initial });

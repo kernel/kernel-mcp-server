@@ -20,12 +20,16 @@ import {
 import { managedAuthBrowserTelemetrySchema } from "@/lib/mcp/tools/managed-auth-telemetry";
 import { errorResponse } from "@/lib/mcp/responses";
 import {
+  DEPRECATED_TOOL_PARAMS,
+  deprecatedParamConflict,
+} from "@/lib/mcp/deprecated-params";
+import { proxyConfigSchema } from "@/lib/mcp/proxy-config";
+import {
   projectForOperation,
   projectSelectionInputSchema,
-  type ProjectSelection,
 } from "@/lib/mcp/project-selection";
 
-type AuthLoginParams = AuthLoginInput & ProjectSelection;
+type AuthLoginParams = z.infer<ReturnType<typeof authLoginInputSchema>>;
 
 export { initializeDeclaresMcpApps };
 
@@ -67,19 +71,48 @@ const authLoginInputSchema = () =>
         "record replay video for this managed-auth flow and make it the connection default for new connections. defaults to true in the secure app.",
       )
       .default(true),
+    browser: z
+      .object({
+        proxy: proxyConfigSchema()
+          .describe(
+            "proxy egress, set with exactly one of id, name, or mode. id or name selects that proxy; mode direct forces direct egress; mode default restores the default egress.",
+          )
+          .optional(),
+        region: z
+          .enum(["us-east", "eu-west", "ap-southeast"])
+          .describe("region for the managed-auth browser session.")
+          .optional(),
+        telemetry: managedAuthBrowserTelemetrySchema
+          .describe(
+            "defaults to { enabled: true }, which captures the operational categories (control, connection, system, captcha).",
+          )
+          .optional(),
+      })
+      .describe(
+        "browser settings for this managed-auth flow. they become the connection defaults for a new login or override them for this reauth. cannot be combined with browser_telemetry, region, proxy_id, or proxy_name.",
+      )
+      .optional(),
     browser_telemetry: managedAuthBrowserTelemetrySchema
       .describe(
-        "browser telemetry for this managed-auth flow and the connection default for new connections. defaults to { enabled: true }, which captures the operational categories (control, connection, system, captcha).",
+        "deprecated: use `browser.telemetry` instead. browser telemetry for this managed-auth flow and the connection default for new connections. defaults to { enabled: true }, which captures the operational categories (control, connection, system, captcha).",
       )
-      .default({ enabled: true }),
+      .optional(),
     region: z
       .enum(["us-east", "eu-west", "ap-southeast"])
       .describe(
-        "region for the managed-auth browser session. sets the connection default for a new login or overrides it for this reauth.",
+        "deprecated: use `browser.region` instead. region for the managed-auth browser session. sets the connection default for a new login or overrides it for this reauth.",
       )
       .optional(),
-    proxy_id: z.string().min(1).optional(),
-    proxy_name: z.string().min(1).optional(),
+    proxy_id: z
+      .string()
+      .min(1)
+      .describe("deprecated: use `browser.proxy.id` instead.")
+      .optional(),
+    proxy_name: z
+      .string()
+      .min(1)
+      .describe("deprecated: use `browser.proxy.name` instead.")
+      .optional(),
   });
 
 function waitAction(
@@ -100,7 +133,28 @@ function waitAction(
   };
 }
 
+function browserParamConflict(params: AuthLoginParams) {
+  return params.browser
+    ? deprecatedParamConflict(
+        "browser",
+        params,
+        DEPRECATED_TOOL_PARAMS.open_auth_login,
+      )
+    : undefined;
+}
+
 function inputFromParams(params: AuthLoginParams): AuthLoginInput {
+  const { browser } = params;
+  const telemetry = browser ? browser.telemetry : params.browser_telemetry;
+  const region = browser ? browser.region : params.region;
+  const proxy = browser
+    ? browser.proxy
+    : params.proxy_id || params.proxy_name
+      ? {
+          ...(params.proxy_id && { id: params.proxy_id }),
+          ...(params.proxy_name && { name: params.proxy_name }),
+        }
+      : undefined;
   return {
     mode: params.mode,
     ...(params.connection_id && { connection_id: params.connection_id }),
@@ -110,10 +164,9 @@ function inputFromParams(params: AuthLoginParams): AuthLoginInput {
       save_credentials: params.save_credentials,
     }),
     record_session: params.record_session ?? true,
-    browser_telemetry: params.browser_telemetry ?? { enabled: true },
-    ...(params.region && { region: params.region }),
-    ...(params.proxy_id && { proxy_id: params.proxy_id }),
-    ...(params.proxy_name && { proxy_name: params.proxy_name }),
+    browser_telemetry: telemetry ?? { enabled: true },
+    ...(region && { region }),
+    ...(proxy && { proxy }),
   };
 }
 
@@ -166,6 +219,8 @@ export function registerAuthLoginApp(server: McpServer) {
     async (params, ctx) => {
       if (!ctx.http?.authInfo) throw new Error("authentication required");
       const project = projectForOperation(ctx.http.authInfo, params);
+      const conflict = browserParamConflict(params);
+      if (conflict) return errorResponse(`error: ${conflict}`);
       const input = inputFromParams(params);
       const validationError = validateAuthLoginInput(input);
       if (validationError) return errorResponse(`error: ${validationError}`);
@@ -262,6 +317,8 @@ export function registerAuthLoginApp(server: McpServer) {
       );
       if (gateError) return errorResponse(gateError);
       const project = projectForOperation(ctx.http.authInfo, params);
+      const conflict = browserParamConflict(params);
+      if (conflict) return errorResponse(`error: ${conflict}`);
       const input = inputFromParams(params);
       const validationError = validateAuthLoginInput(input);
       if (validationError) return errorResponse(`error: ${validationError}`);

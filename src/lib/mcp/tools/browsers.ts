@@ -25,6 +25,13 @@ import {
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 import { browserVaultsSchema } from "@/lib/mcp/vault-schemas";
+import { deprecatedParamConflict } from "@/lib/mcp/deprecated-params";
+import {
+  proxyConfigError,
+  proxyConfigSchema,
+  proxySelectorError,
+  proxySelectorSchema,
+} from "@/lib/mcp/proxy-config";
 import {
   projectForOperation,
   projectSelectionInputSchema,
@@ -530,12 +537,7 @@ export function registerBrowserCapabilities(
             "(create, update) save session changes back to profile on close.",
           )
           .optional(),
-        proxy: z
-          .object({
-            id: z.string().min(1).optional(),
-            name: z.string().min(1).optional(),
-            mode: z.enum(["direct", "default"]).optional(),
-          })
+        proxy: proxyConfigSchema()
           .describe(
             "(create, update) proxy egress, set with exactly one of id, name, or mode. id or name selects that proxy. mode direct forces direct egress; mode default restores the browser's default egress. on create, omit for the browser default; on update, omit to leave unchanged. cannot be combined with proxy_id, clear_proxy, or disable_default_proxy.",
           )
@@ -543,7 +545,26 @@ export function registerBrowserCapabilities(
         proxy_id: z
           .string()
           .describe(
-            "(create, update) deprecated: use proxy.id. proxy id for traffic routing. for update, omit to leave unchanged.",
+            "deprecated: use `proxy.id` instead. (create, update) proxy id for traffic routing. for update, omit to leave unchanged.",
+          )
+          .optional(),
+        network: z
+          .object({
+            proxy_routes: z
+              .array(
+                z.object({
+                  hosts: z.array(z.string().min(1)).min(1).max(50),
+                  proxy: proxySelectorSchema(),
+                }),
+              )
+              .max(10)
+              .describe(
+                'route requests for 1–50 host patterns per route through a proxy selected by exactly one of proxy.id or proxy.name (max 10 routes). use exact hostnames or leading "*." wildcards, which match subdomains only, not the apex. matching ignores case and ports; the most specific match wins. matched hosts override the top-level proxy; unmatched hosts use the top-level proxy or the browser default. start_url uses the top-level proxy, not routes. if a route proxy is unavailable, matched requests fail closed.',
+              )
+              .optional(),
+          })
+          .describe(
+            "(create only) network settings for the browser session. cannot be combined with proxy_routes.",
           )
           .optional(),
         proxy_routes: z
@@ -556,19 +577,19 @@ export function registerBrowserCapabilities(
           )
           .max(10)
           .describe(
-            '(create only) route requests for 1–50 host patterns per route through a proxy selected by exactly one of proxy_id or proxy_name (max 10 routes). use exact hostnames or leading "*." wildcards, which match subdomains only, not the apex. matching ignores case and ports; the most specific match wins. matched hosts override the top-level proxy; unmatched hosts use the top-level proxy or the browser default. start_url uses the top-level proxy, not routes. if a route proxy is unavailable, matched requests fail closed.',
+            "deprecated: use `network.proxy_routes` instead. (create only) the same routes, with each proxy selected by exactly one of proxy_id or proxy_name.",
           )
           .optional(),
         clear_proxy: z
           .boolean()
           .describe(
-            "(update) deprecated: use proxy.mode=default. remove the current proxy from the browser session.",
+            "deprecated: use `proxy.mode` default instead. (update) remove the current proxy from the browser session.",
           )
           .optional(),
         disable_default_proxy: z
           .boolean()
           .describe(
-            "(update) deprecated: use proxy.mode=direct. connect directly instead of through the session's default KERNEL-managed proxy.",
+            "deprecated: use `proxy.mode` direct instead. (update) connect directly instead of through the session's default KERNEL-managed proxy.",
           )
           .optional(),
         kiosk_mode: z
@@ -716,27 +737,36 @@ export function registerBrowserCapabilities(
             "vault bindings are creation-only; they cannot be added to an existing browser.",
           );
         }
-        if (params.proxy_routes !== undefined && params.action !== "create") {
+        if (
+          (params.network !== undefined || params.proxy_routes !== undefined) &&
+          params.action !== "create"
+        ) {
           return errorResponse(
             "proxy routes are creation-only; they cannot be added to an existing browser.",
           );
         }
         if (params.proxy !== undefined) {
-          const { id, name, mode } = params.proxy;
-          if ([id, name, mode].filter(Boolean).length !== 1) {
-            return errorResponse(
-              "error: proxy requires exactly one of id, name, or mode.",
-            );
-          }
-          if (
-            params.proxy_id !== undefined ||
-            params.clear_proxy !== undefined ||
-            params.disable_default_proxy !== undefined
-          ) {
-            return errorResponse(
-              "error: proxy cannot be combined with proxy_id, clear_proxy, or disable_default_proxy.",
-            );
-          }
+          const error =
+            proxyConfigError("proxy", params.proxy) ??
+            deprecatedParamConflict("proxy", params, [
+              "proxy_id",
+              "clear_proxy",
+              "disable_default_proxy",
+            ]);
+          if (error) return errorResponse(`error: ${error}`);
+        }
+        if (params.network !== undefined) {
+          const error =
+            deprecatedParamConflict("network", params, ["proxy_routes"]) ??
+            params.network.proxy_routes
+              ?.map((route, i) =>
+                proxySelectorError(
+                  `network.proxy_routes[${i}].proxy`,
+                  route.proxy,
+                ),
+              )
+              .find(Boolean);
+          if (error) return errorResponse(`error: ${error}`);
         }
         switch (params.action) {
           case "create": {
@@ -762,6 +792,8 @@ export function registerBrowserCapabilities(
             }
             if (params.proxy !== undefined) createParams.proxy = params.proxy;
             if (params.proxy_id) createParams.proxy_id = params.proxy_id;
+            if (params.network !== undefined)
+              createParams.network = params.network;
             if (params.proxy_routes !== undefined) {
               const proxyRoutes: Array<BrowserNetworkConfig.ProxyRoute> = [];
               for (const {

@@ -351,7 +351,10 @@ describe("manage_browsers proxy routes", () => {
     try {
       const { tools } = await client.listTools();
       const browser = tools.find(({ name }) => name === "manage_browsers");
-      const routes = browser?.inputSchema.properties?.proxy_routes as
+      const network = browser?.inputSchema.properties?.network as
+        | { properties?: Record<string, unknown> }
+        | undefined;
+      const routes = network?.properties?.proxy_routes as
         | {
             description?: string;
             maxItems?: number;
@@ -469,6 +472,93 @@ describe("manage_browsers proxy routes", () => {
     }
   });
 
+  test("passes network.proxy_routes through SDK create unchanged", async () => {
+    const requests: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (params: unknown) => {
+            requests.push(params);
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+    try {
+      const network = {
+        proxy_routes: [
+          { hosts: ["example.com"], proxy: { id: "prx_route" } },
+          { hosts: ["*.example.org"], proxy: { name: "backup" } },
+        ],
+      };
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: { action: "create", proxy: { name: "default" }, network },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(requests).toEqual([{ proxy: { name: "default" }, network }]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects invalid network routes before SDK create", async () => {
+    let creates = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async () => {
+            creates++;
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+    try {
+      const cases: Array<[Record<string, unknown>, string]> = [
+        [
+          {
+            network: { proxy_routes: [{ hosts: ["example.com"], proxy: {} }] },
+          },
+          "network.proxy_routes[0].proxy requires exactly one of id or name",
+        ],
+        [
+          {
+            network: {
+              proxy_routes: [
+                {
+                  hosts: ["example.com"],
+                  proxy: { id: "prx_route", name: "backup" },
+                },
+              ],
+            },
+          },
+          "network.proxy_routes[0].proxy requires exactly one of id or name",
+        ],
+        [
+          {
+            network: { proxy_routes: [] },
+            proxy_routes: [{ hosts: ["example.com"], proxy_id: "prx_route" }],
+          },
+          "network cannot be combined with proxy_routes",
+        ],
+      ];
+      for (const [args, message] of cases) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "create", ...args },
+        });
+        expect(result.isError).toBe(true);
+        expect(toolResultText(result)).toContain(message);
+      }
+      expect(creates).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+
   test("rejects routes on update without calling the SDK", async () => {
     let updates = 0;
     const { client, close } = await connectTestMcp(
@@ -568,7 +658,11 @@ describe("manage_browsers proxy", () => {
       const invalid = [
         { action: "create", proxy: {} },
         { action: "create", proxy: { id: "prx_123", name: "residential" } },
-        { action: "create", proxy: { name: "residential" }, proxy_id: "prx_123" },
+        {
+          action: "create",
+          proxy: { name: "residential" },
+          proxy_id: "prx_123",
+        },
         {
           action: "update",
           session_id: "brr_123",
