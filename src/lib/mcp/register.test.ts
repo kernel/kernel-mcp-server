@@ -185,6 +185,7 @@ describe("MCP toolset allowlist", () => {
         "get_connection_context",
         "computer_action",
         "execute_playwright_code",
+        "manage_playwright_executors",
         "browser_repl",
       ]);
       expect(registration.appTools).toEqual([]);
@@ -217,6 +218,7 @@ describe("project selection registration", () => {
     "computer_action",
     "exec_command",
     "execute_playwright_code",
+    "manage_playwright_executors",
     "browser_repl",
     "manage_replays",
     "manage_auth_connections",
