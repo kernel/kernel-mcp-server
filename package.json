@@ -40,7 +40,7 @@
     "@modelcontextprotocol/client": "2.0.0",
     "@modelcontextprotocol/core": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
-    "@onkernel/managed-auth-react": "0.5.3",
+    "@onkernel/managed-auth-react": "0.5.5",
     "@onkernel/sdk": "0.117.0",
     "@posthog/mcp": "0.17.0",
     "@types/jsonwebtoken": "^9.0.10",
