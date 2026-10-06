@@ -10,6 +10,7 @@ export const KERNEL_MCP_TOOL_NAMES = [
   "manage_api_keys",
   "manage_apps",
   "manage_auth_connections",
+  "manage_browser_files",
   "manage_browser_pools",
   "manage_browsers",
   "manage_config_registry",
