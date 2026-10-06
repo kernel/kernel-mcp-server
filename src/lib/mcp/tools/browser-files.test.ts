@@ -426,9 +426,15 @@ describe("manage_browser_files", () => {
 
   test("stops reading directory archives at max_bytes", async () => {
     let cancelled = false;
+    let retries: number | undefined;
     const fs = {
-      downloadDirZip: async () =>
-        new Response(
+      downloadDirZip: async (
+        _id: string,
+        _params: unknown,
+        options: { maxRetries?: number },
+      ) => {
+        retries = options.maxRetries;
+        return new Response(
           new ReadableStream({
             pull(controller) {
               controller.enqueue(new Uint8Array(3));
@@ -437,7 +443,8 @@ describe("manage_browser_files", () => {
               cancelled = true;
             },
           }),
-        ),
+        );
+      },
     } as any;
 
     const result = await callBrowserFiles(fs, {
@@ -448,6 +455,7 @@ describe("manage_browser_files", () => {
     });
 
     expect(cancelled).toBe(true);
+    expect(retries).toBe(0);
     expect(result.isError).toBe(true);
     expect(text(result)).toBe(
       'error: the archive of /home/kernel exceeds max_bytes (8). use "list" to pick a smaller subdirectory, or exec_command to build a smaller archive.',
@@ -517,6 +525,19 @@ describe("manage_browser_files", () => {
       expect(text(result)).toContain(
         "must be an absolute path starting with /",
       );
+    }
+  });
+
+  test("advertises inline path schemas", async () => {
+    const { client, close } = await connectTestMcp(
+      registerBrowserFileTools,
+      {},
+    );
+    try {
+      const { tools } = await client.listTools();
+      expect(JSON.stringify(tools[0].inputSchema)).not.toContain("$ref");
+    } finally {
+      await close();
     }
   });
 });

@@ -23,12 +23,14 @@ import {
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 const MAX_MAX_BYTES = 25 * 1024 * 1024;
 
-const absolutePathSchema = z
-  .string()
-  .regex(/^\//, "must be an absolute path starting with /");
+// A factory, so each field gets its own schema instance and the advertised
+// JSON schema inlines it instead of emitting a $ref.
+function absolutePathSchema() {
+  return z.string().regex(/^\//, "must be an absolute path starting with /");
+}
 
 const fileContentSchema = z.object({
-  dest_path: absolutePathSchema.describe(
+  dest_path: absolutePathSchema().describe(
     "absolute destination path in the browser vm.",
   ),
   content: z.string().describe("file contents, encoded according to encoding."),
@@ -58,15 +60,15 @@ const browserFileParamsSchema = z.object({
     ])
     .describe("filesystem operation to perform."),
   session_id: z.string().min(1).describe("browser session id or name."),
-  path: absolutePathSchema
+  path: absolutePathSchema()
     .describe(
       "(list, get_info, read, download, write, download_dir_zip, create_directory, delete_file, delete_directory, set_permissions) absolute file or directory path in the browser vm.",
     )
     .optional(),
-  src_path: absolutePathSchema
+  src_path: absolutePathSchema()
     .describe("(move) absolute source path.")
     .optional(),
-  dest_path: absolutePathSchema
+  dest_path: absolutePathSchema()
     .describe("(move, upload_zip) absolute destination path.")
     .optional(),
   content: z
@@ -116,7 +118,7 @@ const browserFileParamsSchema = z.object({
 
 type BrowserFileParams = z.infer<typeof browserFileParamsSchema>;
 type BrowserFsClient = KernelClient["browsers"]["fs"];
-type MutationOptions = { maxRetries: 0; signal: AbortSignal };
+type NoRetryOptions = { maxRetries: 0; signal: AbortSignal };
 
 function required(value: string | undefined, name: string, action: string) {
   if (value !== undefined) return value;
@@ -222,7 +224,7 @@ async function readCapped(
 async function runBrowserFileAction(
   fs: BrowserFsClient,
   params: BrowserFileParams,
-  mutation: MutationOptions,
+  noRetry: NoRetryOptions,
 ) {
   const maxBytes = params.max_bytes ?? DEFAULT_MAX_BYTES;
 
@@ -275,7 +277,7 @@ async function runBrowserFileAction(
         params.session_id,
         decoded,
         { path, ...(params.mode && { mode: params.mode }) },
-        mutation,
+        noRetry,
       );
       return textResponse(`wrote file ${path}`);
     }
@@ -295,7 +297,7 @@ async function runBrowserFileAction(
           file: await toFile(decoded, file.dest_path.split("/").pop()),
         });
       }
-      await fs.upload(params.session_id, { files }, mutation);
+      await fs.upload(params.session_id, { files }, noRetry);
       return textResponse(`uploaded ${files.length} file(s)`);
     }
     case "upload_zip": {
@@ -308,7 +310,7 @@ async function runBrowserFileAction(
       await fs.uploadZip(
         params.session_id,
         { dest_path: destPath, zip_file: await toFile(decoded, "upload.zip") },
-        mutation,
+        noRetry,
       );
       return textResponse(`uploaded and extracted archive to ${destPath}`);
     }
@@ -316,7 +318,7 @@ async function runBrowserFileAction(
       const path = required(params.path, "path", params.action);
       if (typeof path !== "string") return path;
       const buffer = await boundedBuffer(
-        await fs.downloadDirZip(params.session_id, { path }),
+        await fs.downloadDirZip(params.session_id, { path }, noRetry),
         maxBytes,
       );
       if (!buffer) {
@@ -337,7 +339,7 @@ async function runBrowserFileAction(
       await fs.createDirectory(
         params.session_id,
         { path, ...(params.mode && { mode: params.mode }) },
-        mutation,
+        noRetry,
       );
       return textResponse(`created directory ${path}`);
     }
@@ -349,20 +351,20 @@ async function runBrowserFileAction(
       await fs.move(
         params.session_id,
         { src_path: srcPath, dest_path: destPath },
-        mutation,
+        noRetry,
       );
       return textResponse(`moved ${srcPath} to ${destPath}`);
     }
     case "delete_file": {
       const path = required(params.path, "path", params.action);
       if (typeof path !== "string") return path;
-      await fs.deleteFile(params.session_id, { path }, mutation);
+      await fs.deleteFile(params.session_id, { path }, noRetry);
       return textResponse(`deleted file ${path}`);
     }
     case "delete_directory": {
       const path = required(params.path, "path", params.action);
       if (typeof path !== "string") return path;
-      await fs.deleteDirectory(params.session_id, { path }, mutation);
+      await fs.deleteDirectory(params.session_id, { path }, noRetry);
       return textResponse(`deleted directory ${path}`);
     }
     case "set_permissions": {
@@ -378,7 +380,7 @@ async function runBrowserFileAction(
           ...(params.owner && { owner: params.owner }),
           ...(params.group && { group: params.group }),
         },
-        mutation,
+        noRetry,
       );
       return textResponse(`updated permissions for ${path}`);
     }
