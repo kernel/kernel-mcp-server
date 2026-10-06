@@ -43,7 +43,7 @@ export const vaultItemFields: OutputFields = {
   expanded: { payment_methods: paymentMethodFields },
   spec: {
     ...fields(
-      "provider wallet user_id payment_method_id card_id amount currency merchant merchant_name merchant_url context expires_at description account access_token_expires_at",
+      "provider wallet user_id payment_method_id card_id amount currency merchant merchant_name merchant_url merchant_country context expires_at description account access_token_expires_at",
     ),
     requests: onePasswordRequestFields,
     fields: fields("name label type required sensitive"),
@@ -74,7 +74,7 @@ export const vaultItemFields: OutputFields = {
     preparation: fields(
       "id status browser_id merchant_origin environment created_at expires_at approval_url",
     ),
-    masks: fields("brand last4"),
+    masks: fields("brand last4 token_last4"),
     aliases: fields("number cvc exp_month exp_year"),
     authorization: fields(
       "id status psp merchant amount amount_cents currency created_at expires_at approval_url browser_id reason psp_error_code expected_cents actual_cents amount_authority amount_verified charged_amount_cents charged_currency charged_kind replay_attempted replay_status replay_delivered",
@@ -382,7 +382,7 @@ export function vaultItemResponse(
   const payment = z
     .object({
       type: z.enum(["card", "wallet"]),
-      spec: z.object({ provider: z.enum(["link", "agentcard"]) }),
+      spec: z.object({ provider: z.enum(["link", "agentcard", "kernel"]) }),
     })
     .safeParse(projected);
   const cardProvider =
@@ -430,6 +430,16 @@ export function vaultItemResponse(
                       "wallets connect a payment provider; they are not fillable cards. use manage_vault_cards to configure a purchase request, then inspect that card's state and advertised operations.",
                     ]
                   : []),
+                ...(payment.success && payment.data.spec.provider === "kernel"
+                  ? [
+                      "KERNEL wallet enrollment and visa spend approval are cardholder actions. share action urls only with the intended user privately, never open them or put them in logs or traces. payment_methods eligibility is advisory; eligible=false means do not authorize with that method. observe state with get/events before continuing.",
+                    ]
+                  : []),
+                ...(cardProvider === "kernel"
+                  ? [
+                      "KERNEL cards require merchant_country for visa purchases. after explicit user approval, use manage_vault_cards authorize only when advertised; visa may return a spend_approval action for the cardholder. poll get/events until ready. only then use the advertised fill operation at spec.merchant_url's exact origin before expires_at. fill does not submit checkout or prove payment. KERNEL cards have no aliases or egress substitution and cannot be updated.",
+                    ]
+                  : []),
                 ...(cardProvider === "link"
                   ? [
                       "link cards use browser field writes for checkout only when advertised. link does not expose aliases or support egress substitution; do not use aliases from older responses, which fail closed on supported payment shapes. the browser must retain this vault attachment in the same project. the exact current https top-level page url must have the origin of spec.merchant_url. the card must remain ready and unexpired with stored card material and a non-deleted parent wallet; lifecycle and destination checks still apply.",
@@ -469,6 +479,14 @@ const onePasswordCredentialGuidance = [
 
 const onePasswordStoredTokenGuidance =
   "this credential has no account: it uses a customer-supplied 1password access token stored encrypted by KERNEL, and spec.access_token_expires_at is optional expiry metadata. the integrating developer replaces the token through the KERNEL api; 1pw_update_access_token is not available through mcp. never ask for or accept 1password tokens or integration keys in chat. while the token is expired, request and fill are unavailable.";
+
+// Kernel-hosted action URLs are bearer capabilities; upstream error text is not
+// trusted to omit them.
+export function throwKernelVaultError(tool: string, action: string): never {
+  throw new Error(
+    `error in ${tool} (${action}): inspect item state and events before taking further action. do not retry an uncertain authorization.`,
+  );
+}
 
 export function throwVaultError(
   tool: string,
