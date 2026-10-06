@@ -16,6 +16,10 @@ async function callBrowserFiles(fs: unknown, args: Record<string, unknown>) {
   }
 }
 
+function fileInfo(sizeBytes: number) {
+  return async () => ({ size_bytes: sizeBytes });
+}
+
 function text(result: Awaited<ReturnType<typeof callBrowserFiles>>) {
   const [content] = result.content as Array<{ type: string; text?: string }>;
   return content.type === "text" ? content.text : undefined;
@@ -52,6 +56,7 @@ describe("manage_browser_files", () => {
 
   test("reads text without wrapping the contents", async () => {
     const fs = {
+      fileInfo: fileInfo(12),
       readFile: async () => new Response("hello\nworld\n"),
     } as any;
 
@@ -64,11 +69,12 @@ describe("manage_browser_files", () => {
     expect(text(result)).toBe("hello\nworld\n");
   });
 
-  test("returns binary downloads as embedded resources", async () => {
+  test("returns binary downloads as octet-stream embedded resources", async () => {
     const fs = {
+      fileInfo: fileInfo(3),
       readFile: async () =>
         new Response(new Uint8Array([0, 1, 2]), {
-          headers: { "content-type": "image/png" },
+          headers: { "content-type": "application/octet-stream" },
         }),
     } as any;
 
@@ -84,7 +90,7 @@ describe("manage_browser_files", () => {
         resource: {
           uri: "kernel-browser-file://session-1/tmp/a%20file.png",
           blob: "AAEC",
-          mimeType: "image/png",
+          mimeType: "application/octet-stream",
         },
       },
     ]);
@@ -97,9 +103,11 @@ describe("manage_browser_files", () => {
         sessionId: string,
         contents: Uint8Array,
         params: { path: string; mode?: string },
+        options: { maxRetries?: number },
       ) => {
         expect(sessionId).toBe("session-1");
         expect(params).toEqual({ path: "/tmp/file.bin", mode: "0600" });
+        expect(options.maxRetries).toBe(0);
         written = contents;
       },
     } as any;
@@ -212,18 +220,33 @@ describe("manage_browser_files", () => {
   });
 
   test("routes filesystem mutations to the SDK", async () => {
-    const calls: Array<[string, unknown]> = [];
+    const calls: Array<[string, unknown, number | undefined]> = [];
     const fs = {
-      createDirectory: async (_id: string, params: unknown) =>
-        calls.push(["createDirectory", params]),
-      move: async (_id: string, params: unknown) =>
-        calls.push(["move", params]),
-      deleteFile: async (_id: string, params: unknown) =>
-        calls.push(["deleteFile", params]),
-      deleteDirectory: async (_id: string, params: unknown) =>
-        calls.push(["deleteDirectory", params]),
-      setFilePermissions: async (_id: string, params: unknown) =>
-        calls.push(["setFilePermissions", params]),
+      createDirectory: async (
+        _id: string,
+        params: unknown,
+        options: { maxRetries?: number },
+      ) => calls.push(["createDirectory", params, options.maxRetries]),
+      move: async (
+        _id: string,
+        params: unknown,
+        options: { maxRetries?: number },
+      ) => calls.push(["move", params, options.maxRetries]),
+      deleteFile: async (
+        _id: string,
+        params: unknown,
+        options: { maxRetries?: number },
+      ) => calls.push(["deleteFile", params, options.maxRetries]),
+      deleteDirectory: async (
+        _id: string,
+        params: unknown,
+        options: { maxRetries?: number },
+      ) => calls.push(["deleteDirectory", params, options.maxRetries]),
+      setFilePermissions: async (
+        _id: string,
+        params: unknown,
+        options: { maxRetries?: number },
+      ) => calls.push(["setFilePermissions", params, options.maxRetries]),
     } as any;
 
     await callBrowserFiles(fs, {
@@ -258,13 +281,14 @@ describe("manage_browser_files", () => {
     });
 
     expect(calls).toEqual([
-      ["createDirectory", { path: "/tmp/new", mode: "0755" }],
-      ["move", { src_path: "/tmp/old", dest_path: "/tmp/new" }],
-      ["deleteFile", { path: "/tmp/file" }],
-      ["deleteDirectory", { path: "/tmp/dir" }],
+      ["createDirectory", { path: "/tmp/new", mode: "0755" }, 0],
+      ["move", { src_path: "/tmp/old", dest_path: "/tmp/new" }, 0],
+      ["deleteFile", { path: "/tmp/file" }, 0],
+      ["deleteDirectory", { path: "/tmp/dir" }, 0],
       [
         "setFilePermissions",
         { path: "/tmp/file", mode: "0640", owner: "1000", group: "1000" },
+        0,
       ],
     ]);
   });
@@ -312,6 +336,187 @@ describe("manage_browser_files", () => {
       const result = await callBrowserFiles(fs, args);
       expect(result.isError).toBe(true);
       expect(text(result)).not.toContain("unexpected SDK call");
+    }
+  });
+
+  test("uses mime_type for downloads", async () => {
+    const fs = {
+      fileInfo: fileInfo(3),
+      readFile: async () => new Response(new Uint8Array([0, 1, 2])),
+    } as any;
+
+    const result = await callBrowserFiles(fs, {
+      action: "download",
+      session_id: "session-1",
+      path: "/tmp/a.png",
+      mime_type: "image/png",
+    });
+
+    expect((result.content as unknown[])[0]).toEqual({
+      type: "resource",
+      resource: {
+        uri: "kernel-browser-file://session-1/tmp/a.png",
+        blob: "AAEC",
+        mimeType: "image/png",
+      },
+    });
+  });
+
+  test("flags binary content returned by read", async () => {
+    const fs = {
+      fileInfo: fileInfo(3),
+      readFile: async () => new Response(new Uint8Array([0xff, 0xfe, 0x00])),
+    } as any;
+
+    const result = await callBrowserFiles(fs, {
+      action: "read",
+      session_id: "session-1",
+      path: "/tmp/a.bin",
+    });
+
+    expect(text(result)).toEndWith(
+      '(note: this file appears binary; use "download" to get its bytes.)',
+    );
+  });
+
+  test.each(["read", "download"])(
+    "refuses to %s files over max_bytes without reading them",
+    async (action) => {
+      let read = false;
+      const fs = {
+        fileInfo: fileInfo(11 * 1024 * 1024),
+        readFile: async () => {
+          read = true;
+          return new Response("");
+        },
+      } as any;
+
+      const result = await callBrowserFiles(fs, {
+        action,
+        session_id: "session-1",
+        path: "/tmp/big.log",
+      });
+
+      expect(read).toBe(false);
+      expect(result.isError).toBe(true);
+      expect(text(result)).toBe(
+        'error: /tmp/big.log (11534336 bytes) exceeds max_bytes (10485760). use "list" or "get_info" to find a smaller file, or exec_command to split, compress, or filter it first.',
+      );
+    },
+  );
+
+  test("refuses a file that grows past max_bytes after the size check", async () => {
+    const fs = {
+      fileInfo: fileInfo(4),
+      readFile: async () => new Response("grown"),
+    } as any;
+
+    const result = await callBrowserFiles(fs, {
+      action: "read",
+      session_id: "session-1",
+      path: "/tmp/growing.log",
+      max_bytes: 4,
+    });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toStartWith(
+      "error: /tmp/growing.log exceeds max_bytes (4).",
+    );
+  });
+
+  test("stops reading directory archives at max_bytes", async () => {
+    let cancelled = false;
+    const fs = {
+      downloadDirZip: async () =>
+        new Response(
+          new ReadableStream({
+            pull(controller) {
+              controller.enqueue(new Uint8Array(3));
+            },
+            cancel() {
+              cancelled = true;
+            },
+          }),
+        ),
+    } as any;
+
+    const result = await callBrowserFiles(fs, {
+      action: "download_dir_zip",
+      session_id: "session-1",
+      path: "/home/kernel",
+      max_bytes: 8,
+    });
+
+    expect(cancelled).toBe(true);
+    expect(result.isError).toBe(true);
+    expect(text(result)).toBe(
+      'error: the archive of /home/kernel exceeds max_bytes (8). use "list" to pick a smaller subdirectory, or exec_command to build a smaller archive.',
+    );
+  });
+
+  test("uploads and extracts zip archives", async () => {
+    let uploaded: any;
+    let retries: number | undefined;
+    const fs = {
+      uploadZip: async (
+        sessionId: string,
+        params: unknown,
+        options: { maxRetries?: number },
+      ) => {
+        expect(sessionId).toBe("session-1");
+        uploaded = params;
+        retries = options.maxRetries;
+      },
+    } as any;
+
+    const result = await callBrowserFiles(fs, {
+      action: "upload_zip",
+      session_id: "session-1",
+      dest_path: "/tmp/extracted",
+      content: "UEs=",
+      encoding: "base64",
+    });
+
+    expect(uploaded.dest_path).toBe("/tmp/extracted");
+    expect(uploaded.zip_file.name).toBe("upload.zip");
+    expect([...new Uint8Array(await uploaded.zip_file.arrayBuffer())]).toEqual([
+      80, 75,
+    ]);
+    expect(retries).toBe(0);
+    expect(text(result)).toBe(
+      "uploaded and extracted archive to /tmp/extracted",
+    );
+  });
+
+  test("rejects relative paths before calling the SDK", async () => {
+    const fs = new Proxy(
+      {},
+      {
+        get: () => {
+          throw new Error("unexpected SDK call");
+        },
+      },
+    );
+
+    for (const args of [
+      { action: "read", session_id: "session-1", path: "tmp/a.txt" },
+      {
+        action: "move",
+        session_id: "session-1",
+        src_path: "/a",
+        dest_path: "b",
+      },
+      {
+        action: "upload",
+        session_id: "session-1",
+        files: [{ dest_path: "a.txt", content: "a" }],
+      },
+    ]) {
+      const result = await callBrowserFiles(fs, args);
+      expect(result.isError).toBe(true);
+      expect(text(result)).toContain(
+        "must be an absolute path starting with /",
+      );
     }
   });
 });
