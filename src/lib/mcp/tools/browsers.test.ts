@@ -305,7 +305,7 @@ describe("manage_browsers telemetry", () => {
 
       expect(result.isError).toBeTrue();
       expect(toolResultText(result)).toContain(
-        "Raw screenshot PNGs are not available",
+        "raw screenshot pngs are not available",
       );
       expect(queries).toHaveLength(1);
     } finally {
@@ -335,7 +335,7 @@ describe("manage_browsers telemetry", () => {
         "late events or retention may change results",
       );
       expect(compact?.description).toContain("limit<=5");
-      expect(compact?.description).toContain("1 MiB");
+      expect(compact?.description).toContain("1 mib");
     } finally {
       await close();
     }
@@ -351,7 +351,10 @@ describe("manage_browsers proxy routes", () => {
     try {
       const { tools } = await client.listTools();
       const browser = tools.find(({ name }) => name === "manage_browsers");
-      const routes = browser?.inputSchema.properties?.proxy_routes as
+      const network = browser?.inputSchema.properties?.network as
+        | { properties?: Record<string, unknown> }
+        | undefined;
+      const routes = network?.properties?.proxy_routes as
         | {
             description?: string;
             maxItems?: number;
@@ -469,6 +472,102 @@ describe("manage_browsers proxy routes", () => {
     }
   });
 
+  test("passes network.proxy_routes through SDK create unchanged", async () => {
+    const requests: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (params: unknown) => {
+            requests.push(params);
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+    try {
+      const network = {
+        private_hosts: ["*.preview.example.ts.net", "100.64.0.0/10"],
+        proxy_routes: [
+          { hosts: ["example.com"], proxy: { id: "prx_route" } },
+          { hosts: ["*.example.org"], proxy: { name: "backup" } },
+        ],
+      };
+      for (const args of [
+        { proxy: { name: "default" }, network },
+        { network: { private_hosts: [] } },
+      ]) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "create", ...args },
+        });
+        expect(result.isError).toBeFalsy();
+      }
+      expect(requests).toEqual([
+        { proxy: { name: "default" }, network },
+        { network: { private_hosts: [] } },
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects invalid network routes before SDK create", async () => {
+    let creates = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async () => {
+            creates++;
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+    try {
+      const cases: Array<[Record<string, unknown>, string]> = [
+        [
+          {
+            network: { proxy_routes: [{ hosts: ["example.com"], proxy: {} }] },
+          },
+          "network.proxy_routes[0].proxy requires exactly one of id or name",
+        ],
+        [
+          {
+            network: {
+              proxy_routes: [
+                {
+                  hosts: ["example.com"],
+                  proxy: { id: "prx_route", name: "backup" },
+                },
+              ],
+            },
+          },
+          "network.proxy_routes[0].proxy requires exactly one of id or name",
+        ],
+        [
+          {
+            network: { proxy_routes: [] },
+            proxy_routes: [{ hosts: ["example.com"], proxy_id: "prx_route" }],
+          },
+          "network cannot be combined with proxy_routes",
+        ],
+      ];
+      for (const [args, message] of cases) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "create", ...args },
+        });
+        expect(result.isError).toBe(true);
+        expect(toolResultText(result)).toContain(message);
+      }
+      expect(creates).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+
   test("rejects routes on update without calling the SDK", async () => {
     let updates = 0;
     const { client, close } = await connectTestMcp(
@@ -495,6 +594,105 @@ describe("manage_browsers proxy routes", () => {
       expect(result.isError).toBe(true);
       expect(toolResultText(result)).toContain("creation-only");
       expect(updates).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe("manage_browsers proxy", () => {
+  test("passes the proxy config through SDK create and update", async () => {
+    const creates: unknown[] = [];
+    const updates: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (params: unknown) => {
+            creates.push(params);
+            return { session_id: "brr_123" };
+          },
+          update: async (sessionId: string, params: unknown) => {
+            updates.push([sessionId, params]);
+            return { session_id: sessionId };
+          },
+        },
+      },
+    );
+    try {
+      for (const proxy of [{ name: "residential" }, { id: "prx_123" }]) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "create", proxy },
+        });
+        expect(result.isError).toBeFalsy();
+      }
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "update",
+          session_id: "brr_123",
+          proxy: { mode: "direct" },
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(creates).toEqual([
+        { proxy: { name: "residential" } },
+        { proxy: { id: "prx_123" } },
+      ]);
+      expect(updates).toEqual([["brr_123", { proxy: { mode: "direct" } }]]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects ambiguous proxy selection without calling the SDK", async () => {
+    let calls = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+          update: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+    try {
+      const invalid = [
+        { action: "create", proxy: {} },
+        { action: "create", proxy: { id: "prx_123", name: "residential" } },
+        {
+          action: "create",
+          proxy: { name: "residential" },
+          proxy_id: "prx_123",
+        },
+        {
+          action: "update",
+          session_id: "brr_123",
+          proxy: { name: "residential" },
+          clear_proxy: true,
+        },
+        {
+          action: "update",
+          session_id: "brr_123",
+          proxy: { mode: "default" },
+          disable_default_proxy: false,
+        },
+      ];
+      for (const args of invalid) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: args,
+        });
+        expect(result.isError).toBe(true);
+      }
+      expect(calls).toBe(0);
     } finally {
       await close();
     }

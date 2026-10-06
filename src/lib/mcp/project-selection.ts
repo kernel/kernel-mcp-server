@@ -3,10 +3,10 @@ import { z } from "zod";
 import type { McpConnectionContext } from "@/lib/mcp/auth-context";
 
 const DEFAULT_PROJECT_DESCRIPTION =
-  "Optional project name or ID used to scope this operation. On organization-wide connections, omit it to use the API's organization-wide or default-project behavior. On project-scoped connections, omit it or pass the fixed project returned by get_connection_context.";
+  "optional project name or id used to scope this operation. on organization-wide connections, omit it to use the api's organization-wide or default-project behavior. on project-scoped connections, omit it or pass the fixed project returned by get_connection_context.";
 
 const DEFAULT_PROJECT_ID_DESCRIPTION =
-  "Deprecated: use `project` instead. Optional project ID used to scope this operation. On organization-wide connections, omit it to use the API's organization-wide or default-project behavior. On project-scoped connections, omit it or pass the fixed project ID returned by get_connection_context.";
+  "deprecated: use `project` instead. optional project id used to scope this operation. on organization-wide connections, omit it to use the api's organization-wide or default-project behavior. on project-scoped connections, omit it or pass the fixed project id returned by get_connection_context.";
 
 export type ProjectSelection = {
   project?: string;
@@ -46,7 +46,7 @@ export function connectionContextFromAuthInfo(
 ): McpConnectionContext {
   const context = authInfo.extra?.connectionContext;
   if (!context || typeof context !== "object" || !("scope" in context)) {
-    throw new Error("Kernel connection scope is unavailable");
+    throw new Error("KERNEL connection scope is unavailable");
   }
   return context as McpConnectionContext;
 }

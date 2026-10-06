@@ -148,7 +148,7 @@ describe("projectIDForOperation", () => {
       scopes: [],
     };
     expect(() => connectionContextFromAuthInfo(info)).toThrow(
-      "Kernel connection scope is unavailable",
+      "KERNEL connection scope is unavailable",
     );
   });
 });

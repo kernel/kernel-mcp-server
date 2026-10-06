@@ -40,18 +40,18 @@ describe("vault SDK request contracts", () => {
       }
       const cards = tools.find((tool) => tool.name === "manage_vault_cards");
       expect(cards?.description).toContain(
-        "Mode is determined by the wallet credentials",
+        "mode is determined by the wallet credentials",
       );
       expect(cards?.description).toContain(
-        "Pending issuance updates preserve omitted optional fields",
+        "pending issuance updates preserve omitted optional fields",
       );
       expect(cards?.description).toContain("recovery_required");
       expect(JSON.stringify(cards?.inputSchema)).toContain("checkout_origin");
       expect(cards?.description).toContain(
-        "Kernel does not compare it with the browser page",
+        "KERNEL does not compare it with the browser page",
       );
       expect(cards?.description).toContain(
-        "Prepared checkout uses preparation.merchant_origin",
+        "prepared checkout uses preparation.merchant_origin",
       );
       expect(fixture.requests).toHaveLength(0);
     } finally {

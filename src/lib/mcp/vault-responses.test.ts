@@ -264,9 +264,9 @@ describe("vault public responses", () => {
         expect(text).toContain(`${status} `);
         expect(text).toContain(message);
         expect(text).toContain(`[code: ${code}]`);
-        expect(text).toContain("Do not replay a payment.");
+        expect(text).toContain("do not replay a payment.");
         expect(text).not.toContain("hidden");
-        expect(text).not.toContain("Provider configuration writes");
+        expect(text).not.toContain("provider configuration writes");
       } finally {
         await fixture.close();
       }
@@ -322,7 +322,7 @@ describe("vault public responses", () => {
         expect(result.isError).toBe(true);
         expect(text).toContain("400 A new API diagnostic message.");
         expect(text).toContain("[code: new_api_error]");
-        expect(text).toContain("Do not replay a payment.");
+        expect(text).toContain("do not replay a payment.");
         expect(fixture.requests).toHaveLength(1);
       } finally {
         await fixture.close();
@@ -350,7 +350,7 @@ describe("vault public responses", () => {
         expect(result.content).toEqual([
           {
             type: "text",
-            text: `Error in manage_vault_items (get): 400 ${message} [code: element_not_found] Inspect item state/events before taking further action. Do not replay a payment.`,
+            text: `error in manage_vault_items (get): 400 ${message} [code: element_not_found] inspect item state/events before taking further action. do not replay a payment.`,
           },
         ]);
       } finally {

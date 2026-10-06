@@ -71,7 +71,7 @@ const checkedKernelToolSchema = z
     if (toolName) return toolName;
     context.addIssue({
       code: "custom",
-      message: "must name a tool provided by the KERNEL MCP server",
+      message: "must name a tool provided by the KERNEL mcp server",
     });
     return z.NEVER;
   });
@@ -80,13 +80,13 @@ const missingCapabilityFields = {
   context: z
     .string()
     .describe(
-      "The missing capability and the user's goal, in 15-25 words and third person. Never include credentials, URLs, domains, account names, file contents, paths, or personal data. For site tools, put the public registrable domain only in site_domain.",
+      "the missing capability and the user's goal, in 15-25 words and third person. never include credentials, urls, domains, account names, file contents, paths, or personal data. for site tools, put the public registrable domain only in site_domain.",
     ),
   gap_reason: gapReasonSchema.describe(
-    "Classify the gap. kernel_capability_missing, site_tool_missing, and external_integration_unavailable are recorded separately. site_tool_missing means a reusable site action is not exposed by webmcp after checking its list, even if Playwright can complete the task. For an existing tool failure, use submit_feedback instead; transient failures and client restrictions are not capability gaps.",
+    "classify the gap. kernel_capability_missing, site_tool_missing, and external_integration_unavailable are recorded separately. site_tool_missing means a reusable site action is not exposed by webmcp after checking its list, even if playwright can complete the task. for an existing tool failure, use submit_feedback instead; transient failures and client restrictions are not capability gaps.",
   ),
   capability_area: capabilityAreaSchema.describe(
-    "The single KERNEL product area that would own the capability. Use webmcp for site_tool_missing, or external_integration/client_environment when Kernel does not own it.",
+    "the single KERNEL product area that would own the capability. use webmcp for site_tool_missing, or external_integration/client_environment when KERNEL does not own it.",
   ),
   capability: z
     .string()
@@ -94,7 +94,7 @@ const missingCapabilityFields = {
     .min(1)
     .max(100)
     .describe(
-      'A short generic capability name, such as "browser filesystem upload". Do not include a site, customer, account, domain, path, or payload.',
+      'a short generic capability name, such as "browser filesystem upload". do not include a site, customer, account, domain, path, or payload.',
     ),
   site_domain: z
     .string()
@@ -103,23 +103,23 @@ const missingCapabilityFields = {
     .refine((value) => {
       const parsed = parseDomain(value, { allowPrivateDomains: false });
       return parsed.isIcann && parsed.domain === value;
-    }, "must be a public registrable domain without a subdomain or URL components")
+    }, "must be a public registrable domain without a subdomain or url components")
     .optional()
     .describe(
-      "Only for site_tool_missing: the public registrable domain (e.g. example.com), when known. No URL, subdomain, path, query, port, account identifier, or private hostname.",
+      "only for site_tool_missing: the public registrable domain (e.g. example.com), when known. no url, subdomain, path, query, port, account identifier, or private hostname.",
     ),
   requested_action: requestedActionSchema.describe(
-    "The primary operation the missing capability needed to perform.",
+    "the primary operation the missing capability needed to perform.",
   ),
   task_outcome: taskOutcomeSchema.describe(
-    "Whether the task was completed, completed through a workaround, partially completed, or blocked.",
+    "whether the task was completed, completed through a workaround, partially completed, or blocked.",
   ),
   tools_checked: z
     .array(checkedKernelToolSchema)
     .max(10)
     .optional()
     .describe(
-      "The closest KERNEL MCP tools checked before confirming the gap. Omit when no existing tool is relevant.",
+      "the closest KERNEL mcp tools checked before confirming the gap. omit when no existing tool is relevant.",
     ),
 };
 
@@ -146,7 +146,7 @@ function legacySchemaResponse() {
     recorded: false,
     status: "legacy_schema_refresh_required",
     message:
-      "This client used the previous get_more_tools schema. Refresh the available tool definitions, retry with the structured fields, and continue the original task with any available workaround.",
+      "this client used the previous get_more_tools schema. refresh the available tool definitions, retry with the structured fields, and continue the original task with any available workaround.",
   });
 }
 
@@ -188,14 +188,14 @@ export function registerMissingCapabilityTool(
     KERNEL_MISSING_CAPABILITY_TOOL_NAME,
     {
       description:
-        "Report a missing KERNEL capability, external integration, or reusable site-specific WebMCP action after checking the tool list. For a site action, first list webmcp tools in the browser; if no suitable action is exposed, report site_tool_missing with capability_area webmcp, optionally site_domain, and continue using Playwright when possible. Do not report an existing tool failure, transient capacity failure, or client permission restriction as demand; use submit_feedback for an existing KERNEL tool failure. A request does not install a tool or replace the original task.",
+        "report a missing KERNEL capability, external integration, or reusable site-specific webmcp action after checking the tool list. for a site action, first list webmcp tools in the browser; if no suitable action is exposed, report site_tool_missing with capability_area webmcp, optionally site_domain, and continue using playwright when possible. do not report an existing tool failure, transient capacity failure, or client permission restriction as demand; use submit_feedback for an existing KERNEL tool failure. a request does not install a tool or replace the original task.",
       inputSchema: structuredMissingCapabilitySchema,
       annotations: {
-        title: "Get more tools",
+        title: "get more tools",
         readOnlyHint: false,
         destructiveHint: false,
         idempotentHint: false,
-        openWorldHint: true,
+        openWorldHint: false,
       },
     },
     async (report, ctx) => {
@@ -212,8 +212,8 @@ export function registerMissingCapabilityTool(
           status: "not_a_capability_gap",
           message:
             report.gap_reason === "existing_tool_failed"
-              ? "Use submit_feedback for the existing KERNEL tool, then continue the original task."
-              : "This is not a missing capability request. Continue the original task using its normal recovery or client-permission path.",
+              ? "use submit_feedback for the existing KERNEL tool, then continue the original task."
+              : "this is not a missing capability request. continue the original task using its normal recovery or client-permission path.",
         });
       }
       if (
@@ -230,7 +230,7 @@ export function registerMissingCapabilityTool(
           recorded: false,
           status: "invalid_capability_owner",
           message:
-            "gap_reason and capability_area identify different owners. Correct the classification, then continue the original task.",
+            "gap_reason and capability_area identify different owners. correct the classification, then continue the original task.",
         });
       }
 
@@ -255,8 +255,8 @@ export function registerMissingCapabilityTool(
             : "kernel_product_demand",
         message:
           status === "recorded"
-            ? "The capability request was recorded. No additional KERNEL tools are available; continue the original task with any available workaround."
-            : "The capability request was not recorded. No additional KERNEL tools are available; continue the original task with any available workaround.",
+            ? "the capability request was recorded. no additional KERNEL tools are available; continue the original task with any available workaround."
+            : "the capability request was not recorded. no additional KERNEL tools are available; continue the original task with any available workaround.",
       });
     },
   );

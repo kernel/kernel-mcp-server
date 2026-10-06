@@ -16,7 +16,7 @@ export function registerCredentialProviderTools(server: McpServer) {
     "manage_credential_providers",
     {
       description:
-        'Manage external credential providers (e.g. 1Password). "list" returns configured providers, "get" retrieves one by ID, "create" configures a new provider with a service-account token, "update" changes its name/token/priority/enabled/cache_ttl_seconds, "delete" removes it, "list_items" returns available credential items from the provider (e.g. 1Password login items with their paths), and "test" validates the token and lists accessible vaults.',
+        'manage external credential providers (e.g. 1password). "list" returns configured providers, "get" retrieves one by id, "create" configures a new provider with a service-account token, "update" changes its name/token/priority/enabled/cache_ttl_seconds, "delete" removes it, "list_items" returns available credential items from the provider (e.g. 1password login items with their paths), and "test" validates the token and lists accessible vaults.',
       inputSchema: z.object({
         action: z
           .enum([
@@ -28,51 +28,51 @@ export function registerCredentialProviderTools(server: McpServer) {
             "list_items",
             "test",
           ])
-          .describe("Operation to perform."),
+          .describe("operation to perform."),
         id: z
           .string()
           .describe(
-            "(get, update, delete, list_items, test) Credential provider ID.",
+            "(get, update, delete, list_items, test) credential provider id.",
           )
           .optional(),
         ...paginationParams,
         name: z
           .string()
-          .describe("(create, update) Human-readable name (unique per org).")
+          .describe("(create, update) human-readable name (unique per org).")
           .optional(),
         token: z
           .string()
           .describe(
-            "(create) Service-account token for the provider. (update) New token to rotate credentials.",
+            "(create) service-account token for the provider. (update) new token to rotate credentials.",
           )
           .optional(),
         provider_type: z
           .enum(["onepassword"])
-          .describe("(create) Type of credential provider.")
+          .describe("(create) type of credential provider.")
           .optional(),
         cache_ttl_seconds: z
           .number()
           .int()
           .describe(
-            "(create, update) How long to cache credential lists (default 300).",
+            "(create, update) how long to cache credential lists (default 300).",
           )
           .optional(),
         enabled: z
           .boolean()
           .describe(
-            "(update) Whether the provider is enabled for credential lookups.",
+            "(update) whether the provider is enabled for credential lookups.",
           )
           .optional(),
         priority: z
           .number()
           .int()
           .describe(
-            "(update) Priority order for credential lookups (lower numbers checked first).",
+            "(update) priority order for credential lookups (lower numbers checked first).",
           )
           .optional(),
       }),
       annotations: {
-        title: "Manage Kernel credential providers",
+        title: "manage KERNEL credential providers",
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false,
@@ -80,7 +80,7 @@ export function registerCredentialProviderTools(server: McpServer) {
       },
     },
     async (params, ctx) => {
-      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
       const client = createKernelClient(ctx.http.authInfo.token);
 
       try {
@@ -94,7 +94,7 @@ export function registerCredentialProviderTools(server: McpServer) {
           }
           case "get": {
             if (!params.id)
-              return errorResponse("Error: id is required for get.");
+              return errorResponse("error: id is required for get.");
             const provider = await client.credentialProviders.retrieve(
               params.id,
             );
@@ -103,7 +103,7 @@ export function registerCredentialProviderTools(server: McpServer) {
           case "create": {
             if (!params.token || !params.name || !params.provider_type) {
               return errorResponse(
-                "Error: token, name, and provider_type are required for create.",
+                "error: token, name, and provider_type are required for create.",
               );
             }
             const provider = await client.credentialProviders.create({
@@ -115,12 +115,12 @@ export function registerCredentialProviderTools(server: McpServer) {
               }),
             });
             if (!provider)
-              return errorResponse("Failed to create credential provider");
+              return errorResponse("failed to create credential provider");
             return jsonResponse(provider);
           }
           case "update": {
             if (!params.id)
-              return errorResponse("Error: id is required for update.");
+              return errorResponse("error: id is required for update.");
             const updateParams = {
               ...(params.name !== undefined && { name: params.name }),
               ...(params.token !== undefined && { token: params.token }),
@@ -136,7 +136,7 @@ export function registerCredentialProviderTools(server: McpServer) {
             };
             if (Object.keys(updateParams).length === 0) {
               return errorResponse(
-                "Error: at least one update field is required.",
+                "error: at least one update field is required.",
               );
             }
             const provider = await client.credentialProviders.update(
@@ -147,13 +147,13 @@ export function registerCredentialProviderTools(server: McpServer) {
           }
           case "delete": {
             if (!params.id)
-              return errorResponse("Error: id is required for delete.");
+              return errorResponse("error: id is required for delete.");
             await client.credentialProviders.delete(params.id);
-            return textResponse(`Credential provider ${params.id} deleted.`);
+            return textResponse(`credential provider ${params.id} deleted.`);
           }
           case "list_items": {
             if (!params.id)
-              return errorResponse("Error: id is required for list_items.");
+              return errorResponse("error: id is required for list_items.");
             const response = await client.credentialProviders.listItems(
               params.id,
             );
@@ -161,7 +161,7 @@ export function registerCredentialProviderTools(server: McpServer) {
           }
           case "test": {
             if (!params.id)
-              return errorResponse("Error: id is required for test.");
+              return errorResponse("error: id is required for test.");
             const result = await client.credentialProviders.test(params.id);
             return jsonResponse(result);
           }

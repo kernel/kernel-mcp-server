@@ -65,7 +65,7 @@ describe("vault next-step hints", () => {
     expect(JSON.stringify(result.hints)).not.toContain("provider.example");
     expect(JSON.stringify(result)).not.toContain("hidden");
     expect(result.guidance.join(" ")).toContain(
-      "Invocation hints are not approval",
+      "invocation hints are not approval",
     );
   });
 

@@ -61,18 +61,18 @@ function buildPoolCreateParams(
   params: PoolConfigParams,
 ): BrowserConfigResult<BrowserPoolCreateParams> {
   if (params.size === undefined) {
-    return { ok: false, error: "Error: size is required for create." };
+    return { ok: false, error: "error: size is required for create." };
   }
   if (params.clear_profile || params.clear_extensions) {
     return {
       ok: false,
-      error: "Error: clear_profile and clear_extensions are update-only.",
+      error: "error: clear_profile and clear_extensions are update-only.",
     };
   }
   if (params.start_url === "") {
     return {
       ok: false,
-      error: "Error: an empty start_url is update-only.",
+      error: "error: an empty start_url is update-only.",
     };
   }
 
@@ -111,7 +111,7 @@ function buildPoolUpdateParams(
     return {
       ok: false,
       error:
-        "Error: clear_profile cannot be combined with profile_id or profile_name.",
+        "error: clear_profile cannot be combined with profile_id or profile_name.",
     };
   }
   if (
@@ -121,7 +121,7 @@ function buildPoolUpdateParams(
     return {
       ok: false,
       error:
-        "Error: clear_extensions cannot be combined with extension_id or extension_name.",
+        "error: clear_extensions cannot be combined with extension_id or extension_name.",
     };
   }
 
@@ -131,7 +131,7 @@ function buildPoolUpdateParams(
     try {
       new URL(params.start_url);
     } catch {
-      return { ok: false, error: "Error: start_url must be a valid URL." };
+      return { ok: false, error: "error: start_url must be a valid url." };
     }
   }
 
@@ -195,8 +195,8 @@ function summarizeBrowserPool(pool: BrowserPool) {
 
 function poolNextActions(pool: BrowserPool) {
   return [
-    `Use manage_browser_pools with action "acquire" and id_or_name "${pool.id}" to get a browser from this pool.`,
-    `Use manage_browser_pools with action "get" and id_or_name "${pool.id}" for full pool details.`,
+    `use manage_browser_pools with action "acquire" and id_or_name "${pool.id}" to get a browser from this pool.`,
+    `use manage_browser_pools with action "get" and id_or_name "${pool.id}" for full pool details.`,
   ];
 }
 
@@ -221,7 +221,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
     name: "browser_pools",
     uriTemplate:
       "kernel://orgs/{organizationId}/projects/{projectId}/browser-pools",
-    emptyText: "No browser pools found",
+    emptyText: "no browser pools found",
     read: async (client) => {
       const pools = [];
       for await (const pool of client.browserPools.list()) {
@@ -236,7 +236,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
     uriTemplate:
       "kernel://orgs/{organizationId}/projects/{projectId}/browser-pools/{idOrName}",
     variableName: "idOrName",
-    resourceLabel: "Browser pool",
+    resourceLabel: "browser pool",
     read: (client, idOrName) => client.browserPools.retrieve(idOrName),
   });
 
@@ -245,7 +245,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
     "manage_browser_pools",
     {
       description:
-        'Manage pre-warmed browser pools when an agent needs fast browser acquisition or reusable session capacity. Use "list" for a compact pool inventory, "get" for full details, "acquire" before controlling a pooled browser, and "release" when the browser should return to the pool.',
+        'manage pre-warmed browser pools when an agent needs fast browser acquisition or reusable session capacity. use "list" for a compact pool inventory, "get" for full details, "acquire" before controlling a pooled browser, and "release" when the browser should return to the pool.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z
@@ -259,11 +259,11 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
             "acquire",
             "release",
           ])
-          .describe("Operation to perform."),
+          .describe("operation to perform."),
         id_or_name: z
           .string()
           .describe(
-            "Pool ID or name. Required for update/get/delete/flush/acquire/release.",
+            "pool id or name. required for update/get/delete/flush/acquire/release.",
           )
           .optional(),
         size: z
@@ -271,85 +271,85 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           .int()
           .min(1)
           .describe(
-            "(create, update) Number of browsers to maintain in the pool.",
+            "(create, update) number of browsers to maintain in the pool.",
           )
           .optional(),
         name: z
           .string()
-          .describe("(create, update) Unique pool name.")
+          .describe("(create, update) unique pool name.")
           .optional(),
         headless: z
           .boolean()
-          .describe("(create, update) Headless mode for pool browsers.")
+          .describe("(create, update) headless mode for pool browsers.")
           .optional(),
         stealth: z
           .boolean()
           .describe(
-            "(create, update) Apply site-compatibility settings to pool browsers.",
+            "(create, update) apply site-compatibility settings to pool browsers.",
           )
           .optional(),
         timeout_seconds: browserPoolTimeoutSchema
           .describe(
-            "(create, update) Idle timeout for acquired browsers. Default 600.",
+            "(create, update) idle timeout for acquired browsers. default 600.",
           )
           .optional(),
         profile_name: z
           .string()
           .describe(
-            "(create, update) Profile name to load into pool browsers. Cannot use with profile_id.",
+            "(create, update) profile name to load into pool browsers. cannot use with profile_id.",
           )
           .optional(),
         profile_id: z
           .string()
           .describe(
-            "(create, update) Profile ID to load into pool browsers. Cannot use with profile_name.",
+            "(create, update) profile id to load into pool browsers. cannot use with profile_name.",
           )
           .optional(),
         clear_profile: z
           .boolean()
           .describe(
-            "(update) Remove the profile from the pool. Cannot use with profile_id or profile_name.",
+            "(update) remove the profile from the pool. cannot use with profile_id or profile_name.",
           )
           .optional(),
         proxy_id: z
           .string()
           .describe(
-            "(create, update) Proxy for pool browsers. On update, an empty string clears the proxy.",
+            "(create, update) proxy for pool browsers. on update, an empty string clears the proxy.",
           )
           .optional(),
         fill_rate_per_minute: browserPoolFillRateSchema
           .describe(
-            "(create, update) Pool fill rate percentage per minute. Default 25%.",
+            "(create, update) pool fill rate percentage per minute. default 25%.",
           )
           .optional(),
         start_url: z
           .union([z.literal(""), z.string().url()])
           .describe(
-            "(create, update) URL to open when a browser is warmed into the pool. On update, an empty string clears it. Navigation is best-effort.",
+            "(create, update) url to open when a browser is warmed into the pool. on update, an empty string clears it. navigation is best-effort.",
           )
           .optional(),
         chrome_policy: z
           .record(z.string(), z.unknown())
           .describe(
-            "(create, update) Chrome enterprise policy overrides for all browsers in the pool. On update, an empty object clears the policy. Kernel-managed policies such as extensions, proxy, CDP, and automation are blocked by the API.",
+            "(create, update) chrome enterprise policy overrides for all browsers in the pool. on update, an empty object clears the policy. KERNEL-managed policies such as extensions, proxy, cdp, and automation are blocked by the api.",
           )
           .optional(),
         kiosk_mode: z
           .boolean()
-          .describe("(create, update) Hide address bar/tabs in live view.")
+          .describe("(create, update) hide address bar/tabs in live view.")
           .optional(),
         extension_id: z
           .string()
-          .describe("(create, update) Extension ID to load.")
+          .describe("(create, update) extension id to load.")
           .optional(),
         extension_name: z
           .string()
-          .describe("(create, update) Extension name to load.")
+          .describe("(create, update) extension name to load.")
           .optional(),
         clear_extensions: z
           .boolean()
           .describe(
-            "(update) Remove all extensions from the pool. Cannot use with extension_id or extension_name.",
+            "(update) remove all extensions from the pool. cannot use with extension_id or extension_name.",
           )
           .optional(),
         viewport_width: z
@@ -357,7 +357,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           .int()
           .min(1)
           .describe(
-            "(create, update) Window width in pixels. Must pair with viewport_height.",
+            "(create, update) window width in pixels. must pair with viewport_height.",
           )
           .optional(),
         viewport_height: z
@@ -365,47 +365,47 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           .int()
           .min(1)
           .describe(
-            "(create, update) Window height in pixels. Must pair with viewport_width.",
+            "(create, update) window height in pixels. must pair with viewport_width.",
           )
           .optional(),
         viewport_refresh_rate: z
           .number()
           .int()
           .min(1)
-          .describe("(create, update) Display refresh rate in Hz.")
+          .describe("(create, update) display refresh rate in hz.")
           .optional(),
         discard_all_idle: z
           .boolean()
           .describe(
-            "(update) Discard idle browsers and rebuild the pool immediately.",
+            "(update) discard idle browsers and rebuild the pool immediately.",
           )
           .optional(),
         force: z
           .boolean()
-          .describe("(delete) Force delete even if browsers are leased.")
+          .describe("(delete) force delete even if browsers are leased.")
           .optional(),
         acquire_timeout_seconds: z
           .number()
           .int()
           .min(0)
-          .describe("(acquire) Max seconds to wait for a browser.")
+          .describe("(acquire) max seconds to wait for a browser.")
           .optional(),
         session_id: z
           .string()
           .describe(
-            "(release) Session ID of the browser to release. Must be the ID, not the session name.",
+            "(release) session id of the browser to release. must be the id, not the session name.",
           )
           .optional(),
         reuse: z
           .boolean()
           .describe(
-            "(release) Reuse browser instance or recreate. Default true.",
+            "(release) reuse browser instance or recreate. default true.",
           )
           .optional(),
         ...paginationParams,
       }),
       annotations: {
-        title: "Manage Kernel browser pools",
+        title: "manage KERNEL browser pools",
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false,
@@ -413,7 +413,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
       },
     },
     async (params, ctx) => {
-      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
       const client = createKernelClient(
         ctx.http.authInfo.token,
         projectForOperation(ctx.http.authInfo, params),
@@ -426,7 +426,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
             if (!createParams.ok) return errorResponse(createParams.error);
 
             const pool = await client.browserPools.create(createParams.value);
-            if (!pool) return errorResponse("Failed to create browser pool");
+            if (!pool) return errorResponse("failed to create browser pool");
             return jsonResponse({
               browser_pool: summarizeBrowserPool(pool),
               next_actions: poolNextActions(pool),
@@ -434,14 +434,14 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           }
           case "update": {
             if (!params.id_or_name) {
-              return errorResponse("Error: id_or_name is required for update.");
+              return errorResponse("error: id_or_name is required for update.");
             }
 
             const updateParams = buildPoolUpdateParams(params);
             if (!updateParams.ok) return errorResponse(updateParams.error);
             if (Object.keys(updateParams.value).length === 0) {
               return errorResponse(
-                "Error: at least one update field is required.",
+                "error: at least one update field is required.",
               );
             }
 
@@ -449,7 +449,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
               params.id_or_name,
               updateParams.value,
             );
-            if (!pool) return errorResponse("Failed to update browser pool");
+            if (!pool) return errorResponse("failed to update browser pool");
             return jsonResponse({
               browser_pool: summarizeBrowserPool(pool),
               next_actions: [
@@ -469,40 +469,40 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
             });
             return paginatedJsonResponse(page, {
               mapItem: summarizeBrowserPool,
-              note: 'Use action "get" with id_or_name for full pool details.',
-              emptyText: "No browser pools found",
+              note: 'use action "get" with id_or_name for full pool details.',
+              emptyText: "no browser pools found",
             });
           }
           case "get": {
             if (!params.id_or_name)
-              return errorResponse("Error: id_or_name is required for get.");
+              return errorResponse("error: id_or_name is required for get.");
             const pool = await client.browserPools.retrieve(params.id_or_name);
             if (!pool)
               return errorResponse(
-                `Browser pool "${params.id_or_name}" not found`,
+                `browser pool "${params.id_or_name}" not found`,
               );
             return jsonResponse(pool);
           }
           case "delete": {
             if (!params.id_or_name)
-              return errorResponse("Error: id_or_name is required for delete.");
+              return errorResponse("error: id_or_name is required for delete.");
             await client.browserPools.delete(params.id_or_name, {
               ...(params.force !== undefined && { force: params.force }),
             });
-            return textResponse("Browser pool deleted successfully");
+            return textResponse("browser pool deleted successfully");
           }
           case "flush": {
             if (!params.id_or_name)
-              return errorResponse("Error: id_or_name is required for flush.");
+              return errorResponse("error: id_or_name is required for flush.");
             await client.browserPools.flush(params.id_or_name);
             return textResponse(
-              "Pool flushed successfully. All idle browsers destroyed.",
+              "pool flushed successfully. all idle browsers destroyed.",
             );
           }
           case "acquire": {
             if (!params.id_or_name)
               return errorResponse(
-                "Error: id_or_name is required for acquire.",
+                "error: id_or_name is required for acquire.",
               );
             const browser = await client.browserPools.acquire(
               params.id_or_name,
@@ -513,33 +513,33 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
               },
             );
             if (!browser)
-              return errorResponse("Failed to acquire browser from pool");
+              return errorResponse("failed to acquire browser from pool");
             // Prefer the stable pool id for the release hint (acquire may have
             // been called by name); fall back to the caller's identifier.
             const poolId = browser.pool?.id ?? params.id_or_name;
             return jsonResponse({
               browser: summarizeAcquiredBrowser(browser),
               next_actions: [
-                `Use computer_action with session_id "${browser.session_id}" to control this browser.`,
-                `When finished, use manage_browser_pools with action "release", id_or_name "${poolId}", and session_id "${browser.session_id}".`,
-                `Use manage_browsers with action "get" and session_id "${browser.session_id}" for full browser details.`,
+                `use computer_action with session_id "${browser.session_id}" to control this browser.`,
+                `when finished, use manage_browser_pools with action "release", id_or_name "${poolId}", and session_id "${browser.session_id}".`,
+                `use manage_browsers with action "get" and session_id "${browser.session_id}" for full browser details.`,
               ],
             });
           }
           case "release": {
             if (!params.id_or_name)
               return errorResponse(
-                "Error: id_or_name is required for release.",
+                "error: id_or_name is required for release.",
               );
             if (!params.session_id)
               return errorResponse(
-                "Error: session_id is required for release.",
+                "error: session_id is required for release.",
               );
             await client.browserPools.release(params.id_or_name, {
               session_id: params.session_id,
               ...(params.reuse !== undefined && { reuse: params.reuse }),
             });
-            return textResponse("Browser released back to pool successfully");
+            return textResponse("browser released back to pool successfully");
           }
         }
       } catch (error) {

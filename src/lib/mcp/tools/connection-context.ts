@@ -8,10 +8,10 @@ export function registerConnectionContextTool(server: McpServer) {
     "get_connection_context",
     {
       description:
-        "Inspect the authenticated Kernel connection before a project-scoped operation. connection_scope.kind=organization may omit project for organization-wide reads and default-project creates, or pass a project name or ID to select a project. connection_scope.kind=project is fixed to connection_scope.project_id; omit project or pass that project.",
+        "inspect the authenticated KERNEL connection before a project-scoped operation. connection_scope.kind=organization may omit project for organization-wide reads and default-project creates, or pass a project name or id to select a project. connection_scope.kind=project is fixed to connection_scope.project_id; omit project or pass that project.",
       inputSchema: z.object({}),
       annotations: {
-        title: "Get Kernel connection context",
+        title: "get KERNEL connection context",
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
@@ -19,7 +19,7 @@ export function registerConnectionContextTool(server: McpServer) {
       },
     },
     async (_params, ctx) => {
-      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
       const { authContext, scope } = connectionContextFromAuthInfo(
         ctx.http.authInfo,
       );

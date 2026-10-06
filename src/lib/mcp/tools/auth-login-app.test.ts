@@ -155,7 +155,7 @@ describe("managed-auth MCP App registration", () => {
       expect(schema.safeParse({ ...base, region: "emea" }).success).toBe(false);
       const defaults = schema.parse(base);
       expect(defaults.record_session).toBe(true);
-      expect(defaults.browser_telemetry).toEqual({ enabled: true });
+      expect(defaults.browser_telemetry).toBeUndefined();
       expect(
         schema.safeParse({
           ...base,
@@ -213,6 +213,48 @@ describe("managed-auth MCP App registration", () => {
     expect(result._meta).toBeUndefined();
   });
 
+  test("launcher validates the nested browser object before any flow starts", async () => {
+    const { tools } = captureRegistration();
+    const base = {
+      mode: "new_login",
+      domain: "example.com",
+      profile_name: "work",
+    };
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [
+        { ...base, browser: { region: "eu-west" }, region: "us-east" },
+        "browser cannot be combined with region",
+      ],
+      [
+        { ...base, browser: { proxy: { id: "proxy_1", name: "residential" } } },
+        "proxy requires exactly one of id, name, or mode",
+      ],
+      [
+        { ...base, proxy_id: "proxy_1", proxy_name: "residential" },
+        "proxy requires exactly one of id, name, or mode",
+      ],
+    ];
+    for (const [params, message] of cases) {
+      const result = await tools
+        .get("open_auth_login")!
+        .handler(params, projectScopedExtra("proj_test", "unused-api-key"));
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(message);
+    }
+    const ok = await tools.get("open_auth_login")!.handler(
+      {
+        ...base,
+        browser: {
+          proxy: { mode: "direct" },
+          region: "eu-west",
+          stealth: false,
+        },
+      },
+      projectScopedExtra("proj_test", "unused-api-key"),
+    );
+    expect(ok.isError).toBeUndefined();
+  });
+
   test("app-only tools fail closed on hosts without MCP Apps support", async () => {
     const { tools } = captureRegistration({ appsSupport: false });
     const result = await tools
@@ -222,7 +264,7 @@ describe("managed-auth MCP App registration", () => {
         projectScopedExtra("proj_test", "unused-api-key"),
       );
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("MCP Apps-capable hosts");
+    expect(result.content[0].text).toContain("mcp apps-capable hosts");
     expect(JSON.stringify(result)).not.toContain("handoff_code");
     expect(JSON.stringify(result)).not.toContain("hosted_url");
   });
@@ -335,7 +377,7 @@ describe("managed-auth MCP App registration", () => {
         },
       );
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain("MCP Apps-capable hosts");
+      expect(result.content[0].text).toContain("mcp apps-capable hosts");
     } finally {
       redisMarkerPresent = false;
     }

@@ -127,7 +127,7 @@ export function throwToolError(
 ): never {
   throw new ToolCallError(
     errorName(error),
-    `Error in ${toolName} (${action}): ${errorMessage(error)}${note ? ` ${note}` : ""}`,
+    `error in ${toolName} (${action}): ${errorMessage(error)}${note ? ` ${note}` : ""}`,
   );
 }
 
@@ -143,6 +143,6 @@ export function throwToolErrorWithApiBody(
   const note = !structuredBody && fallbackNote ? ` ${fallbackNote}` : "";
   throw new ToolCallError(
     errorName(error),
-    `Error in ${toolName} (${action}): ${detail}${note}`,
+    `error in ${toolName} (${action}): ${detail}${note}`,
   );
 }

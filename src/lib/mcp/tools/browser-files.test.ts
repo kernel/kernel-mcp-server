@@ -114,7 +114,7 @@ describe("manage_browser_files", () => {
     });
 
     expect([...written!]).toEqual([0, 1, 2]);
-    expect(text(result)).toBe("Wrote file /tmp/file.bin");
+    expect(text(result)).toBe("wrote file /tmp/file.bin");
   });
 
   test("rejects malformed base64 before writing", async () => {
@@ -135,7 +135,7 @@ describe("manage_browser_files", () => {
 
     expect(called).toBe(false);
     expect(result.isError).toBe(true);
-    expect(text(result)).toBe("Error: content is not valid base64.");
+    expect(text(result)).toBe("error: content is not valid base64.");
   });
 
   test("uploads multiple files", async () => {
@@ -166,7 +166,7 @@ describe("manage_browser_files", () => {
     ]);
     expect(await uploaded.files[0].file.text()).toBe("one");
     expect(await uploaded.files[1].file.text()).toBe("two");
-    expect(text(result)).toBe("Uploaded 2 file(s)");
+    expect(text(result)).toBe("uploaded 2 file(s)");
   });
 
   test("downloads directories as embedded zip resources", async () => {
@@ -286,7 +286,7 @@ describe("manage_browser_files", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(text(result)).toBe("Error: dest_path is required for move.");
+    expect(text(result)).toBe("error: dest_path is required for move.");
   });
 
   test("rejects empty session IDs and paths before calling the SDK", async () => {

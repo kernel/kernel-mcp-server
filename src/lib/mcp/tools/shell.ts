@@ -29,20 +29,20 @@ export function registerShellTool(
     "exec_command",
     {
       description:
-        'Execute a command synchronously inside a browser VM. Returns stdout, stderr, and exit code. The command field is the executable; use args for its arguments. Common uses: read files (command: "cat", args: ["/var/log/supervisord.log"]), list dirs (command: "ls", args: ["/var/log"]), check DNS (command: "cat", args: ["/etc/resolv.conf"]), test connectivity (command: "curl", args: ["-I", "https://example.com"]).',
+        'execute a command synchronously inside a browser vm. returns stdout, stderr, and exit code. the command field is the executable; use args for its arguments. common uses: read files (command: "cat", args: ["/var/log/supervisord.log"]), list dirs (command: "ls", args: ["/var/log"]), check dns (command: "cat", args: ["/etc/resolv.conf"]), test connectivity (command: "curl", args: ["-I", "https://example.com"]).',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
-        session_id: z.string().describe("Browser session ID or name."),
+        session_id: z.string().describe("browser session id or name."),
         command: z
           .string()
-          .describe("Executable to run (e.g., 'cat', 'ls', 'curl')."),
+          .describe("executable to run (e.g., 'cat', 'ls', 'curl')."),
         args: z
           .array(z.string())
-          .describe("Arguments to pass to the command.")
+          .describe("arguments to pass to the command.")
           .optional(),
         cwd: z
           .string()
-          .describe("Working directory (absolute path).")
+          .describe("working directory (absolute path).")
           .optional(),
         timeout_sec: z
           .number()
@@ -50,13 +50,13 @@ export function registerShellTool(
           .min(1)
           .max(MAX_TIMEOUT_SEC)
           .describe(
-            `Max execution time in seconds (1-${MAX_TIMEOUT_SEC}). The command is killed at the deadline. Defaults to ${DEFAULT_TIMEOUT_SEC}.`,
+            `max execution time in seconds (1-${MAX_TIMEOUT_SEC}). the command is killed at the deadline. defaults to ${DEFAULT_TIMEOUT_SEC}.`,
           )
           .default(DEFAULT_TIMEOUT_SEC),
-        as_root: z.boolean().describe("Run with root privileges.").optional(),
+        as_root: z.boolean().describe("run with root privileges.").optional(),
       }),
       annotations: {
-        title: "Run shell command in browser VM",
+        title: "run shell command in browser vm",
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false,
@@ -76,7 +76,7 @@ export function registerShellTool(
       },
       ctx,
     ) => {
-      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
       const client = options.createKernelClient(
         ctx.http.authInfo.token,
         projectForOperation(ctx.http.authInfo, { project, project_id }),

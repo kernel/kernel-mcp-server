@@ -28,6 +28,7 @@ import {
   MCP_FEEDBACK_SUBMITTED_EVENT,
   MCP_USED_PROJECT_ID_PROPERTY,
   MCP_USED_PROJECT_PROPERTY,
+  MCP_DEPRECATED_PARAMS_PROPERTY,
   OAUTH_TOKEN_EXCHANGE_EVENT,
   sanitizeMcpAnalyticsEvent,
 } from "@/lib/mcp/analytics";
@@ -511,6 +512,61 @@ describe("sanitizeMcpAnalyticsEvent", () => {
 
     expect(result?.properties[MCP_USED_PROJECT_ID_PROPERTY]).toBe(false);
     expect(result?.properties[MCP_USED_PROJECT_PROPERTY]).toBe(true);
+  });
+
+  test("lists deprecated parameter names a tool call used, without values", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.ToolName]: "manage_browsers",
+      [PostHogMCPAnalyticsProperty.Parameters]: {
+        request: {
+          params: {
+            arguments: {
+              action: "update",
+              session_id: "brr_123",
+              proxy_id: "prx_secret",
+              clear_proxy: false,
+            },
+          },
+        },
+      },
+    });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    expect(result?.properties[MCP_DEPRECATED_PARAMS_PROPERTY]).toEqual([
+      "proxy_id",
+      "clear_proxy",
+    ]);
+    expect(JSON.stringify(result)).not.toContain("prx_secret");
+  });
+
+  test("records an empty deprecated parameter list for current inputs only", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.ToolName]: "manage_proxies",
+      [PostHogMCPAnalyticsProperty.Parameters]: {
+        request: {
+          params: {
+            arguments: { action: "create", type: "isp", config: {} },
+          },
+        },
+      },
+    });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    expect(result?.properties[MCP_DEPRECATED_PARAMS_PROPERTY]).toEqual([]);
+  });
+
+  test("omits the deprecated parameter list for tools without deprecated inputs", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.ToolName]: "computer_action",
+    });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    expect(result?.properties).not.toHaveProperty(
+      MCP_DEPRECATED_PARAMS_PROPERTY,
+    );
   });
 
   test("records false/false when a tool call omits both project selectors", async () => {
@@ -1030,7 +1086,7 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       });
       expect(rejectedVaultInput.isError).toBe(true);
       expect(JSON.stringify(rejectedVaultInput)).toContain(
-        "Invalid vault tool input",
+        "invalid vault tool input",
       );
       expect(JSON.stringify(rejectedVaultInput)).not.toContain(
         "never-echo-this",

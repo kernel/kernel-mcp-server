@@ -97,7 +97,7 @@ describe("manage_auth_connections programmatic surface", () => {
       }
 
       expect(browserTelemetry).toBeDefined();
-      expect(JSON.stringify(browserTelemetry)).not.toContain('"$ref"');
+      expect(JSON.stringify(tool?.inputSchema)).not.toContain('"$ref"');
     } finally {
       await close();
     }
@@ -222,6 +222,99 @@ describe("manage_auth_connections programmatic surface", () => {
       });
     } finally {
       kernelClientMock.factory = () => unusedKernelClient;
+    }
+  });
+
+  test("forwards the nested browser object on create, update, and login", async () => {
+    const { handler } = captureHandler();
+    const bodies: unknown[] = [];
+    kernelClientMock.factory = () => ({
+      auth: {
+        connections: {
+          create: async (body: unknown) => {
+            bodies.push(body);
+            return connection();
+          },
+          update: async (_id: string, body: unknown) => {
+            bodies.push(body);
+            return connection();
+          },
+          login: async (_id: string, body: unknown) => {
+            bodies.push(body);
+            return { id: "conn_1" };
+          },
+        },
+      },
+    });
+    try {
+      const extra = { authInfo: { token: "test-token" } };
+      const browser = {
+        proxy: { name: "residential" },
+        region: "eu-west",
+        stealth: false,
+        telemetry: { enabled: true },
+      };
+      await handler(
+        {
+          action: "create",
+          domain: "example.com",
+          profile_name: "work",
+          browser,
+        },
+        extra,
+      );
+      await handler(
+        {
+          action: "update",
+          id: "conn_1",
+          browser: { proxy: { mode: "direct" } },
+        },
+        extra,
+      );
+      await handler(
+        {
+          action: "login",
+          id: "conn_1",
+          browser: { proxy: { id: "proxy_1" } },
+        },
+        extra,
+      );
+      expect(bodies).toEqual([
+        { domain: "example.com", profile_name: "work", browser },
+        { browser: { proxy: { mode: "direct" } } },
+        { browser: { proxy: { id: "proxy_1" } } },
+      ]);
+    } finally {
+      kernelClientMock.factory = () => unusedKernelClient;
+    }
+  });
+
+  test("rejects a nested browser object mixed with deprecated fields", async () => {
+    const { handler } = captureHandler();
+    const extra = { authInfo: { token: "test-token" } };
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [
+        {
+          action: "login",
+          id: "conn_1",
+          browser: { region: "eu-west" },
+          proxy_name: "residential",
+        },
+        "browser cannot be combined with proxy_name",
+      ],
+      [
+        {
+          action: "update",
+          id: "conn_1",
+          browser: { proxy: { id: "proxy_1", mode: "direct" } },
+        },
+        "browser.proxy requires exactly one of id, name, or mode",
+      ],
+    ];
+    for (const [params, message] of cases) {
+      const result = await handler(params, extra);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(message);
     }
   });
 
@@ -528,7 +621,7 @@ describe("manage_auth_connections programmatic surface", () => {
       // delete returns the established plain-text confirmation.
       const deleted = await handler({ action: "delete", id: "conn_1" }, extra);
       expect(deleted.content[0].text).toBe(
-        "Auth connection deleted successfully",
+        "auth connection deleted successfully",
       );
 
       expect(calls).toEqual({
@@ -695,7 +788,7 @@ describe("manage_auth_connections programmatic surface", () => {
           { authInfo: { token: "test-token" } },
         ),
       ).rejects.toThrow(
-        "Error in manage_auth_connections (get): upstream boom",
+        "error in manage_auth_connections (get): upstream boom",
       );
     } finally {
       kernelClientMock.factory = () => unusedKernelClient;
@@ -787,7 +880,7 @@ describe("manage_auth_connections programmatic surface", () => {
       );
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain(
-        "Multiple managed-auth connections matched",
+        "multiple managed-auth connections matched",
       );
       expect(result.content[0].text).not.toContain("secret");
     } finally {
@@ -805,7 +898,7 @@ describe("manage_auth_connections programmatic surface", () => {
     );
     expect(safe.error_code).toBe("login_failed");
     expect(safe.error_message).toBe(
-      "Managed authentication failed. Retry the secure login flow.",
+      "managed authentication failed. retry the secure login flow.",
     );
     assertNoSecrets(safe);
   });

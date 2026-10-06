@@ -18,11 +18,11 @@ function curlUrlError(url: string) {
   try {
     parsed = new URL(url);
   } catch {
-    return "Error: url must be a valid URL.";
+    return "error: url must be a valid url.";
   }
 
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return "Error: url must use http or https.";
+    return "error: url must use http or https.";
   }
   return undefined;
 }
@@ -32,36 +32,36 @@ export function registerBrowserCurlTool(server: McpServer) {
     "browser_curl",
     {
       description:
-        "Send an HTTP request through an existing Kernel browser session's Chrome network stack. Use when the request needs that browser session's cookies, proxy, network context, or origin behavior; do not use for general documentation lookup or web search.",
+        "send an http request through an existing KERNEL browser session's chrome network stack. use when the request needs that browser session's cookies, proxy, network context, or origin behavior; do not use for general documentation lookup or web search.",
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
-        session_id: z.string().describe("Browser session ID or name."),
-        url: z.string().url().describe("Target http or https URL."),
+        session_id: z.string().describe("browser session id or name."),
+        url: z.string().url().describe("target http or https url."),
         method: z
           .enum(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
-          .describe("HTTP method. Defaults to GET.")
+          .describe('http method. defaults to "GET".')
           .optional(),
         headers: z
           .record(z.string(), z.string())
-          .describe("Custom headers merged with browser defaults.")
+          .describe("custom headers merged with browser defaults.")
           .optional(),
         body: z
           .string()
-          .describe("Request body for POST, PUT, or PATCH requests.")
+          .describe('request body for "POST", "PUT", or "PATCH" requests.')
           .optional(),
         response_encoding: z
           .enum(["utf8", "base64"])
-          .describe("Response body encoding. Use base64 for binary content.")
+          .describe("response body encoding. use base64 for binary content.")
           .optional(),
         timeout_ms: z
           .number()
           .int()
           .min(1)
-          .describe("Request timeout in milliseconds.")
+          .describe("request timeout in milliseconds.")
           .optional(),
       }),
       annotations: {
-        title: "Send HTTP request via browser",
+        title: "send http request via browser",
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: false,
@@ -69,7 +69,7 @@ export function registerBrowserCurlTool(server: McpServer) {
       },
     },
     async (params, ctx) => {
-      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
       const client = createKernelClient(
         ctx.http.authInfo.token,
         projectForOperation(ctx.http.authInfo, params),

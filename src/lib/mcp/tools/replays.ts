@@ -19,45 +19,45 @@ export function registerReplayTools(server: McpServer) {
     "manage_replays",
     {
       description:
-        'Manage video replay recordings for a browser session. Use "start" to begin recording a session (returns a replay_id and a viewable URL), "stop" to end a recording and persist the video, or "list" to see all replays for a session with their view URLs. Recording is session-scoped: start once, run your automation, then stop -- rather than recording each action separately. Requires a paid Kernel plan; not available on the free tier.',
+        'manage video replay recordings for a browser session. use "start" to begin recording a session (returns a replay_id and a viewable url), "stop" to end a recording and persist the video, or "list" to see all replays for a session with their view urls. recording is session-scoped: start once, run your automation, then stop -- rather than recording each action separately. requires a paid KERNEL plan; not available on the free tier.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z
           .enum(["start", "stop", "list"])
-          .describe("Operation to perform."),
-        session_id: z.string().describe("Browser session ID or name."),
-        replay_id: z.string().describe("(stop) Replay ID to stop.").optional(),
+          .describe("operation to perform."),
+        session_id: z.string().describe("browser session id or name."),
+        replay_id: z.string().describe("(stop) replay id to stop.").optional(),
         framerate: z
           .number()
           .int()
           .min(1)
           .describe(
-            "(start) Recording framerate in fps. Values above 20 require GPU to be enabled on the session.",
+            "(start) recording framerate in fps. values above 20 require gpu to be enabled on the session.",
           )
           .optional(),
         max_duration_in_seconds: z
           .number()
           .int()
           .min(1)
-          .describe("(start) Maximum recording duration in seconds.")
+          .describe("(start) maximum recording duration in seconds.")
           .optional(),
         record_audio: z
           .boolean()
           .describe(
-            "(start) Record audio in addition to video. Defaults to video-only.",
+            "(start) record audio in addition to video. defaults to video-only.",
           )
           .optional(),
       }),
       annotations: {
-        title: "Manage browser session replays",
+        title: "manage browser session replays",
         readOnlyHint: false,
-        destructiveHint: false,
+        destructiveHint: true,
         idempotentHint: false,
         openWorldHint: false,
       },
     },
     async (params, ctx) => {
-      if (!ctx.http?.authInfo) throw new Error("Authentication required");
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
       const client = createKernelClient(
         ctx.http.authInfo.token,
         projectForOperation(ctx.http.authInfo, params),
@@ -85,18 +85,18 @@ export function registerReplayTools(server: McpServer) {
           }
           case "stop": {
             if (!params.replay_id)
-              return errorResponse("Error: replay_id is required for stop.");
+              return errorResponse("error: replay_id is required for stop.");
             await client.browsers.replays.stop(params.replay_id, {
               id_or_name: params.session_id,
             });
-            return textResponse("Replay stopped successfully");
+            return textResponse("replay stopped successfully");
           }
           case "list": {
             const replays = await client.browsers.replays.list(
               params.session_id,
             );
             return itemsJsonResponse(replays, {
-              emptyText: "No replays found for this session",
+              emptyText: "no replays found for this session",
             });
           }
         }
