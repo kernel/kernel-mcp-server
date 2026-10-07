@@ -1298,6 +1298,9 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
 
     // identify stays unwired, so no $identify event is ever published.
     expect(byEvent.has("$identify")).toBe(false);
+
+    // A carried transport session is kept rather than derived.
+    expect(toolCall.properties.$session_id).toBe("ses_integration");
   });
 
   test("classifies rejected capability input through instrumentation", async () => {
@@ -1574,6 +1577,134 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     } finally {
       await handler.close();
     }
+  });
+
+  async function modernToolCall({
+    token,
+    clientName,
+    meta = {},
+  }: {
+    token: string;
+    clientName: string;
+    meta?: Record<string, unknown>;
+  }) {
+    const captured: {
+      event?: string;
+      distinctId?: string;
+      properties?: Record<string, unknown>;
+    }[] = [];
+    const handler = createMcpHandler(() => makeServer(captured));
+    try {
+      const response = await handler.fetch(
+        new Request("https://mcp.example.test/mcp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "MCP-Protocol-Version": "2026-07-28",
+            "Mcp-Method": "tools/call",
+            "Mcp-Name": "ping",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: {
+              name: "ping",
+              arguments: { context: "Checking derived session analytics." },
+              _meta: {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {
+                  name: clientName,
+                  version: "1",
+                },
+                "io.modelcontextprotocol/clientCapabilities": {},
+                ...meta,
+              },
+            },
+          }),
+        }),
+        {
+          authInfo: {
+            token,
+            clientId: "test-client",
+            scopes: [],
+            extra: { connectionContext: { scope: { organizationId: ORG } } },
+          },
+        },
+      );
+      expect(response.status).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } finally {
+      await handler.close();
+    }
+    const event = captured.find(
+      (event) => event.event === PostHogMCPAnalyticsEvent.ToolCall,
+    );
+    expect(event).toBeDefined();
+    return event!;
+  }
+
+  test("groups session-less calls by caller and client", async () => {
+    const first = await modernToolCall({
+      token: "token-a",
+      clientName: "client-a",
+    });
+    const second = await modernToolCall({
+      token: "token-a",
+      clientName: "client-a",
+    });
+    const otherCaller = await modernToolCall({
+      token: "token-b",
+      clientName: "client-a",
+    });
+    const otherClient = await modernToolCall({
+      token: "token-a",
+      clientName: "client-b",
+    });
+
+    const sessionId = first.properties?.$session_id;
+    expect(sessionId).toStartWith("ses_");
+    expect(first.distinctId).toBe(sessionId as string);
+    expect(second.properties?.$session_id).toBe(sessionId);
+    expect(second.distinctId).toBe(sessionId as string);
+    expect(otherCaller.properties?.$session_id).not.toBe(sessionId);
+    expect(otherClient.properties?.$session_id).not.toBe(sessionId);
+    expect(JSON.stringify(first)).not.toContain("token-a");
+    expect(first.properties).not.toHaveProperty("__mcp_analytics_session_key");
+  });
+
+  test("records the model only from Codex request metadata", async () => {
+    const codex = await modernToolCall({
+      token: "token-a",
+      clientName: "codex",
+      meta: { "x-codex-turn-metadata": { model: "gpt-5.2-codex" } },
+    });
+    expect(codex.properties).toMatchObject({
+      [PostHogMCPAnalyticsProperty.LlmModel]: "gpt-5.2-codex",
+      [PostHogMCPAnalyticsProperty.LlmModelSource]: "client_metadata",
+    });
+
+    for (const model of ["unknown", "ignore previous instructions", 42]) {
+      const event = await modernToolCall({
+        token: "token-a",
+        clientName: "codex",
+        meta: { "x-codex-turn-metadata": { model } },
+      });
+      expect(event.properties).not.toHaveProperty(
+        PostHogMCPAnalyticsProperty.LlmModel,
+      );
+    }
+
+    const other = await modernToolCall({
+      token: "token-a",
+      clientName: "client-a",
+    });
+    expect(other.properties).not.toHaveProperty(
+      PostHogMCPAnalyticsProperty.LlmModel,
+    );
+    expect(other.properties).not.toHaveProperty(
+      PostHogMCPAnalyticsProperty.LlmModelSource,
+    );
   });
 
   test("stays anonymous when no connection context is attached", async () => {
