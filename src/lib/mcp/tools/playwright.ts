@@ -60,7 +60,7 @@ export function registerPlaywrightTool(
           .describe("browser session id or name to execute the code against."),
         executor: executorNameSchema
           .describe(
-            "name of the executor to run the code in. omit or pass `default` to bind `page` to the active tab. any other name runs in a named executor that owns its own background tab; the first call with a new name creates it (the result's `tab.created` is true), and later calls with the same name reuse that tab and run one at a time. use distinct names to drive several tabs of one browser in parallel.",
+            "named executor to run the call in; each owns its own tab. omit for the active tab.",
           )
           .optional(),
       }),
@@ -113,9 +113,13 @@ export function registerPlaywrightTool(
           ],
         };
       } catch (error) {
-        // A 409 means the browser is at its named executor limit. The body lists the
-        // current executors so the agent can reuse one or pick one to delete.
-        if (error instanceof APIError && error.status === 409) {
+        // A 409 on a named call means the browser is at its named executor limit. The
+        // body lists the current executors so the agent can reuse one or pick one to delete.
+        if (
+          executor !== undefined &&
+          error instanceof APIError &&
+          error.status === 409
+        ) {
           throwToolErrorWithApiBody(
             "execute_playwright_code",
             "execute",
@@ -136,7 +140,7 @@ export function registerPlaywrightTool(
     "manage_playwright_executors",
     {
       description:
-        'manage the playwright executors of a KERNEL browser session. an executor is the dedicated process that execute_playwright_code runs a call in; `default` always exists and binds `page` to the active tab, and every other name is a named executor that owns its own background tab. use "list" to see every executor (default first) with whether it is busy, when it was created and last used, and for named executors the target_id and url of the tab it owns. use "delete" to stop a named executor you no longer need and, by default, close its tab; a browser can have at most 8 named executors, so delete unneeded ones before creating more. a call running on a deleted executor fails, and the name can be reused afterwards. deleting `default` restarts it instead of removing it.',
+        'manage the playwright executors of a KERNEL browser session. an executor is the dedicated process that execute_playwright_code runs a call in; `default` always exists and binds `page` to the active tab, and every other name is a named executor that owns its own background tab. use "list" to see every executor (default first) with whether it is busy, when it was created and last used, and for named executors the target_id and url of the tab it owns. use "delete" to stop a named executor you no longer need and, by default, close its tab; delete unneeded ones to stay under the per-browser named executor limit. a call running on a deleted executor fails, and the name can be reused afterwards. deleting `default` restarts it instead of removing it.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z.enum(["list", "delete"]).describe("operation to perform."),

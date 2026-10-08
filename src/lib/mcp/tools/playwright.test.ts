@@ -212,6 +212,32 @@ describe("execute_playwright_code executors", () => {
       await close();
     }
   });
+
+  test("does not treat a 409 on an unnamed call as the executor limit", async () => {
+    const conflict = { code: "conflict", message: "browser is busy" };
+    const { client, close } = await connectTestMcp(
+      registerPlaywrightTool,
+      playwrightClient({
+        execute: async () => {
+          throw new APIError(409, conflict, undefined, new Headers());
+        },
+      }),
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "execute_playwright_code",
+        arguments: { code: "return 1", session_id: "ses_1" },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = toolResultText(result);
+      expect(text).toStartWith("error in execute_playwright_code (execute):");
+      expect(text).not.toContain(JSON.stringify(conflict));
+    } finally {
+      await close();
+    }
+  });
 });
 
 describe("manage_playwright_executors", () => {
