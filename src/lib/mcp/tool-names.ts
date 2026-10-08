@@ -17,6 +17,7 @@ export const KERNEL_MCP_TOOL_NAMES = [
   "manage_credential_providers",
   "manage_credentials",
   "manage_extensions",
+  "manage_playwright_executors",
   "manage_profiles",
   "manage_projects",
   "manage_proxies",
