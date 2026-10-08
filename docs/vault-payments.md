@@ -13,7 +13,38 @@ there is no per-item test flag. AgentCard configuration responses report the
 introspected `test_mode`. A development or staging MCP endpoint does not make a
 card request a test transaction.
 
-The released Node SDK dependency is pinned in `bun.lock`.
+The released Node SDK dependency is pinned in `bun.lock`. The API's Visa
+`merchant_country` field is not yet in the generated SDK type; the tool validates
+and forwards it unchanged.
+
+## Kernel-hosted payment card
+
+Use one vault per end user. Create it with `manage_vaults`, then create a wallet with
+`manage_vault_wallets` using `action: "create"`, `provider: "kernel"`, `spec: {}`,
+and a stable wallet key. Give the returned `card_enrollment` action URL only to the
+intended cardholder in a private surface, outside the agent-controlled browser.
+Never request or pass a PAN, CVC, expiration date, or hosted action URL as tool input.
+Observe the wallet with `manage_vault_items` `get` until connected. Use
+`manage_vault_wallets` `payment_methods` to inspect the enrolled card's advisory
+`capabilities.single_use_card`: `eligible: false` means do not proceed; missing
+capabilities are unknown, not proof of eligibility.
+
+Create one card request with `manage_vault_cards` `action: "create"`,
+`provider: "kernel"`, a new immutable key, and `spec` containing `wallet`, `amount` (integer
+minor currency units, maximum 50000), `currency`, `merchant_name`, HTTPS
+`merchant_url`, and `merchant_country` (ISO 3166-1 alpha-2; required for Visa).
+This only creates a request, not a merchant payment. Kernel cards cannot be updated.
+After explicit user approval and only when the card advertises `authorize`, call
+`manage_vault_cards` with `action: "authorize"`, `provider: "kernel"`, the same
+vault/key, and no spec. Mastercard can become ready without a hosted approval;
+Visa may return a `spend_approval` action. Give that URL only to the cardholder
+privately, never open it on their behalf or log it. Observe `get`/`events` until
+ready; a pending response does not mean the card can be used. If `fill` is
+advertised, attach the vault to a new browser and invoke that operation with
+value-free bindings on the exact HTTPS origin of `merchant_url` before
+`expires_at`. Fill does not submit checkout or prove payment. No aliases or
+egress substitution are available. Never retry an uncertain authorization,
+fill, or merchant payment; reconcile `recovery_required` with support.
 
 ## Credential collection and observation
 
@@ -254,7 +285,7 @@ The `vaults` toolset configuration can further restrict access, never grant it.
 | `manage_vault_provider_configs` | `create`, `list`, `get`, `update`, `delete` |
 | `manage_vaults`                 | `create`, `list`, `get`, `delete`           |
 | `manage_vault_wallets`          | `create`, `payment_methods`                 |
-| `manage_vault_cards`            | `create`, `update`                          |
+| `manage_vault_cards`            | `create`, `update`, `authorize`             |
 | `manage_vault_credentials`      | `create`, `update`, `connect_account`       |
 | `manage_vault_items`            | `list`, `get`, `invoke`, `events`, `delete` |
 
@@ -270,7 +301,7 @@ to inspect the connection's scope.
 `vault` accepts an ID or immutable name. `key` is an immutable item key within that
 vault, not the item ID. Vault names, item keys, and project ownership cannot be renamed.
 
-Wallet/card writes take a `provider` (`link` or `agentcard`) and a JSON `spec`
+Wallet/card writes take a `provider` (`link`, `agentcard`, or `kernel`) and a JSON `spec`
 **object**, not a string or a `{type, spec}` envelope. The tool injects `provider`;
 if present in `spec`, it must match. Tool schemas describe the provider-specific
 fields and reject unknown fields, including nested ones. No defaults or currency
