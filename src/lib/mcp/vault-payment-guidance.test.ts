@@ -51,7 +51,7 @@ describe("provider-specific vault payment guidance", () => {
         "returns no card values",
         "browser access can expose written values",
         "failed or unknown writes may leave partial changes",
-        "never automatically retry or fall back to aliases",
+        "fill is safe to retry, but do not fall back to aliases",
         "not that the payment succeeded",
       ])
         expect(guidance).toContain(text);
@@ -139,7 +139,7 @@ describe("provider-specific vault payment guidance", () => {
     );
     expect(result.guidance).toHaveLength(5);
     expect(result.guidance[4]).toBe(
-      "invocation hints are not approval to execute. invoke the advertised browser field-writing operation with manage_vault_items using an inputs object containing browser_id and ordered fields of field/selector bindings, never values. bind the vault at browser creation, authorize the destination, and follow the advertised description. fill does not submit or navigate; real values enter the browser and may be read by an agent with browser access. never retry an uncertain fill or fall back to aliases.",
+      "invocation hints are not approval to execute. invoke the advertised browser field-writing operation with manage_vault_items using an inputs object containing browser_id and ordered fields of field/selector bindings, never values. bind the vault at browser creation, authorize the destination, and follow the advertised description. fill does not submit or navigate; real values enter the browser and may be read by an agent with browser access. fill is safe to retry after a failed or unknown outcome; do not fall back to aliases.",
     );
     expect(result.guidance.join(" ")).not.toContain("link cards");
     expect(result.guidance.join(" ")).not.toContain("agentcard aliases");
