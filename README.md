@@ -448,6 +448,23 @@ Example: “Log me into my Hacker News account and update my profile to add a ra
 
 The secure App defaults `record_session` and `browser.telemetry.enabled` to `true`, recording replay video plus the operational telemetry categories (`control`, `connection`, `system`, and `captcha`) for managed-auth browser sessions. Callers can explicitly disable either setting. Set `browser.region` in `open_auth_login` or `manage_auth_connections` to choose where a managed-auth browser runs, and `browser.proxy` to choose its proxy by id, name, or mode. Create and update set the connection default; login and reauth overrides apply only to that flow. Omit the field on create to use `us-east`, or omit it on update and login to preserve or inherit the connection default. The programmatic `manage_auth_connections` create, update, and login actions pass the `browser` object through to the API unchanged, preserving defaults and inheritance when it is omitted.
 
+### Fill a login from a vault
+
+```
+Human: Log in to github.com for user-123 with a password they enter themselves, not in chat.
+Assistant: I'll check user-123's vault for a GitHub credential first.
+[Uses manage_vaults with action: "create" and name: "user-123", which returns the vault if it already exists]
+[Uses manage_vault_items with action: "list" on vault "user-123"; no GitHub credential exists]
+Assistant: Is your GitHub login saved in your own 1Password, or would you rather enter it in a secure Kernel form?
+Human: The Kernel form.
+[Uses manage_vault_credentials with action: "create", provider: "kernel", and username/password field definitions]
+Returns: a collection URL to share privately with the user
+[Uses manage_vault_items with action: "get" and wait: 60 until the credential is ready]
+[Uses manage_browsers with action: "create" and vaults: [{ "name": "user-123" }], then navigates to the login page]
+[Uses manage_vault_items with action: "invoke", operation: "fill", and inputs with browser_id, page_url, and field/selector bindings]
+Returns: per-field outcomes without the values. The agent submits the form and checks the page.
+```
+
 ### Set up browser profiles for authentication
 
 ```

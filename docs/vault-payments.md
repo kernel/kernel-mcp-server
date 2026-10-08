@@ -97,7 +97,7 @@ failed or uncertain outcome; do not fall back to payment aliases.
      "vault": "user-123",
      "key": "login",
      "operation": "fill",
-     "fill": {
+     "inputs": {
        "browser_id": "browser-session-id",
        "page_url": "https://example.com/login",
        "fields": [
@@ -427,7 +427,7 @@ credentials. A reused `user_id` must belong to the same organization and config.
    The tool fetches the item again and submits only a currently advertised
    operation. `authorize` has no additional parameters: its API body is
    `{"type":"authorize"}`. This does not apply to `fill`, which requires the nested
-   MCP parameters below. Follow any returned provider action and observe state.
+   `inputs` object below. Follow any returned provider action and observe state.
    OAuth, enrollment, MFA, and approval actions are for the user, not operation names.
 
 6. When ready, create a new browser with `manage_browsers`:
@@ -456,7 +456,7 @@ credentials. A reused `user_id` must belong to the same organization and config.
      "vault": "checkout",
      "key": "order-1",
      "operation": "fill",
-     "fill": {
+     "inputs": {
        "browser_id": "browser-session-id",
        "page_url": "https://shop.example/checkout",
        "fields": [
@@ -469,7 +469,7 @@ credentials. A reused `user_id` must belong to the same organization and config.
    }
    ```
 
-   `fill` is a nested MCP input object, not a top-level set of API parameters.
+   Fill parameters go in the nested `inputs` object, not at the top level.
    `fields` contains bindings, never card values. Each selector must resolve to
    one unique editable target across all frames. For separate expiration inputs,
    use `exp_month` (MM) and `exp_year` (YYYY) without `format`. Only combined
