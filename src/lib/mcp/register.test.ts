@@ -247,7 +247,7 @@ describe("MCP toolset allowlist", () => {
     const previousEnabled = process.env.KERNEL_MCP_ENABLED_TOOLSETS;
     const previousDisabled = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
     process.env.KERNEL_MCP_ENABLED_TOOLSETS =
-      "execute_playwright_code browser_repl computer_action";
+      "execute_playwright_code manage_playwright_executors browser_repl computer_action";
     delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
     try {
       const registration = await captureRegistration(false);

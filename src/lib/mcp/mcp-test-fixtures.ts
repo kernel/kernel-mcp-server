@@ -51,6 +51,13 @@ export async function connectTestMcp(
   };
 }
 
+export function toolResultText(
+  result: Awaited<ReturnType<Client["callTool"]>>,
+) {
+  const content = result.content as Array<{ type: string; text: string }>;
+  return content[0].text;
+}
+
 export function toolResultJSON(
   result: Awaited<ReturnType<Client["callTool"]>>,
 ) {

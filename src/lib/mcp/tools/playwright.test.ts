@@ -3,7 +3,11 @@
 import { APIError } from "@onkernel/sdk";
 import { describe, expect, test } from "bun:test";
 
-import { connectTestMcp, toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
+import {
+  connectTestMcp,
+  toolResultJSON,
+  toolResultText,
+} from "@/lib/mcp/mcp-test-fixtures";
 import { registerPlaywrightTool } from "@/lib/mcp/tools/playwright";
 
 type ExecuteCall = { sessionId: string; body: Record<string, unknown> };
@@ -56,10 +60,6 @@ function playwrightClient({
       },
     },
   };
-}
-
-function toolResultText(result: { content: unknown }) {
-  return (result.content as Array<{ text: string }>)[0].text;
 }
 
 describe("execute_playwright_code executors", () => {

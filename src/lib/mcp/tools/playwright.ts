@@ -13,6 +13,7 @@ import { longOperationOptions } from "@/lib/mcp/request-options";
 import {
   errorResponse,
   itemsJsonResponse,
+  jsonResponse,
   textResponse,
   throwToolError,
   throwToolErrorWithApiBody,
@@ -41,7 +42,7 @@ export function registerPlaywrightTool(
     "execute_playwright_code",
     {
       description:
-        "execute arbitrary playwright code in a fresh execution context against the browser. the code runs in the same vm as the browser, minimizing latency and maximizing throughput. it has access to `page`, `context`, `browser`, and `webmcp` variables. use `webmcp.listTools()` to discover browser-wide webmcp tools and `webmcp.invokeTool(toolRef, input?, { timeoutSec? })` to invoke an exact registration. it can `return` a value, and this value is returned as the tool result.\n\n" +
+        "execute arbitrary playwright code in a fresh execution context against the browser. for reusable site actions, check `webmcp.listTools()` first and prefer a suitable structured tool; use playwright when none is exposed. does not create or delete browsers -- use manage_browsers for session lifecycle. the code runs in the same vm as the browser, minimizing latency and maximizing throughput. it has access to `page`, `context`, `browser`, and `webmcp` variables. use `webmcp.listTools()` to discover browser-wide webmcp tools and `webmcp.invokeTool(toolRef, input?, { timeoutSec? })` to invoke an exact registration. it can `return` a value, and this value is returned as the tool result.\n\n" +
         "every call runs in an executor: a dedicated node.js process with its own browser connection. calls on different executors run concurrently; calls on the same executor run one at a time. a timeout, crash, or blocked event loop in one executor does not affect other executors. after a timeout the executor keeps its process and drops its browser connection, so code abandoned by the timeout cannot keep driving the browser. after a crash or a blocked event loop, the next call on that executor starts a fresh process.\n\n" +
         'calls without `executor` run in the executor named `default`, which always exists and is the same as passing `executor: "default"`. in the default executor, `page` is bound to an active tab reported by chrome. in single-window sessions, this is the foreground tab. when multiple browser windows are open, chrome reports one active tab per window and the selected window is unspecified. `context` is the `BrowserContext` that owns the selected page. use `browser.contexts()` to select a context or page explicitly.\n\n' +
         "pass any other name to run the call in a named executor. the first call with a new name creates it. each named executor owns a tab: its first call opens a new background tab in the default browser context, and `page` is bound to that tab on every later call while it stays open. opening it does not change the active tab of an existing window. if the tab is closed, the next call opens a new one and reports `tab.created: true`. executor code can still reach other tabs through `context` and `browser`; ownership only decides what `page` is bound to. use named executors to drive several tabs of one browser in parallel.\n\n" +
@@ -93,25 +94,7 @@ export function registerPlaywrightTool(
           longOperationOptions(SCRIPT_BUDGET_SEC),
         );
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  success: response.success,
-                  result: response.result,
-                  error: response.error,
-                  stdout: response.stdout,
-                  stderr: response.stderr,
-                  ...(response.tab && { tab: response.tab }),
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
+        return jsonResponse(response);
       } catch (error) {
         // A 409 on a named call means the browser is at its named executor limit. The
         // body lists the current executors so the agent can reuse one or pick one to delete.
@@ -124,7 +107,6 @@ export function registerPlaywrightTool(
             "execute_playwright_code",
             "execute",
             error,
-            "the browser is at its named executor limit; list and delete executors with manage_playwright_executors.",
           );
         }
         // No normal API response came back -- the session was gone, unleased, the request
