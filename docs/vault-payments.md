@@ -47,8 +47,8 @@ For `manage_vault_credentials` updates, use the current `version`
 and `expected_item_id` when bound to an earlier read. Clearing supported required
 values returns pending collection; hosted forms still require populated inputs.
 Fill writes real values into the browser without submitting the form. It does not
-isolate them from an agent with browser access. Never retry an uncertain fill or
-fall back to payment aliases.
+isolate them from an agent with browser access. Fill is safe to retry after a
+failed or uncertain outcome; do not fall back to payment aliases.
 
 ### MCP credential flow
 
@@ -109,12 +109,12 @@ fall back to payment aliases.
    ```
 
    The response has a value-free `result` with ordered field outcomes. `failed` and
-   `unknown` are tool errors, not invitations to retry; fields may already be written.
-   API validation errors (400/403/404/409) retain HTTP status and recognized error codes,
-   with actionable explanations and confirmation that this request wrote no fields.
-   Inspect and correct the cause before deciding on a new fill. Transport loss and
-   other uncertain failures retain the no-retry warning. Raw upstream error bodies
-   are never returned.
+   `unknown` are tool errors; fields may already be written. Fill never submits, so it
+   is safe to retry. API validation errors (400/403/404/409) retain HTTP status and
+   recognized error codes, with actionable explanations and confirmation that this
+   request wrote no fields. Correct the cause and retry. Transport loss and other
+   uncertain failures are also safe to retry. Raw upstream error bodies are never
+   returned.
    Fill does not navigate or submit. Submit separately only after confirming the fill
    completed and submission is authorized. TOTP bindings send only the field name;
    the API generates each current code immediately before writing, never exposing seeds.
@@ -481,11 +481,10 @@ credentials. A reused `user_id` must belong to the same organization and config.
 8. Inspect the value-free `result`: `status` is `completed`, `failed`, or `unknown`,
    with ordered field outcomes `filled`, `failed`, `unknown`, or `not_attempted`.
    Filling stops at the first failure; prior writes are not rolled back. Failed
-   and unknown results are tool errors, not invitations to retry. Transport loss
-   can also leave partial writes. Inspect the browser before further action; never
-   automatically retry a failed or uncertain fill or fall back to aliases.
-   Pre-write validation errors confirm that this request wrote no fields; correct
-   the cause before deciding on a new fill.
+   and unknown results are tool errors. Transport loss can also leave partial
+   writes. Fill never explicitly submits checkout, so it is safe to retry after any
+   of these; never fall back to aliases. Pre-write validation errors confirm that
+   this request wrote no fields; correct the cause and retry.
 
    Fill puts real values into the browser without returning them in the API
    response. It does not isolate them from browser/CDP access. It does not navigate,
