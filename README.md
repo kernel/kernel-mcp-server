@@ -462,7 +462,7 @@ Returns: a collection URL to share privately with the user
 [Uses manage_vault_items with action: "get" and wait: 60 until the credential is ready]
 [Uses manage_browsers with action: "create" and vaults: [{ "name": "user-123" }], then navigates to the login page]
 [Uses manage_vault_items with action: "invoke", operation: "fill", and inputs with browser_id, page_url, and field/selector bindings]
-Returns: per-field outcomes without the values. The agent submits the form and checks the page.
+Returns: per-field outcomes without the values. Fill never submits, so the agent retries it if it fails, then submits the form and checks the page.
 ```
 
 ### Set up browser profiles for authentication
