@@ -197,12 +197,10 @@ passkeys; use Kernel-hosted collection for those, or when the user declines
    the account owner. 1Password credentials store no values or selectors and cannot
    be updated.
 
-3. Create a browser with the vault attached before asking the owner to approve
-   anything: the approval link exists only after this request. After explicit user
-   approval, invoke the advertised `1pw_create_access_request` with
-   `inputs: {"browser_id": "..."}`.
-   Kernel loads the 1Password extension into that browser on demand. Request-time
-   `reason` and `keywords` apply only to a single-login credential.
+3. After explicit user approval, invoke the advertised `1pw_create_access_request`
+   with an optional `goal`. Kernel creates the request with 1Password directly, so it
+   needs no browser, and the approval link exists only after this request.
+   Request-time `reason` and `keywords` apply only to a single-login credential.
 4. Approval is a human action in the account owner's 1Password app. The pending item
    returns `action: {"name": "1password_access_approval", "url": "onepassword://grant-brokered-access?access_request_reference=..."}`.
    Give that link, unmodified, only to the account owner in a private surface outside
@@ -210,8 +208,8 @@ passkeys; use Kernel-hosted collection for those, or when the user declines
    choose, approve, or deny the login there. The link grants nothing until they
    approve, but it identifies the request, so the agent must never open, decode, or
    approve it. MCP forwards only links in that exact native form, without the API's
-   free-text instructions. Invoke the advertised `1pw_access_request_status` with
-   `browser_id` to observe the decision; it only reads status, so its hint has
+   free-text instructions. Invoke the advertised `1pw_access_request_status` without
+   a browser to observe the decision; it only reads status, so its hint has
    `requires_user_approval: false`.
    - `declined`: the owner denied the request. Do not request again unless they
      ask; offer Kernel-hosted collection.
@@ -221,8 +219,10 @@ passkeys; use Kernel-hosted collection for those, or when the user declines
      the `credential_account` named by `spec.account` is connected. If it is, a
      request may already have reached 1Password. There is no reset: stop, ask the
      owner to check 1Password, and never delete or recreate the item to retry.
-5. When the item is ready, invoke the advertised `1pw_fill` with `browser_id` and the
-   exact current `page_url`. When several approved logins share the page origin, ask
+5. When the item is ready, create a browser with the vault attached and navigate to
+   the login page. Invoke the advertised `1pw_fill` with that `browser_id` and the
+   exact current `page_url`; Kernel loads the 1Password extension into the browser
+   on demand. When several approved logins share the page origin, ask
    the owner which one to use and pass its `entry_id` from `state.access_request`
    entries. The extension selects fields and submits the form. `fill_submitted`
    means the form was submitted, not that login succeeded, so check the page.
