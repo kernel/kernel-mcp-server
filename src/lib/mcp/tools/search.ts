@@ -347,7 +347,7 @@ export function registerSearchTools(
       }),
       annotations: {
         title: "search the web with KERNEL",
-        readOnlyHint: false,
+        readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: false,
         openWorldHint: true,

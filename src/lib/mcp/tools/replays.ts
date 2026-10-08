@@ -51,7 +51,7 @@ export function registerReplayTools(server: McpServer) {
       annotations: {
         title: "manage browser session replays",
         readOnlyHint: false,
-        destructiveHint: false,
+        destructiveHint: true,
         idempotentHint: false,
         openWorldHint: false,
       },

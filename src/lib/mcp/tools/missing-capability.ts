@@ -195,7 +195,7 @@ export function registerMissingCapabilityTool(
         readOnlyHint: false,
         destructiveHint: false,
         idempotentHint: false,
-        openWorldHint: true,
+        openWorldHint: false,
       },
     },
     async (report, ctx) => {
