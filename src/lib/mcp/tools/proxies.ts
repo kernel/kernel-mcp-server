@@ -121,8 +121,10 @@ export function registerProxyTools(
           )
           .optional(),
         type: z
-          .enum(["datacenter", "isp", "residential", "mobile", "custom"])
-          .describe("(create) proxy type.")
+          .enum(["isp", "residential", "mobile", "custom"])
+          .describe(
+            "(create) proxy type. datacenter proxies are deprecated; use isp.",
+          )
           .optional(),
         name: z
           .string()
@@ -138,7 +140,7 @@ export function registerProxyTools(
           .optional(),
         config: proxyCreateConfigSchema
           .describe(
-            "(create) settings for the selected type. datacenter and isp accept country; residential accepts country, state, city, zip, and asn; mobile accepts country, state, and city; custom requires host and port. cannot be combined with the deprecated country, city, state, or custom_* fields.",
+            "(create) settings for the selected type. isp accepts country; residential accepts country, state, city, zip, and asn; mobile accepts country, state, and city; custom requires host and port. cannot be combined with the deprecated country, city, state, or custom_* fields.",
           )
           .optional(),
         bypass_hosts: z
