@@ -213,7 +213,9 @@ export function registerVaultItemTools(
                 guidance:
                   projected.type === "1pw_fill"
                     ? "fill_submitted means the 1password extension reported submitting the form, not that login succeeded: check the page before continuing. do not automatically retry a failed or uncertain fill."
-                    : "inspect item state and events for the outcome. do not automatically retry an uncertain operation.",
+                    : projected.type === "fill"
+                      ? "completed means the fields were written, not that the form was submitted or accepted. fill never submits, so it is safe to retry after a failed or unknown outcome."
+                      : "inspect item state and events for the outcome. do not automatically retry an uncertain operation.",
               }),
               ...(typeof projected === "object" &&
                 projected !== null &&
@@ -249,7 +251,7 @@ export function registerVaultItemTools(
               next_after: nextAfter ?? null,
               hints: { observation: vaultObservationHints(target, nextAfter) },
               guidance:
-                "observing events never retries an operation. for edits to ready credentials, compare item versions without wait; a version change does not identify a specific form submission. do not replay an uncertain fill or payment.",
+                "observing events never retries an operation. for edits to ready credentials, compare item versions without wait; a version change does not identify a specific form submission. do not replay an uncertain payment.",
             });
           }
           case "delete": {
@@ -282,6 +284,7 @@ export function registerVaultItemTools(
           params.action,
           error,
           operationSubmitted,
+          params.operation,
         );
       }
     },

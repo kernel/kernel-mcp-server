@@ -420,7 +420,7 @@ export function vaultItemResponse(
                 "mcp returns field definitions, has_value, version, collection expiry, and explicitly non-sensitive text/email values. sensitive values and totp seeds are never returned. ready means required values exist, not that login succeeded. listing does not renew collection links; use get or the advertised collection operation.",
                 'use manage_vault_items with action: "invoke" and the advertised collection operation to reopen the full form without clearing values or changing readiness or version. wait observes readiness, not edits to ready items. compare versions with get without wait; a change can also come from an api update, so it does not identify a specific form submission.',
                 "create or update credentials with manage_vault_credentials. on create, inspect the website and list the named field definitions in its natural top-to-bottom order; that array order directly controls the user-facing collection form. use optional non-secret labels for human-readable text; stable names remain authoritative for state, updates, and fill. use a per-user vault, a recognizable site-name-only description, and sensitive:false for usernames/emails. passwords and totp must be sensitive. updates require the current version; supply expected_item_id when bound to an earlier read. omitted values remain; null or empty strings clear supported fields, including required text/email/password fields. hosted forms still require populated required inputs. do not store payment-card data in credential items.",
-                "invocation hints are not approval to execute. invoke the advertised browser field-writing operation with manage_vault_items using an inputs object containing browser_id and ordered fields of field/selector bindings, never values. bind the vault at browser creation, authorize the destination, and follow the advertised description. fill does not submit or navigate; real values enter the browser and may be read by an agent with browser access. never retry an uncertain fill or fall back to aliases.",
+                "invocation hints are not approval to execute. invoke the advertised browser field-writing operation with manage_vault_items using an inputs object containing browser_id and ordered fields of field/selector bindings, never values. bind the vault at browser creation, authorize the destination, and follow the advertised description. fill does not submit or navigate; real values enter the browser and may be read by an agent with browser access. fill is safe to retry after a failed or unknown outcome; do not fall back to aliases.",
               ]
             : [
                 "ask the user to complete returned provider actions. never request card data or oauth codes/tokens in chat; imported grants must come from a trusted backend. read operation descriptions and obtain explicit user approval before invoking.",
@@ -433,7 +433,7 @@ export function vaultItemResponse(
                 ...(cardProvider === "link"
                   ? [
                       "link cards use browser field writes for checkout only when advertised. link does not expose aliases or support egress substitution; do not use aliases from older responses, which fail closed on supported payment shapes. the browser must retain this vault attachment in the same project. the exact current https top-level page url must have the origin of spec.merchant_url. the card must remain ready and unexpired with stored card material and a non-deleted parent wallet; lifecycle and destination checks still apply.",
-                      "when the field-writing operation is advertised, pass inputs with browser_id, exact current top-level page_url (including path, query, and fragment), and ordered field/selector bindings, never values. a combined expiration field requires format mm/yy or mm/yyyy. attach the vault at browser creation. the operation returns no card values and does not explicitly submit checkout; browser access can expose written values. failed or unknown writes may leave partial changes. never automatically retry or fall back to aliases. completion means fields were written, not that the payment succeeded.",
+                      "when the field-writing operation is advertised, pass inputs with browser_id, exact current top-level page_url (including path, query, and fragment), and ordered field/selector bindings, never values. a combined expiration field requires format mm/yy or mm/yyyy. attach the vault at browser creation. the operation returns no card values and does not explicitly submit checkout; browser access can expose written values. failed or unknown writes may leave partial changes; fill is safe to retry, but do not fall back to aliases. completion means fields were written, not that the payment succeeded.",
                     ]
                   : []),
                 ...(cardProvider === "agentcard"
@@ -475,9 +475,13 @@ export function throwVaultError(
   action: string,
   error: unknown,
   operationSubmitted = false,
+  operation?: string,
 ): never {
-  const guidance = operationSubmitted
-    ? "the operation may have partially completed. inspect item state, events, and browser before acting. do not retry automatically."
-    : "inspect item state/events before taking further action. do not replay a payment.";
+  const guidance =
+    operationSubmitted && operation === "fill"
+      ? "fill may have written some fields but never submits the form, so it is safe to retry after fixing any reported cause."
+      : operationSubmitted
+        ? "the operation may have partially completed. inspect item state, events, and browser before acting. do not retry automatically."
+        : "inspect item state/events before taking further action. do not replay a payment.";
   throwToolError(tool, action, error, guidance);
 }

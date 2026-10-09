@@ -194,7 +194,7 @@ describe("vault OpenAPI steering", () => {
         "natural top-to-bottom order",
         "wait observes readiness",
         "manage_vault_credentials",
-        "never retry an uncertain fill",
+        "fill is safe to retry after a failed or unknown outcome",
       ])
         expect(guidance).toContain(text);
       expect(guidance).not.toContain("ready does not mean paid");
