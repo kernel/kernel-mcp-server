@@ -498,6 +498,12 @@ export function registerBrowserCapabilities(
             "(create) enable gpu acceleration. requires start-up or enterprise plan and headless=false.",
           )
           .optional(),
+        video_memory: z
+          .enum(["2GiB", "4GiB"])
+          .describe(
+            "(create) gpu video memory. requires gpu=true. `2GiB` (default) comes with 4 vcpus and 6 gb of memory; `4GiB` comes with 8 vcpus and 12 gb of memory and bills at twice the gpu rate. `4GiB` returns 529 when at capacity; retry later or omit it for `2GiB`.",
+          )
+          .optional(),
         stealth: z
           .boolean()
           .describe(
@@ -782,6 +788,8 @@ export function registerBrowserCapabilities(
             if (params.headless !== undefined)
               createParams.headless = params.headless;
             if (params.gpu !== undefined) createParams.gpu = params.gpu;
+            if (params.video_memory !== undefined)
+              createParams.video_memory = params.video_memory;
             if (params.stealth !== undefined)
               createParams.stealth = params.stealth;
             if (params.region !== undefined)
