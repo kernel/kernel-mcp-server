@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setSystemTime, test } from "bun:test";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import type { PostHog } from "posthog-node";
 import {
@@ -1579,14 +1579,18 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     }
   });
 
-  async function modernToolCall({
+  async function modernRequest({
     token,
     clientName,
     meta = {},
+    name = "ping",
+    args = { context: "Checking derived session analytics." },
   }: {
     token: string;
     clientName: string;
     meta?: Record<string, unknown>;
+    name?: string;
+    args?: Record<string, unknown>;
   }) {
     const captured: {
       event?: string;
@@ -1602,15 +1606,15 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
             "Content-Type": "application/json",
             "MCP-Protocol-Version": "2026-07-28",
             "Mcp-Method": "tools/call",
-            "Mcp-Name": "ping",
+            "Mcp-Name": name,
           },
           body: JSON.stringify({
             jsonrpc: "2.0",
             id: 1,
             method: "tools/call",
             params: {
-              name: "ping",
-              arguments: { context: "Checking derived session analytics." },
+              name,
+              arguments: args,
               _meta: {
                 "io.modelcontextprotocol/protocolVersion": "2026-07-28",
                 "io.modelcontextprotocol/clientInfo": {
@@ -1637,40 +1641,97 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     } finally {
       await handler.close();
     }
-    const event = captured.find(
+    return captured;
+  }
+
+  async function modernToolCall(options: Parameters<typeof modernRequest>[0]) {
+    const event = (await modernRequest(options)).find(
       (event) => event.event === PostHogMCPAnalyticsEvent.ToolCall,
     );
     expect(event).toBeDefined();
     return event!;
   }
 
-  test("groups session-less calls by caller and client", async () => {
-    const first = await modernToolCall({
-      token: "token-a",
-      clientName: "client-a",
-    });
-    const second = await modernToolCall({
-      token: "token-a",
-      clientName: "client-a",
-    });
-    const otherCaller = await modernToolCall({
-      token: "token-b",
-      clientName: "client-a",
-    });
-    const otherClient = await modernToolCall({
-      token: "token-a",
-      clientName: "client-b",
-    });
+  test("groups session-less calls by caller, client, and window", async () => {
+    setSystemTime(new Date("2026-01-01T00:10:00Z"));
+    try {
+      const first = await modernToolCall({
+        token: "token-a",
+        clientName: "client-a",
+      });
+      const second = await modernToolCall({
+        token: "token-a",
+        clientName: "client-a",
+      });
+      const otherCaller = await modernToolCall({
+        token: "token-b",
+        clientName: "client-a",
+      });
+      const otherClient = await modernToolCall({
+        token: "token-a",
+        clientName: "client-b",
+      });
+      setSystemTime(new Date("2026-01-01T00:40:00Z"));
+      const nextWindow = await modernToolCall({
+        token: "token-a",
+        clientName: "client-a",
+      });
 
-    const sessionId = first.properties?.$session_id;
-    expect(sessionId).toStartWith("ses_");
-    expect(first.distinctId).toBe(sessionId as string);
-    expect(second.properties?.$session_id).toBe(sessionId);
-    expect(second.distinctId).toBe(sessionId as string);
-    expect(otherCaller.properties?.$session_id).not.toBe(sessionId);
-    expect(otherClient.properties?.$session_id).not.toBe(sessionId);
-    expect(JSON.stringify(first)).not.toContain("token-a");
-    expect(first.properties).not.toHaveProperty("__mcp_analytics_session_key");
+      const sessionId = first.properties?.$session_id;
+      expect(sessionId).toStartWith("ses_");
+      expect(first.distinctId).toBe(sessionId as string);
+      expect(second.properties?.$session_id).toBe(sessionId);
+      expect(second.distinctId).toBe(sessionId as string);
+      expect(otherCaller.properties?.$session_id).not.toBe(sessionId);
+      expect(otherClient.properties?.$session_id).not.toBe(sessionId);
+      expect(nextWindow.properties?.$session_id).not.toBe(sessionId);
+      expect(JSON.stringify(first)).not.toContain("token-a");
+      expect(first.properties).not.toHaveProperty(
+        "__mcp_analytics_session_key",
+      );
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test("puts session-less custom events in the caller's derived session", async () => {
+    setSystemTime(new Date("2026-01-01T00:10:00Z"));
+    try {
+      const toolCall = await modernToolCall({
+        token: "token-a",
+        clientName: "client-a",
+      });
+      const captured = await modernRequest({
+        token: "token-a",
+        clientName: "client-a",
+        name: KERNEL_FEEDBACK_TOOL_NAME,
+        args: {
+          context:
+            "Reporting a repeatable site block so the affected domain can be prioritized for a working browser configuration.",
+          summary: "Stealth sessions were consistently blocked",
+          feedback_type: "site_compatibility",
+          sentiment: "negative",
+          task_completed: false,
+          site_compatibility: {
+            registrable_domain: "example.com",
+            observed_outcome: "blocked",
+            reproducibility: "consistent",
+          },
+        },
+      });
+      const feedback = captured.find(
+        ({ event }) => event === MCP_FEEDBACK_SUBMITTED_EVENT,
+      );
+
+      const sessionId = toolCall.properties?.$session_id;
+      expect(feedback?.properties?.$session_id).toBe(sessionId);
+      expect(feedback?.distinctId).toBe(sessionId as string);
+      expect(feedback?.properties).not.toHaveProperty(
+        "__mcp_analytics_session_key",
+      );
+    } finally {
+      setSystemTime();
+    }
   });
 
   test("records the model only from Codex request metadata", async () => {
