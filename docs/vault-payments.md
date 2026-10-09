@@ -227,8 +227,8 @@ passkeys; use Kernel-hosted collection for those, or when the user declines
    entries. The extension selects fields and submits the form. `fill_submitted`
    means the form was submitted, not that login succeeded, so check the page.
    `fill_failed` and `fill_unknown` are tool errors; `noExistingCredentials` means the
-   owner's 1Password has no usable login for the page, and `fill_unknown` must not be
-   retried in the same browser.
+   owner's 1Password has no usable login for the page. `fill_unknown` means the form
+   may have been filled or submitted; inspect the page to see the result of the fill.
 
 The Kernel API also supports 1Password credentials backed by a customer-supplied
 access token and integration key instead of a connected account. The integrating
