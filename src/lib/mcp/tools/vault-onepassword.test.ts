@@ -125,7 +125,9 @@ describe("1Password vault credentials", () => {
       expect(items).toContain("1pw_create_access_request");
       expect(items).toContain("1pw_access_request_status");
       expect(items).toContain("recover a failed account link");
-      expect(items).toContain("so create the browser first");
+      expect(items).toContain(
+        "1pw_create_access_request and 1pw_access_request_status need no browser",
+      );
       expect(credentials).toContain(
         "no approval link exists before that request",
       );
@@ -483,8 +485,9 @@ describe("1Password vault credentials", () => {
       expect(guidance).toContain('action: "invoke"');
       expect(guidance).toContain('operation: "1pw_access_request_status"');
       expect(guidance).toContain("needs no user approval");
+      expect(guidance).toContain("it needs no browser");
       expect(guidance).toContain(
-        "create that browser before requesting access",
+        "create a browser with this vault attached (KERNEL loads the 1password extension into it on demand)",
       );
       expect(guidance).not.toContain("collection url");
       expect(result.hints.invocation).toEqual([
@@ -582,12 +585,11 @@ describe("1Password vault credentials", () => {
         ...target,
         action: "invoke",
         operation: "1pw_create_access_request",
-        inputs: { browser_id: "browser-1", reason: "Check order status" },
+        inputs: { reason: "Check order status" },
       });
       expect(result.isError).toBeUndefined();
       expect(fixture.requests[1].body).toEqual({
         type: "1pw_create_access_request",
-        browser_id: "browser-1",
         reason: "Check order status",
       });
       expectNoReferences(result, { approvalLink: true });
@@ -901,7 +903,7 @@ describe("1Password vault credentials", () => {
           ...target,
           action: "invoke",
           operation,
-          inputs: { browser_id: "browser-1" },
+          inputs: {},
         });
         expect(result.isError).toBe(true);
         expect(fixture.requests).toHaveLength(2);
@@ -936,7 +938,7 @@ describe("1Password vault credentials", () => {
         ...target,
         action: "invoke",
         operation: "1pw_create_access_request",
-        inputs: { browser_id: "browser-1" },
+        inputs: {},
       });
       expect(result.isError).toBe(true);
       const text = JSON.stringify(result.content);
