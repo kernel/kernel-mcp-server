@@ -894,7 +894,10 @@ describe("1Password vault credentials", () => {
           }),
         );
         expect(read.guidance.join(" ")).toContain(
-          "never delete or recreate the item to retry",
+          "do not delete or recreate the item on your own to retry",
+        );
+        expect(read.guidance.join(" ")).toContain(
+          "when the end-user asks for a new request",
         );
         expect(read.guidance.join(" ")).toContain(
           "first check that the credential_account named by spec.account is connected",
