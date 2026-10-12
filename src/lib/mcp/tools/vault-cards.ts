@@ -26,7 +26,7 @@ export function registerVaultCardTools(
     "manage_vault_cards",
     {
       description:
-        'configure payment card requests in a per-end-user vault, not merchant payments. KERNEL cards use a connected KERNEL wallet, amount in minor units, https merchant_url and optional iso merchant_country (required by visa). "authorize" is only for KERNEL cards: after explicit user approval it invokes the currently advertised authorize operation, returning a visa spend_approval action for the cardholder or an issued mastercard card. give action urls only to the intended user privately; do not open them or include them in logs/traces. KERNEL cards cannot be updated; inspect with manage_vault_items get/events, and use advertised fill only when ready. card enrollment is hosted; never accept card numbers, cvc, or expiration data in tool inputs or credential items. mode is determined by the wallet credentials, not a per-item test flag; never assume a test transaction. "create" creates or retrieves an identical card request by immutable key. "update" replaces requested-card specs. pending issuance updates preserve omitted optional fields and clear explicit empty lists, only for provider-supported edits allowed by the api. wallet/provider binding cannot change after authorization starts. uncertain updates enter recovery_required; do not retry. neither implicitly authorizes link: inspect available_operations with manage_vault_items and obtain explicit user approval before invoking. for agentcard, optional checkout_origin is a caller-declared canonical https origin (or localhost http origin) that KERNEL forwards for eligible autopilot rule matching on non-prepared checkout authorizations. KERNEL does not compare it with the browser page; it does not enable autopilot or ensure payment success. omitting it retains the existing approval flow, and autopilot may fall back to user approval. prepared checkout uses preparation.merchant_origin. eligible unused agentcard cards advertise a checkout-preparation operation for supported tokenization checkout; invoke it through manage_vault_items with the api-required checkout inputs. keep the returned approval page open, poll until ready_to_submit, and submit native pay before preparation.expires_at. preparations are single-use, even after failure or expiry. amounts are integer minor currency units. no card data, oauth tokens, provider secrets, or domain configuration. never reconfigure a card to retry a failed, timed-out, rejected, or indeterminate payment. requests are not automatically retried.',
+        'configure payment card requests in a per-end-user vault, not merchant payments. KERNEL cards use a connected KERNEL wallet, amount in minor units, https merchant_url and optional iso merchant_country (required by visa). "authorize" is only for KERNEL cards: after explicit user approval it invokes the currently advertised authorize operation, returning a visa spend_approval action for the cardholder or an issued mastercard card. give action urls only to the intended user privately; do not open them or include them in logs/traces. KERNEL cards cannot be updated; inspect with manage_vault_items get/events. authorize is equivalent to manage_vault_items invoke authorize. use advertised fill only when ready: number, expiration (format "MM/YY"), cvc; billing_* fields fail with 400 field_unavailable before any write. enter billing name/zip on the merchant page. after the user submits checkout and the merchant outcome is observed, use manage_vault_items invoke confirm_transaction exactly once with status, transaction_type, amount, currency, occurred_at; unknown outcomes need reconciliation, not retry/reporting. only if a recovery_required KERNEL card advertises restart_verification, invoke it once with no inputs after user approval and give the new spend_approval url privately to the cardholder; otherwise stop and reconcile. card enrollment is hosted; never accept card numbers, cvc, or expiration data in tool inputs or credential items. mode is determined by the wallet credentials, not a per-item test flag; never assume a test transaction. "create" creates or retrieves an identical card request by immutable key. "update" replaces requested-card specs. pending issuance updates preserve omitted optional fields and clear explicit empty lists, only for provider-supported edits allowed by the api. wallet/provider binding cannot change after authorization starts. uncertain updates enter recovery_required; do not retry. neither implicitly authorizes link: inspect available_operations with manage_vault_items and obtain explicit user approval before invoking. for agentcard, optional checkout_origin is a caller-declared canonical https origin (or localhost http origin) that KERNEL forwards for eligible autopilot rule matching on non-prepared checkout authorizations. KERNEL does not compare it with the browser page; it does not enable autopilot or ensure payment success. omitting it retains the existing approval flow, and autopilot may fall back to user approval. prepared checkout uses preparation.merchant_origin. eligible unused agentcard cards advertise a checkout-preparation operation for supported tokenization checkout; invoke it through manage_vault_items with the api-required checkout inputs. keep the returned approval page open, poll until ready_to_submit, and submit native pay before preparation.expires_at. preparations are single-use, even after failure or expiry. amounts are integer minor currency units. no card data, oauth tokens, provider secrets, or domain configuration. never reconfigure a card to retry a failed, timed-out, rejected, or indeterminate payment. requests are not automatically retried.',
       inputSchema: vaultToolInput({
         ...vaultItemSchema,
         key: vaultKeySchema(),
@@ -60,6 +60,7 @@ export function registerVaultCardTools(
         project,
       );
       const options = { maxRetries: 0, signal: ctx.mcpReq.signal };
+      let authorizationSubmitted = false;
       try {
         if (params.action === "authorize") {
           if (params.provider !== "kernel" || params.spec !== undefined)
@@ -79,6 +80,7 @@ export function registerVaultCardTools(
             return errorResponse(
               "kernel card does not advertise authorize; inspect item state and events.",
             );
+          authorizationSubmitted = true;
           const item = await client.vaults.items.performOperation(
             params.key,
             { id_or_name: params.vault, type: "authorize" },
@@ -122,7 +124,12 @@ export function registerVaultCardTools(
         return vaultItemResponse(item, target);
       } catch (error) {
         if (params.provider === "kernel")
-          throwKernelVaultError("manage_vault_cards", params.action);
+          throwKernelVaultError(
+            "manage_vault_cards",
+            params.action,
+            error,
+            authorizationSubmitted,
+          );
         throwVaultError("manage_vault_cards", params.action, error);
       }
     },

@@ -13,9 +13,11 @@ there is no per-item test flag. AgentCard configuration responses report the
 introspected `test_mode`. A development or staging MCP endpoint does not make a
 card request a test transaction.
 
-The released Node SDK dependency is pinned in `bun.lock`. The API's Visa
-`merchant_country` field is not yet in the generated SDK type; the tool validates
-and forwards it unchanged.
+The released Node SDK dependency is pinned to 0.121.0 in `bun.lock`, including
+Visa `merchant_country` in the generated card spec type. `confirm_transaction`
+and `restart_verification` are forwarded generically only when advertised by the API.
+`restart_verification` depends on kernel/kernel#4760 (staging only until merged and
+released); never assume it is available based on state or SDK version.
 
 ## Kernel-hosted payment card
 
@@ -36,15 +38,55 @@ minor currency units, maximum 50000), `currency`, `merchant_name`, HTTPS
 This only creates a request, not a merchant payment. Kernel cards cannot be updated.
 After explicit user approval and only when the card advertises `authorize`, call
 `manage_vault_cards` with `action: "authorize"`, `provider: "kernel"`, the same
-vault/key, and no spec. Mastercard can become ready without a hosted approval;
-Visa may return a `spend_approval` action. Give that URL only to the cardholder
-privately, never open it on their behalf or log it. Observe `get`/`events` until
-ready; a pending response does not mean the card can be used. If `fill` is
-advertised, attach the vault to a new browser and invoke that operation with
-value-free bindings on the exact HTTPS origin of `merchant_url` before
-`expires_at`. Fill does not submit checkout or prove payment. No aliases or
-egress substitution are available. Never retry an uncertain authorization,
-fill, or merchant payment; reconcile `recovery_required` with support.
+vault/key, and no spec. This is equivalent to `manage_vault_items` `invoke` with
+`operation: "authorize"` and no inputs. Mastercard can become ready without a
+hosted approval; Visa returns a `spend_approval` action. Give that URL only to the
+cardholder privately for passkey/OTP verification and approval, never open it on
+their behalf or log it. Observe `get`/`events` until ready; a pending response does
+not mean the card can be used. Safe display metadata includes `state.masks.token_last4`.
+
+If `fill` is advertised, attach the vault to a new browser and invoke it before
+`expires_at` with `browser_id`, the exact current HTTPS top-level `page_url` on
+`merchant_url`'s origin (including path, query, and fragment), and ordered,
+value-free `fields` bindings. Kernel's fill fields are `number`, `expiration`
+(use `format: "MM/YY"`), and `cvc`. Kernel stores **no billing details**:
+any `billing_*` field returns HTTP 400 `field_unavailable` before any write.
+Enter billing name/ZIP directly on the merchant page, not through vault fill.
+No aliases or egress substitution are available. Fill does not submit checkout
+or prove payment; the user submits checkout on the merchant site.
+
+After observing the merchant outcome, report it **exactly once** using
+`manage_vault_items` `action: "invoke"`, `operation: "confirm_transaction"`, only
+when advertised. Supply exactly these `inputs` (additional properties are rejected):
+
+- `status`: `APPROVED`, `DECLINED`, `PENDING`, `ERROR`, or `CANCELLED`.
+- `transaction_type`: `PURCHASE`, `AUTHORIZATION`, `CAPTURE`, `REFUND`, `REVERSAL`,
+  `VERIFICATION`, `CHARGEBACK`, or `FRAUD`.
+- `amount`: integer minor units, 0..50000, no more than the approved amount.
+- `currency`: three-letter uppercase, e.g. `USD`; must match the approval currency.
+- `occurred_at`: RFC3339 timestamp of the merchant outcome.
+
+Do not infer success from fill. An unknown merchant outcome needs reconciliation,
+not checkout retry or reporting (do not guess `PENDING` or `ERROR`). After a report,
+`confirm_transaction` is no longer advertised; never replay a report whose outcome
+is uncertain.
+
+For a `recovery_required` Kernel card, **only when `restart_verification` is
+advertised**, obtain explicit user approval and invoke it once through
+`manage_vault_items` with no inputs. It rotates the approval link locally without
+a provider call, only after a classified initial attestation failure with proof
+that no intent was dispatched. Give the new `spend_approval` URL privately to the
+cardholder. This is not a general reset: every other `recovery_required` state
+still means stop and reconcile with the provider or support. Never retry an
+uncertain authorization, fill, or merchant payment.
+
+Kernel tool errors redact upstream message text, which may contain bearer URLs,
+but retain HTTP status and a validated short API error code when present. A 4xx
+validation/conflict rejection means nothing new was authorized: fix inputs or
+access, rather than treating it as an uncertain authorization. A 5xx, network
+failure, or timeout after submitting `authorize` leaves the outcome uncertain:
+inspect state/events and do not retry. A failed observation does not submit a new
+authorization.
 
 ## Credential collection and observation
 
@@ -634,8 +676,12 @@ A reusable card remaining `ready` does not establish that the last payment succe
   `recovery_required` and must not be retried.
 - `recovery_required` is preserved in responses and ends the API's bounded wait.
   It is neither decline nor expiry. Stop payment attempts and reconcile with the
-  provider or support. There is no reset or caller-asserted reconciliation tool.
-  Unresolved cards can also block deletion of their wallet and vault.
+  provider or support. The sole exception is an advertised `restart_verification`
+  on a Kernel card: after user approval, invoke once with no inputs and privately
+  deliver the new `spend_approval` link. This only recovers proven no-dispatch
+  attestation failure, not an uncertain payment. There is no general reset or
+  caller-asserted reconciliation tool. Unresolved cards can also block deletion
+  of their wallet and vault.
 - Browser attachments accept at most 20 references, each containing exactly one
   `id` or `name`. They are creation-only and unavailable for browser pools. You
   cannot add vaults to an existing browser. Vault-bound browser creation also

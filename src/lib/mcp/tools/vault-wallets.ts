@@ -118,7 +118,7 @@ export function registerVaultWalletTools(
         }
       } catch (error) {
         if (params.provider === "kernel")
-          throwKernelVaultError("manage_vault_wallets", params.action);
+          throwKernelVaultError("manage_vault_wallets", params.action, error);
         throwVaultError("manage_vault_wallets", params.action, error);
       }
     },
