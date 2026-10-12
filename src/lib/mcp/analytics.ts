@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import {
+  decodeSessionId,
+  getRequestHeaders,
   instrument,
+  MCP_SESSION_HEADER,
   PostHogMCPAnalyticsEvent,
   PostHogMCPAnalyticsProperty,
   type BeforeSendFn,
@@ -9,6 +12,7 @@ import {
 } from "@posthog/mcp";
 import {
   CLIENT_CAPABILITIES_META_KEY,
+  CLIENT_INFO_META_KEY,
   type McpServer,
 } from "@modelcontextprotocol/server";
 import { PostHog } from "posthog-node";
@@ -171,6 +175,8 @@ const SENT_PROPERTIES = new Set<string>([
   PostHogMCPAnalyticsProperty.IntentSource,
   PostHogMCPAnalyticsProperty.IsError,
   PostHogMCPAnalyticsProperty.ListedToolNames,
+  PostHogMCPAnalyticsProperty.LlmModel,
+  PostHogMCPAnalyticsProperty.LlmModelSource,
   PostHogMCPAnalyticsProperty.ProtocolVersion,
   PostHogMCPAnalyticsProperty.ResourceName,
   PostHogMCPAnalyticsProperty.ServerName,
@@ -392,6 +398,7 @@ export const sanitizeMcpAnalyticsEvent: BeforeSendFn = (event) => {
   const properties = event.properties;
   if (!properties) return event;
   enrichMcpAnalyticsEvent(event);
+  applyDerivedSession(event);
   if (event.event === PostHogMCPAnalyticsEvent.ToolCall) {
     annotateProjectParamUsage(properties);
     annotateDeprecatedParamUsage(properties);
@@ -459,6 +466,100 @@ function connectionOrgId(ctx: unknown) {
   return authExtra?.connectionContext?.scope.organizationId;
 }
 
+const SESSION_KEY_PROPERTY = "__mcp_analytics_session_key";
+
+// Matches the SDK's inactivity timeout, but as fixed windows: requests on the 2026-07-28
+// revision run on a fresh server instance each, so there is no in-process state to
+// measure inactivity against.
+const DERIVED_SESSION_WINDOW_MS = 30 * 60 * 1000;
+
+/**
+ * Requests without an MCP session (every request on the 2026-07-28 revision) would get a
+ * new $session_id per call. For those, key the session on the caller, organization, and
+ * client instead; sanitizeMcpAnalyticsEvent buckets the key into a window. Concurrent
+ * runs by the same caller and client share a session.
+ */
+function analyticsSessionKey(ctx: unknown) {
+  const extra = ctx as
+    | {
+        sessionId?: string;
+        http?: { authInfo?: { token?: string; extra?: unknown } };
+        mcpReq?: { envelope?: unknown };
+      }
+    | undefined;
+  const headers = getRequestHeaders(extra);
+  const header = headers?.[MCP_SESSION_HEADER];
+  if (
+    extra?.sessionId ||
+    decodeSessionId(Array.isArray(header) ? header[0] : header)
+  ) {
+    return null;
+  }
+
+  const authInfo = extra?.http?.authInfo;
+  const userId = (authInfo?.extra as { userId?: string | null } | undefined)
+    ?.userId;
+  const subject = userId
+    ? `user:${userId}`
+    : authInfo?.token
+      ? `token:${authInfo.token}`
+      : null;
+  if (!subject) return null;
+
+  const envelope = extra?.mcpReq?.envelope;
+  const clientInfo = isRecord(envelope)
+    ? envelope[CLIENT_INFO_META_KEY]
+    : undefined;
+  const clientName =
+    isRecord(clientInfo) && typeof clientInfo.name === "string"
+      ? clientInfo.name
+      : "";
+
+  return createHash("sha256")
+    .update([subject, connectionOrgId(ctx) ?? "", clientName].join("\0"))
+    .digest("hex");
+}
+
+function applyDerivedSession(event: Parameters<BeforeSendFn>[0]) {
+  const properties = event.properties;
+  const key = properties[SESSION_KEY_PROPERTY];
+  delete properties[SESSION_KEY_PROPERTY];
+  if (typeof key !== "string") return;
+
+  const window = Math.floor(
+    Date.parse(event.timestamp) / DERIVED_SESSION_WINDOW_MS,
+  );
+  const sessionId = `ses_${createHash("sha256")
+    .update(`${key}\0${window}`)
+    .digest("hex")
+    .slice(0, 32)}`;
+
+  const previous = properties[PostHogMCPAnalyticsProperty.SessionId];
+  properties[PostHogMCPAnalyticsProperty.SessionId] = sessionId;
+  // Anonymous events use the session id as their distinct id.
+  if (event.distinct_id === previous) event.distinct_id = sessionId;
+}
+
+const CODEX_TURN_METADATA_KEY = "x-codex-turn-metadata";
+const MODEL_ID_PATTERN = /^[\w.:/@-]{1,100}$/;
+
+/**
+ * Codex reports its model in request metadata, which needs no extra tool argument.
+ * Other clients don't, and agent self-reporting stays off.
+ */
+function clientMetadataModel(request: { params?: unknown }) {
+  const params = request.params;
+  const meta = isRecord(params) ? params._meta : undefined;
+  const codex = isRecord(meta) ? meta[CODEX_TURN_METADATA_KEY] : undefined;
+  const model =
+    isRecord(codex) && typeof codex.model === "string"
+      ? codex.model.trim()
+      : "";
+  return MODEL_ID_PATTERN.test(model) && model.toLowerCase() !== "unknown"
+    ? model
+    : null;
+}
+
 export function captureMcpCustomEvent(
   analytics: McpAnalytics,
   extra: unknown,
@@ -466,11 +567,13 @@ export function captureMcpCustomEvent(
   properties: Record<string, unknown>,
 ) {
   const organizationId = connectionOrgId(extra);
+  const sessionKey = analyticsSessionKey(extra);
   return analytics.capture({
     event,
     properties: {
       ...properties,
       ...(organizationId && { $groups: { organization: organizationId } }),
+      ...(sessionKey && { [SESSION_KEY_PROPERTY]: sessionKey }),
     },
   });
 }
@@ -897,6 +1000,16 @@ export function instrumentMcpAnalytics(
         : undefined;
       if (isRecord(capabilities)) {
         Object.assign(properties, clientCapabilityAnalytics(capabilities));
+      }
+      const sessionKey = analyticsSessionKey(extra);
+      if (sessionKey) properties[SESSION_KEY_PROPERTY] = sessionKey;
+      if (request.method === "tools/call") {
+        const model = clientMetadataModel(request);
+        if (model) {
+          properties[PostHogMCPAnalyticsProperty.LlmModel] = model;
+          properties[PostHogMCPAnalyticsProperty.LlmModelSource] =
+            "client_metadata";
+        }
       }
       return Object.keys(properties).length > 0 ? properties : null;
     },

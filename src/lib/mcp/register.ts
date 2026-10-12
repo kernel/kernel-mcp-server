@@ -78,6 +78,7 @@ const standaloneToolsetAliases: Partial<Record<string, McpToolset>> = {
   search_docs: "docs",
   web_search: "search",
   execute_playwright_code: "playwright",
+  manage_playwright_executors: "playwright",
   browser_repl: "repl",
   exec_command: "shell",
   browser_utilities: "browser_curl",

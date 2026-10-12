@@ -172,8 +172,7 @@ describe("MCP credential flow", () => {
         expect(result.isError).toBe(true);
         expect(text).toContain(`${status} ${message}`);
         expect(text).toContain(`[code: ${code}]`);
-        expect(text).toContain("the operation may have partially completed");
-        expect(text).toContain("do not retry automatically.");
+        expect(text).toContain("safe to retry after fixing any reported cause");
         expect(text).not.toContain("private-");
         expect(fixture.requests.map((request) => request.method)).toEqual([
           "GET",
@@ -193,7 +192,7 @@ describe("MCP credential flow", () => {
     { status: 400, code: "field_unavailable" },
     { status: 400, code: "new_api_error" },
   ])(
-    "passes through operation errors without interpreting the operation type ($status $code)",
+    "passes through fill operation errors ($status $code)",
     async ({ status, code }) => {
       const fixture = await connectVaultTest([
         Response.json(ready),
@@ -204,7 +203,7 @@ describe("MCP credential flow", () => {
         const text = JSON.stringify(result);
         expect(result.isError).toBe(true);
         expect(text).toContain(String(status));
-        expect(text).toContain("the operation may have partially completed");
+        expect(text).toContain("safe to retry after fixing any reported cause");
         expect(text).toContain("API diagnostic message");
         expect(text).toContain(`[code: ${code}]`);
         expect(
@@ -354,7 +353,7 @@ describe("MCP credential flow", () => {
         "GET",
         "POST",
       ]);
-      expect(JSON.stringify(result)).toContain("may have partially completed");
+      expect(JSON.stringify(result)).toContain("safe to retry");
     } finally {
       await fixture.close();
     }
@@ -667,9 +666,7 @@ describe("MCP credential flow", () => {
             fixture.requests.filter(({ method }) => method !== "GET"),
           ).toHaveLength(1);
           if (operation === "fill")
-            expect(JSON.stringify(result)).toContain(
-              "do not retry automatically",
-            );
+            expect(JSON.stringify(result)).toContain("safe to retry");
         } finally {
           await fixture.close();
         }

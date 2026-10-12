@@ -1,8 +1,11 @@
 /// <reference types="bun-types" />
-import type { Client } from "@modelcontextprotocol/client";
 
 import { describe, expect, test } from "bun:test";
-import { connectTestMcp, toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
+import {
+  connectTestMcp,
+  toolResultJSON,
+  toolResultText,
+} from "@/lib/mcp/mcp-test-fixtures";
 import { registerBrowserCapabilities } from "@/lib/mcp/tools/browsers";
 
 const event = {
@@ -37,11 +40,6 @@ function telemetryClient(queries: unknown[], items: unknown[] = [event]) {
       },
     },
   };
-}
-
-function toolResultText(result: Awaited<ReturnType<Client["callTool"]>>) {
-  const content = result.content as Array<{ type: string; text: string }>;
-  return content[0].text;
 }
 
 type TextResourceResult = {

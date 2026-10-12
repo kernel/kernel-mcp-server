@@ -57,7 +57,6 @@ interface BraintrustEvent {
   output?: unknown;
   expected?: unknown;
   error?: string;
-  scores?: Record<string, number>;
   metadata?: Record<string, unknown>;
   metrics?: Record<string, number>;
   _is_merge: false;
@@ -160,6 +159,8 @@ function taskInstruction(trial: BenchmarkTrial): unknown {
   return redactValue(userSteps.at(-1)?.message);
 }
 
+// Score values ride in metadata rather than Braintrust's billed scores field;
+// they stay filterable and groupable there (`metadata.scores.accuracy = 1`).
 function trialMetadata(trial: BenchmarkTrial): Record<string, unknown> {
   return {
     trialName: trial.trialName,
@@ -172,6 +173,7 @@ function trialMetadata(trial: BenchmarkTrial): Record<string, unknown> {
           : trial.scores.accuracy === 1
             ? "correct"
             : "false_negative",
+    scores: trial.scores,
     agent: trial.agent,
     agentVersion: trial.agentVersion,
     agentConfigHash: trial.agentConfigHash,
@@ -500,7 +502,6 @@ export function buildExperimentEvents(
         },
         expected: { reward: 1 },
         error: trial.error ? redactString(trial.error, 400) : undefined,
-        scores: trial.scores,
         metadata: trialMetadata(trial),
         metrics: metricRecord(trial),
         _is_merge: false,

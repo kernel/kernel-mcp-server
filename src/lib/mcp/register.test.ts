@@ -100,6 +100,7 @@ const EXPECTED_ANNOTATIONS: Record<string, [boolean, boolean, boolean]> = {
   computer_action: [false, true, true],
   exec_command: [false, true, true],
   execute_playwright_code: [false, true, true],
+  manage_playwright_executors: [false, true, false],
   browser_repl: [false, true, true],
   webmcp: [false, true, true],
   manage_replays: [false, true, false],
@@ -246,7 +247,7 @@ describe("MCP toolset allowlist", () => {
     const previousEnabled = process.env.KERNEL_MCP_ENABLED_TOOLSETS;
     const previousDisabled = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
     process.env.KERNEL_MCP_ENABLED_TOOLSETS =
-      "execute_playwright_code browser_repl computer_action";
+      "execute_playwright_code manage_playwright_executors browser_repl computer_action";
     delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
     try {
       const registration = await captureRegistration(false);
@@ -254,6 +255,7 @@ describe("MCP toolset allowlist", () => {
         "get_connection_context",
         "computer_action",
         "execute_playwright_code",
+        "manage_playwright_executors",
         "browser_repl",
       ]);
       expect(registration.appTools).toEqual([]);
@@ -287,6 +289,7 @@ describe("project selection registration", () => {
     "computer_action",
     "exec_command",
     "execute_playwright_code",
+    "manage_playwright_executors",
     "browser_repl",
     "manage_replays",
     "manage_auth_connections",
