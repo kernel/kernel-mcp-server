@@ -16,6 +16,7 @@ import {
   clientCapabilityAnalyticsFromInitialize,
   enrichMcpAnalyticsEvent,
   instrumentMcpAnalytics,
+  intentFromContextArgument,
   MCP_CAPABILITY_REQUESTED_EVENT,
   MCP_CLIENT_ELICITATION_MODE_PROPERTY,
   MCP_CLIENT_SUPPORTS_APPS_PROPERTY,
@@ -312,6 +313,41 @@ function toolCallEvent(properties: Record<string, unknown> = {}): CaptureEvent {
     type: "capture",
   };
 }
+
+describe("intentFromContextArgument", () => {
+  test("returns the trimmed context argument", () => {
+    expect(
+      intentFromContextArgument({
+        params: {
+          name: "manage_browsers",
+          arguments: { action: "list", context: "  Listing live browsers.  " },
+        },
+      }),
+    ).toBe("Listing live browsers.");
+  });
+
+  test("returns undefined when context is missing, blank, or not a string", () => {
+    expect(intentFromContextArgument({})).toBeUndefined();
+    expect(intentFromContextArgument({ params: {} })).toBeUndefined();
+    expect(
+      intentFromContextArgument({ params: { arguments: { action: "list" } } }),
+    ).toBeUndefined();
+    expect(
+      intentFromContextArgument({ params: { arguments: { context: "" } } }),
+    ).toBeUndefined();
+    expect(
+      intentFromContextArgument({ params: { arguments: { context: "  \n" } } }),
+    ).toBeUndefined();
+    expect(
+      intentFromContextArgument({ params: { arguments: { context: 42 } } }),
+    ).toBeUndefined();
+    expect(
+      intentFromContextArgument({
+        params: { arguments: { context: { summary: "object" } } },
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe("sanitizeMcpAnalyticsEvent", () => {
   test("keeps $groups so every event carries org attribution", async () => {
@@ -1189,6 +1225,12 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     server.registerTool("ping", { inputSchema: z.object({}) }, async () => ({
       content: [{ type: "text" as const, text: "pong" }],
     }));
+    // Declares context itself, like manage_browsers, so the SDK does not own the argument.
+    server.registerTool(
+      "ping_with_context",
+      { inputSchema: z.object({ context: z.string().optional() }) },
+      async () => ({ content: [{ type: "text" as const, text: "pong" }] }),
+    );
     return server;
   }
 
@@ -1301,6 +1343,28 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
 
     // A carried transport session is kept rather than derived.
     expect(toolCall.properties.$session_id).toBe("ses_integration");
+  });
+
+  test("records intent for a tool that declares its own context argument", async () => {
+    const captured: { event?: string }[] = [];
+
+    const result = (await simulateRequest(captured, "tools/call", {
+      name: "ping_with_context",
+      arguments: {
+        context: "Checking intent capture on a tool-owned context.",
+      },
+    })) as { isError?: boolean };
+
+    expect(result.isError).not.toBe(true);
+    const toolCall = captured.find(
+      ({ event }) => event === PostHogMCPAnalyticsEvent.ToolCall,
+    ) as { properties: Record<string, unknown> };
+    expect(toolCall.properties).toMatchObject({
+      [PostHogMCPAnalyticsProperty.ToolName]: "ping_with_context",
+      [PostHogMCPAnalyticsProperty.Intent]:
+        "Checking intent capture on a tool-owned context.",
+      [PostHogMCPAnalyticsProperty.IntentSource]: "inferred",
+    });
   });
 
   test("classifies rejected capability input through instrumentation", async () => {

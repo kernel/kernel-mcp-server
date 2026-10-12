@@ -27,7 +27,6 @@ import {
 } from "@/lib/mcp/deprecated-params";
 import {
   type KernelFeedback,
-  KERNEL_FEEDBACK_TOOL_NAME,
   LEGACY_SITE_COMPATIBILITY_FEEDBACK_TYPE,
   legacyChallengeType,
   registerFeedbackTool,
@@ -387,6 +386,17 @@ function sanitizeIntent(intent: string) {
 }
 
 const ANALYTICS_CONTEXT_PROPERTY = "__mcp_connection_analytics_context";
+
+// PostHog reads the `context` argument only for tools whose schema leaves it to the SDK.
+// Declaring `context` on a tool (the analytics-backed tools, manage_browsers) stops that
+// read, so the SDK's fallback restores intent capture from the same argument.
+export function intentFromContextArgument(request: {
+  params?: { arguments?: Record<string, unknown>; [key: string]: unknown };
+}) {
+  const context = request.params?.arguments?.context;
+  const intent = typeof context === "string" ? context.trim() : "";
+  return intent || undefined;
+}
 
 /**
  * Enforces the SENT_PROPERTIES allow-list on every event the SDK builds and sanitizes
@@ -952,18 +962,8 @@ export function instrumentMcpAnalytics(
     // the SDK default: it repeats per tool in every tools/list response, so it stays
     // short, and it names the arguments agents must not copy into it.
     context: { description: MCP_INTENT_ARGUMENT_DESCRIPTION },
-    // These tools declare their own context field, so PostHog no longer owns it.
-    intentFallback: (request) => {
-      if (
-        request.params?.name !== KERNEL_FEEDBACK_TOOL_NAME &&
-        request.params?.name !== KERNEL_MISSING_CAPABILITY_TOOL_NAME
-      )
-        return null;
-      const args = request.params?.arguments;
-      return isRecord(args) && typeof args.context === "string"
-        ? args.context
-        : null;
-    },
+    // Runs for tools that declare their own context field, which PostHog then doesn't own.
+    intentFallback: intentFromContextArgument,
     // A failed tool call otherwise fans out into a second `$exception` event whose
     // `$exception_list` is built from the text the tool returned.
     enableExceptionAutocapture: false,
