@@ -24,6 +24,7 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
+import { MCP_INTENT_ARGUMENT_DESCRIPTION } from "@/lib/mcp/analytics-context";
 import { browserVaultsSchema } from "@/lib/mcp/vault-schemas";
 import { deprecatedParamConflict } from "@/lib/mcp/deprecated-params";
 import {
@@ -406,6 +407,7 @@ function buildSshPortForwardingInfo(
 
 // Unknown keys are rejected rather than dropped: a misspelled option would otherwise be
 // silently ignored and the browser created without it. `vault` is the common slip.
+// The analytics `context` argument is declared in the shape so instrumented calls parse.
 function unknownBrowserKeyMessage(issue: z.core.$ZodRawIssue) {
   if (issue.code !== "unrecognized_keys") return undefined;
   return issue.keys
@@ -471,6 +473,10 @@ export function registerBrowserCapabilities(
               "delete",
             ])
             .describe("operation to perform."),
+          context: z
+            .string()
+            .describe(MCP_INTENT_ARGUMENT_DESCRIPTION)
+            .optional(),
           session_id: z
             .string()
             .describe(
