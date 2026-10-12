@@ -284,7 +284,16 @@ export function registerVaultItemTools(
             key: params.key,
           });
         }
-        if (kernelPayment)
+        if (
+          kernelPayment ||
+          (!operationSubmitted &&
+            params.action === "invoke" &&
+            [
+              "authorize",
+              "confirm_transaction",
+              "restart_verification",
+            ].includes(params.operation ?? ""))
+        )
           throwKernelVaultError(
             "manage_vault_items",
             params.action,

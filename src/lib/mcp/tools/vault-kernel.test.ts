@@ -562,6 +562,35 @@ describe("kernel-managed payment tools", () => {
     },
   );
 
+  test.each(["authorize", "confirm_transaction", "restart_verification"])(
+    "redacts preflight errors before the provider is known for %s",
+    async (operation) => {
+      const fixture = await connectVaultTest([
+        Response.json(
+          { message: actionURL, code: "internal_error" },
+          { status: 500 },
+        ),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          action: "invoke",
+          operation,
+          vault: "checkout",
+          key: "order-1",
+        });
+        const text = JSON.stringify(result);
+        expect(result.isError).toBe(true);
+        expect(text).toContain("http status: 500");
+        expect(text).toContain("api code: internal_error");
+        expect(text).not.toContain(actionURL);
+        expect(text).not.toContain("authorization outcome is uncertain");
+        expect(fixture.requests.map(({ method }) => method)).toEqual(["GET"]);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
   test("generic authorize keeps validation rejection distinct from uncertainty", async () => {
     const fixture = await connectVaultTest([
       Response.json(card),
