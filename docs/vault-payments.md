@@ -53,7 +53,12 @@ value-free `fields` bindings. Kernel's fill fields are `number`, `expiration`
 any `billing_*` field returns HTTP 400 `field_unavailable` before any write.
 Enter billing name/ZIP directly on the merchant page, not through vault fill.
 No aliases or egress substitution are available. Fill does not submit checkout
-or prove payment; the user submits checkout on the merchant site.
+or prove payment; the user submits checkout on the merchant site. After a failed
+or unknown fill, inspect the browser page and item state, fix the cause, then
+retrying the field write is safe because fill never submits checkout. A 400
+`field_unavailable` wrote no fields: remove `billing_*` bindings and enter those
+details directly on the merchant page. This does not permit retrying authorization,
+merchant checkout, or transaction reporting.
 
 After observing the merchant outcome, report it **exactly once** using
 `manage_vault_items` `action: "invoke"`, `operation: "confirm_transaction"`, only
@@ -78,7 +83,7 @@ a provider call, only after a classified initial attestation failure with proof
 that no intent was dispatched. Give the new `spend_approval` URL privately to the
 cardholder. This is not a general reset: every other `recovery_required` state
 still means stop and reconcile with the provider or support. Never retry an
-uncertain authorization, fill, or merchant payment.
+uncertain authorization or merchant payment.
 
 Kernel tool errors redact upstream message text, which may contain bearer URLs,
 but retain HTTP status and a validated short API error code when present. A 4xx

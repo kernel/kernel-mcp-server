@@ -438,7 +438,7 @@ export function vaultItemResponse(
                   : []),
                 ...(cardProvider === "kernel"
                   ? [
-                      'KERNEL cards require merchant_country for visa purchases. after explicit user approval, use manage_vault_cards authorize or manage_vault_items invoke authorize only when advertised; visa returns a spend_approval action for the cardholder. poll get/events until ready. attach the vault at browser creation, then invoke advertised fill before expires_at with browser_id, exact current https top-level page_url on spec.merchant_url\'s origin, and ordered field/selector bindings for number, expiration (format "MM/YY"), and cvc. KERNEL stores no billing details: billing_* fields fail with 400 field_unavailable before any write; enter billing name/zip on the merchant page. fill does not submit checkout or prove payment. KERNEL cards have no aliases or egress substitution and cannot be updated.',
+                      'KERNEL cards require merchant_country for visa purchases. after explicit user approval, use manage_vault_cards authorize or manage_vault_items invoke authorize only when advertised; visa returns a spend_approval action for the cardholder. poll get/events until ready. attach the vault at browser creation, then invoke advertised fill before expires_at with browser_id, exact current https top-level page_url on spec.merchant_url\'s origin, and ordered field/selector bindings for number, expiration (format "MM/YY"), and cvc. KERNEL stores no billing details: billing_* fields fail with 400 field_unavailable before any write; enter billing name/zip on the merchant page. fill does not submit checkout or prove payment. after failed or unknown fill, inspect the browser page and item state, fix the cause, then it is safe to retry the field write, not authorization, checkout, or transaction reporting. KERNEL cards have no aliases or egress substitution and cannot be updated.',
                       kernelTransactionGuidance,
                     ]
                   : []),
@@ -502,7 +502,7 @@ export function throwKernelVaultError(
   tool: string,
   action: string,
   error: unknown,
-  authorizationSubmitted = false,
+  submittedOperation?: string,
 ): never {
   const status = error instanceof APIError ? error.status : undefined;
   const code =
@@ -515,16 +515,26 @@ export function throwKernelVaultError(
       : undefined;
   const rejected =
     status !== undefined && status >= 400 && status < 500 && status !== 408;
-  const guidance = rejected
-    ? "the request was rejected; nothing new was authorized. fix validation/conflict inputs or access before another request; do not replay a merchant payment."
-    : authorizationSubmitted
-      ? "authorization outcome is uncertain. inspect item state and events; do not retry authorize."
-      : "inspect item state and events before taking further action. do not retry an uncertain operation.";
-  const safeError = new Error(
-    `error in ${tool} (${action}): ${status !== undefined ? `http status: ${status}. ` : ""}${code ? `api code: ${code}. ` : ""}${guidance}`,
+  const fillFailure =
+    status === 400 && code === "field_unavailable"
+      ? "no fields were written. KERNEL cards store no billing details; remove billing_* bindings and enter billing name/zip on the merchant page."
+      : "fill may have written some fields.";
+  const guidance =
+    submittedOperation === "fill"
+      ? `${fillFailure} inspect the browser page and item state, fix the cause, then it is safe to retry the field write because fill never submits checkout. do not retry authorization, checkout, or transaction reporting.`
+      : rejected
+        ? "the request was rejected; nothing new was authorized. fix validation/conflict inputs or access before another request; do not replay a merchant payment."
+        : submittedOperation === "authorize"
+          ? "authorization outcome is uncertain. inspect item state and events; do not retry authorize."
+          : "inspect item state and events before taking further action. do not retry an uncertain operation.";
+  throwToolError(
+    tool,
+    action,
+    error,
+    guidance,
+    `${status !== undefined ? `http status: ${status}. ` : ""}${code ? `api code: ${code}.` : ""}`.trim() ||
+      "request failed.",
   );
-  if (status !== undefined) safeError.name = `KernelApiError${status}`;
-  throw safeError;
 }
 
 export function throwVaultError(

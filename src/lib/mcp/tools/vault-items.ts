@@ -290,6 +290,7 @@ export function registerVaultItemTools(
             params.action === "invoke" &&
             [
               "authorize",
+              "fill",
               "confirm_transaction",
               "restart_verification",
             ].includes(params.operation ?? ""))
@@ -298,7 +299,7 @@ export function registerVaultItemTools(
             "manage_vault_items",
             params.action,
             error,
-            operationSubmitted && params.operation === "authorize",
+            operationSubmitted ? params.operation : undefined,
           );
         throwVaultError(
           "manage_vault_items",

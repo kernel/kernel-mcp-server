@@ -309,6 +309,99 @@ describe("kernel-managed payment tools", () => {
     }
   });
 
+  test.each([
+    { status: 400, code: "field_unavailable" },
+    { status: 409, code: "conflict" },
+    { status: 500, code: "internal_error" },
+    { status: undefined, code: undefined },
+  ])(
+    "Kernel fill errors allow an inspected field-write retry, not payment retry: $status",
+    async ({ status, code }) => {
+      const fixture = await connectVaultTest([
+        Response.json({
+          ...card,
+          state: { provider: "kernel", status: "ready" },
+          available_operations: [{ type: "fill" }],
+        }),
+        status === undefined
+          ? new Error(`network failed ${actionURL}`)
+          : Response.json({ message: actionURL, code }, { status }),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          action: "invoke",
+          operation: "fill",
+          vault: "checkout",
+          key: "order-1",
+          inputs: {
+            browser_id: "browser-1",
+            page_url: "https://shop.example/pay",
+            fields: [{ field: "number", selector: "#number" }],
+          },
+        });
+        const text = JSON.stringify(result);
+        expect(result.isError).toBe(true);
+        expect(text).toContain("inspect the browser page and item state");
+        expect(text).toContain("safe to retry the field write");
+        expect(text).toContain("fill never submits checkout");
+        expect(text).toContain(
+          "do not retry authorization, checkout, or transaction reporting",
+        );
+        expect(text).not.toContain("nothing new was authorized");
+        expect(text).not.toContain("do not retry an uncertain operation");
+        expect(text).not.toContain(actionURL);
+        if (status !== undefined) {
+          expect(text).toContain(`http status: ${status}`);
+          expect(text).toContain(`api code: ${code}`);
+        }
+        if (code === "field_unavailable") {
+          expect(text).toContain("no fields were written");
+          expect(text).toContain("remove billing_* bindings");
+          expect(text).toContain("enter billing name/zip on the merchant page");
+          expect(text).not.toContain("may have written");
+        }
+        expect(fixture.requests.map(({ method }) => method)).toEqual([
+          "GET",
+          "POST",
+        ]);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test.each(["confirm_transaction", "restart_verification"])(
+    "does not give fill retry guidance for uncertain %s",
+    async (operation) => {
+      const fixture = await connectVaultTest([
+        Response.json({ ...card, available_operations: [{ type: operation }] }),
+        Response.json(
+          { message: actionURL, code: "internal_error" },
+          { status: 500 },
+        ),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          action: "invoke",
+          operation,
+          vault: "checkout",
+          key: "order-1",
+        });
+        const text = JSON.stringify(result);
+        expect(result.isError).toBe(true);
+        expect(text).toContain("do not retry an uncertain operation");
+        expect(text).not.toContain("safe to retry");
+        expect(text).not.toContain(actionURL);
+        expect(fixture.requests.map(({ method }) => method)).toEqual([
+          "GET",
+          "POST",
+        ]);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
   test("reports an observed transaction once using the advertised operation body", async () => {
     const ready = {
       ...card,
@@ -450,6 +543,7 @@ describe("kernel-managed payment tools", () => {
         "proof no intent was dispatched",
         "privately",
         "other recovery_required states mean stop",
+        "safe to retry the field write, not authorization, checkout, or transaction reporting",
       ])
         expect(guidance).toContain(text);
       expect(result.hints.invocation[0]).toMatchObject({
@@ -562,7 +656,12 @@ describe("kernel-managed payment tools", () => {
     },
   );
 
-  test.each(["authorize", "confirm_transaction", "restart_verification"])(
+  test.each([
+    "authorize",
+    "fill",
+    "confirm_transaction",
+    "restart_verification",
+  ])(
     "redacts preflight errors before the provider is known for %s",
     async (operation) => {
       const fixture = await connectVaultTest([
@@ -584,6 +683,7 @@ describe("kernel-managed payment tools", () => {
         expect(text).toContain("api code: internal_error");
         expect(text).not.toContain(actionURL);
         expect(text).not.toContain("authorization outcome is uncertain");
+        expect(text).not.toContain("safe to retry the field write");
         expect(fixture.requests.map(({ method }) => method)).toEqual(["GET"]);
       } finally {
         await fixture.close();

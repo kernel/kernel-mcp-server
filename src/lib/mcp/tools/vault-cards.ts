@@ -128,7 +128,7 @@ export function registerVaultCardTools(
             "manage_vault_cards",
             params.action,
             error,
-            authorizationSubmitted,
+            authorizationSubmitted ? "authorize" : undefined,
           );
         throwVaultError("manage_vault_cards", params.action, error);
       }

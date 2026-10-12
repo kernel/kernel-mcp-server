@@ -14,23 +14,42 @@ describe("kernel authorization errors", () => {
   const actionURL = "https://vault.example/approve#token=private-capability";
 
   test.each([
-    new APIConnectionError({ message: actionURL }),
-    new APIConnectionTimeoutError({ message: actionURL }),
-    new APIError(
-      408,
-      { message: actionURL, code: "timeout" },
-      undefined,
-      new Headers(),
-    ),
+    {
+      error: new APIConnectionError({ message: actionURL }),
+      name: "KernelApiConnectionError",
+    },
+    {
+      error: new APIConnectionTimeoutError({ message: actionURL }),
+      name: "KernelApiTimeout",
+    },
+    {
+      error: new APIUserAbortError({ message: actionURL }),
+      name: "KernelApiAborted",
+    },
+    {
+      error: new APIError(
+        408,
+        { message: actionURL, code: "timeout" },
+        undefined,
+        new Headers(),
+      ),
+      name: "KernelApiError408",
+    },
   ])(
-    "redacts transport and timeout diagnostics and preserves uncertainty",
-    (error) => {
+    "retains $name while redacting diagnostics and preserving uncertainty",
+    ({ error, name }) => {
       let caught: unknown;
       try {
-        throwKernelVaultError("manage_vault_cards", "authorize", error, true);
+        throwKernelVaultError(
+          "manage_vault_cards",
+          "authorize",
+          error,
+          "authorize",
+        );
       } catch (result) {
         caught = result;
       }
+      expect(caught).toHaveProperty("name", name);
       expect(String(caught)).toContain("authorization outcome is uncertain");
       expect(String(caught)).toContain("inspect item state and events");
       expect(String(caught)).toContain("do not retry authorize");
@@ -40,6 +59,51 @@ describe("kernel authorization errors", () => {
         expect(String(caught)).toContain("http status: 408");
         expect(String(caught)).toContain("api code: timeout");
       }
+    },
+  );
+
+  test("a classified fill timeout keeps redaction and allows only an inspected field-write retry", () => {
+    let caught: unknown;
+    try {
+      throwKernelVaultError(
+        "manage_vault_items",
+        "invoke",
+        new APIConnectionTimeoutError({ message: actionURL }),
+        "fill",
+      );
+    } catch (result) {
+      caught = result;
+    }
+    expect(caught).toHaveProperty("name", "KernelApiTimeout");
+    expect(String(caught)).toContain("inspect the browser page and item state");
+    expect(String(caught)).toContain("safe to retry the field write");
+    expect(String(caught)).not.toContain("authorization outcome is uncertain");
+    expect(String(caught)).not.toContain(actionURL);
+  });
+
+  test.each([400, 409, 500])(
+    "retains the HTTP %s category without upstream text",
+    (status) => {
+      let caught: unknown;
+      try {
+        throwKernelVaultError(
+          "manage_vault_cards",
+          "authorize",
+          new APIError(
+            status,
+            { message: actionURL, code: "fixture_error" },
+            undefined,
+            new Headers(),
+          ),
+          "authorize",
+        );
+      } catch (result) {
+        caught = result;
+      }
+      expect(caught).toHaveProperty("name", `KernelApiError${status}`);
+      expect(String(caught)).toContain(`http status: ${status}`);
+      expect(String(caught)).toContain("api code: fixture_error");
+      expect(String(caught)).not.toContain(actionURL);
     },
   );
 

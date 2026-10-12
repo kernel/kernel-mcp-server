@@ -90,6 +90,28 @@ describe("throwToolError classification", () => {
     ).toContain("[code: last_active_project]");
   });
 
+  test("a safe message replaces both upstream text and codes without losing classification", () => {
+    const actionURL = "https://vault.example/approve#token=private-capability";
+    let thrown: unknown;
+    try {
+      throwToolError(
+        "manage_vault_items",
+        "invoke",
+        codedApiError(400, actionURL, actionURL),
+        "inspect the item.",
+        "http status: 400.",
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toHaveProperty("name", "KernelApiError400");
+    expect(thrown).toHaveProperty(
+      "message",
+      "error in manage_vault_items (invoke): http status: 400. inspect the item.",
+    );
+    expect(String(thrown)).not.toContain(actionURL);
+  });
+
   test("ignores absent and non-string API codes", () => {
     const absent = apiError(409, "conflict");
     expect(caught(absent).message).not.toContain("[code:");
