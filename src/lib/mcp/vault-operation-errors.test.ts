@@ -28,7 +28,10 @@ describe("vault operation transport errors", () => {
       caught = result;
     }
     expect(caught).toHaveProperty("name", name);
-    expect(String(caught)).toContain("may have partially completed");
+    expect(String(caught)).toContain(
+      "no response was received from the api after the operation was submitted.",
+    );
+    expect(String(caught)).not.toContain("retry");
     expect(String(caught)).toContain(error.message);
   });
 });

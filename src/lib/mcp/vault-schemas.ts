@@ -61,6 +61,46 @@ export const webmcpInvokeInputsSchema = z
   .strict();
 export type WebmcpInvokeInputs = z.infer<typeof webmcpInvokeInputsSchema>;
 
+// Mirrors FillVaultItemOperationRequest in the KERNEL API spec; `type` is set by the tool.
+export const fillInputsShape =
+  "{ browser_id, page_url?, fields: [{ field, selector, format? }], timeout_ms? }";
+
+export const fillInputsSchema = z
+  .object({
+    browser_id: z.string().min(1),
+    page_url: z.url({ protocol: /^https?$/ }).optional(),
+    fields: z
+      .array(
+        z
+          .object({
+            field: z.string().min(1),
+            selector: z.string().min(1),
+            format: z.enum(["MM/YY", "MM/YYYY"]).optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(32),
+    timeout_ms: z.number().int().min(1).max(30000).optional(),
+  })
+  .strict();
+export type FillInputs = z.infer<typeof fillInputsSchema>;
+
+// Names the offending top-level key, never a value or nested key, and shows the shape
+// the API accepts.
+export function fillInputsIssueMessage(error: z.ZodError) {
+  const unknownKeys = error.issues.flatMap((issue) =>
+    issue.code === "unrecognized_keys" && issue.path.length === 0
+      ? issue.keys
+      : [],
+  );
+  const cause =
+    unknownKeys.length > 0
+      ? `unknown key ${unknownKeys.map((key) => JSON.stringify(key)).join(", ")} in fill inputs`
+      : `invalid fill inputs (${topLevelIssueKeys(error).join(", ") || "inputs"})`;
+  return `${cause}. expected ${fillInputsShape}`;
+}
+
 const integer = () => z.number().int().safe();
 const currency = () => z.string().regex(/^[A-Za-z]{3}$/);
 

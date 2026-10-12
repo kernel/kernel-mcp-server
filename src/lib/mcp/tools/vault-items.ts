@@ -16,12 +16,16 @@ import {
   vaultObservationHints,
 } from "@/lib/mcp/vault-responses";
 import {
+  fillInputsIssueMessage,
+  fillInputsSchema,
+  fillInputsShape,
   vaultItemSchema,
   vaultKeySchema,
   vaultWaitSchema,
   topLevelIssueKeys,
   vaultToolInput,
   webmcpInvokeInputsSchema,
+  type FillInputs,
   type WebmcpInvokeInputs,
 } from "@/lib/mcp/vault-schemas";
 
@@ -58,7 +62,7 @@ export function registerVaultItemTools(
           )
           .optional()
           .describe(
-            "(invoke) optional operation-specific request body fields. read available_operations and the api contract for required inputs. webmcp_invoke requires browser_id, tool_ref, page_url, input, and bindings, with optional timeout_sec. do not include type or id_or_name; the tool sets those. never supply secret values in chat.",
+            `(invoke) optional operation-specific request body fields. read available_operations and the api contract for required inputs. fill takes exactly ${fillInputsShape}: browser_id is a browser session id, page_url is the exact current https top-level url, fields are ordered field/selector bindings (format only for a card's combined expiration field), and timeout_ms is the total deadline (1-30000, default 10000); any other key is rejected. webmcp_invoke requires browser_id, tool_ref, page_url, input, and bindings, with optional timeout_sec. do not include type or id_or_name; the tool sets those. never supply secret values in chat.`,
           ),
         expand: z
           .array(z.enum(["payment_methods"]))
@@ -137,6 +141,13 @@ export function registerVaultItemTools(
                 "1pw_update_access_token takes a secret access token and is not available through mcp. the integrating developer replaces it through the KERNEL api; never ask for tokens in chat.",
               );
             let webmcpInputs: WebmcpInvokeInputs | undefined;
+            let fillInputs: FillInputs | undefined;
+            if (params.operation === "fill") {
+              const parsed = fillInputsSchema.safeParse(params.inputs ?? {});
+              if (!parsed.success)
+                return errorResponse(fillInputsIssueMessage(parsed.error));
+              fillInputs = parsed.data;
+            }
             if (params.operation === "webmcp_invoke") {
               const parsed = webmcpInvokeInputsSchema.safeParse(
                 params.inputs ?? {},
@@ -184,7 +195,7 @@ export function registerVaultItemTools(
               {
                 id_or_name: params.vault,
                 type: operation.type,
-                ...params.inputs,
+                ...(fillInputs ?? params.inputs),
               } as Parameters<typeof client.vaults.items.performOperation>[1],
               options,
             );
@@ -284,7 +295,6 @@ export function registerVaultItemTools(
           params.action,
           error,
           operationSubmitted,
-          params.operation,
         );
       }
     },

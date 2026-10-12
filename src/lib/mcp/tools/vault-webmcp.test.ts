@@ -181,8 +181,7 @@ describe("vault WebMCP invocation", () => {
         const result = await fixture.call("manage_vault_items", invoke);
         const text = JSON.stringify(result);
         expect(result.isError).toBe(true);
-        expect(text).toContain(`[code: ${code}]`);
-        expect(text).toContain("do not retry automatically.");
+        expect(text).toContain(`[code: ${code}]"`);
         expect(
           fixture.requests.filter((request) => request.method === "POST"),
         ).toHaveLength(1);
@@ -201,8 +200,9 @@ describe("vault WebMCP invocation", () => {
       const result = await fixture.call("manage_vault_items", invoke);
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result)).toContain(
-        "the operation may have partially completed",
+        "no response was received from the api after the operation was submitted.",
       );
+      expect(JSON.stringify(result)).not.toContain("retry");
       expect(
         fixture.requests.filter((request) => request.method === "POST"),
       ).toHaveLength(1);

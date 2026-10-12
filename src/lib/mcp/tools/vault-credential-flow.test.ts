@@ -171,8 +171,7 @@ describe("MCP credential flow", () => {
         const text = JSON.stringify(result);
         expect(result.isError).toBe(true);
         expect(text).toContain(`${status} ${message}`);
-        expect(text).toContain(`[code: ${code}]`);
-        expect(text).toContain("safe to retry after fixing any reported cause");
+        expect(text).toContain(`[code: ${code}]"`);
         expect(text).not.toContain("private-");
         expect(fixture.requests.map((request) => request.method)).toEqual([
           "GET",
@@ -203,9 +202,8 @@ describe("MCP credential flow", () => {
         const text = JSON.stringify(result);
         expect(result.isError).toBe(true);
         expect(text).toContain(String(status));
-        expect(text).toContain("safe to retry after fixing any reported cause");
         expect(text).toContain("API diagnostic message");
-        expect(text).toContain(`[code: ${code}]`);
+        expect(text).toContain(`[code: ${code}]"`);
         expect(
           fixture.requests.filter((request) => request.method === "POST"),
         ).toHaveLength(1);
@@ -353,7 +351,7 @@ describe("MCP credential flow", () => {
         "GET",
         "POST",
       ]);
-      expect(JSON.stringify(result)).toContain("safe to retry");
+      expect(JSON.stringify(result)).not.toContain("retry");
     } finally {
       await fixture.close();
     }
@@ -665,8 +663,11 @@ describe("MCP credential flow", () => {
           expect(
             fixture.requests.filter(({ method }) => method !== "GET"),
           ).toHaveLength(1);
-          if (operation === "fill")
-            expect(JSON.stringify(result)).toContain("safe to retry");
+          expect(JSON.stringify(result)).not.toContain("retry");
+          if (failure === "transport")
+            expect(JSON.stringify(result)).toContain(
+              "no response was received from the api",
+            );
         } finally {
           await fixture.close();
         }
@@ -718,38 +719,108 @@ describe("MCP credential flow", () => {
   });
 
   test.each([
-    { ...fill, fields: [] },
+    { inputs: { ...fill, fields: [] }, key: "fields" },
     {
-      ...fill,
-      fields: [
-        { field: "password", selector: "#password", value: "secret-value" },
-      ],
+      inputs: {
+        ...fill,
+        fields: [
+          { field: "password", selector: "#password", value: "secret-value" },
+        ],
+      },
+      key: "fields",
     },
-    { ...fill, frame_id: "frame-1" },
-    { ...fill, timeout_ms: 30001 },
+    {
+      inputs: { ...fill, page_url: "ftp://example.com/login" },
+      key: "page_url",
+    },
+    { inputs: { ...fill, timeout_ms: 30001 }, key: "timeout_ms" },
+    {
+      inputs: { page_url: fill.page_url, fields: fill.fields },
+      key: "browser_id",
+    },
+    { inputs: {}, key: "browser_id, fields" },
   ])(
-    "delegates operation-specific input validation to the API",
-    async (parameters) => {
-      const fixture = await connectVaultTest([
-        Response.json(ready),
-        Response.json({ code: "invalid_request" }, { status: 400 }),
-      ]);
+    "rejects malformed fill inputs before any request ($key)",
+    async ({ inputs, key }) => {
+      const fixture = await connectVaultTest([]);
       try {
         const result = await fixture.call("manage_vault_items", {
           ...invoke,
-          inputs: parameters,
+          inputs,
         });
+        const text = JSON.stringify(result);
         expect(result.isError).toBe(true);
-        expect(JSON.stringify(result)).not.toContain("secret-value");
-        expect(fixture.requests.map(({ method }) => method)).toEqual([
-          "GET",
-          "POST",
-        ]);
+        expect(text).toContain(`invalid fill inputs (${key})`);
+        expect(text).toContain(
+          "expected { browser_id, page_url?, fields: [{ field, selector, format? }], timeout_ms? }",
+        );
+        expect(text).not.toContain("secret-value");
+        expect(fixture.requests).toHaveLength(0);
       } finally {
         await fixture.close();
       }
     },
   );
+
+  test.each([
+    { inputs: { ...fill, frame_id: "frame-1" }, keys: ['"frame_id"'] },
+    {
+      inputs: {
+        browser_id: fill.browser_id,
+        page_url: fill.page_url,
+        bindings: fill.fields,
+      },
+      keys: ['"bindings"'],
+    },
+    {
+      inputs: { ...fill, targets: fill.fields, name: "login" },
+      keys: ['"targets"', '"name"'],
+    },
+  ])(
+    "names unknown fill input keys and the expected shape",
+    async ({ inputs, keys }) => {
+      const fixture = await connectVaultTest([]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          ...invoke,
+          inputs,
+        });
+        const text = (result.content as Array<{ text: string }>)[0].text;
+        expect(result.isError).toBe(true);
+        expect(text).toContain(
+          `unknown key ${keys.join(", ")} in fill inputs. expected { browser_id, page_url?, fields: [{ field, selector, format? }], timeout_ms? }`,
+        );
+        expect(fixture.requests).toHaveLength(0);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test("forwards the full fill request shape the API accepts", async () => {
+    const fixture = await connectVaultTest([
+      Response.json(ready),
+      Response.json(completed),
+    ]);
+    try {
+      const inputs = {
+        browser_id: "browser-1",
+        fields: [{ field: "expiration", selector: "#expiry", format: "MM/YY" }],
+        timeout_ms: 30000,
+      };
+      const result = await fixture.call("manage_vault_items", {
+        ...invoke,
+        inputs,
+      });
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[1]).toMatchObject({
+        method: "POST",
+        body: { type: "fill", ...inputs },
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
 
   test("projects an item-shaped operation response without exposing private fields", async () => {
     const fixture = await connectVaultTest([

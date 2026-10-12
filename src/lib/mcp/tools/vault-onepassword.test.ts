@@ -132,7 +132,10 @@ describe("1Password vault credentials", () => {
         "no approval link exists before that request",
       );
       expect(descriptionOf("manage_vaults")).toContain(
-        "create a browser with this vault attached, then request access",
+        "request access with 1pw_create_access_request, which needs no browser",
+      );
+      expect(descriptionOf("manage_vaults")).toContain(
+        "create a browser with this vault attached only when ready to invoke 1pw_fill",
       );
       for (const { description } of tools) {
         expect(description).not.toContain("reconcile_access");
@@ -946,7 +949,7 @@ describe("1Password vault credentials", () => {
       expect(result.isError).toBe(true);
       const text = JSON.stringify(result.content);
       expect(text).toContain("1Password access request is already in progress");
-      expect(text).toContain("do not retry automatically");
+      expect(text).not.toContain("retry");
       expect(fixture.requests).toHaveLength(2);
     } finally {
       await fixture.close();
