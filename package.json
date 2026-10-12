@@ -28,7 +28,7 @@
     "start": "next start -p 3002",
     "benchmark:report": "bun benchmarks/harbor/report.ts",
     "benchmark:publish": "bun benchmarks/harbor/publish-braintrust.ts",
-    "lint": "prettier --check \"**/*.{ts,js,json,md}\" \"!AGENTS.md\"",
+    "lint": "next lint",
     "test": "bun test",
     "record:oauth-redis-contract": "bun scripts/record-oauth-redis-contract.ts",
     "format": "prettier --write \"**/*.{ts,js,json,md}\"",
