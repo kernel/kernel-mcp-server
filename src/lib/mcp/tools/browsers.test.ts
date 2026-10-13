@@ -598,6 +598,162 @@ describe("manage_browsers proxy routes", () => {
   });
 });
 
+describe("manage_browsers egress allowlist", () => {
+  test("advertises a bounded allowlist that update can clear with null", async () => {
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {},
+    );
+    try {
+      const { tools } = await client.listTools();
+      const browser = tools.find(({ name }) => name === "manage_browsers");
+      const network = browser?.inputSchema.properties?.network as
+        | { properties?: Record<string, unknown> }
+        | undefined;
+      const allowedHosts = network?.properties?.allowed_hosts as
+        | { anyOf?: unknown[]; description?: string }
+        | undefined;
+      expect(allowedHosts?.anyOf).toContainEqual(
+        expect.objectContaining({ type: "array", minItems: 1, maxItems: 100 }),
+      );
+      expect(allowedHosts?.anyOf).toContainEqual({ type: "null" });
+      expect(allowedHosts?.description).toContain("network_policy_denied");
+      expect(allowedHosts?.description).toContain("null removes it");
+    } finally {
+      await close();
+    }
+  });
+
+  test("passes network.allowed_hosts through SDK create", async () => {
+    const requests: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (params: unknown) => {
+            requests.push(params);
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+    try {
+      const network = {
+        private_hosts: ["*.preview.example.ts.net"],
+        allowed_hosts: ["example.com", "*.example.com", "8.8.8.8"],
+      };
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "create",
+          start_url: "https://example.com",
+          network,
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(requests).toEqual([{ network, start_url: "https://example.com" }]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("replaces or removes the allowlist through SDK update", async () => {
+    const updates: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          update: async (sessionId: string, params: unknown) => {
+            updates.push([sessionId, params]);
+            return { session_id: sessionId };
+          },
+        },
+      },
+    );
+    try {
+      for (const allowed_hosts of [["example.com"], null]) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action: "update",
+            session_id: "brr_123",
+            network: { allowed_hosts },
+          },
+        });
+        expect(result.isError).toBeFalsy();
+      }
+      expect(updates).toEqual([
+        ["brr_123", { network: { allowed_hosts: ["example.com"] } }],
+        ["brr_123", { network: { allowed_hosts: null } }],
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects invalid allowlist requests without calling the SDK", async () => {
+    let calls = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+          update: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+    try {
+      const cases: Array<[Record<string, unknown>, string?]> = [
+        [{ action: "create", network: { allowed_hosts: null } }, "update-only"],
+        [{ action: "create", network: { allowed_hosts: [] } }],
+        [
+          {
+            action: "create",
+            network: { allowed_hosts: Array(101).fill("example.com") },
+          },
+        ],
+        [
+          {
+            action: "update",
+            session_id: "brr_123",
+            network: { allowed_hosts: ["example.com"], private_hosts: [] },
+          },
+          "creation-only",
+        ],
+        [
+          {
+            action: "update",
+            session_id: "brr_123",
+            network: { proxy_routes: [] },
+          },
+          "creation-only",
+        ],
+        [
+          { action: "update", session_id: "brr_123", network: {} },
+          "at least one update field is required",
+        ],
+      ];
+      for (const [args, message] of cases) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: args,
+        });
+        expect(result.isError).toBe(true);
+        if (message) expect(toolResultText(result)).toContain(message);
+      }
+      expect(calls).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+});
+
 describe("manage_browsers proxy", () => {
   test("passes the proxy config through SDK create and update", async () => {
     const creates: unknown[] = [];
