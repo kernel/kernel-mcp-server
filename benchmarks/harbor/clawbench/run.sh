@@ -67,7 +67,7 @@ case "$agent" in
     ;;
 esac
 
-harbor_ref=${HARBOR_REF:-dc6879831504879202bce8466249d51cc17910c2}
+harbor_ref=${HARBOR_REF:-d5c115134b300ec1beaa759d8805fcfa1d4eda86}
 
 export KERNEL_API_KEY=$KERNEL_MCP_BENCHMARK_API_KEY
 export KERNEL_BASE_URL=${KERNEL_BASE_URL:-https://api.onkernel.com}
