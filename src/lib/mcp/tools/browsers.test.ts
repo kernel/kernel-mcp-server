@@ -748,6 +748,37 @@ describe("manage_browsers region", () => {
   });
 });
 
+describe("manage_browsers video memory", () => {
+  test("passes video_memory to create", async () => {
+    const createCalls: unknown[] = [];
+    const kernelClient = {
+      browsers: {
+        create: async (params: unknown) => {
+          createCalls.push(params);
+          return { session_id: "brr_123", video_memory: "4GiB" };
+        },
+      },
+    };
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      kernelClient,
+    );
+
+    try {
+      const created = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "create", gpu: true, video_memory: "4GiB" },
+        }),
+      );
+      expect(createCalls).toEqual([{ gpu: true, video_memory: "4GiB" }]);
+      expect(created.browser.video_memory).toBe("4GiB");
+    } finally {
+      await close();
+    }
+  });
+});
+
 describe("manage_browsers id or name", () => {
   test("passes name and tags through create and update", async () => {
     const createCalls: unknown[] = [];
