@@ -61,7 +61,6 @@ manifest = {
     "clawbench_source_sha": os.environ.get("CLAWBENCH_SOURCE_SHA", ""),
     "browser_session_id": browser.get("session_id"),
     "enabled_toolsets": os.environ.get("KERNEL_MCP_ENABLED_TOOLSETS", ""),
-    "image": os.environ.get("KERNEL_MCP_BENCHMARK_IMAGE", ""),
 }
 Path("/logs/kernel-mcp/run-manifest.json").write_text(json.dumps(manifest, indent=2))
 PY

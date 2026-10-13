@@ -933,8 +933,11 @@ describe("benchmark workflow hardening", () => {
 
     expect(workflow).toContain("github.rest.repos.compareCommits");
     expect(workflow).not.toContain("baseSha = pull.base.sha");
-    expect(workflow).toContain('HARBOR_VERSION: "0.21.0"');
-    expect(workflow).toContain('HARBOR_HYPEMAN_VERSION: "0.1.2"');
+    const harborRefMatch = runner.match(
+      /harbor_ref=\$\{HARBOR_REF:-([0-9a-f]{40})\}/,
+    );
+    if (!harborRefMatch) throw new Error("runner is missing the Harbor pin");
+    expect(workflow).toContain(`HARBOR_REF: ${harborRefMatch[1]}`);
     expect(workflow).toContain('CODEX_BENCHMARK_VERSION: "0.120.0"');
     expect(workflow.match(new RegExp(clawbenchRef, "g"))).toHaveLength(1);
     expect(workflow).toContain(`CLAWBENCH_REF: ${clawbenchRef}`);
@@ -963,9 +966,7 @@ describe("benchmark workflow hardening", () => {
     expect(runner).toContain(
       "source_root=${KERNEL_MCP_BENCHMARK_SOURCE_ROOT:-$harness_root}",
     );
-    expect(runner).toContain(
-      "harbor_hypeman_version=${HARBOR_HYPEMAN_VERSION:-0.1.2}",
-    );
+    expect(runner).toContain("--env kernel");
     expect(runner).toContain('--max-retries "${HARBOR_MAX_RETRIES:-5}"');
     expect(runner).toContain('bun "$benchmark_dir/verify-purelymail.ts"');
     for (const exception of [
@@ -974,7 +975,6 @@ describe("benchmark workflow hardening", () => {
       "RateLimitError",
       "InternalServerError",
       "ConnectionRefusedError",
-      "ExecProtocolError",
       "AgentSetupTimeoutError",
       "RuntimeError",
     ]) {

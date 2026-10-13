@@ -2,8 +2,9 @@
 # Run one ClawBench task or the full suite through the local Kernel MCP build.
 #
 # The script asks ClawBench to generate ordinary Harbor tasks, rewrites those
-# tasks with prepare-task.py, then lets Harbor create one isolated Hypeman
-# environment per trial and install the selected stock agent inside it.
+# tasks with prepare-task.py, then lets Harbor's Kernel environment create one
+# browser VM per trial, build the task image inside it, and install the selected
+# stock agent in that container.
 set -euo pipefail
 
 usage() {
@@ -18,14 +19,9 @@ task_id=${2:-v2-1134-chapter-finder-redcross}
 harness_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 source_root=${KERNEL_MCP_BENCHMARK_SOURCE_ROOT:-$harness_root}
 benchmark_dir="$harness_root/benchmarks/harbor"
-image_env="$source_root/benchmarks/harbor/.image.env"
 clawbench_repo=${CLAWBENCH_REPO:-$harness_root/../ClawBench}
 clawbench_ref=${CLAWBENCH_REF:-187cd252bc60af8ac3a2c98a87c9316e49a5ac75}
 
-[[ -f "$image_env" ]] || {
-  echo "Missing $image_env; run benchmarks/harbor/build-image.sh first" >&2
-  exit 1
-}
 [[ -d "$clawbench_repo/.git" || -f "$clawbench_repo/.git" ]] || {
   echo "ClawBench checkout not found at $clawbench_repo" >&2
   exit 1
@@ -35,14 +31,14 @@ git -C "$clawbench_repo" merge-base --is-ancestor "$clawbench_ref" HEAD || {
   exit 1
 }
 
+# ClawBench tracks a .env with placeholder credentials; explicit values win.
 if [[ -f "$clawbench_repo/.env" ]]; then
-  set -a
-  source "$clawbench_repo/.env"
-  set +a
+  while IFS='=' read -r name value; do
+    if [[ "$name" =~ ^[A-Z_][A-Z0-9_]*$ && -z "${!name:-}" ]]; then
+      export "$name=$value"
+    fi
+  done <"$clawbench_repo/.env"
 fi
-set -a
-source "$image_env"
-set +a
 
 : "${KERNEL_MCP_BENCHMARK_API_KEY:?KERNEL_MCP_BENCHMARK_API_KEY is required}"
 : "${PURELY_MAIL_API_KEY:?PURELY_MAIL_API_KEY is required}"
@@ -71,8 +67,7 @@ case "$agent" in
     ;;
 esac
 
-harbor_version=${HARBOR_VERSION:-0.21.0}
-harbor_hypeman_version=${HARBOR_HYPEMAN_VERSION:-0.1.2}
+harbor_ref=${HARBOR_REF:-dc6879831504879202bce8466249d51cc17910c2}
 
 export KERNEL_API_KEY=$KERNEL_MCP_BENCHMARK_API_KEY
 export KERNEL_BASE_URL=${KERNEL_BASE_URL:-https://api.onkernel.com}
@@ -107,10 +102,16 @@ mapfile -t task_dirs < <(find "$dataset" -mindepth 1 -maxdepth 1 -type d | sort)
   exit 1
 }
 
+source_sha=$(git -C "$source_root" rev-parse HEAD)
+source_dir="$runtime_root/kernel-mcp-server"
+mkdir -p "$source_dir"
+git -C "$source_root" archive HEAD | tar -x -C "$source_dir"
+printf '%s\n' "$source_sha" >"$source_dir/SOURCE_SHA"
+
 for task_dir in "${task_dirs[@]}"; do
   python3 "$benchmark_dir/clawbench/prepare-task.py" "$task_dir" \
-    --image "$KERNEL_MCP_BENCHMARK_IMAGE" \
-    --server-sha "$KERNEL_MCP_SOURCE_SHA" \
+    --source-dir "$source_dir" \
+    --server-sha "$source_sha" \
     --clawbench-sha "$clawbench_ref"
 done
 
@@ -154,12 +155,13 @@ else
 fi
 
 timeout --signal=INT --kill-after=30s "${HARBOR_BENCHMARK_TIMEOUT:-$default_timeout}" \
-  uvx --from "harbor==$harbor_version" --with "harbor-hypeman==$harbor_hypeman_version" harbor run \
+  uvx --from "harbor[kernel] @ git+https://github.com/kernel/harbor@$harbor_ref" harbor run \
   --path "$dataset" \
   --agent "$agent" \
   --model "$model" \
   --agent-kwarg "version=$version" \
-  --env harbor_hypeman:HypemanEnvironment \
+  --env kernel \
+  --environment-kwarg stealth=true \
   --env-file "$runtime_env" \
   --job-name "$job_name" \
   --jobs-dir "$jobs_dir" \
@@ -170,7 +172,6 @@ timeout --signal=INT --kill-after=30s "${HARBOR_BENCHMARK_TIMEOUT:-$default_time
   --retry-include RateLimitError \
   --retry-include InternalServerError \
   --retry-include ConnectionRefusedError \
-  --retry-include ExecProtocolError \
   --retry-include AgentSetupTimeoutError \
   --retry-include RuntimeError \
   --delete \

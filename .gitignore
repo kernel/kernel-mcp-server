@@ -109,9 +109,5 @@ Makefile
 # private key
 mcp-key.pem
 
-# Harbor benchmark runtime data
-benchmarks/harbor/.image.env
-benchmarks/harbor/image/source-sha
-
 # TypeScript incremental build cache
 tsconfig.tsbuildinfo
