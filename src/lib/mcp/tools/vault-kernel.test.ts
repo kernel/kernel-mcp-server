@@ -386,10 +386,21 @@ describe("kernel-managed payment tools", () => {
           operation,
           vault: "checkout",
           key: "order-1",
+          ...(operation === "confirm_transaction" && {
+            inputs: {
+              status: "APPROVED",
+              transaction_type: "PURCHASE",
+              amount: 1999,
+              currency: "USD",
+              occurred_at: "2026-09-01T12:00:00Z",
+            },
+          }),
         });
         const text = JSON.stringify(result);
         expect(result.isError).toBe(true);
-        expect(text).toContain("do not retry an uncertain operation");
+        expect(text).toContain(
+          `invoke ${operation} once more only if freshly advertised`,
+        );
         expect(text).not.toContain("safe to retry");
         expect(text).not.toContain(actionURL);
         expect(fixture.requests.map(({ method }) => method)).toEqual([
@@ -527,13 +538,13 @@ describe("kernel-managed payment tools", () => {
       const guidance = result.guidance.join(" ");
       for (const text of [
         "confirm_transaction",
-        "exactly once",
+        "report one observed outcome",
         "transaction_type",
         "occurred_at",
         "no additional properties",
-        "unknown outcomes need reconciliation",
+        "unknown means no reliable merchant outcome",
         "number, expiration",
-        'format "MM/YY"',
+        'format "MM/YY" or "MM/YYYY"',
         "billing_*",
         "400 field_unavailable",
         "exact current https top-level page_url",
@@ -542,7 +553,7 @@ describe("kernel-managed payment tools", () => {
         "without a provider call",
         "proof no intent was dispatched",
         "privately",
-        "other recovery_required states mean stop",
+        "non-restartable recovery_required",
         "safe to retry the field write, not authorization, checkout, or transaction reporting",
       ])
         expect(guidance).toContain(text);
@@ -585,14 +596,14 @@ describe("kernel-managed payment tools", () => {
         expect(text).toContain(`http status: ${status}`);
         expect(text).toContain("api code: invalid_merchant_country");
         expect(text).toContain(
-          status < 500
-            ? "nothing new was authorized"
-            : "authorization outcome is uncertain",
+          status === 409
+            ? "no authorize inputs to fix"
+            : status < 500
+              ? "fix the reported inputs or access"
+              : "re-get the item",
         );
         expect(text).toContain(
-          status < 500
-            ? "fix validation/conflict inputs"
-            : "do not retry authorize",
+          "invoke authorize once more only if freshly advertised",
         );
         expect(fixture.requests).toHaveLength(2);
       } finally {
@@ -646,8 +657,10 @@ describe("kernel-managed payment tools", () => {
         });
         const text = JSON.stringify(result);
         expect(result.isError).toBe(true);
-        expect(text).toContain("authorization outcome is uncertain");
-        expect(text).toContain("do not retry authorize");
+        expect(text).toContain("re-get the item");
+        expect(text).toContain(
+          "invoke authorize once more only if freshly advertised",
+        );
         expect(text).not.toContain(actionURL);
         expect(fixture.requests).toHaveLength(2);
       } finally {
@@ -706,7 +719,7 @@ describe("kernel-managed payment tools", () => {
       const text = JSON.stringify(result);
       expect(text).toContain("http status: 409");
       expect(text).toContain("api code: conflict");
-      expect(text).toContain("nothing new was authorized");
+      expect(text).toContain("no authorize inputs to fix");
       expect(text).not.toContain(actionURL);
       expect(fixture.requests[1].body).toEqual({ type: "authorize" });
     } finally {
@@ -733,7 +746,7 @@ describe("kernel-managed payment tools", () => {
       expect(JSON.stringify(result)).not.toContain(actionURL);
       expect(JSON.stringify(result)).toContain("http status: 409");
       expect(JSON.stringify(result)).toContain("api code: invalid_wallet");
-      expect(JSON.stringify(result)).toContain("nothing new was authorized");
+      expect(JSON.stringify(result)).toContain("the request was rejected");
     } finally {
       await fixture.close();
     }

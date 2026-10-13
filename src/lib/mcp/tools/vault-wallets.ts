@@ -18,6 +18,7 @@ import {
   vaultKeySchema,
   vaultProviderSchema,
   vaultToolInput,
+  topLevelIssueKeys,
 } from "@/lib/mcp/vault-schemas";
 
 export function registerVaultWalletTools(
@@ -64,28 +65,39 @@ export function registerVaultWalletTools(
         project,
       );
       const options = { maxRetries: 0, signal: ctx.mcpReq.signal };
+      let spec: ItemUpsertParams.WalletVaultItemRequest["spec"] | undefined;
+      if (params.action === "create") {
+        if (!params.provider || !params.spec)
+          return errorResponse("provider and spec are required for create.");
+        const parsed = (
+          params.provider === "link"
+            ? linkWalletSpecSchema.transform((spec) => ({
+                ...spec,
+                provider: "link" as const,
+              }))
+            : params.provider === "agentcard"
+              ? agentcardWalletSpecSchema.transform((spec) => ({
+                  ...spec,
+                  provider: "agentcard" as const,
+                }))
+              : kernelWalletSpecSchema.transform((spec) => ({
+                  ...spec,
+                  provider: "kernel" as const,
+                }))
+        ).safeParse(params.spec);
+        if (!parsed.success)
+          return errorResponse(
+            `invalid ${params.provider} wallet spec (${topLevelIssueKeys(parsed.error).join(", ") || "spec"}); no request was sent. correct these fields before creating.`,
+          );
+        spec = parsed.data;
+      }
       try {
         switch (params.action) {
           case "create": {
-            if (!params.provider || !params.spec)
+            if (!spec)
               return errorResponse(
                 "provider and spec are required for create.",
               );
-            const spec: ItemUpsertParams.WalletVaultItemRequest["spec"] =
-              params.provider === "link"
-                ? {
-                    ...linkWalletSpecSchema.parse(params.spec),
-                    provider: params.provider,
-                  }
-                : params.provider === "agentcard"
-                  ? {
-                      ...agentcardWalletSpecSchema.parse(params.spec),
-                      provider: params.provider,
-                    }
-                  : {
-                      ...kernelWalletSpecSchema.parse(params.spec),
-                      provider: params.provider,
-                    };
             const item = await client.vaults.items.upsert(
               params.key,
               {

@@ -16,8 +16,7 @@ card request a test transaction.
 The released Node SDK dependency is pinned to 0.121.0 in `bun.lock`, including
 Visa `merchant_country` in the generated card spec type. `confirm_transaction`
 and `restart_verification` are forwarded generically only when advertised by the API.
-`restart_verification` depends on kernel/kernel#4760 (staging only until merged and
-released); never assume it is available based on state or SDK version.
+Never assume recovery operations are available based on state or SDK version; always re-read `available_operations`.
 
 ## Kernel-hosted payment card
 
@@ -28,14 +27,24 @@ intended cardholder in a private surface, outside the agent-controlled browser.
 Never request or pass a PAN, CVC, expiration date, or hosted action URL as tool input.
 Observe the wallet with `manage_vault_items` `get` until connected. Use
 `manage_vault_wallets` `payment_methods` to inspect the enrolled card's advisory
-`capabilities.single_use_card`: `eligible: false` means do not proceed; missing
-capabilities are unknown, not proof of eligibility.
+`capabilities.single_use_card`: `eligible: false` means do not authorize; missing
+capabilities are unknown, not proof of eligibility. For `network_token_pending`, re-check
+later at most once in this attempt. `network_token_unsupported` and `network_token_failed`
+need a different card. If still ineligible or unknown, ask the cardholder before enrolling
+a different card under a new wallet key; never poll indefinitely or replay an uncertain purchase.
+For `reconnect_required`, share the new `card_enrollment` action. For `degraded`, obtain
+user confirmation and delete the wallet only if the API permits it before creating a new
+wallet under a new key for one enrollment; reconcile unresolved child cards first.
 
 Create one card request with `manage_vault_cards` `action: "create"`,
 `provider: "kernel"`, a new immutable key, and `spec` containing `wallet`, `amount` (integer
 minor currency units, maximum 50000), `currency`, `merchant_name`, HTTPS
 `merchant_url`, and `merchant_country` (ISO 3166-1 alpha-2; required for Visa).
+Optional `merchant_category` and `merchant_category_code` (four-digit MCC other than `0000`)
+are accepted when actually known; omit rather than invent them.
 This only creates a request, not a merchant payment. Kernel cards cannot be updated.
+After user confirmation, delete only if the API permits it and create a new item under
+a new key for a new purchase; reconcile unresolved outcomes first.
 After explicit user approval and only when the card advertises `authorize`, call
 `manage_vault_cards` with `action: "authorize"`, `provider: "kernel"`, the same
 vault/key, and no spec. This is equivalent to `manage_vault_items` `invoke` with
@@ -49,7 +58,7 @@ If `fill` is advertised, attach the vault to a new browser and invoke it before
 `expires_at` with `browser_id`, the exact current HTTPS top-level `page_url` on
 `merchant_url`'s origin (including path, query, and fragment), and ordered,
 value-free `fields` bindings. Kernel's fill fields are `number`, `expiration`
-(use `format: "MM/YY"`), and `cvc`. Kernel stores **no billing details**:
+(use `format: "MM/YY"` or `"MM/YYYY"`), `cvc`, `exp_month`, and `exp_year`. Kernel stores **no billing details**:
 any `billing_*` field returns HTTP 400 `field_unavailable` before any write.
 Enter billing name/ZIP directly on the merchant page, not through vault fill.
 No aliases or egress substitution are available. Fill does not submit checkout
@@ -60,7 +69,7 @@ retrying the field write is safe because fill never submits checkout. A 400
 details directly on the merchant page. This does not permit retrying authorization,
 merchant checkout, or transaction reporting.
 
-After observing the merchant outcome, report it **exactly once** using
+After observing the merchant outcome, report **one observed outcome** using
 `manage_vault_items` `action: "invoke"`, `operation: "confirm_transaction"`, only
 when advertised. Supply exactly these `inputs` (additional properties are rejected):
 
@@ -71,27 +80,43 @@ when advertised. Supply exactly these `inputs` (additional properties are reject
 - `currency`: three-letter uppercase, e.g. `USD`; must match the approval currency.
 - `occurred_at`: RFC3339 timestamp of the merchant outcome.
 
-Do not infer success from fill. An unknown merchant outcome needs reconciliation,
-not checkout retry or reporting (do not guess `PENDING` or `ERROR`). After a report,
-`confirm_transaction` is no longer advertised; never replay a report whose outcome
-is uncertain.
+Do not infer success from fill. `PENDING` means the merchant explicitly confirms an
+accepted transaction is pending; `ERROR` means an explicit merchant transaction error,
+not transport loss or an ambiguous processing page. These are final reports, not polling
+states. An unknown outcome has no reliable merchant evidence: ask the user to check the
+merchant order page, email or statement, then report the confirmed outcome even after
+card expiry. Never guess or repeat checkout.
 
-For a `recovery_required` Kernel card, **only when `restart_verification` is
-advertised**, obtain explicit user approval and invoke it once through
-`manage_vault_items` with no inputs. It rotates the approval link locally without
-a provider call, only after a classified initial attestation failure with proof
-that no intent was dispatched. Give the new `spend_approval` URL privately to the
-cardholder. This is not a general reset: every other `recovery_required` state
-still means stop and reconcile with the provider or support. Never retry an
-uncertain authorization or merchant payment.
+After a merchant decline, report observed `DECLINED` when advertised. If the user wants
+another purchase, ask for a different card or merchant, then delete only if permitted
+and create one new card under a new key. If the approval link or code expires before
+checkout, do not submit; with user confirmation, delete only if permitted and create
+one new card. If checkout was submitted, reconcile and report its observed outcome first.
 
-Kernel tool errors redact upstream message text, which may contain bearer URLs,
-but retain HTTP status and a validated short API error code when present. A 4xx
-validation/conflict rejection means nothing new was authorized: fix inputs or
-access, rather than treating it as an uncertain authorization. A 5xx, network
-failure, or timeout after submitting `authorize` leaves the outcome uncertain:
-inspect state/events and do not retry. A failed observation does not submit a new
-authorization.
+For a `recovery_required` Kernel card, only when `restart_verification` is advertised,
+obtain explicit user approval **each time** and invoke with no inputs. It rotates the
+approval link locally without a provider call, only after proven no-dispatch initial
+attestation failure. It grants no spend consent: share the new `spend_approval` privately
+and the cardholder must verify and explicitly approve spending again.
+If the response is unclear, re-get and share any new action; invoke once more only if
+restart is still advertised and the user approves again.
+For non-restartable recovery, do not retry payment, delete or replace the item. Contact
+**support@kernel.sh** privately with project, vault, item key, `status_reason` and relevant
+event timestamps (never card data, API keys or capability URLs) to reconcile the original
+operation and establish whether a new purchase is safe. Do not assume a new card is safe
+or promise the resulting state.
+
+Kernel errors retain actionable API messages, HTTP status and safe API codes while
+scrubbing HTTP(S) URLs. Local spec validation names bad keys and sends no request.
+After create transport/5xx failure, retry once with the **identical key and spec**; a
+successful earlier create returns the existing item. Never switch keys to recover a
+lost create response. After authorize or confirmation failures, re-get and invoke once
+more only if that operation is freshly advertised; otherwise observe state/events
+(recorded, in flight or recovery). A 409 authorize has no inputs to fix: inspect current
+state and the API message. A 429 means wait for `Retry-After`, then re-check availability
+before one new invocation. Never retry automatically or repeat merchant checkout.
+Fill 400/403/404/409 rejections wrote no fields; other failures may have partially written
+fields. Inspect the page and item, fix the cause and retry only the field write.
 
 ## Credential collection and observation
 
@@ -682,11 +707,15 @@ A reusable card remaining `ready` does not establish that the last payment succe
 - `recovery_required` is preserved in responses and ends the API's bounded wait.
   It is neither decline nor expiry. Stop payment attempts and reconcile with the
   provider or support. The sole exception is an advertised `restart_verification`
-  on a Kernel card: after user approval, invoke once with no inputs and privately
-  deliver the new `spend_approval` link. This only recovers proven no-dispatch
-  attestation failure, not an uncertain payment. There is no general reset or
-  caller-asserted reconciliation tool. Unresolved cards can also block deletion
-  of their wallet and vault.
+  on a Kernel card: after explicit user approval each time, invoke with no inputs
+  and privately deliver the new `spend_approval` link for new verification and
+  spend consent. Re-get after a lost response; invoke once more only if still
+  advertised with renewed user approval. This only recovers proven no-dispatch
+  attestation failure, not an uncertain payment. Otherwise contact support@kernel.sh
+  privately with project, vault, key, status_reason and event timestamps (no card
+  data, API keys or capability URLs); do not delete or replace unresolved items.
+  There is no general reset or caller-asserted reconciliation tool. Unresolved
+  cards can also block deletion of their wallet and vault.
 - Browser attachments accept at most 20 references, each containing exactly one
   `id` or `name`. They are creation-only and unavailable for browser pools. You
   cannot add vaults to an existing browser. Vault-bound browser creation also

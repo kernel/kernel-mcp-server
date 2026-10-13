@@ -85,7 +85,11 @@ function topLevelIssuePath(issue: z.core.$ZodIssue) {
 export function topLevelIssueKeys(error: z.ZodError) {
   return [
     ...new Set(
-      error.issues.map((issue) => String(topLevelIssuePath(issue)[0] ?? "")),
+      error.issues.flatMap((issue) =>
+        issue.code === "unrecognized_keys" && issue.path.length === 0
+          ? issue.keys
+          : [String(topLevelIssuePath(issue)[0] ?? "")],
+      ),
     ),
   ].filter(Boolean);
 }
@@ -249,6 +253,18 @@ export const kernelCardSpecSchema = z
       .string()
       .regex(/^[A-Za-z]{2}$/)
       .describe("iso 3166-1 alpha-2 country code; required for visa purchases.")
+      .optional(),
+    merchant_category: z
+      .string()
+      .min(1)
+      .max(255)
+      .describe("actual merchant category; omit rather than invent.")
+      .optional(),
+    merchant_category_code: z
+      .string()
+      .regex(/^[0-9]{4}$/)
+      .refine((value) => value !== "0000")
+      .describe("actual merchant mcc; omit rather than invent.")
       .optional(),
   })
   .strict();

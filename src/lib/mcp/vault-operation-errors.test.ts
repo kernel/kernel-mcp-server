@@ -50,9 +50,11 @@ describe("kernel authorization errors", () => {
         caught = result;
       }
       expect(caught).toHaveProperty("name", name);
-      expect(String(caught)).toContain("authorization outcome is uncertain");
-      expect(String(caught)).toContain("inspect item state and events");
-      expect(String(caught)).toContain("do not retry authorize");
+      expect(String(caught)).toContain("re-get the item");
+      expect(String(caught)).toContain("inspect state/events");
+      expect(String(caught)).toContain(
+        "invoke authorize once more only if freshly advertised",
+      );
       expect(String(caught)).not.toContain(actionURL);
       expect(String(caught)).not.toContain("nothing new was authorized");
       if (error.status === 408) {
@@ -114,7 +116,7 @@ describe("kernel authorization errors", () => {
         "authorize",
         new APIConnectionTimeoutError({ message: actionURL }),
       ),
-    ).toThrow("do not retry an uncertain operation");
+    ).toThrow("inspect item state and events");
   });
 });
 
