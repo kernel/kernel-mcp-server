@@ -22,7 +22,7 @@ export function proxyRoutesSchema() {
     )
     .max(10)
     .describe(
-      'route requests for 1–50 host patterns per route through a proxy selected by exactly one of proxy.id or proxy.name (max 10 routes). use exact hostnames or leading "*." wildcards, which match subdomains only, not the apex. matching ignores case and ports; the most specific match wins. matched hosts override the top-level proxy; unmatched hosts use the top-level proxy or the browser default. start_url uses the top-level proxy, not routes. if a route proxy is unavailable, matched requests fail closed.',
+      'route requests for 1–50 host patterns per route through a proxy selected by exactly one of proxy.id or proxy.name (max 10 routes). use exact hostnames or leading "*." wildcards, which match subdomains only, not the apex. matching ignores case and ports; the most specific match wins. matched hosts override the top-level proxy; unmatched hosts use the top-level proxy or the browser default. routes apply from the start of the session, including to start_url. if a route proxy is unavailable, matched requests fail closed.',
     );
 }
 

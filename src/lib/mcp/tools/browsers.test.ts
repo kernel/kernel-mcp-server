@@ -367,6 +367,7 @@ describe("manage_browsers proxy routes", () => {
         maxItems: 50,
       });
       expect(routes?.description).toContain("subdomains only, not the apex");
+      expect(routes?.description).toContain("including to start_url");
       expect(routes?.description).toContain("fail closed");
     } finally {
       await close();
