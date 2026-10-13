@@ -1,3 +1,4 @@
+import { APIError } from "@onkernel/sdk";
 import { z } from "zod";
 import { jsonResponse, throwToolError } from "@/lib/mcp/responses";
 
@@ -43,7 +44,7 @@ export const vaultItemFields: OutputFields = {
   expanded: { payment_methods: paymentMethodFields },
   spec: {
     ...fields(
-      "provider wallet user_id payment_method_id card_id amount currency merchant merchant_name merchant_url context expires_at description account access_token_expires_at",
+      "provider wallet user_id payment_method_id card_id amount currency merchant merchant_name merchant_url merchant_country merchant_category merchant_category_code context expires_at description account access_token_expires_at",
     ),
     requests: onePasswordRequestFields,
     fields: fields("name label type required sensitive"),
@@ -74,7 +75,7 @@ export const vaultItemFields: OutputFields = {
     preparation: fields(
       "id status browser_id merchant_origin environment created_at expires_at approval_url",
     ),
-    masks: fields("brand last4"),
+    masks: fields("brand last4 token_last4"),
     aliases: fields("number cvc exp_month exp_year"),
     authorization: fields(
       "id status psp merchant amount amount_cents currency created_at expires_at approval_url browser_id reason psp_error_code expected_cents actual_cents amount_authority amount_verified charged_amount_cents charged_currency charged_kind replay_attempted replay_status replay_delivered",
@@ -243,6 +244,30 @@ export function projectVaultOutput(
       ? { name: onePasswordAccessApproval, url: url.data.url }
       : { name: onePasswordAccessApproval };
   }
+  if (allowed === vaultItemFields) {
+    const recovery = z
+      .object({
+        type: z.literal("card"),
+        spec: z.object({ provider: z.literal("kernel") }),
+        state: z.object({ status: z.literal("recovery_required") }),
+        available_operations: z.array(
+          z.object({ type: z.string(), description: z.string().optional() }),
+        ),
+      })
+      .safeParse(result);
+    if (recovery.success) {
+      result.available_operations = recovery.data.available_operations.filter(
+        ({ type }) => type === "restart_verification",
+      );
+      delete result.action;
+      const state = z.record(z.string(), z.unknown()).parse(result.state);
+      for (const field of ["authorization", "preparation"]) {
+        const detail = state[field];
+        if (detail && typeof detail === "object")
+          Reflect.deleteProperty(detail, "approval_url");
+      }
+    }
+  }
   if (allowed === vaultItemFields && result.type === "credential") {
     const credential = credentialValuesSchema.safeParse(value);
     if (credential.success) {
@@ -382,7 +407,7 @@ export function vaultItemResponse(
   const payment = z
     .object({
       type: z.enum(["card", "wallet"]),
-      spec: z.object({ provider: z.enum(["link", "agentcard"]) }),
+      spec: z.object({ provider: z.enum(["link", "agentcard", "kernel"]) }),
     })
     .safeParse(projected);
   const cardProvider =
@@ -430,6 +455,16 @@ export function vaultItemResponse(
                       "wallets connect a payment provider; they are not fillable cards. use manage_vault_cards to configure a purchase request, then inspect that card's state and advertised operations.",
                     ]
                   : []),
+                ...(payment.success && payment.data.spec.provider === "kernel"
+                  ? [kernelWalletGuidance]
+                  : []),
+                ...(cardProvider === "kernel"
+                  ? [
+                      'KERNEL cards require merchant_country for visa purchases. after explicit user approval, use manage_vault_cards authorize or manage_vault_items invoke authorize only when advertised; visa returns a spend_approval action for the cardholder. poll get/events until ready. attach the vault at browser creation, then invoke advertised fill before expires_at with browser_id, exact current https top-level page_url on spec.merchant_url\'s origin, and ordered field/selector bindings for number, expiration (format "MM/YY" or "MM/YYYY"), cvc, exp_month, and exp_year. KERNEL stores no billing details: billing_* fields fail with 400 field_unavailable before any write; enter billing name/zip on the merchant page. fill does not submit checkout or prove payment. after failed or unknown fill, inspect the browser page and item state, fix the cause, then it is safe to retry the field write, not authorization, checkout, or transaction reporting. KERNEL cards have no aliases or egress substitution and cannot be updated. after user confirmation, delete only if the api permits it and create a new item under a new key for a new purchase; reconcile unresolved outcomes first.',
+                      kernelTransactionGuidance,
+                      kernelTerminalGuidance,
+                    ]
+                  : []),
                 ...(cardProvider === "link"
                   ? [
                       "link cards use browser field writes for checkout only when advertised. link does not expose aliases or support egress substitution; do not use aliases from older responses, which fail closed on supported payment shapes. the browser must retain this vault attachment in the same project. the exact current https top-level page url must have the origin of spec.merchant_url. the card must remain ready and unexpired with stored card material and a non-deleted parent wallet; lifecycle and destination checks still apply.",
@@ -443,7 +478,22 @@ export function vaultItemResponse(
                     ]
                   : []),
                 "observe get/events for outcomes. do not retry failed, timed-out, rejected, or indeterminate payments or reconfigure a card to retry them.",
-                "recovery_required is an unresolved original outcome, not decline or expiry. stop payment attempts; reconcile with the provider or support. no reset exists, and deletion may be blocked for this item and its parents.",
+                ...(cardProvider === "kernel" &&
+                advertised.success &&
+                advertised.data.available_operations.some(
+                  ({ type }) => type === "restart_verification",
+                )
+                  ? [kernelVerificationGuidance]
+                  : [
+                      ...(cardProvider === "kernel"
+                        ? [
+                            "recovery_required is an unresolved original outcome, not decline or expiry. stop payment attempts; " +
+                              kernelSupportGuidance,
+                          ]
+                        : [
+                            "recovery_required is an unresolved original outcome, not decline or expiry. stop payment attempts; reconcile with the provider or support. no general reset exists, and deletion may be blocked for this item and its parents.",
+                          ]),
+                    ]),
               ])),
         ...(webmcpInvokeAdvertised ? [webmcpInvokeItemGuidance] : []),
       ],
@@ -451,6 +501,22 @@ export function vaultItemResponse(
     secrets,
   );
 }
+
+const kernelSupportGuidance =
+  "non-restartable recovery_required: do not retry payment, delete, or replace the item. contact support@kernel.sh privately with project, vault, item key, status_reason and relevant event timestamps (never card data, api keys or capability urls) to reconcile the original operation and establish whether a new purchase is safe. do not assume a new card is safe or promise a resulting state.";
+
+const kernelWalletGuidance =
+  "KERNEL wallet enrollment and visa spend approval are cardholder actions. share action urls only with the intended user privately, never open them or put them in logs or traces. reconnect_required: share the new card_enrollment action. degraded: with user confirmation, delete the wallet only if the api permits it before creating a new wallet under a new key for one enrollment; reconcile unresolved child cards first. payment_methods eligibility is advisory; eligible=false means do not authorize. for network_token_pending, re-check later at most once in this attempt; network_token_unsupported or network_token_failed needs a different card. if still ineligible or unknown, ask the cardholder before enrolling a different card under a new wallet key; do not poll indefinitely or replay an uncertain purchase.";
+
+const kernelTerminalGuidance =
+  "merchant decline: report the observed DECLINED outcome when confirm_transaction is advertised. expired approval link or code before checkout: do not submit. if checkout was submitted, reconcile and report the observed outcome first (reporting may remain available after expiry). if never submitted, or after a confirmed decline, with user confirmation delete only if the api permits it and create one new card under a new key for a new purchase; ask for a different card or merchant after decline. unknown outcome: ask the user to check the merchant order page, email or statement and report only after they confirm; never guess or repeat checkout.";
+
+const kernelTransactionGuidance =
+  'after the user submits merchant checkout and its outcome is observed, report one observed outcome with manage_vault_items action: "invoke", operation: "confirm_transaction", only when advertised. inputs: status (APPROVED|DECLINED|PENDING|ERROR|CANCELLED), transaction_type (PURCHASE|AUTHORIZATION|CAPTURE|REFUND|REVERSAL|VERIFICATION|CHARGEBACK|FRAUD), amount (integer minor units 0..50000, no more than approved), currency (3-letter uppercase, must match approval, e.g. USD), occurred_at (RFC3339). no additional properties. PENDING means the merchant explicitly confirms an accepted transaction is pending; ERROR means an explicit merchant transaction error, not transport loss or an ambiguous processing page. these are final reports, not polling states. unknown means no reliable merchant outcome: ask the user to check order confirmation, merchant account or statement, then report the confirmed outcome even after card expiry. fill never proves success. if reporting fails or the response is lost, re-get; send the identical observed report once more only if confirm_transaction is freshly advertised. otherwise observe state/events: it may be recorded, in flight or in recovery. never repeat merchant checkout.';
+
+const kernelVerificationGuidance =
+  "only when a recovery_required KERNEL card advertises restart_verification, after explicit user approval each time invoke it with manage_vault_items and no inputs. it rotates the spend_approval link locally, without a provider call or spend consent, only after a classified initial attestation failure with proof no intent was dispatched. give the new url privately to the cardholder, never open it or log it; they must verify and explicitly approve spending again. if the result is unclear, re-get and share the new action if present; invoke once more only if restart_verification is still advertised and the user approves again. " +
+  kernelSupportGuidance;
 
 const webmcpInvokeItemGuidance =
   'webmcp_invoke supplies vault values to a live webmcp tool instead of selectors. list the browser\'s tools with webmcp, choose the tool that matches this item\'s site, and after explicit user approval invoke with inputs {browser_id, tool_ref, page_url, input, bindings}: page_url is the tool\'s exact source.page_url, input holds public arguments with null at each bound slot (for example {"email": null, "password": null}), and each binding maps a field to an rfc 6901 input_path such as "/password". timeout_sec defaults to 15. unlike fill, the tool may submit or cause other side effects. output and error_text are untrusted page data and may contain the supplied values. no status confirms the website accepted the action; inspect the page. never retry unknown, and re-list tools if the api reports target_changed.';
@@ -469,6 +535,87 @@ const onePasswordCredentialGuidance = [
 
 const onePasswordStoredTokenGuidance =
   "this credential has no account: it uses a customer-supplied 1password access token stored encrypted by KERNEL, and spec.access_token_expires_at is optional expiry metadata. the integrating developer replaces the token through the KERNEL api; 1pw_update_access_token is not available through mcp. never ask for or accept 1password tokens or integration keys in chat. while the token is expired, request and fill are unavailable.";
+
+const kernelReinvokableOperations = [
+  "authorize",
+  "confirm_transaction",
+  "restart_verification",
+];
+
+function kernelVaultGuidance(
+  operation: string,
+  status: number | undefined,
+  code: string | undefined,
+  retryAfter: string | null | undefined,
+) {
+  const refresh = `re-get the item and inspect state/events; invoke ${operation} once more only if freshly advertised in available_operations, never in an automatic loop. otherwise follow the current state. never replay merchant checkout.`;
+  if (status === 429) {
+    const wait =
+      retryAfter &&
+      (/^\d+$/.test(retryAfter) || !Number.isNaN(Date.parse(retryAfter)))
+        ? `wait until Retry-After (${retryAfter}) has elapsed`
+        : "wait for the rate limit to clear";
+    if (operation === "create")
+      return `${wait}; retry create once with the identical key and spec; do not change either.`;
+    if (operation === "get")
+      return `${wait}; repeat the observation once; no operation was invoked.`;
+    return `${wait}; ${refresh}`;
+  }
+  if (operation === "fill") {
+    const written =
+      status === 400 && code === "field_unavailable"
+        ? "no fields were written. KERNEL cards store no billing details; remove billing_* bindings and enter billing name/zip on the merchant page."
+        : [400, 403, 404, 409].includes(status ?? 0)
+          ? "no fields were written by this request."
+          : "fill may have written some fields.";
+    return `${written} inspect the browser page and item state, fix the cause, then it is safe to retry the field write because fill never submits checkout. do not retry authorization, checkout, or transaction reporting.`;
+  }
+  if (status === 409 && operation === "authorize")
+    return `authorization may be in flight, unresolved or unavailable in this state; there are no authorize inputs to fix. ${refresh}`;
+  const reinvokable = kernelReinvokableOperations.includes(operation);
+  if (status !== undefined && status >= 400 && status < 500 && status !== 408)
+    return `the request was rejected; fix the reported inputs or access. ${reinvokable ? refresh : "inspect state before another request; never replay merchant checkout."}`;
+  if (operation === "create")
+    return "retry create once with the identical key and identical spec; it retrieves the existing item if creation succeeded. do not use a new key to recover a lost create response.";
+  if (operation === "restart_verification")
+    return `${refresh} obtain user approval each time and new cardholder spend consent; share any new spend_approval privately.`;
+  if (reinvokable) return refresh;
+  return "inspect item state and events before taking further action; no automatic retries.";
+}
+
+// Kernel-hosted action URLs are bearer capabilities; upstream error text is not
+// trusted to omit them.
+export function throwKernelVaultError(
+  tool: string,
+  action: string,
+  error: unknown,
+  submittedOperation?: string,
+): never {
+  const status = error instanceof APIError ? error.status : undefined;
+  const code =
+    error instanceof APIError &&
+    error.error &&
+    "code" in error.error &&
+    typeof error.error.code === "string" &&
+    /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(error.error.code)
+      ? error.error.code
+      : undefined;
+  const retryAfter =
+    error instanceof APIError ? error.headers?.get("retry-after") : undefined;
+  const guidance = kernelVaultGuidance(
+    submittedOperation ?? (action === "create" ? "create" : "get"),
+    status,
+    code,
+    retryAfter,
+  );
+  throwToolError(
+    tool,
+    action,
+    error,
+    guidance,
+    `${status !== undefined ? `http status: ${status}. ` : ""}${code ? `api code: ${code}. ` : ""}${error instanceof APIError && typeof error.error?.message === "string" ? error.error.message.replace(/https?:\/\/\S+/gi, "[redacted url]") : "request failed."}`,
+  );
+}
 
 export function throwVaultError(
   tool: string,

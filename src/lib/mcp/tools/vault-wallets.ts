@@ -5,14 +5,20 @@ import type { McpDependencies } from "@/lib/mcp/dependencies";
 import { projectForOperation } from "@/lib/mcp/project-selection";
 import { longOperationOptions } from "@/lib/mcp/request-options";
 import { errorResponse } from "@/lib/mcp/responses";
-import { throwVaultError, vaultItemResponse } from "@/lib/mcp/vault-responses";
+import {
+  throwKernelVaultError,
+  throwVaultError,
+  vaultItemResponse,
+} from "@/lib/mcp/vault-responses";
 import {
   agentcardWalletSpecSchema,
   linkWalletSpecSchema,
+  kernelWalletSpecSchema,
   vaultItemSchema,
   vaultKeySchema,
   vaultProviderSchema,
   vaultToolInput,
+  topLevelIssueKeys,
 } from "@/lib/mcp/vault-schemas";
 
 export function registerVaultWalletTools(
@@ -23,7 +29,7 @@ export function registerVaultWalletTools(
     "manage_vault_wallets",
     {
       description:
-        'connect payment wallets without exposing secrets. "create" creates or retrieves an identical wallet by immutable key. hosted connection/enrollment actions are for the user; a valid imported link grant creates a connected wallet. "payment_methods" requests the advertised live payment_methods expansion (unavailable expansions return an api error). select link payment_method_id explicitly; never automatically choose a default. agentcard card_id may be omitted for cardholder selection at checkout approval. capabilities are advisory; absent means unknown. KERNEL-managed link oauth remains supported. customer-managed link requires authorization.client.provider_config and a write-only authorization.tokens pair supplied by a trusted backend, never chat; config credentials do not authorize a user. KERNEL owns refresh rotation after import. duplicate create never replaces a grant; bindings cannot change. agentcard spec.provider_config is optional; omit for KERNEL-managed credentials, and reuse user_id only within the same config. no in-place imported reauthorization: obtain a fresh grant under a new wallet key for new payments only; retain unresolved old payments for reconciliation. never provide card data or oauth codes. requests are not automatically retried.',
+        'connect payment wallets without exposing secrets. KERNEL wallets use spec:{} and return a hosted card_enrollment action; share its url only with the intended cardholder in a private surface, never open it for them. "create" creates or retrieves an identical wallet by immutable key. hosted connection/enrollment actions are for the user; a valid imported link grant creates a connected wallet. "payment_methods" requests the advertised live payment_methods expansion (unavailable expansions return an api error). select link payment_method_id explicitly; never automatically choose a default. agentcard card_id may be omitted for cardholder selection at checkout approval. capabilities are advisory; absent means unknown. KERNEL-managed link oauth remains supported. customer-managed link requires authorization.client.provider_config and a write-only authorization.tokens pair supplied by a trusted backend, never chat; config credentials do not authorize a user. KERNEL owns refresh rotation after import. duplicate create never replaces a grant; bindings cannot change. agentcard spec.provider_config is optional; omit for KERNEL-managed credentials, and reuse user_id only within the same config. no in-place imported reauthorization: obtain a fresh grant under a new wallet key for new payments only; retain unresolved old payments for reconciliation. never provide card data or oauth codes. requests are not automatically retried.',
       inputSchema: vaultToolInput({
         ...vaultItemSchema,
         key: vaultKeySchema(),
@@ -32,9 +38,13 @@ export function registerVaultWalletTools(
           .describe("(create) payment provider.")
           .optional(),
         spec: z
-          .union([linkWalletSpecSchema, agentcardWalletSpecSchema])
+          .union([
+            linkWalletSpecSchema,
+            agentcardWalletSpecSchema,
+            kernelWalletSpecSchema,
+          ])
           .describe(
-            '(create) specification object, not a {type, spec} envelope. embedded provider must match provider. link: {"authorization":{"method":"oauth","client":{"type":"kernel_managed"}}}, or customer_managed with provider_config (exactly one id/name) and tokens from a trusted backend. agentcard: {} to enroll, optionally provider_config or user_id from the same configuration.',
+            '(create) specification object, not a {type, spec} envelope. embedded provider must match provider. link: {"authorization":{"method":"oauth","client":{"type":"kernel_managed"}}}, or customer_managed with provider_config (exactly one id/name) and tokens from a trusted backend. agentcard: {} to enroll, optionally provider_config or user_id from the same configuration. KERNEL: {} to enroll a card on the hosted page; no card data in tool input.',
           )
           .optional(),
       }),
@@ -55,23 +65,39 @@ export function registerVaultWalletTools(
         project,
       );
       const options = { maxRetries: 0, signal: ctx.mcpReq.signal };
+      let spec: ItemUpsertParams.WalletVaultItemRequest["spec"] | undefined;
+      if (params.action === "create") {
+        if (!params.provider || !params.spec)
+          return errorResponse("provider and spec are required for create.");
+        const parsed = (
+          params.provider === "link"
+            ? linkWalletSpecSchema.transform((spec) => ({
+                ...spec,
+                provider: "link" as const,
+              }))
+            : params.provider === "agentcard"
+              ? agentcardWalletSpecSchema.transform((spec) => ({
+                  ...spec,
+                  provider: "agentcard" as const,
+                }))
+              : kernelWalletSpecSchema.transform((spec) => ({
+                  ...spec,
+                  provider: "kernel" as const,
+                }))
+        ).safeParse(params.spec);
+        if (!parsed.success)
+          return errorResponse(
+            `invalid ${params.provider} wallet spec (${topLevelIssueKeys(parsed.error).join(", ") || "spec"}); no request was sent. correct these fields before creating.`,
+          );
+        spec = parsed.data;
+      }
       try {
         switch (params.action) {
           case "create": {
-            if (!params.provider || !params.spec)
+            if (!spec)
               return errorResponse(
                 "provider and spec are required for create.",
               );
-            const spec: ItemUpsertParams.WalletVaultItemRequest["spec"] =
-              params.provider === "link"
-                ? {
-                    ...linkWalletSpecSchema.parse(params.spec),
-                    provider: params.provider,
-                  }
-                : {
-                    ...agentcardWalletSpecSchema.parse(params.spec),
-                    provider: params.provider,
-                  };
             const item = await client.vaults.items.upsert(
               params.key,
               {
@@ -103,6 +129,8 @@ export function registerVaultWalletTools(
           }
         }
       } catch (error) {
+        if (params.provider === "kernel")
+          throwKernelVaultError("manage_vault_wallets", params.action, error);
         throwVaultError("manage_vault_wallets", params.action, error);
       }
     },

@@ -27,7 +27,7 @@ export function vaultKeySchema() {
     "immutable item key within the vault, not the item id.",
   );
 }
-export const vaultProviderSchema = z.enum(["link", "agentcard"]);
+export const vaultProviderSchema = z.enum(["link", "agentcard", "kernel"]);
 export const vaultWaitSchema = z
   .number()
   .int()
@@ -85,7 +85,11 @@ function topLevelIssuePath(issue: z.core.$ZodIssue) {
 export function topLevelIssueKeys(error: z.ZodError) {
   return [
     ...new Set(
-      error.issues.map((issue) => String(topLevelIssuePath(issue)[0] ?? "")),
+      error.issues.flatMap((issue) =>
+        issue.code === "unrecognized_keys" && issue.path.length === 0
+          ? issue.keys
+          : [String(topLevelIssuePath(issue)[0] ?? "")],
+      ),
     ),
   ].filter(Boolean);
 }
@@ -167,6 +171,10 @@ export const linkWalletSpecSchema = z
   })
   .strict();
 
+export const kernelWalletSpecSchema = z
+  .object({ provider: z.literal("kernel").optional() })
+  .strict();
+
 export const agentcardWalletSpecSchema = z
   .object({
     provider: z.literal("agentcard").optional(),
@@ -227,6 +235,37 @@ export const linkCardSpecSchema = z
     totals: z.array(linkTotalSchema()).optional(),
     metadata: z.record(z.string(), z.string()).optional(),
     expires_at: integer().optional(),
+  })
+  .strict();
+
+export const kernelCardSpecSchema = z
+  .object({
+    provider: z.literal("kernel").optional(),
+    wallet: vaultKeySchema(),
+    amount: integer()
+      .min(1)
+      .max(50000)
+      .describe("integer minor currency units."),
+    currency: currency(),
+    merchant_name: z.string().min(1).max(255),
+    merchant_url: z.string().url().startsWith("https://"),
+    merchant_country: z
+      .string()
+      .regex(/^[A-Za-z]{2}$/)
+      .describe("iso 3166-1 alpha-2 country code; required for visa purchases.")
+      .optional(),
+    merchant_category: z
+      .string()
+      .min(1)
+      .max(255)
+      .describe("actual merchant category; omit rather than invent.")
+      .optional(),
+    merchant_category_code: z
+      .string()
+      .regex(/^[0-9]{4}$/)
+      .refine((value) => value !== "0000")
+      .describe("actual merchant mcc; omit rather than invent.")
+      .optional(),
   })
   .strict();
 

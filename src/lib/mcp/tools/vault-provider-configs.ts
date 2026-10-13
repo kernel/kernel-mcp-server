@@ -42,6 +42,7 @@ export function registerVaultProviderConfigTools(
           .describe("(create, update) unique organization-wide name.")
           .optional(),
         provider: vaultProviderSchema
+          .exclude(["kernel"])
           .describe("(create only) immutable provider.")
           .optional(),
         credentials: providerCredentialsSchema
