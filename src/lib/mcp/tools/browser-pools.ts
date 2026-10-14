@@ -33,8 +33,8 @@ type BrowserPoolUpdateParams = Parameters<
 type BrowserPool = Awaited<
   ReturnType<KernelClient["browserPools"]["retrieve"]>
 >;
-type BrowserPoolAcquireResponse = Awaited<
-  ReturnType<KernelClient["browserPools"]["acquire"]>
+type BrowserPoolAcquireResponse = NonNullable<
+  Awaited<ReturnType<KernelClient["browserPools"]["acquire"]>>
 >;
 
 type PoolConfigParams = Omit<

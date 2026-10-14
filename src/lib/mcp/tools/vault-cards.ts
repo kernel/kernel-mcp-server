@@ -155,14 +155,9 @@ export function registerVaultCardTools(
               `${provider} card does not advertise authorize; inspect item state and events.`,
             );
           authorizationSubmitted = true;
-          // The generated SDK types predate Link checkout context on authorize.
           const item = await client.vaults.items.performOperation(
             params.key,
-            {
-              id_or_name: params.vault,
-              type: "authorize",
-              ...checkout.data,
-            } as Parameters<typeof client.vaults.items.performOperation>[1],
+            { id_or_name: params.vault, type: "authorize", ...checkout.data },
             options,
           );
           return vaultItemResponse(item, target);
