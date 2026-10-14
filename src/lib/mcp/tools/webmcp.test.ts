@@ -100,7 +100,7 @@ const customTools = {
 
 describe("webmcp", () => {
   test.each([undefined, false, true])(
-    "lists the nested snapshot with exclude_custom=%s without reshaping it",
+    "lists the nested snapshot with exclude_custom=%s without output schemas",
     async (excludeCustom) => {
       const calls: unknown[][] = [];
       const { client, tokens, close } = await connectTestMcp(
@@ -136,12 +136,41 @@ describe("webmcp", () => {
           ["my-browser", { exclude_custom: excludeCustom }],
         ]);
         expect(tokens).toEqual(["test-token"]);
-        expect(toolResultJSON(result)).toEqual(toolSnapshot);
+        const { outputSchema: _outputSchema, ...searchTool } =
+          toolSnapshot.tools[0].tool;
+        expect(toolResultJSON(result)).toEqual({
+          tools: [
+            { ...toolSnapshot.tools[0], tool: searchTool },
+            toolSnapshot.tools[1],
+            toolSnapshot.tools[2],
+          ],
+        });
       } finally {
         await close();
       }
     },
   );
+
+  test("lists the snapshot unchanged with include_output_schema", async () => {
+    const { client, close } = await connectTestMcp(registerWebMcpTool, {
+      browsers: { webmcp: { listTools: async () => toolSnapshot } },
+    });
+
+    try {
+      const result = await client.callTool({
+        name: "webmcp",
+        arguments: {
+          action: "list",
+          session_id: "my-browser",
+          include_output_schema: true,
+        },
+      });
+
+      expect(toolResultJSON(result)).toEqual(toolSnapshot);
+    } finally {
+      await close();
+    }
+  });
 
   test.each(["completed", "canceled", "error", "awaiting_submission"] as const)(
     "preserves %s from an exact invocation with retries disabled",
