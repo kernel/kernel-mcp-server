@@ -40,7 +40,7 @@ describe("provider-specific vault payment guidance", () => {
         "for a link pay token, pass {browser_id, page_url} and omit fields",
         "for a virtual card, also pass ordered field/selector bindings, never values",
         "format mm/yy or mm/yyyy",
-        "do not inspect or invoke the checkout's webmcp tools yourself",
+        "KERNEL supplies the token through the checkout's webmcp tool, so do not inspect or invoke it yourself",
         "never submits payment: submit the checkout yourself",
         "failed or unknown fills are safe to retry",
         "does not expose aliases or support egress substitution",
@@ -101,7 +101,8 @@ describe("provider-specific vault payment guidance", () => {
       "browser_not_found, browser_unavailable, destination_denied, page_not_found, ambiguous_page, timeout, and browser_error happen before any payment request",
       "make sure the checkout is open in exactly one tab at page_url, then authorize again",
       "authorize without browser_id and page_url to issue a virtual card for the merchant_url origin",
-      "declined or expired: delete the card and create a new one",
+      "declined: read the item's status_reason, then delete the card and create a new one",
+      "expired: delete the card and create a new one",
       "exceeds the virtual card limit (50000 minor units)",
       "check the merchant's order confirmation or order history before paying again",
     ])
@@ -115,8 +116,8 @@ describe("provider-specific vault payment guidance", () => {
       expect(guidance).not.toContain(text);
   });
 
-  test("Link cards are not told to drive checkout webmcp tools", () => {
-    const guidance = toolResultJSON(
+  test("Link virtual cards keep webmcp_invoke guidance when it is advertised", () => {
+    const result = toolResultJSON(
       vaultItemResponse(
         {
           ...linkCard,
@@ -127,8 +128,31 @@ describe("provider-specific vault payment guidance", () => {
         },
         target,
       ),
+    );
+    const guidance = result.guidance.join(" ");
+    expect(guidance).toContain("list the browser's tools with webmcp");
+    expect(guidance).toContain("never retry unknown");
+    expect(
+      result.hints.invocation.map(
+        (hint: { arguments: { operation: string } }) =>
+          hint.arguments.operation,
+      ),
+    ).toEqual(["fill", "webmcp_invoke"]);
+  });
+
+  test("the do-not-invoke-webmcp step is scoped to authorize and link pay token fills", () => {
+    const guidance = toolResultJSON(
+      vaultItemResponse(linkCard, target),
     ).guidance.join(" ");
+    expect(guidance).toContain(
+      "you do not inspect or invoke the checkout's webmcp tools to authorize",
+    );
     expect(guidance).not.toContain("list the browser's tools with webmcp");
+    const virtualCardFill = guidance
+      .split(". ")
+      .find((sentence: string) => sentence.startsWith("for a virtual card"));
+    expect(virtualCardFill).toBeDefined();
+    expect(virtualCardFill).not.toContain("webmcp");
   });
 
   test("AgentCard retains aliases, masks, and checkout approval/replay guidance", () => {

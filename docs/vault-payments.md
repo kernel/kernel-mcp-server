@@ -593,13 +593,15 @@ invoking an operation. A connected Link wallet also returns a read-only
    and message, followed by the recovery step: make sure the checkout is open in
    exactly one tab at `page_url`, then authorize again. If checkout inspection
    keeps failing, authorize without `browser_id` and `page_url` to issue a
-   virtual card for the `merchant_url` origin. If the user declines or the
+   virtual card for the `merchant_url` origin. If the user declines, read the
+   item's `status_reason`, then delete the card and create a new one. If the
    request expires, delete the card and create a new one. If the amount exceeds
    the virtual card limit (50000 minor units) on a checkout without Link Pay
    Token support, delete the card and tell the user.
 
 7. When `fill` is advertised, follow its description. For a Link Pay Token,
-   pass `browser_id` and `page_url` and omit `fields`:
+   pass `browser_id` and `page_url` and omit `fields`; Kernel supplies the token
+   through the checkout's WebMCP tool, so do not invoke it yourself:
 
    ```json
    {
@@ -635,6 +637,10 @@ invoking an operation. A connected Link wallet also returns a read-only
      }
    }
    ```
+
+   A virtual card may also advertise `webmcp_invoke`; it follows the same
+   contract as in the [credential flow](#mcp-credential-flow) and, unlike fill,
+   may submit the checkout.
 
    Each selector must resolve to one unique editable target across all frames.
    For separate expiration inputs, use `exp_month` (MM) and `exp_year` (YYYY)

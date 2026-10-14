@@ -508,19 +508,32 @@ export function vaultItemResponse(
                           ]),
                     ]),
               ])),
-        ...(webmcpInvokeAdvertised && cardProvider !== "link"
-          ? [webmcpInvokeItemGuidance]
-          : []),
+        ...(webmcpInvokeAdvertised ? [webmcpInvokeItemGuidance] : []),
       ],
     },
     secrets,
   );
 }
 
+// Checkout inspection fails before Link receives a payment request, so the
+// agent can fix the browser tab and authorize again.
+export const linkCheckoutErrorCodes = [
+  "browser_not_found",
+  "browser_unavailable",
+  "destination_denied",
+  "page_not_found",
+  "ambiguous_page",
+  "timeout",
+  "browser_error",
+] as const;
+
+export const linkCheckoutRecovery =
+  "make sure the checkout is open in exactly one tab at page_url, then authorize again. if checkout inspection keeps failing, authorize without browser_id and page_url to issue a virtual card for the merchant_url origin.";
+
 const linkCardGuidance = [
-  "link cards follow this order: reach the final checkout page in a browser created with this vault attached, create the card, then after explicit user approval invoke authorize with inputs {browser_id, page_url}: the browser session id and the exact current top-level checkout url. KERNEL inspects the checkout and chooses whether to deliver a link pay token or a virtual card; you never choose or pass it. authorize sends the user an approval request: share the approval url from item.action, then get the item until fill is advertised. to re-check, invoke authorize without browser_id and page_url. each advertised operation's description in available_operations is the source of truth for its inputs and recovery steps.",
-  "fill follows its advertised description. for a link pay token, pass {browser_id, page_url} and omit fields. for a virtual card, also pass ordered field/selector bindings, never values; a combined expiration field requires format mm/yy or mm/yyyy. fill works on the checkout's origin in any browser with this vault attached. do not inspect or invoke the checkout's webmcp tools yourself; KERNEL does that. fill returns no card values and never submits payment: submit the checkout yourself. failed or unknown fills are safe to retry. link does not expose aliases or support egress substitution; do not use aliases from older responses.",
-  "before the card is authorized at a checkout, change it with manage_vault_cards update; after that, update returns 409: delete the card and create a new one. authorize errors browser_not_found, browser_unavailable, destination_denied, page_not_found, ambiguous_page, timeout, and browser_error happen before any payment request: make sure the checkout is open in exactly one tab at page_url, then authorize again. if checkout inspection keeps failing, authorize without browser_id and page_url to issue a virtual card for the merchant_url origin. declined or expired: delete the card and create a new one. if the amount exceeds the virtual card limit (50000 minor units) on a checkout without link pay token support, delete the card and tell the user. if the payment result after submitting is unclear, check the merchant's order confirmation or order history before paying again.",
+  "link cards follow this order: reach the final checkout page in a browser created with this vault attached, create the card, then after explicit user approval invoke authorize with inputs {browser_id, page_url}: the browser session id and the exact current top-level checkout url. KERNEL inspects the checkout and chooses whether to deliver a link pay token or a virtual card; you never choose or pass it, and you do not inspect or invoke the checkout's webmcp tools to authorize. authorize sends the user an approval request: share the approval url from item.action, then get the item until fill is advertised. to re-check, invoke authorize without browser_id and page_url. each advertised operation's description in available_operations is the source of truth for its inputs and recovery steps.",
+  "fill follows its advertised description. for a link pay token, pass {browser_id, page_url} and omit fields; KERNEL supplies the token through the checkout's webmcp tool, so do not inspect or invoke it yourself. for a virtual card, also pass ordered field/selector bindings, never values; a combined expiration field requires format mm/yy or mm/yyyy. fill works on the checkout's origin in any browser with this vault attached. fill returns no card values and never submits payment: submit the checkout yourself. failed or unknown fills are safe to retry. link does not expose aliases or support egress substitution; do not use aliases from older responses.",
+  `before the card is authorized at a checkout, change it with manage_vault_cards update; after that, update returns 409: delete the card and create a new one. authorize errors ${linkCheckoutErrorCodes.slice(0, -1).join(", ")}, and ${linkCheckoutErrorCodes.at(-1)} happen before any payment request: ${linkCheckoutRecovery} declined: read the item's status_reason, then delete the card and create a new one. expired: delete the card and create a new one. if the amount exceeds the virtual card limit (50000 minor units) on a checkout without link pay token support, delete the card and tell the user. if the payment result after submitting is unclear, check the merchant's order confirmation or order history before paying again.`,
 ];
 
 const kernelSupportGuidance =
@@ -638,18 +651,6 @@ export function throwKernelVaultError(
   );
 }
 
-// Checkout inspection fails before Link receives a payment request, so the
-// agent can fix the browser tab and authorize again.
-const linkCheckoutErrorCodes = new Set([
-  "browser_not_found",
-  "browser_unavailable",
-  "destination_denied",
-  "page_not_found",
-  "ambiguous_page",
-  "timeout",
-  "browser_error",
-]);
-
 export function throwLinkAuthorizeError(
   tool: string,
   action: string,
@@ -657,12 +658,12 @@ export function throwLinkAuthorizeError(
   operationSubmitted = false,
 ): never {
   const code = error instanceof APIError ? apiErrorCode(error) : undefined;
-  if (code && linkCheckoutErrorCodes.has(code))
+  if (code && (linkCheckoutErrorCodes as readonly string[]).includes(code))
     throwToolError(
       tool,
       action,
       error,
-      "no payment request was made. make sure the checkout is open in exactly one tab at page_url, then authorize again. if checkout inspection keeps failing, authorize without browser_id and page_url to issue a virtual card for the merchant_url origin.",
+      `no payment request was made. ${linkCheckoutRecovery}`,
     );
   throwVaultError(tool, action, error, operationSubmitted);
 }

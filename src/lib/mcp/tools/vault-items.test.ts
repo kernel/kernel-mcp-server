@@ -889,6 +889,67 @@ describe("Link checkout authorize and fill", () => {
     },
   );
 
+  test.each([
+    {
+      stage: "after the POST was sent",
+      replies: () => [Response.json(item), new Error("socket hang up")],
+      submitted: true,
+      requests: 2,
+    },
+    {
+      stage: "before the POST",
+      replies: () => [new Error("socket hang up")],
+      submitted: false,
+      requests: 1,
+    },
+  ])(
+    "reports a lost Link authorize response $stage",
+    async ({ replies, submitted, requests }) => {
+      const fixture = await connectVaultTest(replies());
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          ...target,
+          action: "invoke",
+          operation: "authorize",
+          inputs: checkout,
+        });
+        const text = (result.content as Array<{ text: string }>)[0].text;
+        expect(result.isError).toBe(true);
+        const note =
+          "no response was received from the api after the operation was submitted.";
+        if (submitted) expect(text).toEndWith(note);
+        else expect(text).not.toContain(note);
+        expect(fixture.requests).toHaveLength(requests);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test.each([
+    "HTTPS://shop.example/checkout",
+    "https://user@shop.example/checkout",
+    "https://shop.example/check out",
+    "https://*.shop.example/checkout",
+  ])("rejects page_url %s that the API pattern rejects", async (page_url) => {
+    const fixture = await connectVaultTest([]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        ...target,
+        action: "invoke",
+        operation: "authorize",
+        inputs: { ...checkout, page_url },
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain(
+        "invalid authorize inputs (page_url)",
+      );
+      expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test("passes through other Link authorize errors unchanged", async () => {
     const fixture = await connectVaultTest([
       Response.json(item),
@@ -947,6 +1008,9 @@ describe("Link checkout authorize and fill", () => {
         body: { type: "fill", ...checkout },
       });
       expect(fixture.requests[1].body).not.toHaveProperty("fields");
+      expect(toolResultJSON(result).guidance).toStartWith(
+        "completed means the credential was supplied to the page",
+      );
     } finally {
       await fixture.close();
     }

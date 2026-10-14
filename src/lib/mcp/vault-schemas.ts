@@ -94,7 +94,10 @@ export const authorizeInputsShape = "{} or { browser_id, page_url }";
 export const authorizeInputsSchema = z
   .object({
     browser_id: z.string().min(1).optional(),
-    page_url: z.url({ protocol: /^https$/ }).optional(),
+    page_url: z
+      .string()
+      .regex(/^https:\/\/[^/?#@*\s]+(?:[/?#][^\s]*)?$/)
+      .optional(),
   })
   .strict()
   .refine(
