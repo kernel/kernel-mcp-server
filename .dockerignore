@@ -1,8 +1,0 @@
-.git
-.github
-.next
-node_modules
-coverage
-.env*
-*.log
-*.pem
