@@ -63,7 +63,7 @@ export type WebmcpInvokeInputs = z.infer<typeof webmcpInvokeInputsSchema>;
 
 // Mirrors FillVaultItemOperationRequest in the KERNEL API spec; `type` is set by the tool.
 export const fillInputsShape =
-  "{ browser_id, page_url?, fields: [{ field, selector, format? }], timeout_ms? }";
+  "{ browser_id, page_url?, fields?: [{ field, selector, format? }], timeout_ms? }";
 
 export const fillInputsSchema = z
   .object({
@@ -80,15 +80,37 @@ export const fillInputsSchema = z
           .strict(),
       )
       .min(1)
-      .max(32),
+      .max(32)
+      .optional(),
     timeout_ms: z.number().int().min(1).max(30000).optional(),
   })
   .strict();
 export type FillInputs = z.infer<typeof fillInputsSchema>;
 
+// Mirrors AuthorizeVaultItemOperationRequest: Link cards take checkout context
+// from the final checkout page, or none for a virtual card on the merchant_url origin.
+export const authorizeInputsShape = "{} or { browser_id, page_url }";
+
+export const authorizeInputsSchema = z
+  .object({
+    browser_id: z.string().min(1).optional(),
+    page_url: z.url({ protocol: /^https$/ }).optional(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      (value.browser_id === undefined) === (value.page_url === undefined),
+    { path: ["browser_id"] },
+  );
+export type AuthorizeInputs = z.infer<typeof authorizeInputsSchema>;
+
 // Names the offending top-level key, never a value or nested key, and shows the shape
 // the API accepts.
-export function fillInputsIssueMessage(error: z.ZodError) {
+function operationInputsIssueMessage(
+  operation: string,
+  shape: string,
+  error: z.ZodError,
+) {
   const unknownKeys = error.issues.flatMap((issue) =>
     issue.code === "unrecognized_keys" && issue.path.length === 0
       ? issue.keys
@@ -96,9 +118,17 @@ export function fillInputsIssueMessage(error: z.ZodError) {
   );
   const cause =
     unknownKeys.length > 0
-      ? `unknown key ${unknownKeys.map((key) => JSON.stringify(key)).join(", ")} in fill inputs`
-      : `invalid fill inputs (${topLevelIssueKeys(error).join(", ") || "inputs"})`;
-  return `${cause}. expected ${fillInputsShape}`;
+      ? `unknown key ${unknownKeys.map((key) => JSON.stringify(key)).join(", ")} in ${operation} inputs`
+      : `invalid ${operation} inputs (${topLevelIssueKeys(error).join(", ") || "inputs"})`;
+  return `${cause}. expected ${shape}`;
+}
+
+export function fillInputsIssueMessage(error: z.ZodError) {
+  return operationInputsIssueMessage("fill", fillInputsShape, error);
+}
+
+export function authorizeInputsIssueMessage(error: z.ZodError) {
+  return `${operationInputsIssueMessage("authorize", authorizeInputsShape, error)}: pass browser_id and the https page_url of the final checkout page together, or neither.`;
 }
 
 const integer = () => z.number().int().safe();
@@ -266,7 +296,9 @@ export const linkCardSpecSchema = z
     amount: integer()
       .min(1)
       .max(500000)
-      .describe("integer minor currency units."),
+      .describe(
+        "integer minor currency units. a virtual card allows at most 50000; a link pay token allows up to 500000. KERNEL chooses which at authorize.",
+      ),
     currency: currency(),
     merchant_name: z.string().min(1).max(255),
     merchant_url: z.string().url(),

@@ -759,3 +759,196 @@ describe("vault observation and deletion", () => {
     },
   );
 });
+
+describe("Link checkout authorize and fill", () => {
+  const target = { vault: "checkout", key: "order-1" };
+  const checkout = {
+    browser_id: "browser-session-id",
+    page_url: "https://shop.example/checkout?session=1#pay",
+  };
+  const pending = {
+    ...item,
+    state: { provider: "link", status: "pending_authorization" },
+    available_operations: [],
+  };
+
+  test.each([{ inputs: checkout }, { inputs: {} }, { inputs: undefined }])(
+    "forwards authorize inputs $inputs unchanged",
+    async ({ inputs }) => {
+      const fixture = await connectVaultTest([
+        Response.json(item),
+        Response.json(pending),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          ...target,
+          action: "invoke",
+          operation: "authorize",
+          ...(inputs && { inputs }),
+        });
+        expect(result.isError).toBeUndefined();
+        expect(fixture.requests[1]).toMatchObject({
+          method: "POST",
+          path: "/vaults/checkout/items/order-1/operations",
+          body: { type: "authorize", ...inputs },
+        });
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test.each([
+    { inputs: { browser_id: checkout.browser_id }, message: "(browser_id)" },
+    { inputs: { page_url: checkout.page_url }, message: "(browser_id)" },
+    {
+      inputs: { ...checkout, page_url: "http://shop.example/checkout" },
+      message: "(page_url)",
+    },
+    {
+      inputs: { ...checkout, merchant_account_id: "acct_123" },
+      message: 'unknown key "merchant_account_id"',
+    },
+  ])(
+    "rejects authorize inputs $inputs before any request",
+    async ({ inputs, message }) => {
+      const fixture = await connectVaultTest([]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          ...target,
+          action: "invoke",
+          operation: "authorize",
+          inputs,
+        });
+        const text = (result.content as Array<{ text: string }>)[0].text;
+        expect(result.isError).toBe(true);
+        expect(text).toContain(message);
+        expect(text).toContain(
+          "expected {} or { browser_id, page_url }: pass browser_id and the https page_url of the final checkout page together, or neither.",
+        );
+        expect(fixture.requests).toHaveLength(0);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test.each([
+    {
+      status: 400,
+      code: "page_not_found",
+      message:
+        "no open tab is at page_url; open the checkout page in the browser and authorize again",
+    },
+    {
+      status: 400,
+      code: "ambiguous_page",
+      message:
+        "more than one tab is at page_url; close the extra tabs and authorize again",
+    },
+    { status: 404, code: "browser_not_found", message: "browser not found" },
+    {
+      status: 409,
+      code: "browser_unavailable",
+      message: "browser is unavailable for checkout inspection",
+    },
+    {
+      status: 403,
+      code: "destination_denied",
+      message: "checkout destination is not authorized",
+    },
+    { status: 400, code: "timeout", message: "checkout inspection failed" },
+    {
+      status: 500,
+      code: "browser_error",
+      message: "checkout inspection failed",
+    },
+  ])(
+    "passes through $code with the checkout recovery step",
+    async ({ status, code, message }) => {
+      const fixture = await connectVaultTest([
+        Response.json(item),
+        Response.json({ code, message }, { status }),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          ...target,
+          action: "invoke",
+          operation: "authorize",
+          inputs: checkout,
+        });
+        const text = (result.content as Array<{ text: string }>)[0].text;
+        expect(result.isError).toBe(true);
+        expect(text).toBe(
+          `error in manage_vault_items (invoke): ${status} ${message} [code: ${code}] no payment request was made. make sure the checkout is open in exactly one tab at page_url, then authorize again. if checkout inspection keeps failing, authorize without browser_id and page_url to issue a virtual card for the merchant_url origin.`,
+        );
+        expect(fixture.requests).toHaveLength(2);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test("passes through other Link authorize errors unchanged", async () => {
+    const fixture = await connectVaultTest([
+      Response.json(item),
+      Response.json(
+        {
+          code: "invalid_request",
+          message:
+            "Link virtual card amount cannot exceed 50000 minor currency units",
+        },
+        { status: 400 },
+      ),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        ...target,
+        action: "invoke",
+        operation: "authorize",
+        inputs: checkout,
+      });
+      expect((result.content as Array<{ text: string }>)[0].text).toBe(
+        "error in manage_vault_items (invoke): 400 Link virtual card amount cannot exceed 50000 minor currency units [code: invalid_request]",
+      );
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("forwards a Link Pay Token fill without fields", async () => {
+    const ready = {
+      ...item,
+      state: { provider: "link", status: "ready" },
+      available_operations: [
+        {
+          type: "fill",
+          description:
+            "Invoke fill with a browser_id that has this vault attached and the exact current top-level page_url, and omit fields.",
+        },
+      ],
+    };
+    const outcome = { type: "fill", status: "completed", fields: [] };
+    const fixture = await connectVaultTest([
+      Response.json(ready),
+      Response.json(outcome),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        ...target,
+        action: "invoke",
+        operation: "fill",
+        inputs: checkout,
+      });
+      expect(result.isError).toBeUndefined();
+      expect(toolResultJSON(result).result).toEqual(outcome);
+      expect(fixture.requests[1]).toMatchObject({
+        method: "POST",
+        body: { type: "fill", ...checkout },
+      });
+      expect(fixture.requests[1].body).not.toHaveProperty("fields");
+    } finally {
+      await fixture.close();
+    }
+  });
+});

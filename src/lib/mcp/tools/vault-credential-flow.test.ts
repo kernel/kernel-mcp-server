@@ -738,7 +738,7 @@ describe("MCP credential flow", () => {
       inputs: { page_url: fill.page_url, fields: fill.fields },
       key: "browser_id",
     },
-    { inputs: {}, key: "browser_id, fields" },
+    { inputs: {}, key: "browser_id" },
   ])(
     "rejects malformed fill inputs before any request ($key)",
     async ({ inputs, key }) => {
@@ -752,7 +752,7 @@ describe("MCP credential flow", () => {
         expect(result.isError).toBe(true);
         expect(text).toContain(`invalid fill inputs (${key})`);
         expect(text).toContain(
-          "expected { browser_id, page_url?, fields: [{ field, selector, format? }], timeout_ms? }",
+          "expected { browser_id, page_url?, fields?: [{ field, selector, format? }], timeout_ms? }",
         );
         expect(text).not.toContain("secret-value");
         expect(fixture.requests).toHaveLength(0);
@@ -788,7 +788,7 @@ describe("MCP credential flow", () => {
         const text = (result.content as Array<{ text: string }>)[0].text;
         expect(result.isError).toBe(true);
         expect(text).toContain(
-          `unknown key ${keys.join(", ")} in fill inputs. expected { browser_id, page_url?, fields: [{ field, selector, format? }], timeout_ms? }`,
+          `unknown key ${keys.join(", ")} in fill inputs. expected { browser_id, page_url?, fields?: [{ field, selector, format? }], timeout_ms? }`,
         );
         expect(fixture.requests).toHaveLength(0);
       } finally {

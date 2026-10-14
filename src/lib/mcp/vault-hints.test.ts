@@ -122,12 +122,32 @@ describe("vault next-step hints", () => {
       name: "manage_vault_items",
       args: { action: "invoke", operation: "authorize" },
     },
+    {
+      name: "manage_vault_items",
+      args: {
+        action: "invoke",
+        operation: "authorize",
+        inputs: {
+          browser_id: "browser-session-id",
+          page_url: "https://shop.example/checkout",
+        },
+      },
+    },
+    {
+      name: "manage_vault_cards",
+      args: {
+        action: "authorize",
+        browser_id: "browser-session-id",
+        page_url: "https://shop.example/checkout",
+      },
+    },
   ])(
     "attaches hints to $name/$args.action responses",
     async ({ name, args }) => {
       const updated = { ...item, available_operations: [] };
+      const operation = args.action === "invoke" || args.action === "authorize";
       const fixture = await connectVaultTest(
-        args.action === "invoke"
+        operation
           ? [Response.json(item), Response.json(updated)]
           : [Response.json(item)],
       );
@@ -144,10 +164,8 @@ describe("vault next-step hints", () => {
           action: "get",
           wait: 0,
         });
-        expect(result.hints.invocation).toHaveLength(
-          args.action === "invoke" ? 0 : 1,
-        );
-        expect(fixture.requests).toHaveLength(args.action === "invoke" ? 2 : 1);
+        expect(result.hints.invocation).toHaveLength(operation ? 0 : 1);
+        expect(fixture.requests).toHaveLength(operation ? 2 : 1);
       } finally {
         await fixture.close();
       }
