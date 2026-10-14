@@ -536,60 +536,24 @@ const onePasswordCredentialGuidance = [
 const onePasswordStoredTokenGuidance =
   "this credential has no account: it uses a customer-supplied 1password access token stored encrypted by KERNEL, and spec.access_token_expires_at is optional expiry metadata. the integrating developer replaces the token through the KERNEL api; 1pw_update_access_token is not available through mcp. never ask for or accept 1password tokens or integration keys in chat. while the token is expired, request and fill are unavailable.";
 
-const kernelReinvokableOperations = [
-  "authorize",
-  "confirm_transaction",
-  "restart_verification",
-];
-
-function kernelVaultGuidance(
-  operation: string,
-  status: number | undefined,
-  code: string | undefined,
-  retryAfter: string | null | undefined,
-) {
-  const refresh = `re-get the item and inspect state/events; invoke ${operation} once more only if freshly advertised in available_operations, never in an automatic loop. otherwise follow the current state. never replay merchant checkout.`;
-  if (status === 429) {
-    const wait =
-      retryAfter &&
-      (/^\d+$/.test(retryAfter) || !Number.isNaN(Date.parse(retryAfter)))
-        ? `wait until Retry-After (${retryAfter}) has elapsed`
-        : "wait for the rate limit to clear";
-    if (operation === "create")
-      return `${wait}; retry create once with the identical key and spec; do not change either.`;
-    if (operation === "get")
-      return `${wait}; repeat the observation once; no operation was invoked.`;
-    return `${wait}; ${refresh}`;
-  }
-  if (operation === "fill") {
-    const written =
-      status === 400 && code === "field_unavailable"
-        ? "no fields were written. KERNEL cards store no billing details; remove billing_* bindings and enter billing name/zip on the merchant page."
-        : [400, 403, 404, 409].includes(status ?? 0)
-          ? "no fields were written by this request."
-          : "fill may have written some fields.";
-    return `${written} inspect the browser page and item state, fix the cause, then it is safe to retry the field write because fill never submits checkout. do not retry authorization, checkout, or transaction reporting.`;
-  }
-  if (status === 409 && operation === "authorize")
-    return `authorization may be in flight, unresolved or unavailable in this state; there are no authorize inputs to fix. ${refresh}`;
-  const reinvokable = kernelReinvokableOperations.includes(operation);
-  if (status !== undefined && status >= 400 && status < 500 && status !== 408)
-    return `the request was rejected; fix the reported inputs or access. ${reinvokable ? refresh : "inspect state before another request; never replay merchant checkout."}`;
-  if (operation === "create")
-    return "retry create once with the identical key and identical spec; it retrieves the existing item if creation succeeded. do not use a new key to recover a lost create response.";
-  if (operation === "restart_verification")
-    return `${refresh} obtain user approval each time and new cardholder spend consent; share any new spend_approval privately.`;
-  if (reinvokable) return refresh;
-  return "inspect item state and events before taking further action; no automatic retries.";
+// The API's error already says what happened and what to do next. The only
+// text added here is for a request that got no response at all.
+function noResponseNote(error: unknown, operationSubmitted: boolean) {
+  if (!(error instanceof APIError) || typeof error.status === "number")
+    return undefined;
+  return operationSubmitted
+    ? "no response was received from the api after the operation was submitted."
+    : "no response was received from the api.";
 }
 
 // Kernel-hosted action URLs are bearer capabilities; upstream error text is not
-// trusted to omit them.
+// trusted to omit them. Status, code, Retry-After, and the redacted message
+// pass through as returned.
 export function throwKernelVaultError(
   tool: string,
   action: string,
   error: unknown,
-  submittedOperation?: string,
+  operationSubmitted = false,
 ): never {
   const status = error instanceof APIError ? error.status : undefined;
   const code =
@@ -602,18 +566,17 @@ export function throwKernelVaultError(
       : undefined;
   const retryAfter =
     error instanceof APIError ? error.headers?.get("retry-after") : undefined;
-  const guidance = kernelVaultGuidance(
-    submittedOperation ?? (action === "create" ? "create" : "get"),
-    status,
-    code,
-    retryAfter,
-  );
+  const retryAfterNote =
+    retryAfter &&
+    (/^\d+$/.test(retryAfter) || !Number.isNaN(Date.parse(retryAfter)))
+      ? `retry-after: ${retryAfter}. `
+      : "";
   throwToolError(
     tool,
     action,
     error,
-    guidance,
-    `${status !== undefined ? `http status: ${status}. ` : ""}${code ? `api code: ${code}. ` : ""}${error instanceof APIError && typeof error.error?.message === "string" ? error.error.message.replace(/https?:\/\/\S+/gi, "[redacted url]") : "request failed."}`,
+    noResponseNote(error, operationSubmitted),
+    `${status !== undefined ? `http status: ${status}. ` : ""}${code ? `api code: ${code}. ` : ""}${retryAfterNote}${error instanceof APIError && typeof error.error?.message === "string" ? error.error.message.replace(/https?:\/\/\S+/gi, "[redacted url]") : "request failed."}`,
   );
 }
 
@@ -623,12 +586,10 @@ export function throwVaultError(
   error: unknown,
   operationSubmitted = false,
 ): never {
-  const noResponse =
-    error instanceof APIError && typeof error.status !== "number";
-  const note = noResponse
-    ? operationSubmitted
-      ? "no response was received from the api after the operation was submitted."
-      : "no response was received from the api."
-    : undefined;
-  throwToolError(tool, action, error, note);
+  throwToolError(
+    tool,
+    action,
+    error,
+    noResponseNote(error, operationSubmitted),
+  );
 }

@@ -106,17 +106,12 @@ event timestamps (never card data, API keys or capability URLs) to reconcile the
 operation and establish whether a new purchase is safe. Do not assume a new card is safe
 or promise the resulting state.
 
-Kernel errors retain actionable API messages, HTTP status and safe API codes while
-scrubbing HTTP(S) URLs. Local spec validation names bad keys and sends no request.
-After create transport/5xx failure, retry once with the **identical key and spec**; a
-successful earlier create returns the existing item. Never switch keys to recover a
-lost create response. After authorize or confirmation failures, re-get and invoke once
-more only if that operation is freshly advertised; otherwise observe state/events
-(recorded, in flight or recovery). A 409 authorize has no inputs to fix: inspect current
-state and the API message. A 429 means wait for `Retry-After`, then re-check availability
-before one new invocation. Never retry automatically or repeat merchant checkout.
-Fill 400/403/404/409 rejections wrote no fields; other failures may have partially written
-fields. Inspect the page and item, fix the cause and retry only the field write.
+Kernel errors pass the API's HTTP status, safe API code, `Retry-After`, and message
+through unchanged, with HTTP(S) URLs scrubbed. The API message states what happened
+(for example whether a fill wrote any fields or a report was recorded) and what to do
+next; follow it rather than inferring from the status code. The only text MCP adds is
+for a request that received no response at all. Local spec validation names bad keys
+and sends no request. Never retry automatically or repeat merchant checkout.
 
 ## Credential collection and observation
 

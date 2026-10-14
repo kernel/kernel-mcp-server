@@ -203,8 +203,9 @@ describe("kernel payment recovery", () => {
         };
         const failed = await fixture.call(tool, args);
         expect(JSON.stringify(failed)).toContain(
-          "identical key and identical spec",
+          "http status: 500. api code: conflict. reconcile before retrying [redacted url]",
         );
+        expect(JSON.stringify(failed)).not.toContain("identical key");
         expect(fixture.requests).toHaveLength(1);
         await fixture.call(tool, args);
         expect(fixture.requests[0].path).toEqual(fixture.requests[1].path);
@@ -247,9 +248,9 @@ describe("kernel payment recovery", () => {
         const failed = await fixture.call("manage_vault_items", args);
         const text = JSON.stringify(failed);
         expect(text).toContain(
-          `invoke ${operation} once more only if freshly advertised`,
+          "http status: 500. api code: conflict. reconcile before retrying",
         );
-        expect(text).toContain("reconcile before retrying");
+        expect(text).not.toContain("freshly advertised");
         expect(text).not.toContain("https://vault.example");
         expect(text).not.toContain("HTTPS://vault.example");
         expect(fixture.requests).toHaveLength(2);
@@ -272,7 +273,7 @@ describe("kernel payment recovery", () => {
   );
 
   test.each(["30", "Wed, 14 Oct 2026 12:00:00 GMT"])(
-    "429 preserves Retry-After %s and gates the next invocation",
+    "429 passes Retry-After %s and the api message through unchanged",
     (after) => {
       expect(() =>
         throwKernelVaultError(
@@ -284,9 +285,11 @@ describe("kernel payment recovery", () => {
             undefined,
             new Headers({ "Retry-After": after }),
           ),
-          "authorize",
+          true,
         ),
-      ).toThrow(`Retry-After (${after})`);
+      ).toThrow(
+        `http status: 429. api code: rate_limited. retry-after: ${after}. provider limit`,
+      );
       expect(() =>
         throwKernelVaultError(
           "manage_vault_items",
@@ -297,32 +300,36 @@ describe("kernel payment recovery", () => {
             undefined,
             new Headers(),
           ),
-          "authorize",
+          true,
         ),
-      ).toThrow("only if freshly advertised");
+      ).toThrow("http status: 429. provider limit");
     },
   );
 
   test.each([400, 403, 404, 409, 500])(
-    "fill rejection/uncertainty differs for HTTP %s",
+    "fill HTTP %s reports only what the api said about writes",
     (status) => {
-      expect(() =>
+      let caught: unknown;
+      try {
         throwKernelVaultError(
           "manage_vault_items",
           "invoke",
           new APIError(
             status,
-            { message: "fix selector" },
+            { message: "fix selector; no fields were written" },
             undefined,
             new Headers(),
           ),
-          "fill",
-        ),
-      ).toThrow(
-        status < 500
-          ? "no fields were written"
-          : "may have written some fields",
+          true,
+        );
+      } catch (error) {
+        caught = error;
+      }
+      expect(String(caught)).toContain(
+        `http status: ${status}. fix selector; no fields were written`,
       );
+      expect(String(caught)).not.toContain("may have written");
+      expect(String(caught)).not.toContain("safe to retry");
     },
   );
 
