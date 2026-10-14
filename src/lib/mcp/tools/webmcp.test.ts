@@ -136,14 +136,13 @@ describe("webmcp", () => {
           ["my-browser", { exclude_custom: excludeCustom }],
         ]);
         expect(tokens).toEqual(["test-token"]);
-        const { outputSchema: _outputSchema, ...searchTool } =
-          toolSnapshot.tools[0].tool;
         expect(toolResultJSON(result)).toEqual({
-          tools: [
-            { ...toolSnapshot.tools[0], tool: searchTool },
-            toolSnapshot.tools[1],
-            toolSnapshot.tools[2],
-          ],
+          tools: toolSnapshot.tools.map(
+            ({ tool: { outputSchema: _outputSchema, ...tool }, ...entry }) => ({
+              ...entry,
+              tool,
+            }),
+          ),
         });
       } finally {
         await close();
@@ -166,7 +165,9 @@ describe("webmcp", () => {
         },
       });
 
-      expect(toolResultJSON(result)).toEqual(toolSnapshot);
+      const snapshot = toolResultJSON(result);
+      expect(snapshot.tools[0].tool.outputSchema).toEqual({ type: "object" });
+      expect(snapshot).toEqual(toolSnapshot);
     } finally {
       await close();
     }
