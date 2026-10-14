@@ -315,7 +315,7 @@ describe("kernel-managed payment tools", () => {
     { status: 500, code: "internal_error" },
     { status: undefined, code: undefined },
   ])(
-    "Kernel fill errors allow an inspected field-write retry, not payment retry: $status",
+    "Kernel fill errors pass the api response through: $status",
     async ({ status, code }) => {
       const fixture = await connectVaultTest([
         Response.json({
@@ -341,24 +341,19 @@ describe("kernel-managed payment tools", () => {
         });
         const text = JSON.stringify(result);
         expect(result.isError).toBe(true);
-        expect(text).toContain("inspect the browser page and item state");
-        expect(text).toContain("safe to retry the field write");
-        expect(text).toContain("fill never submits checkout");
-        expect(text).toContain(
-          "do not retry authorization, checkout, or transaction reporting",
-        );
+        expect(text).not.toContain("fields were written");
+        expect(text).not.toContain("safe to retry");
         expect(text).not.toContain("nothing new was authorized");
-        expect(text).not.toContain("do not retry an uncertain operation");
         expect(text).not.toContain(actionURL);
         if (status !== undefined) {
-          expect(text).toContain(`http status: ${status}`);
-          expect(text).toContain(`api code: ${code}`);
-        }
-        if (code === "field_unavailable") {
-          expect(text).toContain("no fields were written");
-          expect(text).toContain("remove billing_* bindings");
-          expect(text).toContain("enter billing name/zip on the merchant page");
-          expect(text).not.toContain("may have written");
+          expect(text).toContain(
+            `http status: ${status}. api code: ${code}. [redacted url]`,
+          );
+          expect(text).not.toContain("no response was received");
+        } else {
+          expect(text).toContain(
+            "request failed. no response was received from the api after the operation was submitted.",
+          );
         }
         expect(fixture.requests.map(({ method }) => method)).toEqual([
           "GET",
@@ -371,7 +366,7 @@ describe("kernel-managed payment tools", () => {
   );
 
   test.each(["confirm_transaction", "restart_verification"])(
-    "does not give fill retry guidance for uncertain %s",
+    "passes uncertain %s errors through without retry guidance",
     async (operation) => {
       const fixture = await connectVaultTest([
         Response.json({ ...card, available_operations: [{ type: operation }] }),
@@ -399,8 +394,9 @@ describe("kernel-managed payment tools", () => {
         const text = JSON.stringify(result);
         expect(result.isError).toBe(true);
         expect(text).toContain(
-          `invoke ${operation} once more only if freshly advertised`,
+          "http status: 500. api code: internal_error. [redacted url]",
         );
+        expect(text).not.toContain("freshly advertised");
         expect(text).not.toContain("safe to retry");
         expect(text).not.toContain(actionURL);
         expect(fixture.requests.map(({ method }) => method)).toEqual([
@@ -593,18 +589,11 @@ describe("kernel-managed payment tools", () => {
         expect(result.isError).toBe(true);
         expect(text).not.toContain(actionURL);
         expect(text).not.toContain("private-capability");
-        expect(text).toContain(`http status: ${status}`);
-        expect(text).toContain("api code: invalid_merchant_country");
         expect(text).toContain(
-          status === 409
-            ? "no authorize inputs to fix"
-            : status < 500
-              ? "fix the reported inputs or access"
-              : "re-get the item",
+          `http status: ${status}. api code: invalid_merchant_country. failed: [redacted url]`,
         );
-        expect(text).toContain(
-          "invoke authorize once more only if freshly advertised",
-        );
+        expect(text).not.toContain("freshly advertised");
+        expect(text).not.toContain("inputs to fix");
         expect(fixture.requests).toHaveLength(2);
       } finally {
         await fixture.close();
@@ -657,10 +646,10 @@ describe("kernel-managed payment tools", () => {
         });
         const text = JSON.stringify(result);
         expect(result.isError).toBe(true);
-        expect(text).toContain("re-get the item");
         expect(text).toContain(
-          "invoke authorize once more only if freshly advertised",
+          "request failed. no response was received from the api after the operation was submitted.",
         );
+        expect(text).not.toContain("re-get the item");
         expect(text).not.toContain(actionURL);
         expect(fixture.requests).toHaveLength(2);
       } finally {
@@ -727,7 +716,7 @@ describe("kernel-managed payment tools", () => {
       const text = JSON.stringify(result);
       expect(text).toContain("http status: 409");
       expect(text).toContain("api code: conflict");
-      expect(text).toContain("no authorize inputs to fix");
+      expect(text).not.toContain("inputs to fix");
       expect(text).not.toContain(actionURL);
       expect(fixture.requests[1].body).toEqual({ type: "authorize" });
     } finally {
@@ -754,7 +743,8 @@ describe("kernel-managed payment tools", () => {
       expect(JSON.stringify(result)).not.toContain(actionURL);
       expect(JSON.stringify(result)).toContain("http status: 409");
       expect(JSON.stringify(result)).toContain("api code: invalid_wallet");
-      expect(JSON.stringify(result)).toContain("the request was rejected");
+      expect(JSON.stringify(result)).toContain("failed: [redacted url]");
+      expect(JSON.stringify(result)).not.toContain("the request was rejected");
     } finally {
       await fixture.close();
     }

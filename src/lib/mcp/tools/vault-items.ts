@@ -358,7 +358,7 @@ export function registerVaultItemTools(
             "manage_vault_items",
             params.action,
             error,
-            operationSubmitted ? params.operation : undefined,
+            operationSubmitted,
           );
         throwVaultError(
           "manage_vault_items",

@@ -11,7 +11,7 @@ import {
   throwVaultError,
 } from "@/lib/mcp/vault-responses";
 
-describe("kernel authorization errors", () => {
+describe("kernel vault errors", () => {
   const actionURL = "https://vault.example/approve#token=private-capability";
 
   test.each([
@@ -27,97 +27,130 @@ describe("kernel authorization errors", () => {
       error: new APIUserAbortError({ message: actionURL }),
       name: "KernelApiAborted",
     },
-    {
-      error: new APIError(
-        408,
-        { message: actionURL, code: "timeout" },
-        undefined,
-        new Headers(),
-      ),
-      name: "KernelApiError408",
-    },
   ])(
-    "retains $name while redacting diagnostics and preserving uncertainty",
+    "retains $name, redacts diagnostics, and only notes the missing response",
     ({ error, name }) => {
       let caught: unknown;
       try {
-        throwKernelVaultError(
-          "manage_vault_cards",
-          "authorize",
-          error,
-          "authorize",
-        );
+        throwKernelVaultError("manage_vault_cards", "authorize", error, true);
       } catch (result) {
         caught = result;
       }
       expect(caught).toHaveProperty("name", name);
-      expect(String(caught)).toContain("re-get the item");
-      expect(String(caught)).toContain("inspect state/events");
-      expect(String(caught)).toContain(
-        "invoke authorize once more only if freshly advertised",
+      expect(String(caught)).toBe(
+        `${name}: error in manage_vault_cards (authorize): request failed. no response was received from the api after the operation was submitted.`,
       );
-      expect(String(caught)).not.toContain(actionURL);
-      expect(String(caught)).not.toContain("nothing new was authorized");
-      if (error.status === 408) {
-        expect(String(caught)).toContain("http status: 408");
-        expect(String(caught)).toContain("api code: timeout");
-      }
-    },
-  );
-
-  test("a classified fill timeout keeps redaction and allows only an inspected field-write retry", () => {
-    let caught: unknown;
-    try {
-      throwKernelVaultError(
-        "manage_vault_items",
-        "invoke",
-        new APIConnectionTimeoutError({ message: actionURL }),
-        "fill",
-      );
-    } catch (result) {
-      caught = result;
-    }
-    expect(caught).toHaveProperty("name", "KernelApiTimeout");
-    expect(String(caught)).toContain("inspect the browser page and item state");
-    expect(String(caught)).toContain("safe to retry the field write");
-    expect(String(caught)).not.toContain("authorization outcome is uncertain");
-    expect(String(caught)).not.toContain(actionURL);
-  });
-
-  test.each([400, 409, 500])(
-    "retains the HTTP %s category without upstream text",
-    (status) => {
-      let caught: unknown;
-      try {
-        throwKernelVaultError(
-          "manage_vault_cards",
-          "authorize",
-          new APIError(
-            status,
-            { message: actionURL, code: "fixture_error" },
-            undefined,
-            new Headers(),
-          ),
-          "authorize",
-        );
-      } catch (result) {
-        caught = result;
-      }
-      expect(caught).toHaveProperty("name", `KernelApiError${status}`);
-      expect(String(caught)).toContain(`http status: ${status}`);
-      expect(String(caught)).toContain("api code: fixture_error");
       expect(String(caught)).not.toContain(actionURL);
     },
   );
 
-  test("does not describe a failed preflight observation as a submitted authorization", () => {
+  test("a request that was never submitted gets the plain no-response note", () => {
     expect(() =>
       throwKernelVaultError(
         "manage_vault_cards",
         "authorize",
         new APIConnectionTimeoutError({ message: actionURL }),
       ),
-    ).toThrow("inspect item state and events");
+    ).toThrow(
+      "error in manage_vault_cards (authorize): request failed. no response was received from the api.",
+    );
+  });
+
+  test.each([400, 408, 409, 429, 500])(
+    "passes HTTP %s status, code, and redacted message through unchanged",
+    (status) => {
+      let caught: unknown;
+      try {
+        throwKernelVaultError(
+          "manage_vault_items",
+          "invoke",
+          new APIError(
+            status,
+            {
+              message: `card changed; re-read the item. see ${actionURL}`,
+              code: "fixture_error",
+            },
+            undefined,
+            new Headers(),
+          ),
+          true,
+        );
+      } catch (result) {
+        caught = result;
+      }
+      expect(caught).toHaveProperty("name", `KernelApiError${status}`);
+      expect(String(caught)).toBe(
+        `KernelApiError${status}: error in manage_vault_items (invoke): http status: ${status}. api code: fixture_error. card changed; re-read the item. see [redacted url]`,
+      );
+      expect(String(caught)).not.toContain(actionURL);
+    },
+  );
+
+  test.each(["30", "Wed, 14 Oct 2026 12:00:00 GMT"])(
+    "passes Retry-After %s through as returned",
+    (retryAfter) => {
+      expect(() =>
+        throwKernelVaultError(
+          "manage_vault_items",
+          "invoke",
+          new APIError(
+            429,
+            { code: "rate_limited", message: "provider limit" },
+            undefined,
+            new Headers({ "Retry-After": retryAfter }),
+          ),
+          true,
+        ),
+      ).toThrow(
+        `error in manage_vault_items (invoke): http status: 429. api code: rate_limited. retry-after: ${retryAfter}. provider limit`,
+      );
+    },
+  );
+
+  test("omits a malformed Retry-After and an unsafe code", () => {
+    expect(() =>
+      throwKernelVaultError(
+        "manage_vault_items",
+        "invoke",
+        new APIError(
+          429,
+          { code: actionURL, message: "provider limit" },
+          undefined,
+          new Headers({ "Retry-After": actionURL }),
+        ),
+        true,
+      ),
+    ).toThrow(
+      "error in manage_vault_items (invoke): http status: 429. provider limit",
+    );
+  });
+
+  test("adds nothing beyond the api message", () => {
+    for (const status of [400, 403, 404, 409, 500]) {
+      let caught: unknown;
+      try {
+        throwKernelVaultError(
+          "manage_vault_items",
+          "invoke",
+          new APIError(
+            status,
+            { message: "fix selector", code: "invalid_selector" },
+            undefined,
+            new Headers(),
+          ),
+          true,
+        );
+      } catch (result) {
+        caught = result;
+      }
+      const text = String(caught);
+      expect(text).toContain("fix selector");
+      expect(text).not.toContain("fields were written");
+      expect(text).not.toContain("retry");
+      expect(text).not.toContain("re-get");
+      expect(text).not.toContain("advertised");
+      expect(text).not.toContain("no response was received");
+    }
   });
 });
 

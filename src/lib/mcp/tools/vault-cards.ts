@@ -192,7 +192,7 @@ export function registerVaultCardTools(
             "manage_vault_cards",
             params.action,
             error,
-            authorizationSubmitted ? "authorize" : undefined,
+            authorizationSubmitted,
           );
         throwVaultError("manage_vault_cards", params.action, error);
       }
