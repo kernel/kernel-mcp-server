@@ -67,7 +67,7 @@ export function errorResponse(text: string) {
   return { ...textResponse(text), isError: true as const };
 }
 
-function apiErrorCode(error: APIError) {
+export function apiErrorCode(error: APIError) {
   if (
     error.error &&
     typeof error.error === "object" &&

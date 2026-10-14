@@ -2,10 +2,11 @@
 
 The vault tools prepare and observe payment credentials and manage non-payment credential items. They do **not** submit
 merchant payments, return real card values in API responses, or complete provider approval actions.
-They use the same vault API as the Kernel CLI. Link cards use the advertised `fill`
-operation for browser checkout: real values enter the browser and may be read by
-an agent with browser or CDP access. Link does not expose aliases or support proxy
-substitution. The AgentCard alias recipe below is for explicitly chosen
+They use the same vault API as the Kernel CLI. Link cards are authorized at the
+final checkout page and use the advertised `fill` operation: Kernel delivers a
+Link Pay Token or a virtual card, and virtual-card values enter the browser where
+an agent with browser or CDP access may read them. Link does not expose aliases or
+support proxy substitution. The AgentCard alias recipe below is for explicitly chosen
 egress-substitution integrations, not fallback after a failed or uncertain fill.
 
 **Assume real payment effects.** Mode comes from the selected provider credentials;
@@ -200,7 +201,7 @@ failed or uncertain outcome; do not fall back to payment aliases.
      "vault": "user-123",
      "key": "login",
      "operation": "fill",
-     "fill": {
+     "inputs": {
        "browser_id": "browser-session-id",
        "page_url": "https://example.com/login",
        "fields": [
@@ -458,6 +459,21 @@ credentials. A reused `user_id` must belong to the same organization and config.
 
 ## Link flow
 
+Link cards pay at a merchant checkout. Follow this order:
+
+1. Reach the final checkout page.
+2. Create the card.
+3. Authorize it with `browser_id` and `page_url`.
+4. Share the approval URL.
+5. Wait until `fill` is advertised.
+6. Fill.
+7. Submit the checkout yourself.
+
+The card item's `available_operations` descriptions are the API's current
+instructions for each step, including inputs and recovery. Read them before
+invoking an operation. A connected Link wallet also returns a read-only
+`description` with the same flow.
+
 1. Create or retrieve a vault with `manage_vaults`:
 
    ```json
@@ -490,8 +506,22 @@ credentials. A reused `user_id` must belong to the same organization and config.
    do not automatically choose the default. Capabilities are advisory: absent
    means unknown, not ineligible.
 
-4. Create the purchase request with `manage_vault_cards`, replacing
-   `pm_selected` with the selected returned ID:
+4. Create a browser with the vault attached, then navigate to the merchant's
+   final checkout page. Gather the amount, currency, and merchant name and URL
+   there.
+
+   ```json
+   {
+     "action": "create",
+     "vaults": [{ "name": "checkout" }]
+   }
+   ```
+
+   Keep this vault attached throughout checkout; attachments cannot be added to
+   an existing browser. Browser and vault must be in the same project.
+
+5. Create the card with `manage_vault_cards`, replacing `pm_selected` with the
+   selected returned ID:
 
    ```json
    {
@@ -512,46 +542,66 @@ credentials. A reused `user_id` must belong to the same organization and config.
    ```
 
    Link also supports `line_items`, `totals`, `metadata`, and `expires_at`.
-   Creating or updating the card does **not** implicitly authorize it.
+   Creating the card does not contact Link: the card is `requested` and advertises
+   `authorize`. Until the card is authorized at a checkout, change it with
+   `action: "update"` and the full `spec`. Once it has been authorized with
+   `browser_id` and `page_url`, update returns 409: delete the card and create a
+   new one.
 
-5. Read `available_operations` with `manage_vault_items`, `action: "get"`.
-   Read the operation description and obtain explicit user approval before
-   invoking an advertised operation:
+6. After explicit user approval, authorize with the browser session ID and the
+   exact current top-level checkout URL, through either tool:
+
+   ```json
+   {
+     "action": "authorize",
+     "vault": "checkout",
+     "key": "order-1",
+     "browser_id": "browser-session-id",
+     "page_url": "https://shop.example/checkout"
+   }
+   ```
 
    ```json
    {
      "action": "invoke",
      "vault": "checkout",
      "key": "order-1",
-     "operation": "authorize"
+     "operation": "authorize",
+     "inputs": {
+       "browser_id": "browser-session-id",
+       "page_url": "https://shop.example/checkout"
+     }
    }
    ```
 
-   The tool fetches the item again and submits only a currently advertised
-   operation. `authorize` has no additional parameters: its API body is
-   `{"type":"authorize"}`. This does not apply to `fill`, which requires the nested
-   MCP parameters below. Follow any returned provider action and observe state.
-   OAuth, enrollment, MFA, and approval actions are for the user, not operation names.
+   Pass `browser_id` and `page_url` together; the tools reject one without the
+   other. Kernel confirms exactly
+   one tab is open at `page_url`, inspects the checkout, and chooses how the
+   credential is delivered: a merchant-bound Link Pay Token on supported checkouts,
+   otherwise a virtual card. You never choose or pass this. Fill is then limited
+   to that checkout's origin, in any browser with the vault attached. Do not
+   inspect or invoke the checkout's WebMCP tools yourself; Kernel does that.
 
-6. When ready, create a new browser with `manage_browsers`:
+   Authorize sends the user an approval request. Share the approval URL from
+   `item.action` with the user, then `get` the item until `fill` is advertised.
+   To re-check, authorize again without `browser_id` and `page_url`; checkout
+   context is ignored at this point.
 
-   ```json
-   {
-     "action": "create",
-     "vaults": [{ "name": "checkout" }]
-   }
-   ```
+   Authorize errors `page_not_found`, `ambiguous_page`, `browser_not_found`,
+   `browser_unavailable`, `destination_denied`, `timeout`, and `browser_error`
+   happen before any payment request. The tools return the API's status, code,
+   and message, followed by the recovery step: make sure the checkout is open in
+   exactly one tab at `page_url`, then authorize again. If checkout inspection
+   keeps failing, authorize without `browser_id` and `page_url` to issue a
+   virtual card for the `merchant_url` origin. If the user declines, read the
+   item's `status_reason`, then delete the card and create a new one. If the
+   request expires, delete the card and create a new one. If the amount exceeds
+   the virtual card limit (50000 minor units) on a checkout without Link Pay
+   Token support, delete the card and tell the user.
 
-   Keep this vault attached throughout checkout; attachments cannot be added to
-   an existing browser. Browser and vault must be in the same project. Navigate
-   to the approved merchant checkout and inspect its inputs. The current top-level
-   HTTPS page must have the origin of `item.spec.merchant_url`; supplying a URL
-   does not authorize a different destination. The card must remain ready and
-   unexpired with stored card material, and its parent wallet must not be deleted.
-
-7. Only when the card advertises `fill`, invoke `manage_vault_items` with the
-   actual browser session ID, exact current top-level page URL (including path,
-   query, and fragment), and selectors verified on that page:
+7. When `fill` is advertised, follow its description. For a Link Pay Token,
+   pass `browser_id` and `page_url` and omit `fields`; Kernel supplies the token
+   through the checkout's WebMCP tool, so do not invoke it yourself:
 
    ```json
    {
@@ -559,7 +609,23 @@ credentials. A reused `user_id` must belong to the same organization and config.
      "vault": "checkout",
      "key": "order-1",
      "operation": "fill",
-     "fill": {
+     "inputs": {
+       "browser_id": "browser-session-id",
+       "page_url": "https://shop.example/checkout"
+     }
+   }
+   ```
+
+   For a virtual card, also pass ordered, value-free field/selector bindings
+   verified on that page:
+
+   ```json
+   {
+     "action": "invoke",
+     "vault": "checkout",
+     "key": "order-1",
+     "operation": "fill",
+     "inputs": {
        "browser_id": "browser-session-id",
        "page_url": "https://shop.example/checkout",
        "fields": [
@@ -572,33 +638,27 @@ credentials. A reused `user_id` must belong to the same organization and config.
    }
    ```
 
-   `fill` is a nested MCP input object, not a top-level set of API parameters.
-   `fields` contains bindings, never card values. Each selector must resolve to
-   one unique editable target across all frames. For separate expiration inputs,
-   use `exp_month` (MM) and `exp_year` (YYYY) without `format`. Only combined
-   `expiration` requires `format` (`MM/YY` or `MM/YYYY`). Optional `timeout_ms`
-   is the total operation deadline (1–30000 milliseconds; default 10000).
-   Request only needed billing fields from the advertised description; a missing
-   requested billing value returns `field_unavailable` before any writes.
+   A virtual card may also advertise `webmcp_invoke`; it follows the same
+   contract as in the [credential flow](#mcp-credential-flow) and, unlike fill,
+   may submit the checkout.
 
-8. Inspect the value-free `result`: `status` is `completed`, `failed`, or `unknown`,
-   with ordered field outcomes `filled`, `failed`, `unknown`, or `not_attempted`.
-   Filling stops at the first failure; prior writes are not rolled back. Failed
-   and unknown results are tool errors. Transport loss can also leave partial
-   writes. Fill never explicitly submits checkout, so it is safe to retry after any
-   of these; never fall back to aliases. Pre-write validation errors confirm that
-   this request wrote no fields; correct the cause and retry.
+   Each selector must resolve to one unique editable target across all frames.
+   For separate expiration inputs, use `exp_month` (MM) and `exp_year` (YYYY)
+   without `format`. Only combined `expiration` requires `format` (`MM/YY` or
+   `MM/YYYY`). Optional `timeout_ms` is the total operation deadline (1–30000
+   milliseconds; default 10000).
 
-   Fill puts real values into the browser without returning them in the API
-   response. It does not isolate them from browser/CDP access. It does not navigate,
-   click Pay, or explicitly submit checkout, though input/change events may trigger
-   site behavior. `completed` means fields were filled, not merchant acceptance or
-   payment success. Submit separately only after confirming completion and the
-   user's authorization; reconcile uncertain payment outcomes instead of retrying.
+8. Inspect the value-free `result`: `status` is `completed`, `failed`, or
+   `unknown`. Failed and unknown results are tool errors. Fill never submits
+   payment, so failed or unknown fills are safe to retry. `completed` means the
+   credential was supplied to the page, not that the merchant accepted payment.
+   Fill does not isolate written values from browser/CDP access.
 
-Link wallets, provider approval, issuance, and encrypted card material remain
-supported. Link no longer issues or exposes `item.state.aliases`, and proxy swapping
-is removed. Do not use aliases from older Link responses: they fail closed on
+9. Submit the checkout yourself. If the payment result is unclear, check the
+   merchant's order confirmation or order history before paying again.
+
+Link does not issue or expose `item.state.aliases` and does not support proxy
+swapping. Do not use aliases from older Link responses: they fail closed on
 supported payment shapes.
 
 ## AgentCard flow
@@ -669,13 +729,15 @@ A reusable card remaining `ready` does not establish that the last payment succe
   public state, supported AgentCard aliases, masks, safe action/approval URLs, advertised
   operations/expansions, and payment outcomes. Unknown provider fields, opaque
   event data, free-form metadata, and URLs carrying OAuth codes/tokens are omitted.
-  API errors retain the HTTP status but use curated messages for recognized error
-  codes. Unknown codes use a generic fallback; upstream error text is never returned.
+  API errors retain the HTTP status, error code, and message. Link authorize
+  errors from checkout inspection also name the recovery step.
   There is no raw-output or raw-card tool.
 - `hints.observation` contains `{tool, arguments}` entries for non-blocking `get`
   and `events` calls. `hints.invocation` contains only currently advertised
   operations, each with `requires_user_approval: true` except the read-only
-  `1pw_access_request_status`. Hints preserve the resolved
+  `1pw_access_request_status`. A requested Link card's `authorize` hint also
+  lists `required_inputs: ["browser_id", "page_url"]`; add them under `inputs`
+  from the final checkout page. Hints preserve the resolved
   project selector (when present), vault, and item key. Pass `tool` as the MCP
   call's `name` and `arguments` unchanged. Provider-hosted actions remain separate
   in `item.action` and approval URLs; they are not callable operation hints.
@@ -698,7 +760,9 @@ A reusable card remaining `ready` does not establish that the last payment succe
   No vault request is automatically retried. After a failed, timed-out, rejected,
   or indeterminate payment, inspect state/events; do not replay checkout, invoke
   again, or reconfigure a card to retry it.
-- Requested-card `update` replaces the spec. Pending issuance updates preserve
+- Requested-card `update` replaces the spec. A Link card can be updated until it
+  is authorized with `browser_id` and `page_url`; after that the API returns 409,
+  so delete it and create a new card. Pending issuance updates preserve
   omitted optional fields and clear explicit empty lists; only provider-supported
   changes are allowed. Provider/wallet bindings cannot change after authorization
   starts. The tool forwards omissions and empty values without normalization.

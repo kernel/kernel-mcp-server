@@ -1,6 +1,10 @@
 import { APIError } from "@onkernel/sdk";
 import { z } from "zod";
-import { jsonResponse, throwToolError } from "@/lib/mcp/responses";
+import {
+  apiErrorCode,
+  jsonResponse,
+  throwToolError,
+} from "@/lib/mcp/responses";
 
 type OutputFields = { [key: string]: OutputFields | null };
 
@@ -37,7 +41,7 @@ const paymentMethodFields = {
 // Allow public metadata, including future operation names, but never unknown
 // provider fields, free-form metadata, or opaque event data.
 export const vaultItemFields: OutputFields = {
-  ...fields("id key type version created_at updated_at expires_at"),
+  ...fields("id key type version description created_at updated_at expires_at"),
   available_operations: operationFields,
   available_expansions: operationFields,
   action: fields("name url expires_at"),
@@ -414,6 +418,12 @@ export function vaultItemResponse(
     payment.success && payment.data.type === "card"
       ? payment.data.spec.provider
       : undefined;
+  // A requested Link card's authorize hint is incomplete without checkout context.
+  const checkoutAuthorize =
+    cardProvider === "link" &&
+    z
+      .object({ state: z.object({ status: z.literal("requested") }) })
+      .safeParse(projected).success;
   const webmcpInvokeAdvertised =
     advertised.success &&
     advertised.data.available_operations.some(
@@ -433,6 +443,10 @@ export function vaultItemResponse(
                 tool: "manage_vault_items",
                 arguments: { ...target, action: "invoke", operation: type },
                 requires_user_approval: type !== "1pw_access_request_status",
+                ...(checkoutAuthorize &&
+                  type === "authorize" && {
+                    required_inputs: ["browser_id", "page_url"],
+                  }),
               }))
               .filter(safeHint)
           : [],
@@ -452,7 +466,7 @@ export function vaultItemResponse(
                 "invocation hints are not approval to execute. availability may change; invoke rechecks the advertised operations. ready does not mean paid.",
                 ...(payment.success && payment.data.type === "wallet"
                   ? [
-                      "wallets connect a payment provider; they are not fillable cards. use manage_vault_cards to configure a purchase request, then inspect that card's state and advertised operations.",
+                      "wallets connect a payment provider; they are not fillable cards. when item.description is present, follow it for this provider's checkout flow. use manage_vault_cards to create a purchase request, then inspect that card's state and advertised operations.",
                     ]
                   : []),
                 ...(payment.success && payment.data.spec.provider === "kernel"
@@ -465,19 +479,18 @@ export function vaultItemResponse(
                       kernelTerminalGuidance,
                     ]
                   : []),
-                ...(cardProvider === "link"
-                  ? [
-                      "link cards use browser field writes for checkout only when advertised. link does not expose aliases or support egress substitution; do not use aliases from older responses, which fail closed on supported payment shapes. the browser must retain this vault attachment in the same project. the exact current https top-level page url must have the origin of spec.merchant_url. the card must remain ready and unexpired with stored card material and a non-deleted parent wallet; lifecycle and destination checks still apply.",
-                      "when the field-writing operation is advertised, pass inputs with browser_id, exact current top-level page_url (including path, query, and fragment), and ordered field/selector bindings, never values. a combined expiration field requires format mm/yy or mm/yyyy. attach the vault at browser creation. the operation returns no card values and does not explicitly submit checkout; browser access can expose written values. failed or unknown writes may leave partial changes; fill is safe to retry, but do not fall back to aliases. completion means fields were written, not that the payment succeeded.",
-                    ]
-                  : []),
+                ...(cardProvider === "link" ? linkCardGuidance : []),
                 ...(cardProvider === "agentcard"
                   ? [
                       "agentcard aliases remain supported for explicitly chosen egress-substitution integrations: use only returned state.aliases in a browser created with this vault attached, respecting returned permitted domains. checkout hold, approval, and replay remain supported; observe checkout authorization and approval urls. never fall back to aliases after an uncertain fill or preparation.",
                       "for checkout preparation, supply the api-required checkout context and deliver the returned approval url and keep the approval page open. poll the item until ready_to_submit, then submit native pay before state.preparation.expires_at. readiness lasts at most 30 seconds; polling does not extend it. preparations are single-use even after failure or expiry. preparation consumed means claimed, not payment success.",
                     ]
                   : []),
-                "observe get/events for outcomes. do not retry failed, timed-out, rejected, or indeterminate payments or reconfigure a card to retry them.",
+                ...(cardProvider === "link"
+                  ? []
+                  : [
+                      "observe get/events for outcomes. do not retry failed, timed-out, rejected, or indeterminate payments or reconfigure a card to retry them.",
+                    ]),
                 ...(cardProvider === "kernel" &&
                 advertised.success &&
                 advertised.data.available_operations.some(
@@ -501,6 +514,27 @@ export function vaultItemResponse(
     secrets,
   );
 }
+
+// Checkout inspection fails before Link receives a payment request, so the
+// agent can fix the browser tab and authorize again.
+export const linkCheckoutErrorCodes = [
+  "browser_not_found",
+  "browser_unavailable",
+  "destination_denied",
+  "page_not_found",
+  "ambiguous_page",
+  "timeout",
+  "browser_error",
+] as const;
+
+export const linkCheckoutRecovery =
+  "make sure the checkout is open in exactly one tab at page_url, then authorize again. if checkout inspection keeps failing, authorize without browser_id and page_url to issue a virtual card for the merchant_url origin.";
+
+const linkCardGuidance = [
+  "link cards follow this order: reach the final checkout page in a browser created with this vault attached, create the card, then after explicit user approval invoke authorize with inputs {browser_id, page_url}: the browser session id and the exact current top-level checkout url. KERNEL inspects the checkout and chooses whether to deliver a link pay token or a virtual card; you never choose or pass it, and you do not inspect or invoke the checkout's webmcp tools to authorize. authorize sends the user an approval request: share the approval url from item.action, then get the item until fill is advertised. to re-check, invoke authorize without browser_id and page_url. each advertised operation's description in available_operations is the source of truth for its inputs and recovery steps.",
+  "fill follows its advertised description. for a link pay token, pass {browser_id, page_url} and omit fields; KERNEL supplies the token through the checkout's webmcp tool, so do not inspect or invoke it yourself. for a virtual card, also pass ordered field/selector bindings, never values; a combined expiration field requires format mm/yy or mm/yyyy. fill works on the checkout's origin in any browser with this vault attached. fill returns no card values and never submits payment: submit the checkout yourself. failed or unknown fills are safe to retry. link does not expose aliases or support egress substitution; do not use aliases from older responses.",
+  `before the card is authorized at a checkout, change it with manage_vault_cards update; after that, update returns 409: delete the card and create a new one. authorize errors ${linkCheckoutErrorCodes.slice(0, -1).join(", ")}, and ${linkCheckoutErrorCodes.at(-1)} happen before any payment request: ${linkCheckoutRecovery} declined: read the item's status_reason, then delete the card and create a new one. expired: delete the card and create a new one. if the amount exceeds the virtual card limit (50000 minor units) on a checkout without link pay token support, delete the card and tell the user. if the payment result after submitting is unclear, check the merchant's order confirmation or order history before paying again.`,
+];
 
 const kernelSupportGuidance =
   "non-restartable recovery_required: do not retry payment, delete, or replace the item. contact support@kernel.sh privately with project, vault, item key, status_reason and relevant event timestamps (never card data, api keys or capability urls) to reconcile the original operation and establish whether a new purchase is safe. do not assume a new card is safe or promise a resulting state.";
@@ -615,6 +649,23 @@ export function throwKernelVaultError(
     guidance,
     `${status !== undefined ? `http status: ${status}. ` : ""}${code ? `api code: ${code}. ` : ""}${error instanceof APIError && typeof error.error?.message === "string" ? error.error.message.replace(/https?:\/\/\S+/gi, "[redacted url]") : "request failed."}`,
   );
+}
+
+export function throwLinkAuthorizeError(
+  tool: string,
+  action: string,
+  error: unknown,
+  operationSubmitted = false,
+): never {
+  const code = error instanceof APIError ? apiErrorCode(error) : undefined;
+  if (code && (linkCheckoutErrorCodes as readonly string[]).includes(code))
+    throwToolError(
+      tool,
+      action,
+      error,
+      `no payment request was made. ${linkCheckoutRecovery}`,
+    );
+  throwVaultError(tool, action, error, operationSubmitted);
 }
 
 export function throwVaultError(

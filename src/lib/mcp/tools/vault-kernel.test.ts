@@ -165,7 +165,7 @@ describe("kernel-managed payment tools", () => {
     }
   });
 
-  test("does not authorize unadvertised, non-kernel, or update requests", async () => {
+  test("does not authorize unadvertised, mismatched-provider, agentcard, or update requests", async () => {
     const fixture = await connectVaultTest([
       Response.json({ ...card, available_operations: [] }),
       Response.json(item),
@@ -196,7 +196,7 @@ describe("kernel-managed payment tools", () => {
         (
           await fixture.call("manage_vault_cards", {
             ...args,
-            provider: "link",
+            provider: "agentcard",
           })
         ).isError,
       ).toBe(true);

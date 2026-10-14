@@ -7,6 +7,7 @@ import {
 } from "@onkernel/sdk";
 import {
   throwKernelVaultError,
+  throwLinkAuthorizeError,
   throwVaultError,
 } from "@/lib/mcp/vault-responses";
 
@@ -147,5 +148,69 @@ describe("vault operation transport errors", () => {
     );
     expect(String(caught)).not.toContain("retry");
     expect(String(caught)).toContain(error.message);
+  });
+});
+
+describe("link authorize errors", () => {
+  const recovery =
+    "no payment request was made. make sure the checkout is open in exactly one tab at page_url, then authorize again. if checkout inspection keeps failing, authorize without browser_id and page_url to issue a virtual card for the merchant_url origin.";
+
+  function caught(error: unknown) {
+    try {
+      throwLinkAuthorizeError("manage_vault_items", "invoke", error, true);
+    } catch (result) {
+      return result;
+    }
+  }
+
+  test.each([
+    [404, "browser_not_found"],
+    [409, "browser_unavailable"],
+    [403, "destination_denied"],
+    [400, "page_not_found"],
+    [400, "ambiguous_page"],
+    [400, "timeout"],
+    [500, "browser_error"],
+  ])(
+    "keeps the HTTP %s %s message and adds the checkout recovery step",
+    (status, code) => {
+      const error = caught(
+        new APIError(
+          status,
+          { code, message: "Checkout diagnostic" },
+          undefined,
+          new Headers(),
+        ),
+      );
+      expect(error).toHaveProperty("name", `KernelApiError${status}`);
+      expect(String(error)).toContain(
+        `${status} Checkout diagnostic [code: ${code}] ${recovery}`,
+      );
+    },
+  );
+
+  test("passes other API errors through unchanged", () => {
+    const error = caught(
+      new APIError(
+        400,
+        { code: "invalid_request", message: "Amount diagnostic" },
+        undefined,
+        new Headers(),
+      ),
+    );
+    expect(String(error)).toBe(
+      "KernelApiError400: error in manage_vault_items (invoke): 400 Amount diagnostic [code: invalid_request]",
+    );
+  });
+
+  test("reports a lost response like other vault operations", () => {
+    const error = caught(
+      new APIConnectionError({ message: "Connection diagnostic" }),
+    );
+    expect(error).toHaveProperty("name", "KernelApiConnectionError");
+    expect(String(error)).toContain(
+      "no response was received from the api after the operation was submitted.",
+    );
+    expect(String(error)).not.toContain(recovery);
   });
 });
