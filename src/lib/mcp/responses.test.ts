@@ -1,8 +1,7 @@
 /// <reference types="bun-types" />
+import { Client } from "@modelcontextprotocol/client";
+import { McpServer, InMemoryTransport } from "@modelcontextprotocol/server";
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import {
   APIConnectionError,
   APIConnectionTimeoutError,
@@ -12,6 +11,7 @@ import {
 import { describe, expect, test } from "bun:test";
 
 import { errorResponse, throwToolError } from "@/lib/mcp/responses";
+import { z } from "zod";
 
 function apiError(status: number, message: string) {
   return APIError.generate(status, undefined, message, new Headers());
@@ -60,10 +60,10 @@ describe("throwToolError classification", () => {
 
   test("keeps the message the tool already produced", () => {
     expect(caught(apiError(404, "not found")).message).toBe(
-      "Error in manage_browsers (get): 404 not found",
+      "error in manage_browsers (get): 404 not found",
     );
     expect(caught("plain string").message).toBe(
-      "Error in manage_browsers (get): plain string",
+      "error in manage_browsers (get): plain string",
     );
   });
 
@@ -77,7 +77,7 @@ describe("throwToolError classification", () => {
         ),
       ).message,
     ).toBe(
-      "Error in manage_browsers (get): 409 Project still contains resources [code: project_not_empty]",
+      "error in manage_browsers (get): 409 Project still contains resources [code: project_not_empty]",
     );
     expect(
       caught(
@@ -88,6 +88,28 @@ describe("throwToolError classification", () => {
         ),
       ).message,
     ).toContain("[code: last_active_project]");
+  });
+
+  test("a safe message replaces both upstream text and codes without losing classification", () => {
+    const actionURL = "https://vault.example/approve#token=private-capability";
+    let thrown: unknown;
+    try {
+      throwToolError(
+        "manage_vault_items",
+        "invoke",
+        codedApiError(400, actionURL, actionURL),
+        "inspect the item.",
+        "http status: 400.",
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toHaveProperty("name", "KernelApiError400");
+    expect(thrown).toHaveProperty(
+      "message",
+      "error in manage_vault_items (invoke): http status: 400. inspect the item.",
+    );
+    expect(String(thrown)).not.toContain(actionURL);
   });
 
   test("ignores absent and non-string API codes", () => {
@@ -104,28 +126,39 @@ describe("what the client receives", () => {
   async function callTool(name: string) {
     const server = new McpServer({ name: "test", version: "0.0.0" });
 
-    server.tool("api_failure", {}, async () => {
-      throwToolError(
-        "manage_browsers",
-        "get",
-        apiError(404, "browser session not found"),
-      );
-    });
+    server.registerTool(
+      "api_failure",
+      { inputSchema: z.object({}) },
+      async () => {
+        throwToolError(
+          "manage_browsers",
+          "get",
+          apiError(404, "browser session not found"),
+        );
+      },
+    );
 
-    server.tool("coded_api_failure", {}, async () => {
-      throwToolError(
-        "manage_projects",
-        "delete",
-        codedApiError(
-          409,
-          "project_not_empty",
-          "Project still contains resources",
-        ),
-      );
-    });
+    server.registerTool(
+      "coded_api_failure",
+      { inputSchema: z.object({}) },
+      async () => {
+        throwToolError(
+          "manage_projects",
+          "delete",
+          codedApiError(
+            409,
+            "project_not_empty",
+            "Project still contains resources",
+          ),
+        );
+      },
+    );
 
-    server.tool("input_guard", {}, async () =>
-      errorResponse("Error: session_id is required for get action."),
+    server.registerTool(
+      "input_guard",
+      { inputSchema: z.object({}) },
+      async () =>
+        errorResponse("Error: session_id is required for get action."),
     );
 
     const client = new Client({ name: "test-client", version: "0.0.0" });
@@ -148,7 +181,7 @@ describe("what the client receives", () => {
     expect(result.content).toEqual([
       {
         type: "text",
-        text: "Error in manage_browsers (get): 404 browser session not found",
+        text: "error in manage_browsers (get): 404 browser session not found",
       },
     ]);
   });
@@ -169,7 +202,7 @@ describe("what the client receives", () => {
     expect(result.content).toEqual([
       {
         type: "text",
-        text: "Error in manage_projects (delete): 409 Project still contains resources [code: project_not_empty]",
+        text: "error in manage_projects (delete): 409 Project still contains resources [code: project_not_empty]",
       },
     ]);
   });

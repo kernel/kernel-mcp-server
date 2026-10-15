@@ -1,7 +1,6 @@
 import { describe, expect, mock, test } from "bun:test";
 import { encodeSessionId } from "@posthog/mcp";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { MANAGED_AUTH_APP_HTML } from "@/lib/mcp/apps/generated/managed-auth-app";
 import { projectScopedExtra } from "@/lib/mcp/auth-context.test-fixtures";
 import {
@@ -124,15 +123,13 @@ describe("managed-auth MCP App registration", () => {
       "open_auth_login",
     ]);
     expect(
-      tools.get("open_auth_login")!.config.inputSchema.text_only,
+      tools.get("open_auth_login")!.config.inputSchema.shape.text_only,
     ).toBeUndefined();
   });
 
   test("app-only tool schema rejects an empty connection identifier", () => {
     const { tools } = captureRegistration();
-    const beginSchema = z.object(
-      tools.get("begin_auth_login")!.config.inputSchema,
-    );
+    const beginSchema = tools.get("begin_auth_login")!.config.inputSchema;
     expect(
       beginSchema.safeParse({ mode: "reauth", connection_id: "" }).success,
     ).toBe(false);
@@ -146,7 +143,7 @@ describe("managed-auth MCP App registration", () => {
       profile_name: "work",
     };
     for (const name of ["open_auth_login", "begin_auth_login"]) {
-      const schema = z.object(tools.get(name)!.config.inputSchema);
+      const schema = tools.get(name)!.config.inputSchema;
       expect(schema.safeParse({ ...base, proxy_id: "" }).success).toBe(false);
       expect(schema.safeParse({ ...base, proxy_name: "" }).success).toBe(false);
       expect(schema.safeParse({ ...base, proxy_id: "proxy_1" }).success).toBe(
@@ -158,7 +155,7 @@ describe("managed-auth MCP App registration", () => {
       expect(schema.safeParse({ ...base, region: "emea" }).success).toBe(false);
       const defaults = schema.parse(base);
       expect(defaults.record_session).toBe(true);
-      expect(defaults.browser_telemetry).toEqual({ enabled: true });
+      expect(defaults.browser_telemetry).toBeUndefined();
       expect(
         schema.safeParse({
           ...base,
@@ -216,6 +213,48 @@ describe("managed-auth MCP App registration", () => {
     expect(result._meta).toBeUndefined();
   });
 
+  test("launcher validates the nested browser object before any flow starts", async () => {
+    const { tools } = captureRegistration();
+    const base = {
+      mode: "new_login",
+      domain: "example.com",
+      profile_name: "work",
+    };
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [
+        { ...base, browser: { region: "eu-west" }, region: "us-east" },
+        "browser cannot be combined with region",
+      ],
+      [
+        { ...base, browser: { proxy: { id: "proxy_1", name: "residential" } } },
+        "proxy requires exactly one of id, name, or mode",
+      ],
+      [
+        { ...base, proxy_id: "proxy_1", proxy_name: "residential" },
+        "proxy requires exactly one of id, name, or mode",
+      ],
+    ];
+    for (const [params, message] of cases) {
+      const result = await tools
+        .get("open_auth_login")!
+        .handler(params, projectScopedExtra("proj_test", "unused-api-key"));
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(message);
+    }
+    const ok = await tools.get("open_auth_login")!.handler(
+      {
+        ...base,
+        browser: {
+          proxy: { mode: "direct" },
+          region: "eu-west",
+          stealth: false,
+        },
+      },
+      projectScopedExtra("proj_test", "unused-api-key"),
+    );
+    expect(ok.isError).toBeUndefined();
+  });
+
   test("app-only tools fail closed on hosts without MCP Apps support", async () => {
     const { tools } = captureRegistration({ appsSupport: false });
     const result = await tools
@@ -225,68 +264,122 @@ describe("managed-auth MCP App registration", () => {
         projectScopedExtra("proj_test", "unused-api-key"),
       );
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain("MCP Apps-capable hosts");
+    expect(result.content[0].text).toContain("mcp apps-capable hosts");
     expect(JSON.stringify(result)).not.toContain("handoff_code");
     expect(JSON.stringify(result)).not.toContain("hosted_url");
   });
 
-  test("stateless transports pass the gate via the recorded initialize marker", async () => {
-    // Simulates the streamable-HTTP path: no client capabilities on the
-    // per-request server, but the route layer recorded the capability.
-    redisMarkerPresent = true;
-    kernelClientMock.factory = () => ({
-      auth: {
-        connections: {
-          retrieve: async () => ({
-            id: "conn_1",
-            domain: "example.com",
-            profile_name: "work",
-            status: "AUTHENTICATED",
-            flow_expires_at: "2026-01-01T00:00:00Z",
-          }),
-          login: async () => ({
-            id: "conn_1",
-            flow_type: "REAUTH",
-            flow_expires_at: "2099-01-01T00:00:00Z",
-            hosted_url:
-              "https://managed-auth.onkernel.com/login/conn_1?code=handoff-secret",
-            handoff_code: "handoff-secret",
-          }),
-          timeline: async () => ({ getPaginatedItems: () => [] }),
+  test.each(["legacy", "modern"])(
+    "%s stateless requests pass the App gate",
+    async (era) => {
+      redisMarkerPresent = era === "legacy";
+      kernelClientMock.factory = () => ({
+        auth: {
+          connections: {
+            retrieve: async () => ({
+              id: "conn_1",
+              domain: "example.com",
+              profile_name: "work",
+              status: "AUTHENTICATED",
+              flow_expires_at: "2026-01-01T00:00:00Z",
+            }),
+            login: async () => ({
+              id: "conn_1",
+              flow_type: "REAUTH",
+              flow_expires_at: "2099-01-01T00:00:00Z",
+              hosted_url:
+                "https://managed-auth.onkernel.com/login/conn_1?code=handoff-secret",
+              handoff_code: "handoff-secret",
+            }),
+            timeline: async () => ({ getPaginatedItems: () => [] }),
+          },
         },
-      },
-    });
+      });
+      try {
+        const { tools } = captureRegistration({ appsSupport: false });
+        const result = await tools.get("begin_auth_login")!.handler(
+          { mode: "reauth", connection_id: "conn_1" },
+          {
+            ...projectScopedExtra("proj_test", "unused-api-key"),
+            mcpReq: {
+              signal: new AbortController().signal,
+              envelope:
+                era === "modern"
+                  ? {
+                      "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                      "io.modelcontextprotocol/clientCapabilities": {
+                        extensions: { "io.modelcontextprotocol/ui": {} },
+                      },
+                    }
+                  : {},
+            },
+            http: {
+              ...projectScopedExtra("proj_test", "unused-api-key").http,
+              req: new Request("https://mcp.example.test/mcp", {
+                headers:
+                  era === "legacy"
+                    ? {
+                        "mcp-session-id": encodeSessionId({
+                          sessionId: "mcp_session_apps",
+                        }),
+                      }
+                    : {},
+              }),
+            },
+          },
+        );
+        expect(result.isError).toBeUndefined();
+        expect(result.structuredContent.kind).toBe("kernel.managed_auth.begin");
+        expect(result.structuredContent.next_action).toMatchObject({
+          tool: "manage_auth_connections",
+          arguments: {
+            action: "wait",
+            id: "conn_1",
+            flow_checkpoint: expect.any(String),
+            wait_seconds: 5,
+          },
+        });
+        // Capability-bearing material stays in App-private channels only.
+        expect(JSON.stringify(result.content)).not.toContain("handoff-secret");
+      } finally {
+        redisMarkerPresent = false;
+        resetKernelClientFactory();
+      }
+    },
+  );
+
+  test("modern App execution cannot fall back to a legacy capability marker", async () => {
+    redisMarkerPresent = true;
     try {
-      const { tools } = captureRegistration({ appsSupport: false });
+      const { tools } = captureRegistration({ appsSupport: true });
+      const ctx = projectScopedExtra();
       const result = await tools.get("begin_auth_login")!.handler(
         { mode: "reauth", connection_id: "conn_1" },
         {
-          ...projectScopedExtra("proj_test", "unused-api-key"),
-          requestInfo: {
-            headers: {
-              "mcp-session-id": encodeSessionId({
-                sessionId: "mcp_session_apps",
-              }),
+          ...ctx,
+          http: {
+            ...ctx.http,
+            req: new Request("https://mcp.example.test/mcp", {
+              headers: {
+                "mcp-session-id": encodeSessionId({
+                  sessionId: "mcp_session_apps",
+                }),
+              },
+            }),
+          },
+          mcpReq: {
+            ...ctx.mcpReq,
+            envelope: {
+              "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+              "io.modelcontextprotocol/clientCapabilities": {},
             },
           },
         },
       );
-      expect(result.isError).toBeUndefined();
-      expect(result.structuredContent.kind).toBe("kernel.managed_auth.begin");
-      expect(result.structuredContent.next_action).toMatchObject({
-        tool: "manage_auth_connections",
-        arguments: {
-          action: "wait",
-          id: "conn_1",
-          flow_checkpoint: expect.any(String),
-          wait_seconds: 5,
-        },
-      });
-      // Capability-bearing material stays in App-private channels only.
-      expect(JSON.stringify(result.content)).not.toContain("handoff-secret");
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("mcp apps-capable hosts");
     } finally {
       redisMarkerPresent = false;
-      resetKernelClientFactory();
     }
   });
 
