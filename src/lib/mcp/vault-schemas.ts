@@ -309,7 +309,6 @@ export const linkCardSpecSchema = z
     line_items: z.array(linkLineItemSchema).optional(),
     totals: z.array(linkTotalSchema()).optional(),
     metadata: z.record(z.string(), z.string()).optional(),
-    expires_at: integer().optional(),
   })
   .strict();
 

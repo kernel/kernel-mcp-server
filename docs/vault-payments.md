@@ -374,7 +374,7 @@ Wallet/card writes take a `provider` (`link`, `agentcard`, or `kernel`) and a JS
 if present in `spec`, it must match. Tool schemas describe the provider-specific
 fields and reject unknown fields, including nested ones. No defaults or currency
 normalization are applied. Amounts are integer minor currency units. All integer
-inputs, including `expires_at`, must fit JavaScript's safe integer range; unsafe
+inputs, including `amount`, must fit JavaScript's safe integer range; unsafe
 numbers are rejected, not silently rounded. The API enforces provider/state rules.
 
 These capabilities use the existing MCP authentication and deployment. To expose
@@ -536,7 +536,8 @@ invoking an operation. A connected Link wallet also returns a read-only
    }
    ```
 
-   Link also supports `line_items`, `totals`, `metadata`, and `expires_at`.
+   Link also supports `line_items`, `totals`, and `metadata`. The card's
+   `expires_at` comes from Link and can't be set.
    Creating the card does not contact Link: the card is `requested` and advertises
    `authorize`. Until the card is authorized at a checkout, change it with
    `action: "update"` and the full `spec`. Once it has been authorized with

@@ -199,7 +199,6 @@ describe("vault SDK request contracts", () => {
               ...linkSpec,
               provider,
               metadata: { order: "001" },
-              expires_at: Number.MAX_SAFE_INTEGER,
               line_items: [
                 {
                   name: "Supplies",
@@ -482,7 +481,7 @@ describe("vault scopes and input validation", () => {
     { ...linkSpec, provider: "agentcard" },
     { ...linkSpec, amount: 1.1 },
     { ...linkSpec, amount: 500001 },
-    { ...linkSpec, expires_at: Number.MAX_SAFE_INTEGER + 1 },
+    { ...linkSpec, expires_at: 4102444800 },
     {
       ...linkSpec,
       line_items: [
