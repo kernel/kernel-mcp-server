@@ -70,7 +70,7 @@ describe("vault validation boundary", () => {
         });
         expect(result.isError).toBe(true);
         expectSecretFree(result);
-        expect(JSON.stringify(result)).toContain("Invalid vault tool input");
+        expect(JSON.stringify(result)).toContain("invalid vault tool input");
         expect(fixture.requests).toHaveLength(0);
       } finally {
         await fixture.close();

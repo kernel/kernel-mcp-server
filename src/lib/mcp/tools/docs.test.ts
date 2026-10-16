@@ -1,8 +1,7 @@
 /// <reference types="bun-types" />
+import { Client } from "@modelcontextprotocol/client";
+import { McpServer, InMemoryTransport } from "@modelcontextprotocol/server";
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import { registerDocsTools } from "@/lib/mcp/tools/docs";
@@ -45,7 +44,7 @@ test("search_docs reports missing configuration as a failure", async () => {
   expect(result.content).toEqual([
     {
       type: "text",
-      text: "Error: Documentation search is not configured (missing MINTLIFY_ASSISTANT_API_TOKEN or MINTLIFY_DOMAIN).",
+      text: "error: documentation search is not configured (missing MINTLIFY_ASSISTANT_API_TOKEN or MINTLIFY_DOMAIN).",
     },
   ]);
 });

@@ -67,7 +67,7 @@ export function errorResponse(text: string) {
   return { ...textResponse(text), isError: true as const };
 }
 
-function apiErrorCode(error: APIError) {
+export function apiErrorCode(error: APIError) {
   if (
     error.error &&
     typeof error.error === "object" &&
@@ -117,16 +117,19 @@ function errorName(error: unknown) {
  * Throws rather than returning an isError result: analytics reads the error category
  * from a thrown error's name, while a returned result only ever coerces to a generic
  * "Error". The MCP SDK turns the throw back into the same isError text result the client
- * saw before, so agents see no difference.
+ * saw before, so agents see no difference. safeMessage replaces upstream diagnostics
+ * when they may contain secrets, without changing the error category.
  */
 export function throwToolError(
   toolName: string,
   action: string,
   error: unknown,
+  note?: string,
+  safeMessage?: string,
 ): never {
   throw new ToolCallError(
     errorName(error),
-    `Error in ${toolName} (${action}): ${errorMessage(error)}`,
+    `error in ${toolName} (${action}): ${safeMessage ?? errorMessage(error)}${note ? ` ${note}` : ""}`,
   );
 }
 
@@ -142,6 +145,6 @@ export function throwToolErrorWithApiBody(
   const note = !structuredBody && fallbackNote ? ` ${fallbackNote}` : "";
   throw new ToolCallError(
     errorName(error),
-    `Error in ${toolName} (${action}): ${detail}${note}`,
+    `error in ${toolName} (${action}): ${detail}${note}`,
   );
 }

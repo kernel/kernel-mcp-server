@@ -11,26 +11,30 @@ const credential = {
   version: 7,
   spec: {
     description: "Hacker News",
-    fields: {
-      username: {
+    fields: [
+      {
+        name: "username",
+        label: "Membership Number or Username",
         type: "text",
         required: true,
         sensitive: false,
         value: "private-user",
       },
-      password: {
+      {
+        name: "password",
         type: "password",
         required: true,
         sensitive: true,
         value: "private-password",
       },
-      otp: {
+      {
+        name: "otp",
         type: "totp",
         required: false,
         sensitive: true,
         value: "private-seed",
       },
-    },
+    ],
   },
   state: {
     status: "ready",
@@ -59,10 +63,15 @@ describe("vault OpenAPI steering", () => {
         {
           ...credential,
           spec: {
-            fields: {
-              username: { type: "text", sensitive: false },
-              password: { type: "password" },
-            },
+            fields: [
+              {
+                name: "username",
+                label: null,
+                type: "text",
+                sensitive: false,
+              },
+              { name: "password", type: "password" },
+            ],
           },
         },
         target,
@@ -71,6 +80,24 @@ describe("vault OpenAPI steering", () => {
     expect(result.item.state.fields.username.value).toBe("private-user");
     expect(result.item.state.fields.password.value).toBeUndefined();
     expect(result.item.state.fields.otp.value).toBeUndefined();
+  });
+  test("fails closed on duplicate credential definitions", () => {
+    const result = toolResultJSON(
+      vaultItemResponse(
+        {
+          ...credential,
+          spec: {
+            fields: [
+              { name: "username", type: "text", sensitive: false },
+              { name: "username", type: "password", sensitive: true },
+            ],
+          },
+        },
+        target,
+      ),
+    );
+    expect(result.item.state.fields.username).toEqual({ has_value: true });
+    expect(JSON.stringify(result)).not.toContain("private-user");
   });
   test.each([
     { type: "text", sensitive: false, visible: true },
@@ -86,7 +113,7 @@ describe("vault OpenAPI steering", () => {
         vaultItemResponse(
           {
             ...credential,
-            spec: { fields: { field: { type, sensitive } } },
+            spec: { fields: [{ name: "field", type, sensitive }] },
             state: {
               status: "ready",
               fields: { field: { has_value: true, value: "test-value" } },
@@ -110,13 +137,18 @@ describe("vault OpenAPI steering", () => {
       expect(vaults?.description).toContain("sensitive:false");
       expect(items?.description).toContain("without renewing collection links");
       expect(items?.description).toContain(
-        'action: "invoke" with operation: "collect"',
+        "reopen collection using its advertised operation",
       );
-      expect(
-        tools.find(({ name }) => name === "manage_vault_credentials")
-          ?.description,
-      ).toContain('action: "invoke" and operation: "collect"');
-      expect(items?.description).toContain("API-only");
+      const credentials = tools.find(
+        ({ name }) => name === "manage_vault_credentials",
+      );
+      expect(credentials?.description).toContain(
+        'action: "invoke" and operation: "collect"',
+      );
+      expect(credentials?.description).toContain("natural top-to-bottom order");
+      expect(items?.description).toContain(
+        "inputs named by the advertised fill description",
+      );
       expect(tools.map(({ name }) => name)).toContain(
         "manage_vault_credentials",
       );
@@ -136,7 +168,9 @@ describe("vault OpenAPI steering", () => {
       );
       expect(result.item.version).toBe(7);
       expect(result.item.spec.description).toBe("Hacker News");
-      expect(result.item.spec.fields.username).toEqual({
+      expect(result.item.spec.fields[0]).toEqual({
+        name: "username",
+        label: "Membership Number or Username",
         type: "text",
         required: true,
         sensitive: false,
@@ -152,19 +186,20 @@ describe("vault OpenAPI steering", () => {
           (hint: { arguments: { operation: string } }) =>
             hint.arguments.operation,
         ),
-      ).toEqual(["collect"]);
+      ).toEqual(["collect", "fill"]);
       const guidance = result.guidance.join(" ");
       for (const text of [
         "bearer credential",
         "sensitive:false",
         "expected_item_id",
         "site-name-only",
+        "natural top-to-bottom order",
         "wait observes readiness",
         "manage_vault_credentials",
-        "Never retry an uncertain fill",
+        "fill is safe to retry after a failed or unknown outcome",
       ])
         expect(guidance).toContain(text);
-      expect(guidance).not.toContain("Ready does not mean paid");
+      expect(guidance).not.toContain("ready does not mean paid");
     },
   );
 
@@ -182,7 +217,7 @@ describe("vault OpenAPI steering", () => {
         }),
       );
       expect(result.item.version).toBe(7);
-      expect(result.item.spec.fields.password.sensitive).toBe(true);
+      expect(result.item.spec.fields[1].sensitive).toBe(true);
       expect(result.item.state.fields.username.value).toBe("private-user");
       expect(JSON.stringify(result)).not.toContain("private-password");
       expect(JSON.stringify(result)).not.toContain("private-seed");
@@ -233,6 +268,7 @@ describe("vault OpenAPI steering", () => {
       vaultItemResponse(
         {
           ...item,
+          spec: { ...item.spec, provider: "agentcard" },
           state: {
             provider: "agentcard",
             status: "ready_to_submit",
@@ -246,29 +282,39 @@ describe("vault OpenAPI steering", () => {
       ),
     );
     expect(result.item.state.preparation).toEqual(preparation);
-    expect(result.hints.invocation).toEqual([]);
-    expect(result.guidance.join(" ")).toContain("Preparations are single-use");
-    expect(result.guidance.join(" ")).toContain("Never fall back to aliases");
+    expect(result.hints.invocation[0].arguments.operation).toBe(
+      "prepare_checkout",
+    );
+    expect(result.guidance.join(" ")).toContain("preparations are single-use");
+    expect(result.guidance.join(" ")).toContain("never fall back to aliases");
     expect(JSON.stringify(result)).not.toContain("private-token");
   });
 
-  test("field names cannot mutate projection prototypes", () => {
-    const fields = JSON.parse(
-      '{"__proto__":{"type":"text","value":"private-value"}}',
-    );
+  test("preserves ordered definitions without projecting unknown values", () => {
     const result = toolResultJSON(
       vaultItemResponse(
-        { ...credential, spec: { ...credential.spec, fields } },
+        {
+          ...credential,
+          spec: {
+            ...credential.spec,
+            fields: [
+              {
+                name: "password",
+                label: "Account Password",
+                type: "password",
+                value: "private-value",
+              },
+              { name: "username", type: "text", sensitive: false },
+            ],
+          },
+        },
         target,
       ),
     );
-    expect(
-      Object.prototype.hasOwnProperty.call(
-        result.item.spec.fields,
-        "__proto__",
-      ),
-    ).toBe(true);
-    expect(result.item.spec.fields["__proto__"]).toEqual({ type: "text" });
+    expect(result.item.spec.fields).toEqual([
+      { name: "password", label: "Account Password", type: "password" },
+      { name: "username", type: "text", sensitive: false },
+    ]);
     expect(JSON.stringify(result)).not.toContain("private-value");
   });
 });

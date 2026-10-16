@@ -5,10 +5,21 @@ import { connectVaultTest, vault } from "./vaults.test-fixtures";
 const target = { vault: "user-123", key: "login" };
 const spec = {
   description: "Example",
-  fields: {
-    username: { type: "text", required: true, sensitive: false },
-    password: { type: "password", required: true, sensitive: true },
-  },
+  fields: [
+    {
+      name: "username",
+      label: "Membership Number or Username",
+      type: "text",
+      required: true,
+      sensitive: false,
+    },
+    {
+      name: "password",
+      type: "password",
+      required: true,
+      sensitive: true,
+    },
+  ],
 };
 const pending = {
   id: "item-1",
@@ -58,7 +69,7 @@ const completed = {
     { index: 1, status: "filled" },
   ],
 };
-const invoke = { ...target, action: "invoke", operation: "fill", fill };
+const invoke = { ...target, action: "invoke", operation: "fill", inputs: fill };
 
 describe("MCP credential flow", () => {
   test.each(["create", "update"])(
@@ -88,15 +99,14 @@ describe("MCP credential flow", () => {
                   spec: { fields: { username: { value: target.vault } } },
                 }
               : {
+                  provider: "kernel",
                   spec: {
                     ...spec,
-                    fields: {
-                      ...spec.fields,
-                      username: {
-                        ...spec.fields.username,
-                        value: target.vault,
-                      },
-                    },
+                    fields: spec.fields.map((field) =>
+                      field.name === "username"
+                        ? { ...field, value: target.vault }
+                        : field,
+                    ),
                   },
                 }),
           }),
@@ -113,36 +123,87 @@ describe("MCP credential flow", () => {
   );
 
   test.each([
-    { status: 400, code: "ambiguous_selector", message: "multiple targets" },
-    { status: 403, code: "destination_denied", message: "not authorized" },
-    { status: 404, code: "not_found", message: "not found" },
-    { status: 409, code: "conflict", message: "not ready" },
-    {
+    ...[
+      "element_not_found",
+      "invalid_selector",
+      "ambiguous_selector",
+      "duplicate_target",
+      "page_not_found",
+      "ambiguous_page",
+      "target_changed",
+      "element_not_editable",
+      "option_not_found",
+      "field_unavailable",
+      "invalid_request",
+      "timeout",
+    ].map((code) => ({
       status: 400,
-      code: "field_unavailable",
-      message: "no usable stored value",
+      code,
+      message: "vault fill validation failed",
+    })),
+    {
+      status: 403,
+      code: "destination_denied",
+      message: "destination is not authorized",
     },
     {
-      status: 400,
-      code: "private-unknown-code",
-      message: "Fill request failed",
+      status: 409,
+      code: "conflict",
+      message: "fill is not currently available",
+    },
+    {
+      status: 500,
+      code: "execution_failed",
+      message: "vault fill could not start",
     },
   ])(
-    "preserves meaningful pre-write fill errors ($status $code)",
+    "preserves fill API diagnostics for $status / $code without retrying",
     async ({ status, code, message }) => {
       const fixture = await connectVaultTest([
         Response.json(ready),
-        Response.json({ code, message: "private-upstream-secret" }, { status }),
+        Response.json(
+          { code, message, details: "private-upstream-secret" },
+          { status },
+        ),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", invoke);
+        const text = JSON.stringify(result);
+        expect(result.isError).toBe(true);
+        expect(text).toContain(`${status} ${message}`);
+        expect(text).toContain(`[code: ${code}]"`);
+        expect(text).not.toContain("private-");
+        expect(fixture.requests.map((request) => request.method)).toEqual([
+          "GET",
+          "POST",
+        ]);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test.each([
+    { status: 400, code: "ambiguous_selector" },
+    { status: 403, code: "destination_denied" },
+    { status: 404, code: "not_found" },
+    { status: 409, code: "conflict" },
+    { status: 400, code: "field_unavailable" },
+    { status: 400, code: "new_api_error" },
+  ])(
+    "passes through fill operation errors ($status $code)",
+    async ({ status, code }) => {
+      const fixture = await connectVaultTest([
+        Response.json(ready),
+        Response.json({ code, message: "API diagnostic message" }, { status }),
       ]);
       try {
         const result = await fixture.call("manage_vault_items", invoke);
         const text = JSON.stringify(result);
         expect(result.isError).toBe(true);
         expect(text).toContain(String(status));
-        expect(text).toContain(message);
-        expect(text).toContain("No fields were written");
-        expect(text).not.toContain("may have been written");
-        expect(text).not.toContain("private-");
+        expect(text).toContain("API diagnostic message");
+        expect(text).toContain(`[code: ${code}]"`);
         expect(
           fixture.requests.filter((request) => request.method === "POST"),
         ).toHaveLength(1);
@@ -160,13 +221,32 @@ describe("MCP credential flow", () => {
       );
       const items = tools.find((tool) => tool.name === "manage_vault_items");
       expect(credentials?.inputSchema.properties).toHaveProperty("spec");
+      expect(JSON.stringify(credentials?.inputSchema)).toContain('"label"');
+      expect(JSON.stringify(credentials?.inputSchema)).toContain(
+        "128 utf-8 bytes",
+      );
       expect(credentials?.inputSchema.properties).toHaveProperty(
         "expected_item_id",
       );
-      expect(items?.inputSchema.properties).toHaveProperty("fill");
+      expect(items?.inputSchema.properties).toHaveProperty("inputs");
       expect(
         JSON.stringify([credentials?.inputSchema, items?.inputSchema]),
       ).not.toContain('"$ref"');
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("distinguishes fill from webmcp_invoke after a credential is ready", async () => {
+    const fixture = await connectVaultTest([]);
+    try {
+      const { tools } = await fixture.client.listTools();
+      const credentials =
+        tools.find((tool) => tool.name === "manage_vault_credentials")
+          ?.description ?? "";
+      expect(credentials).toContain(
+        "choosing an operation is separate from the provider choice",
+      );
     } finally {
       await fixture.close();
     }
@@ -177,7 +257,14 @@ describe("MCP credential flow", () => {
       Response.json({
         ...ready,
         spec: {
-          fields: { otp: { type: "totp", required: true, sensitive: true } },
+          fields: [
+            {
+              name: "otp",
+              type: "totp",
+              required: true,
+              sensitive: true,
+            },
+          ],
         },
         state: { status: "ready", fields: { otp: { has_value: true } } },
       }),
@@ -194,9 +281,9 @@ describe("MCP credential flow", () => {
       };
       const result = await fixture.call("manage_vault_items", {
         ...invoke,
-        fill: parameters,
+        inputs: parameters,
       });
-      expect(result.isError).toBe(false);
+      expect(result.isError).toBeUndefined();
       expect(fixture.requests[1].body).toEqual({ type: "fill", ...parameters });
     } finally {
       await fixture.close();
@@ -225,7 +312,7 @@ describe("MCP credential flow", () => {
       try {
         const result = await fixture.call("manage_vault_items", {
           ...invoke,
-          fill: {
+          inputs: {
             ...fill,
             page_url,
             fields: [
@@ -234,7 +321,7 @@ describe("MCP credential flow", () => {
             ],
           },
         });
-        expect(result.isError).toBe(!allowed);
+        expect(Boolean(result.isError)).toBe(!allowed);
         expect(
           fixture.requests.filter((request) => request.method === "POST"),
         ).toHaveLength(1);
@@ -252,7 +339,7 @@ describe("MCP credential flow", () => {
     try {
       const result = await fixture.call("manage_vault_items", {
         ...invoke,
-        fill: {
+        inputs: {
           ...fill,
           fields: [
             { field: "password", selector: "#password", format: "MM/YY" },
@@ -264,7 +351,7 @@ describe("MCP credential flow", () => {
         "GET",
         "POST",
       ]);
-      expect(JSON.stringify(result)).toContain("No fields were written");
+      expect(JSON.stringify(result)).not.toContain("retry");
     } finally {
       await fixture.close();
     }
@@ -313,11 +400,15 @@ describe("MCP credential flow", () => {
         await fixture.call("manage_vault_credentials", {
           ...target,
           action: "create",
+          provider: "kernel",
           spec,
         }),
       );
       expect(created.item.action.url).toBe(pending.action.url);
       expect(created.item.spec.fields).toEqual(spec.fields);
+      expect(created.item.spec.fields[0].label).toBe(
+        "Membership Number or Username",
+      );
       expect(
         (
           await fixture.call("manage_vault_items", {
@@ -337,7 +428,7 @@ describe("MCP credential flow", () => {
       expect(observed.item.state.status).toBe("ready");
       expect(observed.item.state.fields.username.value).toBe("secret-username");
       const result = await fixture.call("manage_vault_items", invoke);
-      expect(result.isError).toBe(false);
+      expect(result.isError).toBeUndefined();
       expect(toolResultJSON(result).result).toEqual(completed);
       expect(JSON.stringify(result)).not.toContain("secret-password");
       expect(fixture.requests.map(({ method }) => method)).toEqual([
@@ -350,7 +441,10 @@ describe("MCP credential flow", () => {
         "GET",
         "POST",
       ]);
-      expect(fixture.requests[2].body).toEqual({ type: "credential", spec });
+      expect(fixture.requests[2].body).toEqual({
+        type: "credential",
+        spec: { provider: "kernel", ...spec },
+      });
       expect(fixture.requests.at(-1)?.body).toEqual({ type: "fill", ...fill });
       expect(fixture.requests[5].path).toContain("wait=60");
     } finally {
@@ -394,17 +488,23 @@ describe("MCP credential flow", () => {
       const result = await fixture.call("manage_vault_credentials", {
         ...target,
         action: "create",
+        provider: "kernel",
         spec: {
           ...spec,
-          fields: {
-            password: { type: "password", sensitive: true, value: secret },
-          },
+          fields: [
+            {
+              name: "password",
+              type: "password",
+              sensitive: true,
+              value: secret,
+            },
+          ],
         },
       });
       expect(result.isError).toBeUndefined();
       expect(JSON.stringify(result)).not.toContain(secret);
       expect(fixture.requests[0].body).toHaveProperty(
-        "spec.fields.password.value",
+        "spec.fields.0.value",
         secret,
       );
     } finally {
@@ -412,19 +512,97 @@ describe("MCP credential flow", () => {
     }
   });
 
+  test.each(["create", "update"] as const)(
+    "%s redacts supplied values when the API returns duplicate definitions",
+    async (action) => {
+      const secret = "private-duplicate-value";
+      const fixture = await connectVaultTest([
+        Response.json({
+          ...pending,
+          spec: {
+            description: secret,
+            fields: [
+              { name: "username", type: "text", sensitive: false },
+              { name: "username", type: "password", sensitive: true },
+            ],
+          },
+          state: {
+            status: "ready",
+            fields: {
+              username: { has_value: true, value: secret },
+            },
+          },
+        }),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_credentials", {
+          ...target,
+          action,
+          ...(action === "create"
+            ? {
+                provider: "kernel",
+                spec: {
+                  fields: [
+                    {
+                      name: "username",
+                      type: "text",
+                      sensitive: false,
+                      value: secret,
+                    },
+                  ],
+                },
+              }
+            : {
+                version: 2,
+                spec: { fields: { username: { value: secret } } },
+              }),
+        });
+        expect(result.isError).toBeUndefined();
+        expect(JSON.stringify(result)).not.toContain(secret);
+        expect(JSON.stringify(fixture.requests[0].body)).toContain(secret);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
   test.each([
     { action: "update", spec: { description: "Example" } },
     { action: "create", version: 1, spec },
     { action: "create", expected_item_id: "item-1", spec },
-    { action: "create", spec: { fields: {} } },
+    { action: "create", spec: { fields: [] } },
     {
       action: "create",
-      spec: { fields: { password: { type: "password", sensitive: false } } },
+      spec: {
+        fields: [{ name: "password", type: "password", sensitive: false }],
+      },
+    },
+    ...[
+      "",
+      " Username",
+      "Username ",
+      "User\nname",
+      "User\u200bname",
+      "x".repeat(129),
+    ].map((label) => ({
+      action: "create",
+      spec: { fields: [{ name: "username", label, type: "text" }] },
+    })),
+    {
+      action: "create",
+      spec: {
+        fields: [
+          { name: "username", type: "text", private_key: "secret-value" },
+        ],
+      },
     },
     {
       action: "create",
       spec: {
-        fields: { username: { type: "text", private_key: "secret-value" } },
+        fields: [
+          { name: "username", type: "text" },
+          { name: "username", type: "password" },
+        ],
       },
     },
     {
@@ -457,9 +635,9 @@ describe("MCP credential flow", () => {
       async (failure) => {
         const reply =
           failure === "transport"
-            ? new Error("private-transport-error")
+            ? new Error("transport failure")
             : Response.json(
-                { message: "private-upstream-error" },
+                { message: "API diagnostic message" },
                 { status: Number(failure) },
               );
         const fixture = await connectVaultTest(
@@ -474,18 +652,21 @@ describe("MCP credential flow", () => {
                   action: operation,
                   ...(operation === "update"
                     ? { version: 2, spec: { description: "Example" } }
-                    : { spec }),
+                    : { provider: "kernel", spec }),
                 });
           expect(result.isError).toBe(true);
-          expect(JSON.stringify(result)).not.toContain("private-");
+          expect(JSON.stringify(result)).toContain(
+            failure === "transport"
+              ? "Connection error"
+              : "API diagnostic message",
+          );
           expect(
             fixture.requests.filter(({ method }) => method !== "GET"),
           ).toHaveLength(1);
-          if (operation === "fill")
+          expect(JSON.stringify(result)).not.toContain("retry");
+          if (failure === "transport")
             expect(JSON.stringify(result)).toContain(
-              failure === 409
-                ? "No fields were written"
-                : "Never automatically retry",
+              "no response was received from the api",
             );
         } finally {
           await fixture.close();
@@ -538,40 +719,128 @@ describe("MCP credential flow", () => {
   });
 
   test.each([
-    { ...fill, fields: [] },
+    { inputs: { ...fill, fields: [] }, key: "fields" },
     {
-      ...fill,
-      fields: [
-        { field: "password", selector: "#password", value: "secret-value" },
-      ],
+      inputs: {
+        ...fill,
+        fields: [
+          { field: "password", selector: "#password", value: "secret-value" },
+        ],
+      },
+      key: "fields",
     },
-    { ...fill, frame_id: "frame-1" },
-    { ...fill, timeout_ms: 30001 },
-  ])("rejects invalid fill inputs before requests", async (parameters) => {
-    const fixture = await connectVaultTest([]);
+    {
+      inputs: { ...fill, page_url: "ftp://example.com/login" },
+      key: "page_url",
+    },
+    { inputs: { ...fill, timeout_ms: 30001 }, key: "timeout_ms" },
+    {
+      inputs: { page_url: fill.page_url, fields: fill.fields },
+      key: "browser_id",
+    },
+    { inputs: {}, key: "browser_id" },
+  ])(
+    "rejects malformed fill inputs before any request ($key)",
+    async ({ inputs, key }) => {
+      const fixture = await connectVaultTest([]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          ...invoke,
+          inputs,
+        });
+        const text = JSON.stringify(result);
+        expect(result.isError).toBe(true);
+        expect(text).toContain(`invalid fill inputs (${key})`);
+        expect(text).toContain(
+          "expected { browser_id, page_url?, fields?: [{ field, selector, format? }], timeout_ms? }",
+        );
+        expect(text).not.toContain("secret-value");
+        expect(fixture.requests).toHaveLength(0);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test.each([
+    { inputs: { ...fill, frame_id: "frame-1" }, keys: ['"frame_id"'] },
+    {
+      inputs: {
+        browser_id: fill.browser_id,
+        page_url: fill.page_url,
+        bindings: fill.fields,
+      },
+      keys: ['"bindings"'],
+    },
+    {
+      inputs: { ...fill, targets: fill.fields, name: "login" },
+      keys: ['"targets"', '"name"'],
+    },
+  ])(
+    "names unknown fill input keys and the expected shape",
+    async ({ inputs, keys }) => {
+      const fixture = await connectVaultTest([]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          ...invoke,
+          inputs,
+        });
+        const text = (result.content as Array<{ text: string }>)[0].text;
+        expect(result.isError).toBe(true);
+        expect(text).toContain(
+          `unknown key ${keys.join(", ")} in fill inputs. expected { browser_id, page_url?, fields?: [{ field, selector, format? }], timeout_ms? }`,
+        );
+        expect(fixture.requests).toHaveLength(0);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test("forwards the full fill request shape the API accepts", async () => {
+    const fixture = await connectVaultTest([
+      Response.json(ready),
+      Response.json(completed),
+    ]);
     try {
+      const inputs = {
+        browser_id: "browser-1",
+        fields: [{ field: "expiration", selector: "#expiry", format: "MM/YY" }],
+        timeout_ms: 30000,
+      };
       const result = await fixture.call("manage_vault_items", {
         ...invoke,
-        fill: parameters,
+        inputs,
       });
-      expect(result.isError).toBe(true);
-      expect(JSON.stringify(result)).not.toContain("secret-value");
-      expect(fixture.requests).toHaveLength(0);
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[1]).toMatchObject({
+        method: "POST",
+        body: { type: "fill", ...inputs },
+      });
     } finally {
       await fixture.close();
     }
   });
 
-  test("does not treat a malformed fill response as a successful item", async () => {
+  test("projects an item-shaped operation response without exposing private fields", async () => {
     const fixture = await connectVaultTest([
       Response.json(ready),
-      Response.json(ready),
+      Response.json({
+        ...ready,
+        state: {
+          ...ready.state,
+          fields: {
+            ...ready.state.fields,
+            password: { has_value: true, value: "secret-password" },
+          },
+        },
+      }),
     ]);
     try {
       const result = await fixture.call("manage_vault_items", invoke);
-      expect(result.isError).toBe(true);
-      expect(JSON.stringify(result)).toContain("may have been written");
-      expect(JSON.stringify(result)).not.toContain("secret-username");
+      expect(result.isError).toBeUndefined();
+      expect(toolResultJSON(result).item.key).toBe("login");
+      expect(JSON.stringify(result)).not.toContain("secret-password");
     } finally {
       await fixture.close();
     }

@@ -8,41 +8,131 @@ export function vaultSelectorSchema() {
     .regex(/^[a-zA-Z0-9._-]{1,255}$/)
     .refine(
       (value) => value !== "." && value !== "..",
-      "Invalid vault selector.",
+      "invalid vault selector.",
     );
 }
 
 export const vaultProjectSchema = projectSelectionInputSchema({
   project:
-    "Optional project name or ID. Vaults are project-owned: omit to use the API's effective default project, not all projects. A project-scoped connection cannot select a different project.",
+    "optional project name or id. vaults are project-owned: omit to use the api's effective default project, not all projects. a project-scoped connection cannot select a different project.",
 });
 
 export const vaultItemSchema = {
   ...vaultProjectSchema,
-  vault: vaultSelectorSchema().describe("Vault ID or immutable name."),
+  vault: vaultSelectorSchema().describe("vault id or immutable name."),
 };
-
-export function vaultOperationRequiresInputs(
-  operation: string,
-): operation is "fill" | "prepare_checkout" {
-  return operation === "fill" || operation === "prepare_checkout";
-}
 
 export function vaultKeySchema() {
   return vaultSelectorSchema().describe(
-    "Immutable item key within the vault, not the item ID.",
+    "immutable item key within the vault, not the item id.",
   );
 }
-export const vaultProviderSchema = z.enum(["link", "agentcard"]);
+export const vaultProviderSchema = z.enum(["link", "agentcard", "kernel"]);
 export const vaultWaitSchema = z
   .number()
   .int()
   .min(0)
   .max(60)
   .describe(
-    "(get, events) One bounded server-side observation, in seconds (0-60). Not supported for invoke, list, or delete. Pending state is returned as-is; this never retries an operation or guarantees readiness. For credentials, wait observes required-value readiness, not edits to an already-ready item; compare version using get without wait.",
+    "(get, events) one bounded server-side observation, in seconds (0-60). not supported for invoke, list, or delete. pending state is returned as-is; this never retries an operation or guarantees readiness. for credentials, wait observes required-value readiness, not edits to an already-ready item; compare version using get without wait.",
   )
   .optional();
+
+export const webmcpInvokeInputsSchema = z
+  .object({
+    browser_id: z.string().min(1),
+    tool_ref: z.string().min(1).max(128),
+    page_url: z.string().min(1),
+    input: z.record(z.string(), z.unknown()),
+    bindings: z
+      .array(
+        z
+          .object({
+            field: z.string().min(1),
+            input_path: z.string().min(1),
+            format: z.string().min(1).optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(32),
+    timeout_sec: z.number().int().min(1).max(120).default(15),
+  })
+  .strict();
+export type WebmcpInvokeInputs = z.infer<typeof webmcpInvokeInputsSchema>;
+
+// Mirrors FillVaultItemOperationRequest in the KERNEL API spec; `type` is set by the tool.
+export const fillInputsShape =
+  "{ browser_id, page_url?, fields?: [{ field, selector, format? }], timeout_ms? }";
+
+export const fillInputsSchema = z
+  .object({
+    browser_id: z.string().min(1),
+    page_url: z.url({ protocol: /^https?$/ }).optional(),
+    fields: z
+      .array(
+        z
+          .object({
+            field: z.string().min(1),
+            selector: z.string().min(1),
+            format: z.enum(["MM/YY", "MM/YYYY"]).optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(32)
+      .optional(),
+    timeout_ms: z.number().int().min(1).max(30000).optional(),
+  })
+  .strict();
+export type FillInputs = z.infer<typeof fillInputsSchema>;
+
+// Mirrors AuthorizeVaultItemOperationRequest: Link cards take checkout context
+// from the final checkout page, or none for a virtual card on the merchant_url origin.
+export const authorizeInputsShape = "{} or { browser_id, page_url }";
+
+export const authorizeInputsSchema = z
+  .object({
+    browser_id: z.string().min(1).optional(),
+    page_url: z
+      .string()
+      .regex(/^https:\/\/[^/?#@*\s]+(?:[/?#][^\s]*)?$/)
+      .optional(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      (value.browser_id === undefined) === (value.page_url === undefined),
+    { path: ["browser_id"] },
+  );
+export type AuthorizeInputs = z.infer<typeof authorizeInputsSchema>;
+
+// Names the offending top-level key, never a value or nested key, and shows the shape
+// the API accepts.
+function operationInputsIssueMessage(
+  operation: string,
+  shape: string,
+  error: z.ZodError,
+) {
+  const unknownKeys = error.issues.flatMap((issue) =>
+    issue.code === "unrecognized_keys" && issue.path.length === 0
+      ? issue.keys
+      : [],
+  );
+  const cause =
+    unknownKeys.length > 0
+      ? `unknown key ${unknownKeys.map((key) => JSON.stringify(key)).join(", ")} in ${operation} inputs`
+      : `invalid ${operation} inputs (${topLevelIssueKeys(error).join(", ") || "inputs"})`;
+  return `${cause}. expected ${shape}`;
+}
+
+export function fillInputsIssueMessage(error: z.ZodError) {
+  return operationInputsIssueMessage("fill", fillInputsShape, error);
+}
+
+export function authorizeInputsIssueMessage(error: z.ZodError) {
+  return `${operationInputsIssueMessage("authorize", authorizeInputsShape, error)}: pass browser_id and the https page_url of the final checkout page together, or neither.`;
+}
 
 const integer = () => z.number().int().safe();
 const currency = () => z.string().regex(/^[A-Za-z]{3}$/);
@@ -56,35 +146,46 @@ export function providerConfigReferenceSchema() {
     .strict()
     .refine(
       (value) => (value.id !== undefined) !== (value.name !== undefined),
-      "Provide exactly one provider config id or name.",
+      "provide exactly one provider config id or name.",
     );
 }
 
-// MCP serializes Zod issues before the tool callback runs. Validate each input
-// field without exposing rejected values or nested keys, retaining its schema
-// for tools/list and its normal parsed output for the callback.
+// Validation errors may name a top-level key, never rejected values or nested keys.
+function topLevelIssuePath(issue: z.core.$ZodIssue) {
+  return issue.path.slice(0, 1);
+}
+
+export function topLevelIssueKeys(error: z.ZodError) {
+  return [
+    ...new Set(
+      error.issues.flatMap((issue) =>
+        issue.code === "unrecognized_keys" && issue.path.length === 0
+          ? issue.keys
+          : [String(topLevelIssuePath(issue)[0] ?? "")],
+      ),
+    ),
+  ].filter(Boolean);
+}
+
+// Preserve the advertised schema and parsed values, but never serialize rejected
+// vault values or nested keys into MCP validation errors.
 export function vaultToolInput<Shape extends z.ZodRawShape>(shape: Shape) {
-  return Object.fromEntries(
-    Object.entries(shape).map(([key, schema]) => [
-      key,
-      z.preprocess((value, context) => {
-        if (!schema.safeParse(value).success) {
-          context.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: "Invalid vault tool input. Check the documented schema.",
-            fatal: true,
-          });
-          return z.NEVER;
-        }
-        return value;
-      }, schema),
-    ]),
-  ) as {
-    [Key in keyof Shape]: z.ZodEffects<
-      Shape[Key],
-      z.output<Shape[Key]>,
-      unknown
-    >;
+  const schema = z.object(shape);
+  return {
+    "~standard": {
+      ...schema["~standard"],
+      vendor: "kernel",
+      validate(value: unknown) {
+        const result = schema.safeParse(value);
+        if (result.success) return { value: result.data };
+        return {
+          issues: result.error.issues.map((issue) => ({
+            message: "invalid vault tool input. check the documented schema.",
+            path: topLevelIssuePath(issue),
+          })),
+        };
+      },
+    },
   };
 }
 
@@ -95,8 +196,16 @@ export const providerCredentialsSchema = z
       .string()
       .min(1)
       .describe(
-        "Write-only secret; supply through a trusted client, never chat.",
-      ),
+        "write-only secret; supply through a trusted client, never chat.",
+      )
+      .optional(),
+    publishable_key: z
+      .string()
+      .regex(/^pk_(live|test)_[A-Za-z0-9]+$/)
+      .describe(
+        "(link only) public stripe publishable key KERNEL sends when refreshing and revoking imported wallet grants. without it, imported wallets stop working when their access token expires.",
+      )
+      .optional(),
   })
   .strict();
 
@@ -127,12 +236,16 @@ export const linkWalletSpecSchema = z
             })
             .strict()
             .describe(
-              "Write-only token pair from the same grant. Supply through a trusted backend, never chat. Kernel owns subsequent refresh rotation.",
+              "write-only token pair from the same grant. supply through a trusted backend, never chat. KERNEL owns subsequent refresh rotation.",
             ),
         })
         .strict(),
     ]),
   })
+  .strict();
+
+export const kernelWalletSpecSchema = z
+  .object({ provider: z.literal("kernel").optional() })
   .strict();
 
 export const agentcardWalletSpecSchema = z
@@ -143,7 +256,7 @@ export const agentcardWalletSpecSchema = z
       .string()
       .regex(/^usr_[A-Za-z0-9_]+$/)
       .describe(
-        "An AgentCard user already enrolled in this organization under the same provider configuration.",
+        "an agentcard user already enrolled in this organization under the same provider configuration.",
       )
       .optional(),
   })
@@ -154,7 +267,7 @@ function linkTotalSchema() {
     .object({
       type: z.string(),
       display_text: z.string(),
-      amount: integer().describe("Integer minor currency units."),
+      amount: integer().describe("integer minor currency units."),
     })
     .strict();
 }
@@ -181,35 +294,84 @@ export const linkCardSpecSchema = z
       .string()
       .min(1)
       .describe(
-        "Explicitly selected ID from the wallet's payment_methods expansion.",
+        "explicitly selected id from the wallet's payment_methods expansion.",
       ),
     amount: integer()
       .min(1)
       .max(500000)
-      .describe("Integer minor currency units."),
+      .describe(
+        "integer minor currency units. a virtual card allows at most 50000; a link pay token allows up to 500000. KERNEL chooses which at authorize.",
+      ),
     currency: currency(),
     merchant_name: z.string().min(1).max(255),
     merchant_url: z.string().url(),
     context: z.string().min(100),
     line_items: z.array(linkLineItemSchema).optional(),
     totals: z.array(linkTotalSchema()).optional(),
-    metadata: z.record(z.string()).optional(),
-    expires_at: integer().optional(),
+    metadata: z.record(z.string(), z.string()).optional(),
   })
   .strict();
+
+export const kernelCardSpecSchema = z
+  .object({
+    provider: z.literal("kernel").optional(),
+    wallet: vaultKeySchema(),
+    amount: integer()
+      .min(1)
+      .max(50000)
+      .describe("integer minor currency units."),
+    currency: currency(),
+    merchant_name: z.string().min(1).max(255),
+    merchant_url: z.string().url().startsWith("https://"),
+    merchant_country: z
+      .string()
+      .regex(/^[A-Za-z]{2}$/)
+      .describe("iso 3166-1 alpha-2 country code; required for visa purchases.")
+      .optional(),
+    merchant_category: z
+      .string()
+      .min(1)
+      .max(255)
+      .describe("actual merchant category; omit rather than invent.")
+      .optional(),
+    merchant_category_code: z
+      .string()
+      .regex(/^[0-9]{4}$/)
+      .refine((value) => value !== "0000")
+      .describe("actual merchant mcc; omit rather than invent.")
+      .optional(),
+  })
+  .strict();
+
+export const agentcardCheckoutOriginSchema = z.string().refine((value) => {
+  try {
+    const url = new URL(value);
+    const supportedProtocol =
+      url.protocol === "https:" ||
+      (url.protocol === "http:" && url.hostname === "localhost");
+    return supportedProtocol && value === url.origin;
+  } catch {
+    return false;
+  }
+}, "expected a canonical https origin or localhost http origin without a path.");
 
 export const agentcardCardSpecSchema = z
   .object({
     provider: z.literal("agentcard").optional(),
     wallet: vaultKeySchema(),
     merchant: z.string().min(1).max(120),
-    amount: integer().min(1).describe("Integer minor currency units."),
+    amount: integer().min(1).describe("integer minor currency units."),
     currency: currency(),
+    checkout_origin: agentcardCheckoutOriginSchema
+      .describe(
+        "optional caller-declared checkout origin for eligible agentcard autopilot rule matching on non-prepared checkout authorizations. KERNEL forwards it without comparing it to the browser page. it does not enable autopilot or ensure payment success; omission retains the existing approval flow, and autopilot may fall back to user approval. prepared checkout uses preparation.merchant_origin.",
+      )
+      .optional(),
     card_id: z
       .string()
       .regex(/^vc_[A-Za-z0-9_]+$/)
       .describe(
-        "Optional funding card. Omit for cardholder selection at approval.",
+        "optional funding card. omit for cardholder selection at approval.",
       )
       .optional(),
   })
@@ -225,7 +387,7 @@ export const browserVaultsSchema = z
       .strict()
       .refine(
         (value) => (value.id !== undefined) !== (value.name !== undefined),
-        "Provide exactly one of id or name for each vault.",
+        "provide exactly one of id or name for each vault.",
       ),
   )
   .max(20)
@@ -233,9 +395,9 @@ export const browserVaultsSchema = z
     (values) =>
       new Set(values.map((value) => value.id ?? value.name)).size ===
       values.length,
-    "Duplicate vault references are not allowed.",
+    "duplicate vault references are not allowed.",
   )
   .describe(
-    "(create only) Project-owned vaults to attach, each with exactly one id or name; max 20. Bindings are immutable and unavailable for pooled browsers. Use a separate vault per end user. Attaching grants access to all items, including items added later. Credential fill writes real values into the page; it does not isolate them from an agent with browser access. Payment aliases are a separate, explicitly chosen egress path; never fall back to aliases after an uncertain fill.",
+    "(create only) project-owned vaults to attach, each with exactly one id or name; max 20. bindings are immutable and unavailable for pooled browsers. use a separate vault per end user. attaching grants access to all items, including items added later. credential fill writes real values into the page; it does not isolate them from an agent with browser access. link cards use fill, not aliases or egress substitution. agentcard aliases remain a separate, explicitly chosen egress path; never fall back to aliases after an uncertain fill.",
   )
   .optional();

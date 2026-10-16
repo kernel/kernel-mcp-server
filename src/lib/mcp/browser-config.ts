@@ -92,7 +92,7 @@ function configValue<T>(value: T): BrowserConfigResult<T> {
 }
 
 function configError<T>(message: string): BrowserConfigResult<T> {
-  return { ok: false, error: `Error: ${message}` };
+  return { ok: false, error: `error: ${message}` };
 }
 
 function buildBrowserStartUrl(
@@ -103,7 +103,7 @@ function buildBrowserStartUrl(
   try {
     new URL(startUrl);
   } catch {
-    return configError("start_url must be a valid URL.");
+    return configError("start_url must be a valid url.");
   }
 
   return configValue(startUrl);
@@ -113,7 +113,7 @@ function buildBrowserProfile(
   params: BrowserProfileParams,
 ): BrowserConfigResult<BrowserProfileConfig | undefined> {
   if (params.profile_name && params.profile_id) {
-    return configError("Cannot specify both profile_name and profile_id.");
+    return configError("cannot specify both profile_name and profile_id.");
   }
   if (
     params.save_profile_changes !== undefined &&
@@ -138,7 +138,7 @@ function buildBrowserExtensions(
   params: BrowserExtensionParams,
 ): BrowserConfigResult<BrowserExtensionConfig | undefined> {
   if (params.extension_id && params.extension_name) {
-    return configError("Cannot specify both extension_id and extension_name.");
+    return configError("cannot specify both extension_id and extension_name.");
   }
   if (!params.extension_id && !params.extension_name)
     return configValue(undefined);

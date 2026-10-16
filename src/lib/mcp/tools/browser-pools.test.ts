@@ -1,6 +1,6 @@
 /// <reference types="bun-types" />
+import type { McpServer } from "@modelcontextprotocol/server";
 
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { z } from "zod";
 import { projectScopedExtra } from "@/lib/mcp/auth-context.test-fixtures";
@@ -15,7 +15,7 @@ const { registerBrowserPoolCapabilities } = await import(
 
 type ToolHandler = (
   params: Record<string, unknown>,
-  extra: { authInfo?: { token: string } },
+  ctx: ReturnType<typeof projectScopedExtra>,
 ) => Promise<{
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
@@ -23,14 +23,17 @@ type ToolHandler = (
 
 function captureBrowserPoolTool() {
   let handler: ToolHandler | undefined;
-  let schema: z.ZodRawShape | undefined;
+  let schema: Record<string, z.ZodType> | undefined;
   const server = {
-    resource() {},
     registerResource() {},
-    tool(name: string, ...args: unknown[]) {
+    registerTool(
+      name: string,
+      config: { inputSchema: z.ZodObject<Record<string, z.ZodType>> },
+      callback: ToolHandler,
+    ) {
       if (name !== "manage_browser_pools") return;
-      schema = args[1] as z.ZodRawShape;
-      handler = args.at(-1) as ToolHandler;
+      schema = config.inputSchema.shape;
+      handler = callback;
     },
   } as unknown as McpServer;
 
@@ -130,7 +133,7 @@ describe("browser-pool contract parity", () => {
 
     expect(result).toEqual({
       content: [
-        { type: "text", text: "Error: at least one update field is required." },
+        { type: "text", text: "error: at least one update field is required." },
       ],
       isError: true,
     });
@@ -152,7 +155,7 @@ describe("browser-pool contract parity", () => {
         content: [
           {
             type: "text",
-            text: "Error: clear_profile and clear_extensions are update-only.",
+            text: "error: clear_profile and clear_extensions are update-only.",
           },
         ],
         isError: true,
@@ -171,7 +174,7 @@ describe("browser-pool contract parity", () => {
 
     expect(result).toEqual({
       content: [
-        { type: "text", text: "Error: an empty start_url is update-only." },
+        { type: "text", text: "error: an empty start_url is update-only." },
       ],
       isError: true,
     });
@@ -229,11 +232,11 @@ describe("browser-pool contract parity", () => {
   test.each([
     [
       { clear_profile: true, profile_id: "profile_1" },
-      "Error: clear_profile cannot be combined with profile_id or profile_name.",
+      "error: clear_profile cannot be combined with profile_id or profile_name.",
     ],
     [
       { clear_extensions: true, extension_name: "ublock" },
-      "Error: clear_extensions cannot be combined with extension_id or extension_name.",
+      "error: clear_extensions cannot be combined with extension_id or extension_name.",
     ],
   ])("rejects conflicting clear and set values", async (params, wantError) => {
     kernelClientMock.factory = () => ({ browserPools: {} });

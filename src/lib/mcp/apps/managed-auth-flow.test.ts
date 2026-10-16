@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   initialManagedAuthFlowState,
   managedAuthFlowReducer,
+  sanitizeBeginArguments,
   waitArgumentsFromBegin,
 } from "./managed-auth-flow";
 import type { BeginResult, SafeConnection } from "./managed-auth-types";
@@ -124,5 +125,20 @@ describe("managed-auth App flow reducer", () => {
     });
     expect(complete.phase).toBe("terminal");
     expect(complete.outcome).toBe("success");
+  });
+});
+
+describe("sanitizeBeginArguments", () => {
+  test("forwards launcher login arguments and drops everything else", () => {
+    const args = {
+      mode: "new_login",
+      domain: "example.com",
+      profile_name: "work",
+      project: "billing",
+      browser: { proxy: { name: "residential" }, stealth: false },
+    };
+    expect(
+      sanitizeBeginArguments({ ...args, intent: "log in", password: "x" }),
+    ).toEqual(args);
   });
 });

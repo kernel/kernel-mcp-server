@@ -115,6 +115,33 @@ function dependencies({
 }
 
 describe("POST /token", () => {
+  for (const grantType of ["authorization_code", "refresh_token"]) {
+    test.each([
+      "https://mcp.example.test",
+      "https://mcp.example.test/mcp",
+      undefined,
+    ])(
+      `preserves the existing resource %s during ${grantType}`,
+      async (resource) => {
+        const deps = dependencies();
+        const response = await tokenRequest(
+          request({
+            grant_type: grantType,
+            client_id: "client_1",
+            ...(grantType === "authorization_code"
+              ? { code: "code_1", code_verifier: "verifier_1" }
+              : { refresh_token: "refresh-old" }),
+            ...(resource ? { resource } : {}),
+          }),
+          deps.value,
+        );
+        expect(response.status).toBe(200);
+        expect(deps.calls.exchanges).toHaveLength(1);
+        expect(deps.calls.exchanges[0].get("resource")).toBe(resource ?? null);
+      },
+    );
+  }
+
   test("issues an organization-wide token and persists both contexts", async () => {
     const deps = dependencies();
     const response = await tokenRequest(
@@ -394,5 +421,77 @@ describe("POST /token", () => {
     );
     expect(missingRefreshResponse.status).toBe(400);
     expect(missingRefresh.calls.persisted).toHaveLength(0);
+  });
+
+  test("records the client and a bounded provider error code on rejection", async () => {
+    const deps = dependencies({
+      clerkStatus: 400,
+      clerkTokens: {
+        error: "invalid_grant",
+        error_description: "Code already redeemed",
+      },
+    });
+
+    const response = await tokenRequest(
+      request({
+        grant_type: "authorization_code",
+        client_id: "client_1",
+        code: "already-used",
+        code_verifier: "verifier_1",
+      }),
+      deps.value,
+    );
+
+    expect(response.status).toBe(400);
+    expect(deps.calls.outcomes[0]).toMatchObject({
+      stage: "provider_exchange",
+      outcome: "error",
+      clientId: "client_1",
+      providerStatusCode: 400,
+      providerErrorCode: "invalid_grant",
+    });
+    // The description can carry anything, so it is deliberately not recorded.
+    expect(JSON.stringify(deps.calls.outcomes[0])).not.toContain("redeemed");
+  });
+
+  test("records an unrecognized provider error code as unknown", async () => {
+    const deps = dependencies({
+      clerkStatus: 400,
+      clerkTokens: { error: "user_42_is_rate_limited_until_2026" },
+    });
+
+    await tokenRequest(
+      request({
+        grant_type: "authorization_code",
+        client_id: "client_1",
+        code: "rejected",
+        code_verifier: "verifier_1",
+      }),
+      deps.value,
+    );
+
+    expect(deps.calls.outcomes[0]).toMatchObject({
+      providerErrorCode: "unknown",
+    });
+    expect(JSON.stringify(deps.calls.outcomes[0])).not.toContain("user_42");
+  });
+
+  test("records the client on a successful exchange and no provider failure fields", async () => {
+    const deps = dependencies();
+
+    await tokenRequest(
+      request({
+        grant_type: "authorization_code",
+        client_id: "client_1",
+        code: "code_1",
+        code_verifier: "verifier_1",
+      }),
+      deps.value,
+    );
+
+    const outcome = deps.calls.outcomes[0];
+    expect(outcome).toMatchObject({ outcome: "success", clientId: "client_1" });
+    expect(outcome.providerStatusCode).toBeUndefined();
+    expect(outcome.providerErrorCode).toBeUndefined();
   });
 });
