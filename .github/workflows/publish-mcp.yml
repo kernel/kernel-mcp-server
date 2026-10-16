@@ -1,57 +1,83 @@
 name: Publish MCP server.json
 
-# Paused before we have a remote mcp server and already published it
-
 on:
-  # push:
-  #   branches: [ "main" ]
+  push:
+    branches: ["main"]
+    paths: ["server.json"]
   workflow_dispatch: {}
 
 permissions:
   contents: read
-  id-token: write
+
+env:
+  PUBLISHER_VERSION: v1.8.1
+  REGISTRY_URL: https://registry.modelcontextprotocol.io
+  AUTH_DOMAIN: onkernel.com
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write  # Required for OIDC authentication
-      contents: read
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
-      - name: Setup Node.js  # Adjust for your language
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
-      
-      - name: Install MCP Publisher
+
+      - name: Check whether this version is already published
+        id: version
         run: |
-          # Build publisher from source (requires Go)
-          git clone https://github.com/modelcontextprotocol/registry publisher-repo
-          cd publisher-repo
-          make publisher
-          cp bin/mcp-publisher ../mcp-publisher
-          cd ..
-          chmod +x mcp-publisher
-      
-      - name: Login to MCP Registry
+          name="$(jq -r .name server.json)"
+          want="$(jq -r .version server.json)"
+          live="$(curl -fsS --get --data-urlencode "search=$name" "$REGISTRY_URL/v0/servers" \
+            | jq -r --arg name "$name" '.servers[] | select(.server.name == $name) | .server.version')"
+          if [ "$live" = "$want" ]; then
+            echo "::notice::$name@$want is already published; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publishing $name: ${live:-none} -> $want"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install mcp-publisher
+        if: steps.version.outputs.skip == 'false'
         run: |
-          KEY_B64='${{ secrets.MCP_PRIVATE_KEY }}'
-          SEED_HEX="$(
-            {
-              printf '%s\n' '-----BEGIN PRIVATE KEY-----'
-              printf '%s\n' "$(printf '%s' "$KEY_B64" | tr -d ' \r\n')"
-              printf '%s\n' '-----END PRIVATE KEY-----'
-            } \
-            | openssl pkey -in /dev/stdin -noout -text 2>/dev/null \
-            | awk '/priv:/{p=1;next}/pub:/{p=0}p' \
-            | tr -d ' :\n'
-          )"
-          ./mcp-publisher login dns --domain onkernel.com --private-key "$SEED_HEX"
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/$PUBLISHER_VERSION/mcp-publisher_linux_amd64.tar.gz" \
+            | tar -xz mcp-publisher
+          ./mcp-publisher --version
+
+      - name: Log in to the registry
+        if: steps.version.outputs.skip == 'false'
+        env:
+          MCP_PRIVATE_KEY: ${{ secrets.MCP_PRIVATE_KEY }}
+        run: |
+          # The secret holds the base64 body of a PKCS#8 Ed25519 private key. For
+          # Ed25519 the 48-byte DER ends with the 32-byte seed, which is what the
+          # publisher wants as 64 hex characters.
+          seed="$(printf '%s' "$MCP_PRIVATE_KEY" | tr -d ' \r\n' | base64 -d | tail -c 32 | od -An -tx1 | tr -d ' \n')"
+          echo "::add-mask::$seed"
+          if [ "${#seed}" -ne 64 ]; then
+            echo "::error::MCP_PRIVATE_KEY did not yield a 32-byte Ed25519 seed. It must hold the base64 body of a PKCS#8 Ed25519 private key."
+            exit 1
+          fi
+
+          # Fail here rather than on an opaque 401: the registry trusts whatever
+          # public key is published at the domain apex, so the secret has to match it.
+          pub="$(printf '302e020100300506032b657004220420%s' "$seed" \
+            | python3 -c 'import sys, binascii; sys.stdout.buffer.write(binascii.unhexlify(sys.stdin.read().strip()))' \
+            | openssl pkey -inform DER -pubout -outform DER | tail -c 32 | base64)"
+          dns="$(curl -fsS -H 'accept: application/dns-json' "https://dns.google/resolve?name=$AUTH_DOMAIN&type=TXT" \
+            | jq -r '.Answer[]?.data' | tr -d '"' \
+            | sed -n 's/.*v=MCPv1.*p=\([A-Za-z0-9+/=]*\).*/\1/p' | head -1)"
+          if [ -z "$dns" ]; then
+            echo "::error::No v=MCPv1 TXT record at the $AUTH_DOMAIN apex. MCP DNS auth reads the apex, not a _mcp-registry selector."
+            exit 1
+          fi
+          if [ "$pub" != "$dns" ]; then
+            echo "::error::MCP_PRIVATE_KEY does not match the key published at $AUTH_DOMAIN ($dns)."
+            exit 1
+          fi
+
+          ./mcp-publisher login dns -domain "$AUTH_DOMAIN" -private-key "$seed"
 
       - name: Publish to MCP Registry
+        if: steps.version.outputs.skip == 'false'
         run: ./mcp-publisher publish
