@@ -1,12 +1,9 @@
 import { description } from "../../../server.json";
 
 /**
- * Returned on `initialize` as the server's `instructions`. Hosts surface this
- * to the model, so it answers what an agent can accomplish here and when to
- * reach for it, rather than describing the infrastructure underneath.
- *
- * The registry `description` in server.json is capped at 100 characters by the
- * MCP server schema, so the longer framing has to live here.
+ * Returned on `initialize` as the server's `instructions`, which hosts surface
+ * to the model before it picks a tool. The registry `description` in
+ * server.json is capped at 100 characters, so the longer framing lives here.
  */
 export const MCP_SERVER_INSTRUCTIONS = `${description}
 

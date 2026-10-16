@@ -18,7 +18,7 @@ describe("MCP server metadata", () => {
 
     expect(webmcp).toBeGreaterThanOrEqual(0);
     expect(repl).toBeGreaterThan(webmcp);
-    expect(playwright).toBeGreaterThan(webmcp);
+    expect(playwright).toBeGreaterThan(repl);
     expect(computerUse).toBeGreaterThan(playwright);
   });
 });

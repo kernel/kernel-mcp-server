@@ -12,7 +12,7 @@
     "source": "github"
   },
   "license": "MIT",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "tags": ["browser", "automation", "actions", "cloud"],
   "categories": ["automation", "devtools"],
   "remotes": [
