@@ -360,7 +360,7 @@ async function readBrowserTelemetry(
 
 function browserSessionNextActions(sessionId: string) {
   return [
-    `use computer_action with session_id "${sessionId}" to inspect or control the browser.`,
+    `drive the browser with webmcp, browser_repl, execute_playwright_code, or computer_action using session_id "${sessionId}", preferring the first that can carry the current step.`,
     `use manage_browsers with action "get" and session_id "${sessionId}" for full browser details.`,
     `use manage_browsers with action "delete" and session_id "${sessionId}" when the session is no longer needed.`,
   ];
@@ -459,7 +459,7 @@ export function registerBrowserCapabilities(
     "manage_browsers",
     {
       description:
-        'manage browser sessions and their archived telemetry. use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished. live sessions can be addressed by id or by the name given at creation or set on update; deleted sessions only by id. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
+        'manage the browser sessions that every web task runs in, and their archived telemetry. once a session exists, drive it with webmcp, browser_repl, execute_playwright_code, or computer_action, preferring the first that can carry the current step. use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished. live sessions can be addressed by id or by the name given at creation or set on update; deleted sessions only by id. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
       inputSchema: z.strictObject(
         {
           ...projectSelectionInputSchema(),
