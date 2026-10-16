@@ -116,6 +116,70 @@ describe("kernel-managed payment tools", () => {
     }
   });
 
+  test("advertises the Kernel card amount cap in tools/list", async () => {
+    const fixture = await connectVaultTest([]);
+    try {
+      const { tools } = await fixture.client.listTools();
+      const schema = tools.find(
+        (tool) => tool.name === "manage_vault_cards",
+      )?.inputSchema;
+      expect(schema?.properties?.spec).toMatchObject({
+        anyOf: expect.arrayContaining([
+          expect.objectContaining({
+            properties: expect.objectContaining({
+              provider: expect.objectContaining({ const: "kernel" }),
+              amount: expect.objectContaining({
+                minimum: 1,
+                maximum: 1_000_000,
+              }),
+            }),
+          }),
+        ]),
+      });
+      expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([1, 50_001, 750_000, 1_000_000])(
+    "creates a Kernel card for %i minor units without authorizing",
+    async (amount) => {
+      const spec = { ...card.spec, amount };
+      const { fixture, result } = await callCard(
+        [Response.json({ ...card, spec })],
+        "create",
+        spec,
+      );
+      try {
+        expect(result.isError).toBeUndefined();
+        expect(fixture.requests).toHaveLength(1);
+        expect(fixture.requests[0]).toMatchObject({
+          method: "PUT",
+          body: { type: "card", spec },
+        });
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test.each([0, -1, 1.1, 1_000_001])(
+    "rejects a Kernel card for %s minor units without sending a request",
+    async (amount) => {
+      const { fixture, result } = await callCard([], "create", {
+        ...card.spec,
+        amount,
+      });
+      try {
+        expect(result.isError).toBe(true);
+        expect(fixture.requests).toHaveLength(0);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
   test("creates a Visa card with merchant country but does not authorize", async () => {
     const { fixture, result } = await callCard(
       [Response.json(card)],
@@ -409,9 +473,11 @@ describe("kernel-managed payment tools", () => {
     },
   );
 
-  test("reports an observed transaction once using the advertised operation body", async () => {
+  test("reports an observed transaction at the cap once using the advertised operation body", async () => {
+    const amount = 1_000_000;
     const ready = {
       ...card,
+      spec: { ...card.spec, amount },
       action: undefined,
       state: { provider: "kernel", status: "ready" },
       available_operations: [{ type: "confirm_transaction" }, { type: "fill" }],
@@ -420,7 +486,7 @@ describe("kernel-managed payment tools", () => {
     const inputs = {
       status: "APPROVED",
       transaction_type: "PURCHASE",
-      amount: 1999,
+      amount,
       currency: "USD",
       occurred_at: "2026-06-01T12:00:00Z",
     };
@@ -524,6 +590,7 @@ describe("kernel-managed payment tools", () => {
           "billing_*",
           "field_unavailable",
           "occurred_at",
+          ...(name === "manage_vault_items" ? ["0..1000000"] : []),
         ])
           expect(description).toContain(text);
       }
@@ -538,6 +605,7 @@ describe("kernel-managed payment tools", () => {
         "transaction_type",
         "occurred_at",
         "no additional properties",
+        "0..1000000",
         "unknown means no reliable merchant outcome",
         "number, expiration",
         'format "MM/YY" or "MM/YYYY"',
