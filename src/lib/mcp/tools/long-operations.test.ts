@@ -81,7 +81,7 @@ test("a playwright transport failure is reported through the shared tool-error p
 
     expect(result.isError).toBe(true);
     const text = (result.content as Array<{ text: string }>)[0].text;
-    expect(text).toStartWith("Error in execute_playwright_code (execute):");
+    expect(text).toStartWith("error in execute_playwright_code (execute):");
   } finally {
     await close();
   }

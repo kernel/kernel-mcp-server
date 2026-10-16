@@ -9,6 +9,7 @@ import {
   verifyAuthFlowCheckpoint,
 } from "@/lib/mcp/tools/managed-auth-checkpoint";
 import type { ManagedAuthBrowserTelemetry } from "@/lib/mcp/tools/managed-auth-telemetry";
+import { proxyConfigError, type ProxyConfig } from "@/lib/mcp/proxy-config";
 
 export type ManagedAuthRegion = "us-east" | "eu-west" | "ap-southeast";
 
@@ -55,8 +56,8 @@ export interface AuthLoginInput {
   record_session?: boolean;
   browser_telemetry?: ManagedAuthBrowserTelemetry;
   region?: ManagedAuthRegion;
-  proxy_id?: string;
-  proxy_name?: string;
+  stealth?: boolean;
+  proxy?: ProxyConfig;
 }
 
 export class AuthLoginStartError extends Error {
@@ -97,9 +98,9 @@ export interface AuthWaitResult {
 const TERMINAL_ERROR_MESSAGES: Partial<
   Record<NonNullable<ManagedAuth["flow_status"]>, string>
 > = {
-  FAILED: "Managed authentication failed. Retry the secure login flow.",
-  EXPIRED: "Managed authentication expired. Start a new secure login flow.",
-  CANCELED: "Managed authentication was canceled. Start again when ready.",
+  FAILED: "managed authentication failed. retry the secure login flow.",
+  EXPIRED: "managed authentication expired. start a new secure login flow.",
+  CANCELED: "managed authentication was canceled. start again when ready.",
 };
 
 export function toSafeAuthConnection(
@@ -151,7 +152,7 @@ async function findAuthConnection(
   }
   if (!selector.domain || !selector.profileName) {
     throw new AuthLoginStartError(
-      "Waiting for managed authentication requires a connection ID or an exact domain and profile name.",
+      "waiting for managed authentication requires a connection id or an exact domain and profile name.",
     );
   }
 
@@ -169,7 +170,7 @@ async function findAuthConnection(
     );
   if (matches.length > 1 || (matches.length > 0 && page.hasNextPage())) {
     throw new AuthLoginStartError(
-      "Multiple managed-auth connections matched while waiting. Select a connection explicitly.",
+      "multiple managed-auth connections matched while waiting. select a connection explicitly.",
     );
   }
   return matches[0] ?? null;
@@ -195,7 +196,7 @@ export async function issueAuthWaitCheckpoint(
   const latest = (await authFlowEvents(client, connectionId))[0] ?? null;
   if (kind === "event" && !latest) {
     throw new AuthLoginStartError(
-      "The active managed-auth flow could not be identified. Retry shortly.",
+      "the active managed-auth flow could not be identified. retry shortly.",
     );
   }
   return kind === "event"
@@ -227,7 +228,7 @@ async function waitFromCheckpoint(
   const checkpoint = verifyAuthFlowCheckpoint(token);
   if (!checkpoint || checkpoint.connectionId !== latest.id) {
     throw new AuthLoginStartError(
-      "The managed-auth wait checkpoint is invalid. Restart the secure login flow.",
+      "the managed-auth wait checkpoint is invalid. restart the secure login flow.",
     );
   }
   const events = await authFlowEvents(client, latest.id);
@@ -259,12 +260,12 @@ async function waitFromCheckpoint(
 function authWaitDelay(milliseconds: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
     if (signal?.aborted) {
-      reject(new Error("Managed-auth wait was cancelled."));
+      reject(new Error("managed-auth wait was cancelled."));
       return;
     }
     const onAbort = () => {
       clearTimeout(timer);
-      reject(new Error("Managed-auth wait was cancelled."));
+      reject(new Error("managed-auth wait was cancelled."));
     };
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
@@ -292,7 +293,7 @@ export async function waitForAuthConnection(
 
   do {
     if (options.signal?.aborted) {
-      throw new Error("Managed-auth wait was cancelled.");
+      throw new Error("managed-auth wait was cancelled.");
     }
     try {
       const connection = await findAuthConnection(client, selector);
@@ -339,16 +340,15 @@ export async function waitForAuthConnection(
 
   if (!observedQuery) {
     throw new AuthLoginStartError(
-      "Managed authentication status could not be checked. Retry the wait operation.",
+      "managed authentication status could not be checked. retry the wait operation.",
     );
   }
   return { state: "pending", ...(latest && { connection: latest }) };
 }
 
 export function validateAuthLoginInput(input: AuthLoginInput): string | null {
-  if (input.proxy_id && input.proxy_name) {
-    return "proxy_id and proxy_name cannot be used together.";
-  }
+  const proxyError = input.proxy && proxyConfigError("proxy", input.proxy);
+  if (proxyError) return proxyError;
 
   if (input.mode === "new_login") {
     if (!input.domain || !input.profile_name) {
@@ -368,7 +368,7 @@ export function validateAuthLoginInput(input: AuthLoginInput): string | null {
     input.profile_name ||
     input.save_credentials !== undefined
   ) {
-    return "New-connection configuration is not allowed for reauth.";
+    return "new-connection configuration is not allowed for reauth.";
   }
   return null;
 }
@@ -458,13 +458,6 @@ export async function beginAuthLogin(
 
   const recordSession = input.record_session ?? true;
   const browserTelemetry = input.browser_telemetry ?? { enabled: true };
-  const proxy =
-    input.proxy_id || input.proxy_name
-      ? {
-          ...(input.proxy_id && { id: input.proxy_id }),
-          ...(input.proxy_name && { name: input.proxy_name }),
-        }
-      : undefined;
 
   let connection: ManagedAuth;
   if (input.mode === "new_login") {
@@ -479,7 +472,8 @@ export async function beginAuthLogin(
         browser: {
           telemetry: browserTelemetry,
           ...(input.region && { region: input.region }),
-          ...(proxy && { proxy }),
+          ...(input.stealth !== undefined && { stealth: input.stealth }),
+          ...(input.proxy && { proxy: input.proxy }),
         },
       });
     } catch (error) {
@@ -530,7 +524,8 @@ export async function beginAuthLogin(
       browser: {
         telemetry: browserTelemetry,
         ...(input.region && { region: input.region }),
-        ...(proxy && { proxy }),
+        ...(input.stealth !== undefined && { stealth: input.stealth }),
+        ...(input.proxy && { proxy: input.proxy }),
       },
     });
     let current = withLoginState(connection, login);
@@ -550,12 +545,12 @@ export async function beginAuthLogin(
     const conflictCode = loginConflictCode(error);
     if (conflictCode === "too_many_pending_sessions") {
       throw new AuthLoginStartError(
-        "Too many managed-auth sessions are pending. Close or wait for an existing session to finish, then retry shortly.",
+        "too many managed-auth sessions are pending. close or wait for an existing session to finish, then retry shortly.",
       );
     }
     if (conflictCode) {
       throw new AuthLoginStartError(
-        `Managed authentication could not start (${conflictCode}). Retry after the current operation finishes.`,
+        `managed authentication could not start (${conflictCode}). retry after the current operation finishes.`,
       );
     }
     throw error;

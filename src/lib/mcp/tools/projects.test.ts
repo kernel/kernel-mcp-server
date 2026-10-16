@@ -32,7 +32,7 @@ describe("manage_projects", () => {
       expect(missing.content).toEqual([
         {
           type: "text",
-          text: "Error: project or project_id is required for get.",
+          text: "error: project or project_id is required for get.",
         },
       ]);
       expect(empty.isError).toBe(true);

@@ -1,10 +1,11 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
-import { isValidJwtFormat } from "@/lib/auth-utils";
 
 // Public routes that don't require authentication
 const isPublicRoute = createRouteMatcher([
   "/",
   "/(.well-known)(.*)",
+  // The MCP route validates bearer tokens and returns OAuth discovery challenges.
+  "/mcp",
   "/register",
   "/authorize",
   "/oauth-consent",
@@ -17,15 +18,6 @@ const isPublicRoute = createRouteMatcher([
 
 export default clerkMiddleware(async (auth, req) => {
   if (isPublicRoute(req)) return;
-  if (req.nextUrl.pathname.startsWith("/mcp")) {
-    if (req.method === "OPTIONS") return;
-    const authheader = req.headers.get("Authorization");
-    if (authheader?.startsWith("Bearer ")) {
-      const token = authheader.substring(7).trim();
-      // If it's NOT a JWT format, treat it as an API key
-      if (!isValidJwtFormat(token)) return;
-    }
-  }
   await auth.protect();
 });
 

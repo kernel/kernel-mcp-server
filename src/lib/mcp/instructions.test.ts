@@ -10,12 +10,14 @@ describe("MCP server metadata", () => {
 
   test("instructions list the execution layers in escalation order", () => {
     const webmcp = MCP_SERVER_INSTRUCTIONS.indexOf("webmcp");
+    const repl = MCP_SERVER_INSTRUCTIONS.indexOf("browser_repl");
     const playwright = MCP_SERVER_INSTRUCTIONS.indexOf(
       "execute_playwright_code",
     );
     const computerUse = MCP_SERVER_INSTRUCTIONS.indexOf("computer_action");
 
     expect(webmcp).toBeGreaterThanOrEqual(0);
+    expect(repl).toBeGreaterThan(webmcp);
     expect(playwright).toBeGreaterThan(webmcp);
     expect(computerUse).toBeGreaterThan(playwright);
   });

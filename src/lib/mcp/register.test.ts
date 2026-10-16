@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { connectTestMcp } from "@/lib/mcp/mcp-test-fixtures";
 import { instrumentMcpAnalytics } from "@/lib/mcp/analytics";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
 import { KERNEL_MCP_TOOL_NAMES } from "@/lib/mcp/tool-names";
@@ -13,12 +13,14 @@ const NON_AUTH_TOOLSETS = [
   "browser_pools",
   "config_registry",
   "browser_curl",
+  "browser_files",
   "proxies",
   "extensions",
   "apps",
   "computer",
   "shell",
   "playwright",
+  "repl",
   "webmcp",
   "replays",
   "credentials",
@@ -26,48 +28,40 @@ const NON_AUTH_TOOLSETS = [
   "vaults",
 ].join(",");
 
-function captureRegistration(
+async function captureRegistration(
   mcpApps: boolean,
   vaults = false,
   analytics = false,
+  search = false,
 ) {
-  const legacyTools: string[] = [];
-  const appTools: string[] = [];
-  const resources: string[] = [];
-  const schemas = new Map<string, Record<string, unknown>>();
-  const server = {
-    server: {
-      _requestHandlers: new Map([
-        ["tools/call", async () => ({ content: [] })],
-      ]),
-    },
-    prompt() {},
-    resource() {},
-    tool(name: string, _description: string, inputSchema: object) {
-      legacyTools.push(name);
-      schemas.set(name, inputSchema as Record<string, unknown>);
-    },
-    registerTool(
-      name: string,
-      config: { inputSchema?: Record<string, unknown> },
-    ) {
-      appTools.push(name);
-      schemas.set(name, config.inputSchema ?? {});
-      return { enable() {}, disable() {} };
-    },
-    registerResource(name: string) {
-      resources.push(name);
-      return { enable() {}, disable() {} };
-    },
-  } as unknown as McpServer;
-  registerMcpCapabilities(server, { mcpApps, vaults });
-  if (analytics) instrumentMcpAnalytics(server, null);
-  return { legacyTools, appTools, resources, schemas };
+  const mcp = await connectTestMcp((server) => {
+    registerMcpCapabilities(server, { mcpApps, vaults, search });
+    if (analytics) instrumentMcpAnalytics(server, null);
+  }, {});
+  try {
+    const { tools } = await mcp.client.listTools();
+    const { resources } = await mcp.client.listResources();
+    const appNames = new Set(["open_auth_login", "begin_auth_login"]);
+    return {
+      legacyTools: tools
+        .filter((tool) => !appNames.has(tool.name))
+        .map((tool) => tool.name),
+      appTools: tools
+        .filter((tool) => appNames.has(tool.name))
+        .map((tool) => tool.name),
+      resources: resources.map((resource) => resource.name),
+      schemas: new Map(
+        tools.map((tool) => [tool.name, tool.inputSchema.properties ?? {}]),
+      ),
+    };
+  } finally {
+    await mcp.close();
+  }
 }
 
 describe("MCP tool ownership", () => {
-  test("matches every registered KERNEL tool in both directions", () => {
-    const registration = captureRegistration(true, true, true);
+  test("matches every registered KERNEL tool in both directions", async () => {
+    const registration = await captureRegistration(true, true, true, true);
     const registeredTools = new Set([
       ...registration.legacyTools,
       ...registration.appTools,
@@ -83,12 +77,81 @@ describe("MCP tool ownership", () => {
   });
 });
 
+// [readOnlyHint, destructiveHint, openWorldHint], per the ChatGPT plugin
+// submission guidelines: read-only only for pure retrieval, destructive for any
+// delete/overwrite/cancel/stop, open world for public or arbitrary destinations.
+const EXPECTED_ANNOTATIONS: Record<string, [boolean, boolean, boolean]> = {
+  get_more_tools: [false, false, false],
+  submit_feedback: [false, false, false],
+  get_connection_context: [true, false, false],
+  search_docs: [true, false, false],
+  web_search: [true, false, true],
+  manage_profiles: [false, true, true],
+  manage_browsers: [false, true, false],
+  manage_projects: [false, true, false],
+  manage_api_keys: [false, true, false],
+  manage_browser_pools: [false, true, false],
+  manage_browser_files: [false, true, false],
+  manage_config_registry: [false, true, true],
+  browser_curl: [false, true, true],
+  manage_proxies: [false, true, true],
+  manage_extensions: [false, true, false],
+  manage_apps: [false, true, true],
+  computer_action: [false, true, true],
+  exec_command: [false, true, true],
+  execute_playwright_code: [false, true, true],
+  manage_playwright_executors: [false, true, false],
+  browser_repl: [false, true, true],
+  webmcp: [false, true, true],
+  manage_replays: [false, true, false],
+  manage_auth_connections: [false, true, true],
+  open_auth_login: [false, false, true],
+  begin_auth_login: [false, false, true],
+  manage_credentials: [false, true, false],
+  manage_credential_providers: [false, true, true],
+  manage_vaults: [false, true, true],
+  manage_vault_items: [false, true, true],
+  manage_vault_credentials: [false, true, true],
+  manage_vault_cards: [false, true, true],
+  manage_vault_wallets: [false, false, true],
+  manage_vault_provider_configs: [false, true, true],
+};
+
+describe("MCP tool annotations", () => {
+  test("sets every hint explicitly to the reviewed value", async () => {
+    const mcp = await connectTestMcp((server) => {
+      registerMcpCapabilities(server, {
+        mcpApps: true,
+        vaults: true,
+        search: true,
+      });
+      instrumentMcpAnalytics(server, null);
+    }, {});
+    try {
+      const { tools } = await mcp.client.listTools();
+      const actual = Object.fromEntries(
+        tools.map((tool) => [
+          tool.name,
+          [
+            tool.annotations?.readOnlyHint,
+            tool.annotations?.destructiveHint,
+            tool.annotations?.openWorldHint,
+          ],
+        ]),
+      );
+      expect(actual).toEqual(EXPECTED_ANNOTATIONS);
+    } finally {
+      await mcp.close();
+    }
+  });
+});
+
 describe("MCP Apps additive registration", () => {
-  test("keeps managed auth unchanged and only adds the App tools for capable clients", () => {
+  test("keeps managed auth unchanged and only adds the App tools for capable clients", async () => {
     const previous = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
     process.env.KERNEL_MCP_DISABLED_TOOLSETS = NON_AUTH_TOOLSETS;
     try {
-      const base = captureRegistration(false);
+      const base = await captureRegistration(false);
       expect(base.legacyTools).toEqual([
         "get_connection_context",
         "manage_auth_connections",
@@ -96,7 +159,7 @@ describe("MCP Apps additive registration", () => {
       expect(base.appTools).toEqual([]);
       expect(base.resources).toEqual([]);
 
-      const withApps = captureRegistration(true);
+      const withApps = await captureRegistration(true);
       expect(withApps.legacyTools).toEqual([
         "get_connection_context",
         "manage_auth_connections",
@@ -118,17 +181,45 @@ describe("MCP Apps additive registration", () => {
 
 describe("MCP toolset allowlist", () => {
   test.each([false, true])(
+    "requires search access with an allowlist (MCP Apps: %s)",
+    async (mcpApps) => {
+      const previousEnabled = process.env.KERNEL_MCP_ENABLED_TOOLSETS;
+      const previousDisabled = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+      process.env.KERNEL_MCP_ENABLED_TOOLSETS = "web_search";
+      delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+      try {
+        expect((await captureRegistration(mcpApps)).legacyTools).toEqual([
+          "get_connection_context",
+        ]);
+        expect(
+          (await captureRegistration(mcpApps, false, false, true)).legacyTools,
+        ).toEqual(["get_connection_context", "web_search"]);
+        process.env.KERNEL_MCP_DISABLED_TOOLSETS = "web_search";
+        expect(
+          (await captureRegistration(mcpApps, false, false, true)).legacyTools,
+        ).toEqual(["get_connection_context"]);
+      } finally {
+        if (previousEnabled === undefined)
+          delete process.env.KERNEL_MCP_ENABLED_TOOLSETS;
+        else process.env.KERNEL_MCP_ENABLED_TOOLSETS = previousEnabled;
+        if (previousDisabled === undefined)
+          delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
+        else process.env.KERNEL_MCP_DISABLED_TOOLSETS = previousDisabled;
+      }
+    },
+  );
+  test.each([false, true])(
     "requires vault access even with an allowlist (MCP Apps: %s)",
-    (mcpApps) => {
+    async (mcpApps) => {
       const previousEnabled = process.env.KERNEL_MCP_ENABLED_TOOLSETS;
       const previousDisabled = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
       process.env.KERNEL_MCP_ENABLED_TOOLSETS = "vaults";
       delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
       try {
-        expect(captureRegistration(mcpApps).legacyTools).toEqual([
+        expect((await captureRegistration(mcpApps)).legacyTools).toEqual([
           "get_connection_context",
         ]);
-        expect(captureRegistration(mcpApps, true).legacyTools).toEqual([
+        expect((await captureRegistration(mcpApps, true)).legacyTools).toEqual([
           "get_connection_context",
           "manage_vault_provider_configs",
           "manage_vault_wallets",
@@ -138,7 +229,7 @@ describe("MCP toolset allowlist", () => {
           "manage_vaults",
         ]);
         process.env.KERNEL_MCP_DISABLED_TOOLSETS = "vaults";
-        expect(captureRegistration(mcpApps, true).legacyTools).toEqual([
+        expect((await captureRegistration(mcpApps, true)).legacyTools).toEqual([
           "get_connection_context",
         ]);
       } finally {
@@ -152,18 +243,20 @@ describe("MCP toolset allowlist", () => {
     },
   );
 
-  test("keeps connection context and only the selected browser controls", () => {
+  test("keeps connection context and only the selected browser controls", async () => {
     const previousEnabled = process.env.KERNEL_MCP_ENABLED_TOOLSETS;
     const previousDisabled = process.env.KERNEL_MCP_DISABLED_TOOLSETS;
     process.env.KERNEL_MCP_ENABLED_TOOLSETS =
-      "execute_playwright_code computer_action";
+      "execute_playwright_code manage_playwright_executors browser_repl computer_action";
     delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
     try {
-      const registration = captureRegistration(false);
+      const registration = await captureRegistration(false);
       expect(registration.legacyTools).toEqual([
         "get_connection_context",
         "computer_action",
         "execute_playwright_code",
+        "manage_playwright_executors",
+        "browser_repl",
       ]);
       expect(registration.appTools).toEqual([]);
       expect(registration.resources).toEqual([]);
@@ -189,12 +282,15 @@ describe("project selection registration", () => {
     "manage_browsers",
     "manage_browser_pools",
     "browser_curl",
+    "manage_browser_files",
     "manage_proxies",
     "manage_extensions",
     "manage_apps",
     "computer_action",
     "exec_command",
     "execute_playwright_code",
+    "manage_playwright_executors",
+    "browser_repl",
     "manage_replays",
     "manage_auth_connections",
     "manage_credentials",
@@ -207,8 +303,8 @@ describe("project selection registration", () => {
     "begin_auth_login",
   ];
 
-  test("advertises one stable project-aware tool contract", () => {
-    const registration = captureRegistration(true, true);
+  test("advertises one stable project-aware tool contract", async () => {
+    const registration = await captureRegistration(true, true);
 
     for (const name of projectScopedTools) {
       expect(registration.schemas.get(name)).toHaveProperty("project");

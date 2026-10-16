@@ -1,13 +1,20 @@
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import {
+  decodeSessionId,
+  getRequestHeaders,
   instrument,
+  MCP_SESSION_HEADER,
   PostHogMCPAnalyticsEvent,
   PostHogMCPAnalyticsProperty,
   type BeforeSendFn,
   type McpAnalytics,
 } from "@posthog/mcp";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  CLIENT_CAPABILITIES_META_KEY,
+  CLIENT_INFO_META_KEY,
+  type McpServer,
+} from "@modelcontextprotocol/server";
 import { PostHog } from "posthog-node";
 import type {
   McpConnectionAnalyticsContext,
@@ -15,7 +22,13 @@ import type {
 } from "@/lib/mcp/auth-context";
 import { MCP_INTENT_ARGUMENT_DESCRIPTION } from "@/lib/mcp/analytics-context";
 import {
+  DEPRECATED_TOOL_PARAMS,
+  deprecatedParamsUsed,
+} from "@/lib/mcp/deprecated-params";
+import {
   type KernelFeedback,
+  LEGACY_SITE_COMPATIBILITY_FEEDBACK_TYPE,
+  legacyChallengeType,
   registerFeedbackTool,
 } from "@/lib/mcp/tools/feedback";
 import {
@@ -32,6 +45,7 @@ import {
   MCP_ENTERPRISE_MANAGED_AUTHORIZATION_EXTENSION,
   MCP_OAUTH_CLIENT_CREDENTIALS_EXTENSION,
   MCP_TASKS_EXTENSION,
+  type RawClientCapabilities,
 } from "@/lib/mcp/client-capabilities";
 
 const projectToken = process.env.POSTHOG_PROJECT_TOKEN;
@@ -39,6 +53,8 @@ const projectToken = process.env.POSTHOG_PROJECT_TOKEN;
 export type OAuthTokenExchangeAnalytics = {
   grantType: "authorization_code" | "refresh_token" | "unknown";
   clientType: "kernel_cli" | "registered_client" | "unknown";
+  /** OAuth client_id, so a failure can be attributed to the client that caused it. */
+  clientId?: string;
   accessScope: "organization" | "project" | "unknown";
   stage:
     | "request_validation"
@@ -54,6 +70,11 @@ export type OAuthTokenExchangeAnalytics = {
     | "invalid_grant"
     | "unsupported_grant_type"
     | "server_error";
+  /** Upstream status when the provider rejected the exchange. */
+  providerStatusCode?: number;
+  /** Coarse RFC 6749 section 5.2 error code from the provider, or `unknown`
+   * for anything outside that set. Narrows a failure; does not identify it. */
+  providerErrorCode?: string;
   statusCode: number;
   durationMs: number;
 };
@@ -91,6 +112,7 @@ const posthog = projectToken
 
 export const MCP_USED_PROJECT_ID_PROPERTY = "$mcp_used_project_id";
 export const MCP_USED_PROJECT_PROPERTY = "$mcp_used_project";
+export const MCP_DEPRECATED_PARAMS_PROPERTY = "$mcp_deprecated_params";
 export const MCP_CLIENT_SUPPORTS_SAMPLING_PROPERTY =
   "$mcp_client_supports_sampling";
 export const MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY =
@@ -131,7 +153,8 @@ const CLIENT_EXTENSION_PROPERTIES = {
 // property the pinned SDK doesn't emit today — a renamed payload field, a new one —
 // can't start flowing on an upgrade. Deliberately absent: $mcp_parameters and
 // $mcp_response (call payloads), and $mcp_error_message (the text a failed tool
-// returned). $mcp_used_project_id / $mcp_used_project are presence flags only.
+// returned). $mcp_used_project_id / $mcp_used_project are presence flags only, and
+// $mcp_deprecated_params lists parameter names, never values.
 const SENT_PROPERTIES = new Set<string>([
   "$groups",
   "$insert_id",
@@ -142,6 +165,7 @@ const SENT_PROPERTIES = new Set<string>([
   "$mcp_scope_source",
   MCP_USED_PROJECT_ID_PROPERTY,
   MCP_USED_PROJECT_PROPERTY,
+  MCP_DEPRECATED_PARAMS_PROPERTY,
   MCP_CLIENT_SUPPORTS_SAMPLING_PROPERTY,
   MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY,
   MCP_CLIENT_ELICITATION_MODE_PROPERTY,
@@ -157,6 +181,8 @@ const SENT_PROPERTIES = new Set<string>([
   PostHogMCPAnalyticsProperty.IntentSource,
   PostHogMCPAnalyticsProperty.IsError,
   PostHogMCPAnalyticsProperty.ListedToolNames,
+  PostHogMCPAnalyticsProperty.LlmModel,
+  PostHogMCPAnalyticsProperty.LlmModelSource,
   PostHogMCPAnalyticsProperty.ProtocolVersion,
   PostHogMCPAnalyticsProperty.ResourceName,
   PostHogMCPAnalyticsProperty.ServerName,
@@ -214,6 +240,7 @@ const SENT_PROPERTIES = new Set<string>([
   "missing_capability_destination",
   "missing_capability_area",
   "missing_capability_name",
+  "missing_capability_site_domain",
   "missing_capability_requested_action",
   "missing_capability_task_outcome",
   "missing_capability_tools_checked",
@@ -255,8 +282,12 @@ export function clientCapabilityAnalyticsFromInitialize(
   body: unknown,
 ): McpClientCapabilityAnalytics | null {
   const capabilities = initializeClientCapabilities(body);
-  if (!capabilities) return null;
+  return capabilities ? clientCapabilityAnalytics(capabilities) : null;
+}
 
+function clientCapabilityAnalytics(
+  capabilities: RawClientCapabilities,
+): McpClientCapabilityAnalytics {
   const sampling = isRecord(capabilities.sampling)
     ? capabilities.sampling
     : null;
@@ -320,6 +351,20 @@ function annotateProjectParamUsage(properties: Record<string, unknown>) {
   properties[MCP_USED_PROJECT_PROPERTY] = hasNonEmptyParam(args, "project");
 }
 
+function annotateDeprecatedParamUsage(properties: Record<string, unknown>) {
+  const toolName = properties[PostHogMCPAnalyticsProperty.ToolName];
+  if (
+    typeof toolName !== "string" ||
+    !Object.prototype.hasOwnProperty.call(DEPRECATED_TOOL_PARAMS, toolName)
+  ) {
+    return;
+  }
+  properties[MCP_DEPRECATED_PARAMS_PROPERTY] = deprecatedParamsUsed(
+    toolCallArguments(properties) ?? {},
+    DEPRECATED_TOOL_PARAMS[toolName as keyof typeof DEPRECATED_TOOL_PARAMS],
+  );
+}
+
 const IPV6_CANDIDATE_PATTERN =
   /(?<![A-Za-z0-9:])(?:[A-Fa-f0-9]{0,4}:){2,}(?:[A-Fa-f0-9]{0,4}|(?:\d{1,3}\.){3}\d{1,3})(?:%[A-Za-z0-9_.-]+)?(?![A-Za-z0-9:.])/g;
 
@@ -349,6 +394,17 @@ function sanitizeIntent(intent: string) {
 
 const ANALYTICS_CONTEXT_PROPERTY = "__mcp_connection_analytics_context";
 
+// PostHog reads the `context` argument only for tools whose schema leaves it to the SDK.
+// Declaring `context` on a tool (the analytics-backed tools, manage_browsers) stops that
+// read, so the SDK's fallback restores intent capture from the same argument.
+export function intentFromContextArgument(request: {
+  params?: { arguments?: Record<string, unknown>; [key: string]: unknown };
+}) {
+  const context = request.params?.arguments?.context;
+  const intent = typeof context === "string" ? context.trim() : "";
+  return intent || undefined;
+}
+
 /**
  * Enforces the SENT_PROPERTIES allow-list on every event the SDK builds and sanitizes
  * the free-form intent.
@@ -359,8 +415,10 @@ export const sanitizeMcpAnalyticsEvent: BeforeSendFn = (event) => {
   const properties = event.properties;
   if (!properties) return event;
   enrichMcpAnalyticsEvent(event);
+  applyDerivedSession(event);
   if (event.event === PostHogMCPAnalyticsEvent.ToolCall) {
     annotateProjectParamUsage(properties);
+    annotateDeprecatedParamUsage(properties);
     const errorMessage = properties[PostHogMCPAnalyticsProperty.ErrorMessage];
     if (
       properties[PostHogMCPAnalyticsProperty.ToolName] ===
@@ -402,9 +460,10 @@ export const sanitizeMcpAnalyticsEvent: BeforeSendFn = (event) => {
 };
 
 /** Extracts the analytics identity resolved during MCP authentication. */
-function connectionAnalyticsContext(extra: unknown) {
-  const authInfo = (extra as { authInfo?: { extra?: unknown } } | undefined)
-    ?.authInfo;
+function connectionAnalyticsContext(ctx: unknown) {
+  const authInfo = (
+    ctx as { http?: { authInfo?: { extra?: unknown } } } | undefined
+  )?.http?.authInfo;
   const authExtra = authInfo?.extra as
     | { connectionAnalytics?: McpConnectionAnalyticsContext }
     | undefined;
@@ -414,13 +473,108 @@ function connectionAnalyticsContext(extra: unknown) {
 // The route resolves the Kernel connection context at auth time and attaches it to
 // authInfo.extra on every request, so reading the org id out of the request extras
 // adds no I/O.
-function connectionOrgId(extra: unknown) {
-  const authInfo = (extra as { authInfo?: { extra?: unknown } } | undefined)
-    ?.authInfo;
+function connectionOrgId(ctx: unknown) {
+  const authInfo = (
+    ctx as { http?: { authInfo?: { extra?: unknown } } } | undefined
+  )?.http?.authInfo;
   const authExtra = authInfo?.extra as
     | { connectionContext?: McpConnectionContext | null }
     | undefined;
   return authExtra?.connectionContext?.scope.organizationId;
+}
+
+const SESSION_KEY_PROPERTY = "__mcp_analytics_session_key";
+
+// Matches the SDK's inactivity timeout, but as fixed windows: requests on the 2026-07-28
+// revision run on a fresh server instance each, so there is no in-process state to
+// measure inactivity against.
+const DERIVED_SESSION_WINDOW_MS = 30 * 60 * 1000;
+
+/**
+ * Requests without an MCP session (every request on the 2026-07-28 revision) would get a
+ * new $session_id per call. For those, key the session on the caller, organization, and
+ * client instead; sanitizeMcpAnalyticsEvent buckets the key into a window. Concurrent
+ * runs by the same caller and client share a session.
+ */
+function analyticsSessionKey(ctx: unknown) {
+  const extra = ctx as
+    | {
+        sessionId?: string;
+        http?: { authInfo?: { token?: string; extra?: unknown } };
+        mcpReq?: { envelope?: unknown };
+      }
+    | undefined;
+  const headers = getRequestHeaders(extra);
+  const header = headers?.[MCP_SESSION_HEADER];
+  if (
+    extra?.sessionId ||
+    decodeSessionId(Array.isArray(header) ? header[0] : header)
+  ) {
+    return null;
+  }
+
+  const authInfo = extra?.http?.authInfo;
+  const userId = (authInfo?.extra as { userId?: string | null } | undefined)
+    ?.userId;
+  const subject = userId
+    ? `user:${userId}`
+    : authInfo?.token
+      ? `token:${authInfo.token}`
+      : null;
+  if (!subject) return null;
+
+  const envelope = extra?.mcpReq?.envelope;
+  const clientInfo = isRecord(envelope)
+    ? envelope[CLIENT_INFO_META_KEY]
+    : undefined;
+  const clientName =
+    isRecord(clientInfo) && typeof clientInfo.name === "string"
+      ? clientInfo.name
+      : "";
+
+  return createHash("sha256")
+    .update([subject, connectionOrgId(ctx) ?? "", clientName].join("\0"))
+    .digest("hex");
+}
+
+function applyDerivedSession(event: Parameters<BeforeSendFn>[0]) {
+  const properties = event.properties;
+  const key = properties[SESSION_KEY_PROPERTY];
+  delete properties[SESSION_KEY_PROPERTY];
+  if (typeof key !== "string") return;
+
+  const window = Math.floor(
+    Date.parse(event.timestamp) / DERIVED_SESSION_WINDOW_MS,
+  );
+  const sessionId = `ses_${createHash("sha256")
+    .update(`${key}\0${window}`)
+    .digest("hex")
+    .slice(0, 32)}`;
+
+  const previous = properties[PostHogMCPAnalyticsProperty.SessionId];
+  properties[PostHogMCPAnalyticsProperty.SessionId] = sessionId;
+  // Anonymous events use the session id as their distinct id.
+  if (event.distinct_id === previous) event.distinct_id = sessionId;
+}
+
+const CODEX_TURN_METADATA_KEY = "x-codex-turn-metadata";
+const MODEL_ID_PATTERN = /^[\w.:/@-]{1,100}$/;
+
+/**
+ * Codex reports its model in request metadata, which needs no extra tool argument.
+ * Other clients don't, and agent self-reporting stays off.
+ */
+function clientMetadataModel(request: { params?: unknown }) {
+  const params = request.params;
+  const meta = isRecord(params) ? params._meta : undefined;
+  const codex = isRecord(meta) ? meta[CODEX_TURN_METADATA_KEY] : undefined;
+  const model =
+    isRecord(codex) && typeof codex.model === "string"
+      ? codex.model.trim()
+      : "";
+  return MODEL_ID_PATTERN.test(model) && model.toLowerCase() !== "unknown"
+    ? model
+    : null;
 }
 
 export function captureMcpCustomEvent(
@@ -430,11 +584,13 @@ export function captureMcpCustomEvent(
   properties: Record<string, unknown>,
 ) {
   const organizationId = connectionOrgId(extra);
+  const sessionKey = analyticsSessionKey(extra);
   return analytics.capture({
     event,
     properties: {
       ...properties,
       ...(organizationId && { $groups: { organization: organizationId } }),
+      ...(sessionKey && { [SESSION_KEY_PROPERTY]: sessionKey }),
     },
   });
 }
@@ -456,9 +612,11 @@ export function captureMissingCapabilityReport(
     : { value: "", redacted: false };
   const capability = redactAnalyticsTextWithStatus(report.capability);
   const destination =
-    report.gap_reason === "kernel_capability_missing"
-      ? "kernel_product_demand"
-      : "external_integration_demand";
+    report.gap_reason === "site_tool_missing"
+      ? "webmcp_catalog_demand"
+      : report.gap_reason === "kernel_capability_missing"
+        ? "kernel_product_demand"
+        : "external_integration_demand";
 
   return captureMcpCustomEvent(
     analytics,
@@ -472,12 +630,16 @@ export function captureMissingCapabilityReport(
       missing_capability_destination: destination,
       missing_capability_area: report.capability_area,
       missing_capability_name: capability.value,
+      ...(report.site_domain && {
+        missing_capability_site_domain: report.site_domain,
+      }),
       missing_capability_requested_action: report.requested_action,
       missing_capability_task_outcome: report.task_outcome,
       missing_capability_tools_checked: report.tools_checked,
       missing_capability_dedupe_key: analyticsDedupeKey([
         destination,
         report.capability_area,
+        report.site_domain,
         report.requested_action,
         capability.value.toLowerCase(),
       ]),
@@ -541,10 +703,13 @@ export function captureOAuthTokenExchange(
   const properties = {
     oauth_grant_type: exchange.grantType,
     oauth_client_type: exchange.clientType,
+    oauth_client_id: exchange.clientId,
     oauth_access_scope: exchange.accessScope,
     oauth_stage: exchange.stage,
     oauth_outcome: exchange.outcome,
     oauth_error_code: exchange.errorCode,
+    oauth_provider_status_code: exchange.providerStatusCode,
+    oauth_provider_error_code: exchange.providerErrorCode,
     http_status_code: exchange.statusCode,
     duration_ms: exchange.durationMs,
   };
@@ -617,9 +782,20 @@ export function captureMcpFeedback(
   analytics: McpAnalytics,
 ) {
   const isSiteOutcome =
-    feedback.feedback_type === "bot_detection" ||
+    feedback.feedback_type === "site_compatibility" ||
     feedback.feedback_type === "config_registry";
-  const botDetection = isSiteOutcome ? feedback.bot_detection : undefined;
+  const siteCompatibility = isSiteOutcome
+    ? feedback.site_compatibility
+    : undefined;
+  // Site-compatibility feedback keeps its original analytics names and values
+  // so existing PostHog insights continue to match.
+  const feedbackType =
+    feedback.feedback_type === "site_compatibility"
+      ? LEGACY_SITE_COMPATIBILITY_FEEDBACK_TYPE
+      : feedback.feedback_type;
+  const challengeType =
+    siteCompatibility?.challenge_type &&
+    legacyChallengeType(siteCompatibility.challenge_type);
   const configRegistry =
     feedback.feedback_type === "config_registry"
       ? feedback.config_registry
@@ -635,11 +811,13 @@ export function captureMcpFeedback(
 
   const summary = safeText(feedback.summary)!;
   const productArea = safeText(feedback.product_area);
-  const suspectedVendor = safeText(botDetection?.suspected_vendor);
-  const region = safeText(botDetection?.region);
-  const browserVersion = safeText(botDetection?.browser_version);
-  const browserImageVersion = safeText(botDetection?.browser_image_version);
-  const browserSessionId = safeText(botDetection?.browser_session_id);
+  const suspectedVendor = safeText(siteCompatibility?.access_provider);
+  const region = safeText(siteCompatibility?.region);
+  const browserVersion = safeText(siteCompatibility?.browser_version);
+  const browserImageVersion = safeText(
+    siteCompatibility?.browser_image_version,
+  );
+  const browserSessionId = safeText(siteCompatibility?.browser_session_id);
   const analysisId = safeText(configRegistry?.analysis_id);
   const toolsUsed = feedback.tools_used?.map((tool) => safeText(tool)!);
   const frictionPoints = safeText(feedback.friction_points);
@@ -656,7 +834,7 @@ export function captureMcpFeedback(
         : "unknown");
   const destination = configRegistry
     ? "config_registry_quality"
-    : botDetection
+    : siteCompatibility
       ? "config_registry_prioritization"
       : feedback.feedback_type === "mcp"
         ? feedback.category === "missing_tool"
@@ -670,7 +848,7 @@ export function captureMcpFeedback(
             : feedback.sentiment === "positive"
               ? "product_praise"
               : "product_feedback"
-          : `${feedback.feedback_type}_feedback`;
+          : `${feedbackType}_feedback`;
   const appliedConfigKey = configRegistry
     ? configRegistryAppliedConfigKey(configRegistry)
     : undefined;
@@ -678,19 +856,19 @@ export function captureMcpFeedback(
     ? analyticsDedupeKey([
         "config_registry",
         analysisId ?? configRegistry.request_method,
-        botDetection?.registrable_domain,
+        siteCompatibility?.registrable_domain,
         appliedConfigKey,
-        botDetection?.observed_outcome,
+        siteCompatibility?.observed_outcome,
       ])
-    : botDetection
+    : siteCompatibility
       ? analyticsDedupeKey([
-          "bot_detection",
-          botDetection.registrable_domain,
-          botDetection.observed_outcome,
-          botDetection.reproducibility,
+          LEGACY_SITE_COMPATIBILITY_FEEDBACK_TYPE,
+          siteCompatibility.registrable_domain,
+          siteCompatibility.observed_outcome,
+          siteCompatibility.reproducibility,
         ])
       : analyticsDedupeKey([
-          feedback.feedback_type,
+          feedbackType,
           feedback.affected_tool,
           productArea,
           feedback.category,
@@ -699,7 +877,7 @@ export function captureMcpFeedback(
 
   return captureMcpCustomEvent(analytics, extra, MCP_FEEDBACK_SUBMITTED_EVENT, {
     feedback_summary: summary,
-    feedback_type: feedback.feedback_type,
+    feedback_type: feedbackType,
     feedback_sentiment: feedback.sentiment,
     feedback_task_outcome: taskOutcome,
     feedback_affected_tool: feedback.affected_tool,
@@ -707,16 +885,18 @@ export function captureMcpFeedback(
     feedback_privacy_redacted: privacyRedacted,
     feedback_product_area: productArea,
     feedback_destination: destination,
-    feedback_bot_detection_registrable_domain: botDetection?.registrable_domain,
-    feedback_bot_detection_observed_outcome: botDetection?.observed_outcome,
+    feedback_bot_detection_registrable_domain:
+      siteCompatibility?.registrable_domain,
+    feedback_bot_detection_observed_outcome:
+      siteCompatibility?.observed_outcome,
     feedback_bot_detection_suspected_vendor: suspectedVendor,
-    feedback_bot_detection_challenge_type: botDetection?.challenge_type,
-    feedback_bot_detection_stealth: botDetection?.stealth,
-    feedback_bot_detection_proxy_type: botDetection?.proxy_type,
+    feedback_bot_detection_challenge_type: challengeType,
+    feedback_bot_detection_stealth: siteCompatibility?.compatibility_mode,
+    feedback_bot_detection_proxy_type: siteCompatibility?.proxy_type,
     feedback_bot_detection_region: region,
     feedback_bot_detection_browser_version: browserVersion,
     feedback_bot_detection_browser_image_version: browserImageVersion,
-    feedback_bot_detection_reproducibility: botDetection?.reproducibility,
+    feedback_bot_detection_reproducibility: siteCompatibility?.reproducibility,
     feedback_bot_detection_browser_session_id: browserSessionId,
     feedback_config_registry_request_method: configRegistry?.request_method,
     feedback_config_registry_analysis_id: analysisId,
@@ -792,9 +972,13 @@ export function instrumentMcpAnalytics(
     // the SDK default: it repeats per tool in every tools/list response, so it stays
     // short, and it names the arguments agents must not copy into it.
     context: { description: MCP_INTENT_ARGUMENT_DESCRIPTION },
+    // Runs for tools that declare their own context field, which PostHog then doesn't own.
+    intentFallback: intentFromContextArgument,
     // A failed tool call otherwise fans out into a second `$exception` event whose
     // `$exception_list` is built from the text the tool returned.
     enableExceptionAutocapture: false,
+    enableConversationId: false,
+    captureModel: false,
     // Keep general MCP telemetry session-scoped. The initialize event alone uses the
     // canonical Kernel user ID when auth context identifies a user; API-key principals
     // remain anonymous because their principal ID identifies the credential itself.
@@ -802,7 +986,7 @@ export function instrumentMcpAnalytics(
     // Attributes every event to the caller's organization via $groups — the same
     // convention as the Kernel API's own events (api_call sends $groups with
     // organization = org id). Stamped here rather than through the SDK's identify
-    // callback because identify never runs for tools/list, and mcp-handler builds a
+    // callback because identify never runs for tools/list, and createMcpHandler builds a
     // fresh McpServer per HTTP request, so the SDK's per-session identity cache is
     // always cold when a tools/list request arrives.
     //
@@ -819,6 +1003,23 @@ export function instrumentMcpAnalytics(
         if (context) properties[ANALYTICS_CONTEXT_PROPERTY] = context;
         const capabilities = clientCapabilityAnalyticsFromInitialize(request);
         if (capabilities) Object.assign(properties, capabilities);
+      }
+      const envelope = extra?.mcpReq?.envelope;
+      const capabilities = isRecord(envelope)
+        ? envelope[CLIENT_CAPABILITIES_META_KEY]
+        : undefined;
+      if (isRecord(capabilities)) {
+        Object.assign(properties, clientCapabilityAnalytics(capabilities));
+      }
+      const sessionKey = analyticsSessionKey(extra);
+      if (sessionKey) properties[SESSION_KEY_PROPERTY] = sessionKey;
+      if (request.method === "tools/call") {
+        const model = clientMetadataModel(request);
+        if (model) {
+          properties[PostHogMCPAnalyticsProperty.LlmModel] = model;
+          properties[PostHogMCPAnalyticsProperty.LlmModelSource] =
+            "client_metadata";
+        }
       }
       return Object.keys(properties).length > 0 ? properties : null;
     },

@@ -15,9 +15,9 @@ KERNEL runs real chromium browsers in the cloud. reach for it when the task is o
 for each step, prefer these layers in order. move to the next when the current one is unavailable or insufficient:
 
 1. webmcp: tools the site itself exposes to agents. prefer this where available, because the site defines the action contract rather than you inferring it from the dom.
-2. execute_playwright_code: structured dom interaction.
+2. browser_repl or execute_playwright_code: dom interaction. the repl keeps state across calls; playwright code runs in a fresh context each call.
 3. computer_action: visual control, for pages the dom cannot drive.
 
-a single task can mix layers. an \`awaiting_submission\` result from webmcp, for example, populates a form and then needs one of the other two to submit it.
+a single task can mix layers. an \`awaiting_submission\` result from webmcp, for example, populates a form and then needs one of the lower layers to submit it.
 
 create sessions with manage_browsers and delete them when finished. set timeout_seconds so an abandoned session cleans itself up.`;
