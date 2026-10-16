@@ -39,7 +39,7 @@ wallet under a new key for one enrollment; reconcile unresolved child cards firs
 
 Create one card request with `manage_vault_cards` `action: "create"`,
 `provider: "kernel"`, a new immutable key, and `spec` containing `wallet`, `amount` (integer
-minor currency units, maximum 50000), `currency`, `merchant_name`, HTTPS
+minor currency units, maximum 1000000 ($10,000 USD)), `currency`, `merchant_name`, HTTPS
 `merchant_url`, and `merchant_country` (ISO 3166-1 alpha-2; required for Visa).
 Optional `merchant_category` and `merchant_category_code` (four-digit MCC other than `0000`)
 are accepted when actually known; omit rather than invent them.
@@ -77,7 +77,7 @@ when advertised. Supply exactly these `inputs` (additional properties are reject
 - `status`: `APPROVED`, `DECLINED`, `PENDING`, `ERROR`, or `CANCELLED`.
 - `transaction_type`: `PURCHASE`, `AUTHORIZATION`, `CAPTURE`, `REFUND`, `REVERSAL`,
   `VERIFICATION`, `CHARGEBACK`, or `FRAUD`.
-- `amount`: integer minor units, 0..50000, no more than the approved amount.
+- `amount`: integer minor units, 0..1000000, no more than the approved amount.
 - `currency`: three-letter uppercase, e.g. `USD`; must match the approval currency.
 - `occurred_at`: RFC3339 timestamp of the merchant outcome.
 

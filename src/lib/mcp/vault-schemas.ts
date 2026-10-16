@@ -318,8 +318,8 @@ export const kernelCardSpecSchema = z
     wallet: vaultKeySchema(),
     amount: integer()
       .min(1)
-      .max(50000)
-      .describe("integer minor currency units."),
+      .max(1_000_000)
+      .describe("integer minor currency units, maximum 1000000."),
     currency: currency(),
     merchant_name: z.string().min(1).max(255),
     merchant_url: z.string().url().startsWith("https://"),

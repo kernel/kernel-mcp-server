@@ -186,11 +186,12 @@ kernel browsers playwright execute ${session_id} "const cookies = await page.con
 3. create a new browser session
 
 ### page not loading
-**cause:** network, dns, or proxy issues
+**cause:** network, dns, or proxy issues, or the session's egress allowlist
 **check:**
 1. test curl from inside vm
 2. check /etc/resolv.conf for dns config
 3. verify proxy settings if using one
+4. if \`manage_browsers\` action "get" shows \`network.allowed_hosts\`, a 403 page with an \`X-Kernel-Proxy-Error: network_policy_denied\` header means the allowlist refused the destination; refused scripts and subresources may only show a generic network error. the allowlist only filters traffic through the browser's proxy, so a curl test from inside the vm can succeed where chrome is refused.
 
 ### live view not working
 **cause:** neko/webrtc issues
