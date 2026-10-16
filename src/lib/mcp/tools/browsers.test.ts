@@ -907,6 +907,7 @@ describe("manage_browsers next actions", () => {
       );
       const hint: string = created.next_actions[0];
       expect(hint).toContain("brr_123");
+      expect(hint).toContain("webmcp");
       expect(hint.indexOf("webmcp")).toBeLessThan(
         hint.indexOf("computer_action"),
       );
