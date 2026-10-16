@@ -25,6 +25,7 @@ import {
   createMcpTransportSession,
   verifyMcpTransportSession,
 } from "@/lib/mcp-transport-session";
+import { MCP_SERVER_INSTRUCTIONS } from "@/lib/mcp/instructions";
 import {
   mcpToolsetEnabledByConfig,
   registerMcpCapabilities,
@@ -139,7 +140,10 @@ export function connectionScopeFailureResponse(
 }
 
 const handler = createMcpHandler(({ authInfo }) => {
-  const server = new McpServer({ name, version });
+  const server = new McpServer(
+    { name, version },
+    { instructions: MCP_SERVER_INSTRUCTIONS },
+  );
   instrumentMcpAnalytics(server);
   registerMcpCapabilities(server, {
     mcpApps: authInfo?.extra?.mcpApps === true,
