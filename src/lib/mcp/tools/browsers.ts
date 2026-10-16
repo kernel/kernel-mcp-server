@@ -28,11 +28,13 @@ import { MCP_INTENT_ARGUMENT_DESCRIPTION } from "@/lib/mcp/analytics-context";
 import { browserVaultsSchema } from "@/lib/mcp/vault-schemas";
 import { deprecatedParamConflict } from "@/lib/mcp/deprecated-params";
 import {
-  proxyConfigError,
-  proxyConfigSchema,
-  proxySelectorError,
-  proxySelectorSchema,
-} from "@/lib/mcp/proxy-config";
+  allowedHostsDescription,
+  allowedHostsSchema,
+  privateHostsSchema,
+  proxyRoutesError,
+  proxyRoutesSchema,
+} from "@/lib/mcp/network-config";
+import { proxyConfigError, proxyConfigSchema } from "@/lib/mcp/proxy-config";
 import {
   projectForOperation,
   projectSelectionInputSchema,
@@ -577,27 +579,20 @@ export function registerBrowserCapabilities(
             .optional(),
           network: z
             .object({
-              private_hosts: z
-                .array(z.string().min(1))
+              private_hosts: privateHostsSchema().optional(),
+              proxy_routes: proxyRoutesSchema().optional(),
+              allowed_hosts: allowedHostsSchema()
+                .nullable()
                 .describe(
-                  "destinations the browser reaches directly through the session's own network instead of KERNEL-managed egress, such as private hosts on a vpn or tailnet the session joined. entries are hostname patterns or private ip and cidr literals. an explicit list replaces the default private ranges (rfc1918, cgnat, and ipv6 ula); an empty list disables them; omit to keep the defaults.",
-                )
-                .optional(),
-              proxy_routes: z
-                .array(
-                  z.object({
-                    hosts: z.array(z.string().min(1)).min(1).max(50),
-                    proxy: proxySelectorSchema(),
-                  }),
-                )
-                .max(10)
-                .describe(
-                  'route requests for 1–50 host patterns per route through a proxy selected by exactly one of proxy.id or proxy.name (max 10 routes). use exact hostnames or leading "*." wildcards, which match subdomains only, not the apex. matching ignores case and ports; the most specific match wins. matched hosts override the top-level proxy; unmatched hosts use the top-level proxy or the browser default. start_url uses the top-level proxy, not routes. if a route proxy is unavailable, matched requests fail closed.',
+                  allowedHostsDescription(
+                    "the browser",
+                    "on update, a list replaces the allowlist and null removes it; a browser created without an allowlist cannot be given one, and a removed allowlist cannot be added back. open connections to removed hosts close within about 30 seconds.",
+                  ),
                 )
                 .optional(),
             })
             .describe(
-              "(create only) network settings for the browser session. cannot be combined with proxy_routes.",
+              "(create, update) network settings for the browser session. update can only change allowed_hosts. cannot be combined with proxy_routes.",
             )
             .optional(),
           proxy_routes: z
@@ -773,11 +768,13 @@ export function registerBrowserCapabilities(
           );
         }
         if (
-          (params.network !== undefined || params.proxy_routes !== undefined) &&
-          params.action !== "create"
+          params.action !== "create" &&
+          (params.proxy_routes !== undefined ||
+            params.network?.proxy_routes !== undefined ||
+            params.network?.private_hosts !== undefined)
         ) {
           return errorResponse(
-            "proxy routes are creation-only; they cannot be added to an existing browser.",
+            "proxy routes and private hosts are creation-only; only network.allowed_hosts can change on an existing browser.",
           );
         }
         if (params.proxy !== undefined) {
@@ -793,14 +790,7 @@ export function registerBrowserCapabilities(
         if (params.network !== undefined) {
           const error =
             deprecatedParamConflict("network", params, ["proxy_routes"]) ??
-            params.network.proxy_routes
-              ?.map((route, i) =>
-                proxySelectorError(
-                  `network.proxy_routes[${i}].proxy`,
-                  route.proxy,
-                ),
-              )
-              .find(Boolean);
+            proxyRoutesError(params.network.proxy_routes);
           if (error) return errorResponse(`error: ${error}`);
         }
         switch (params.action) {
@@ -827,8 +817,18 @@ export function registerBrowserCapabilities(
             }
             if (params.proxy !== undefined) createParams.proxy = params.proxy;
             if (params.proxy_id) createParams.proxy_id = params.proxy_id;
-            if (params.network !== undefined)
-              createParams.network = params.network;
+            if (params.network !== undefined) {
+              const { allowed_hosts, ...network } = params.network;
+              if (allowed_hosts === null) {
+                return errorResponse(
+                  "error: a null network.allowed_hosts is update-only; omit it for unfiltered egress.",
+                );
+              }
+              createParams.network =
+                allowed_hosts === undefined
+                  ? network
+                  : { ...network, allowed_hosts };
+            }
             if (params.proxy_routes !== undefined) {
               const proxyRoutes: Array<BrowserNetworkConfig.ProxyRoute> = [];
               for (const {
@@ -902,6 +902,11 @@ export function registerBrowserCapabilities(
               updateParams.proxy_id = "";
             } else if (params.proxy_id !== undefined) {
               updateParams.proxy_id = params.proxy_id;
+            }
+            if (params.network?.allowed_hosts !== undefined) {
+              updateParams.network = {
+                allowed_hosts: params.network.allowed_hosts,
+              };
             }
             if (params.name !== undefined) updateParams.name = params.name;
             if (params.tags !== undefined) updateParams.tags = params.tags;

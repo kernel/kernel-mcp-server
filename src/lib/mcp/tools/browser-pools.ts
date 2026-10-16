@@ -8,6 +8,13 @@ import {
 } from "@/lib/mcp/browser-config";
 import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
 import {
+  allowedHostsDescription,
+  allowedHostsSchema,
+  privateHostsSchema,
+  proxyRoutesError,
+  proxyRoutesSchema,
+} from "@/lib/mcp/network-config";
+import {
   registerJsonResourceCollection,
   registerJsonResourceTemplate,
 } from "@/lib/mcp/resource-templates";
@@ -50,6 +57,7 @@ type PoolConfigParams = Omit<
   fill_rate_per_minute?: number;
   chrome_policy?: Record<string, unknown>;
   kiosk_mode?: boolean;
+  network?: BrowserPoolCreateParams["network"];
   clear_profile?: boolean;
   clear_extensions?: boolean;
 };
@@ -76,6 +84,9 @@ function buildPoolCreateParams(
     };
   }
 
+  const networkError = proxyRoutesError(params.network?.proxy_routes);
+  if (networkError) return { ok: false, error: `error: ${networkError}` };
+
   const browserConfig = buildBrowserCreateConfig(params);
   if (!browserConfig.ok) return browserConfig;
   const chromePolicy =
@@ -99,6 +110,7 @@ function buildPoolCreateParams(
       }),
       ...(chromePolicy && { chrome_policy: chromePolicy }),
       ...(params.kiosk_mode !== undefined && { kiosk_mode: params.kiosk_mode }),
+      ...(params.network !== undefined && { network: params.network }),
       ...browserConfig.value,
     },
   };
@@ -124,6 +136,9 @@ function buildPoolUpdateParams(
         "error: clear_extensions cannot be combined with extension_id or extension_name.",
     };
   }
+
+  const networkError = proxyRoutesError(params.network?.proxy_routes);
+  if (networkError) return { ok: false, error: `error: ${networkError}` };
 
   const browserConfig = buildBrowserSharedConfig(params);
   if (!browserConfig.ok) return browserConfig;
@@ -154,6 +169,7 @@ function buildPoolUpdateParams(
       }),
       ...(params.kiosk_mode !== undefined && { kiosk_mode: params.kiosk_mode }),
       ...(params.start_url !== undefined && { start_url: params.start_url }),
+      ...(params.network !== undefined && { network: params.network }),
       ...browserConfig.value,
       ...(params.clear_profile && { profile: { id: "" } }),
       ...(params.clear_extensions && { extensions: [] }),
@@ -184,6 +200,7 @@ function summarizeBrowserPool(pool: BrowserPool) {
       start_url: config.start_url,
       profile_id: pool.profile_id,
       proxy_id: config.proxy_id,
+      network: config.network,
       viewport: config.viewport,
       extension_ids: pool.extension_ids,
       chrome_policy_keys: config.chrome_policy
@@ -211,6 +228,7 @@ function summarizeAcquiredBrowser(browser: BrowserPoolAcquireResponse) {
     pool: browser.pool,
     profile: browser.profile,
     proxy_id: browser.proxy_id,
+    network: browser.network,
     start_url: browser.start_url,
     viewport: browser.viewport,
   };
@@ -337,6 +355,23 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
         kiosk_mode: z
           .boolean()
           .describe("(create, update) hide address bar/tabs in live view.")
+          .optional(),
+        network: z
+          .object({
+            private_hosts: privateHostsSchema().optional(),
+            proxy_routes: proxyRoutesSchema().optional(),
+            allowed_hosts: allowedHostsSchema()
+              .describe(
+                allowedHostsDescription(
+                  "pool browsers",
+                  "changing it replaces idle browsers. a leased browser keeps its allowlist until release, when it is reset to the pool's or the browser is replaced; manage_browsers update can replace or remove it during the lease.",
+                ),
+              )
+              .optional(),
+          })
+          .describe(
+            "(create, update) network settings for pool browsers. on update, replaces the pool's whole network config: include every field to keep, or pass {} to remove it. private_hosts and proxy_routes changes only reach browsers created afterward (see discard_all_idle).",
+          )
           .optional(),
         extension_id: z
           .string()

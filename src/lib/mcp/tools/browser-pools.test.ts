@@ -229,6 +229,116 @@ describe("browser-pool contract parity", () => {
     expect(response.browser_pool.config).not.toHaveProperty("extensions");
   });
 
+  test("passes network settings through create and update", async () => {
+    const createCalls: unknown[] = [];
+    const updateCalls: unknown[] = [];
+    const network = {
+      private_hosts: ["*.preview.example.ts.net"],
+      proxy_routes: [{ hosts: ["api.example.org"], proxy: { name: "backup" } }],
+      allowed_hosts: ["example.com", "*.example.com"],
+    };
+    kernelClientMock.factory = () => ({
+      browserPools: {
+        create: async (params: unknown) => {
+          createCalls.push(params);
+          const created = pool();
+          return {
+            ...created,
+            browser_pool_config: { ...created.browser_pool_config, network },
+          };
+        },
+        update: async (...args: unknown[]) => {
+          updateCalls.push(args);
+          return pool();
+        },
+      },
+    });
+    const { handler } = captureBrowserPoolTool();
+
+    const created = await handler({ action: "create", size: 1, network }, auth);
+    const updated = await handler(
+      {
+        action: "update",
+        id_or_name: "pool_1",
+        network: { allowed_hosts: ["example.org"] },
+      },
+      auth,
+    );
+    const removed = await handler(
+      { action: "update", id_or_name: "pool_1", network: {} },
+      auth,
+    );
+
+    expect(createCalls).toEqual([{ size: 1, network }]);
+    expect(updateCalls).toEqual([
+      ["pool_1", { network: { allowed_hosts: ["example.org"] } }],
+      ["pool_1", { network: {} }],
+    ]);
+    expect(
+      JSON.parse(created.content[0].text).browser_pool.config.network,
+    ).toEqual(network);
+    expect(updated.isError).toBeUndefined();
+    expect(removed.isError).toBeUndefined();
+  });
+
+  test("validates pool network inputs before calling the SDK", async () => {
+    kernelClientMock.factory = () => ({ browserPools: {} });
+    const { handler, schema } = captureBrowserPoolTool();
+
+    expect(
+      schema.network.safeParse({ allowed_hosts: ["example.com"] }).success,
+    ).toBe(true);
+    expect(schema.network.safeParse({ allowed_hosts: [] }).success).toBe(false);
+    expect(schema.network.safeParse({ allowed_hosts: null }).success).toBe(
+      false,
+    );
+    expect(
+      schema.network.safeParse({
+        allowed_hosts: Array(101).fill("example.com"),
+      }).success,
+    ).toBe(false);
+
+    const result = await handler(
+      {
+        action: "update",
+        id_or_name: "pool_1",
+        network: { proxy_routes: [{ hosts: ["example.com"], proxy: {} }] },
+      },
+      auth,
+    );
+
+    expect(result).toEqual({
+      content: [
+        {
+          type: "text",
+          text: "error: network.proxy_routes[0].proxy requires exactly one of id or name.",
+        },
+      ],
+      isError: true,
+    });
+  });
+
+  test("returns the network of an acquired browser", async () => {
+    const network = { allowed_hosts: ["example.com"] };
+    kernelClientMock.factory = () => ({
+      browserPools: {
+        acquire: async () => ({
+          session_id: "brr_1",
+          pool: { id: "pool_1" },
+          network,
+        }),
+      },
+    });
+    const { handler } = captureBrowserPoolTool();
+
+    const result = await handler(
+      { action: "acquire", id_or_name: "pool_1" },
+      auth,
+    );
+
+    expect(JSON.parse(result.content[0].text).browser.network).toEqual(network);
+  });
+
   test.each([
     [
       { clear_profile: true, profile_id: "profile_1" },
