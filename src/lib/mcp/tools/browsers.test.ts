@@ -886,6 +886,36 @@ describe("manage_browsers id or name", () => {
   });
 });
 
+describe("manage_browsers next actions", () => {
+  test("leads the post-create hint with the preference order", async () => {
+    const kernelClient = {
+      browsers: {
+        create: async () => ({ session_id: "brr_123" }),
+      },
+    };
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      kernelClient,
+    );
+
+    try {
+      const created = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "create" },
+        }),
+      );
+      const hint: string = created.next_actions[0];
+      expect(hint).toContain("brr_123");
+      expect(hint.indexOf("webmcp")).toBeLessThan(
+        hint.indexOf("computer_action"),
+      );
+    } finally {
+      await close();
+    }
+  });
+});
+
 describe("browser resources", () => {
   test("uses injected dependencies", async () => {
     const kernelClient = {
