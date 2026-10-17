@@ -31,7 +31,7 @@ function safeJsonResponse(value: unknown) {
     content: [
       {
         type: "text" as const,
-        text: JSON.stringify(value, null, 2),
+        text: JSON.stringify(value),
       },
     ],
     structuredContent: value as Record<string, unknown>,

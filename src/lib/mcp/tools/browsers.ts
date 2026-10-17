@@ -346,8 +346,6 @@ async function readBrowserTelemetry(
     if (rawError) return errorResponse(`error: ${rawError}`);
   }
 
-  // Single-line JSON rather than the pretty-printed house helpers: a page
-  // carries up to 100 events and indentation would inflate the token cost.
   const serializedResponse = JSON.stringify(response);
   if (
     params.compact === false &&

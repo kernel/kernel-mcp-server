@@ -31,7 +31,7 @@ export function textResponse(text: string) {
 }
 
 export function jsonResponse(value: unknown) {
-  return textResponse(JSON.stringify(value, null, 2) ?? String(value));
+  return textResponse(JSON.stringify(value) ?? String(value));
 }
 
 export function itemsJsonResponse<T, U = T>(

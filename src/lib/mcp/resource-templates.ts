@@ -85,7 +85,7 @@ export function registerJsonResourceCollection(
             mimeType: "application/json",
             text:
               resources.length > 0
-                ? JSON.stringify(resources, null, 2)
+                ? JSON.stringify(resources)
                 : options.emptyText,
           },
         ],
@@ -127,7 +127,7 @@ export function registerJsonResourceTemplate(
           {
             uri: uri.toString(),
             mimeType: "application/json",
-            text: JSON.stringify(resource, null, 2),
+            text: JSON.stringify(resource),
           },
         ],
       };
