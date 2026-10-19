@@ -5,7 +5,7 @@ import {
   type McpDependencies,
 } from "@/lib/mcp/dependencies";
 import { longOperationOptions } from "@/lib/mcp/request-options";
-import { throwToolError } from "@/lib/mcp/responses";
+import { jsonResponse, throwToolError } from "@/lib/mcp/responses";
 import {
   projectForOperation,
   projectSelectionInputSchema,
@@ -102,23 +102,12 @@ export function registerShellTool(
           ? Buffer.from(result.stderr_b64, "base64").toString("utf-8")
           : "";
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  exit_code: result.exit_code,
-                  duration_ms: result.duration_ms,
-                  stdout,
-                  stderr,
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
+        return jsonResponse({
+          exit_code: result.exit_code,
+          duration_ms: result.duration_ms,
+          stdout,
+          stderr,
+        });
       } catch (error) {
         throwToolError("exec_command", "exec", error);
       }

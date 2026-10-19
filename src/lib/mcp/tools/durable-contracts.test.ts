@@ -271,7 +271,7 @@ describe("durable profile contracts", () => {
         expect(result.content).toEqual([
           {
             type: "text",
-            text: JSON.stringify({ id: "profile-1", name: "Renamed" }, null, 2),
+            text: JSON.stringify({ id: "profile-1", name: "Renamed" }),
           },
         ]);
       }
@@ -426,7 +426,7 @@ describe("durable proxy contracts", () => {
       expect(result.content).toEqual([
         {
           type: "text",
-          text: JSON.stringify({ id: "proxy-1", name: "Renamed" }, null, 2),
+          text: JSON.stringify({ id: "proxy-1", name: "Renamed" }),
         },
       ]);
     } finally {
