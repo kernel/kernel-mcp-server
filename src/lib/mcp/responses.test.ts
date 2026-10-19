@@ -10,7 +10,11 @@ import {
 } from "@onkernel/sdk";
 import { describe, expect, test } from "bun:test";
 
-import { errorResponse, throwToolError } from "@/lib/mcp/responses";
+import {
+  errorResponse,
+  jsonResponse,
+  throwToolError,
+} from "@/lib/mcp/responses";
 import { z } from "zod";
 
 function apiError(status: number, message: string) {
@@ -29,6 +33,14 @@ function caught(error: unknown) {
   }
   throw new Error("throwToolError did not throw");
 }
+
+describe("jsonResponse", () => {
+  test("emits compact JSON", () => {
+    expect(jsonResponse({ a: 1, b: [2] }).content[0].text).toBe(
+      '{"a":1,"b":[2]}',
+    );
+  });
+});
 
 describe("throwToolError classification", () => {
   test("names Kernel API failures after their status", () => {

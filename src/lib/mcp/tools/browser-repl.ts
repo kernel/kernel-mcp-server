@@ -137,7 +137,7 @@ function replToolContent(result: BrowserReplResult): ReplToolContent[] {
   };
 
   const content: ReplToolContent[] = [
-    { type: "text", text: JSON.stringify(summary, null, 2) },
+    { type: "text", text: JSON.stringify(summary) },
   ];
   for (const item of result.content ?? []) {
     if (item.type === "image") {
