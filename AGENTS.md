@@ -81,6 +81,10 @@ bun run format
 
 Prettier formats the following file types: `*.ts`, `*.js`, `*.json`, `*.md`
 
+### MCP responses
+
+Model-facing JSON (tool results and resources) is compact: use `jsonResponse` or `JSON.stringify(value)` without indentation.
+
 ## Project Structure
 
 - `src/` - Source code directory
