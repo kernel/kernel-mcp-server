@@ -27,7 +27,9 @@ jobs:
         run: |
           name="$(jq -r .name server.json)"
           want="$(jq -r .version server.json)"
-          live="$(curl -fsS --get --data-urlencode "search=$name" "$REGISTRY_URL/v0/servers" \
+          # Without version=latest the registry returns every published version
+          # of the name, so the comparison below would never match.
+          live="$(curl -fsS --get --data-urlencode "search=$name" --data-urlencode "version=latest" "$REGISTRY_URL/v0/servers" \
             | jq -r --arg name "$name" '.servers[] | select(.server.name == $name) | .server.version')"
           if [ "$live" = "$want" ]; then
             echo "::notice::$name@$want is already published; nothing to do."
