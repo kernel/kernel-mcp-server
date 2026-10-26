@@ -26,6 +26,11 @@ import {
   deprecatedParamsUsed,
 } from "@/lib/mcp/deprecated-params";
 import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
+import { forwardSiteReport } from "@/lib/mcp/site-report-forwarder";
+import {
   type KernelFeedback,
   LEGACY_SITE_COMPATIBILITY_FEEDBACK_TYPE,
   legacyChallengeType,
@@ -948,6 +953,7 @@ export function captureMcpFeedback(
 export function instrumentMcpAnalytics(
   server: McpServer,
   client: PostHog | null = posthog,
+  dependencies: McpDependencies = defaultMcpDependencies,
 ) {
   if (!client) {
     registerMissingCapabilityTool(server);
@@ -1031,9 +1037,10 @@ export function instrumentMcpAnalytics(
     beforeSend: sanitizeMcpAnalyticsEvent,
   });
 
-  registerFeedbackTool(server, (feedback, extra) =>
-    captureMcpFeedback(feedback, extra, analytics),
-  );
+  registerFeedbackTool(server, async (feedback, extra) => {
+    await forwardSiteReport(feedback, extra, dependencies);
+    captureMcpFeedback(feedback, extra, analytics);
+  });
 }
 
 /**
