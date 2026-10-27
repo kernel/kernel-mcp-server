@@ -92,6 +92,8 @@ describe("browser-pool contract parity", () => {
       expect(schema.memory.safeParse(memory).success).toBe(true);
     expect(schema.memory.safeParse("6GiB").success).toBe(false);
     expect(schema.expected_network.safeParse({}).success).toBe(true);
+    expect(schema.id_or_name.safeParse("").success).toBe(false);
+    expect(schema.name.safeParse("").success).toBe(false);
   });
 
   test("keeps ordinary create valid", async () => {

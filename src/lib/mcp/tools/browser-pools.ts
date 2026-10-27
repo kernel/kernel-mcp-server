@@ -344,6 +344,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           .describe("operation to perform."),
         id_or_name: z
           .string()
+          .min(1)
           .describe(
             "pool id or name. required for update/get/delete/flush/acquire/release.",
           )
@@ -358,6 +359,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           .optional(),
         name: z
           .string()
+          .min(1)
           .describe(
             "(create, update) unique pool name. (list) exact-match name filter. (acquire) lease-only browser session name, unique among active sessions in the project.",
           )

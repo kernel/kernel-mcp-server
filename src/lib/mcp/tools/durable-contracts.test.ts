@@ -469,7 +469,7 @@ describe("durable proxy contracts", () => {
     [
       "no proxy ID",
       { name: "Renamed" },
-      "error: proxy_id is required for rename.",
+      "error: id_or_name is required for rename.",
     ],
     ["no name", { proxy_id: "proxy-1" }, "error: name is required for rename."],
   ])("rejects rename with %s", async (_name, params, wantError) => {

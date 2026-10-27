@@ -81,24 +81,28 @@ export function registerAppCapabilities(
           .describe("operation to perform."),
         app_name: z
           .string()
+          .min(1)
           .describe(
             "(list_apps, invoke, list_deployments, list_invocations) app name filter or target.",
           )
           .optional(),
         version: z
           .string()
+          .min(1)
           .describe(
             "(list_apps, invoke, list_deployments, list_invocations) app version filter. defaults to 'latest' for invoke. deployment version filtering requires app_name.",
           )
           .optional(),
         query: z
           .string()
+          .min(1)
           .describe(
             "(list_apps) search apps by name. (list_deployments) search by deployment id, app name, or version. (list_invocations) search by invocation id, app name, or action name.",
           )
           .optional(),
         action_name: z
           .string()
+          .min(1)
           .describe(
             "(invoke) action to execute within the app. (list_invocations) action-name filter.",
           )
@@ -118,12 +122,14 @@ export function registerAppCapabilities(
           .optional(),
         deployment_id: z
           .string()
+          .min(1)
           .describe(
             "(get_deployment, delete_deployment) deployment id. (list_invocations) deployment filter.",
           )
           .optional(),
         invocation_id: z
           .string()
+          .min(1)
           .describe(
             "(get_invocation, list_invocation_browsers, delete_invocation_browsers) invocation id.",
           )
@@ -134,6 +140,7 @@ export function registerAppCapabilities(
           .optional(),
         since: z
           .string()
+          .min(1)
           .describe(
             "(list_invocations) include runs started since this rfc timestamp or duration such as 5m.",
           )

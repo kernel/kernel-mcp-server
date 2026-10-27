@@ -1,7 +1,11 @@
 /// <reference types="bun-types" />
 
 import { describe, expect, test } from "bun:test";
-import { connectTestMcp, toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
+import {
+  connectTestMcp,
+  toolResultJSON,
+  toolResultText,
+} from "@/lib/mcp/mcp-test-fixtures";
 import { registerAppCapabilities } from "@/lib/mcp/tools/apps";
 import type {
   InvocationCreateParams,
@@ -272,6 +276,38 @@ describe("manage_apps invocation contract", () => {
         ],
         ["deleteBrowsers", "inv_123"],
       ]);
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe("manage_apps identifiers", () => {
+  test.each([
+    "action_name",
+    "app_name",
+    "deployment_id",
+    "query",
+    "since",
+    "version",
+  ])("rejects an empty list_invocations %s in the schema", async (field) => {
+    let lists = 0;
+    const { client, close } = await connectTestMcp(registerAppCapabilities, {
+      invocations: {
+        list: async () => {
+          lists++;
+          return { getPaginatedItems: () => [], has_more: false };
+        },
+      },
+    });
+    try {
+      const result = await client.callTool({
+        name: "manage_apps",
+        arguments: { action: "list_invocations", [field]: "" },
+      });
+      expect(result.isError).toBe(true);
+      expect(toolResultText(result)).toContain(field);
+      expect(lists).toBe(0);
     } finally {
       await close();
     }

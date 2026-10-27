@@ -31,6 +31,7 @@ export function registerAPIKeyCapabilities(
           .describe("operation to perform."),
         api_key_id: z
           .string()
+          .min(1)
           .describe(
             "api key id. required for get, update, rotate, and delete; keys are not addressable by name.",
           )
@@ -143,6 +144,15 @@ export function registerAPIKeyCapabilities(
       }
       if (params.action !== "rotate" && params.expire_in_days !== undefined) {
         return errorResponse("error: expire_in_days is rotate-only.");
+      }
+      if (
+        params.action !== "create" &&
+        params.action !== "rotate" &&
+        params.days_to_expire !== undefined
+      ) {
+        return errorResponse(
+          "error: days_to_expire applies only to create and rotate.",
+        );
       }
 
       try {

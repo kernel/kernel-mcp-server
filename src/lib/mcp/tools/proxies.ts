@@ -120,6 +120,7 @@ export function registerProxyTools(
           .optional(),
         proxy_id: z
           .string()
+          .min(1)
           .describe(
             "deprecated alias for id_or_name. use the proxy id for rename, check, and delete.",
           )
@@ -274,14 +275,14 @@ export function registerProxyTools(
           }
           case "get": {
             if (!idOrName) {
-              return errorResponse("error: proxy_id is required for get.");
+              return errorResponse("error: id_or_name is required for get.");
             }
             const proxy = await client.proxies.retrieve(idOrName);
             return jsonResponse(proxy);
           }
           case "rename": {
             if (!idOrName) {
-              return errorResponse("error: proxy_id is required for rename.");
+              return errorResponse("error: id_or_name is required for rename.");
             }
             if (!params.name) {
               return errorResponse("error: name is required for rename.");
@@ -293,7 +294,7 @@ export function registerProxyTools(
           }
           case "check": {
             if (!idOrName) {
-              return errorResponse("error: proxy_id is required for check.");
+              return errorResponse("error: id_or_name is required for check.");
             }
             const result = await client.proxies.check(
               idOrName,
@@ -303,7 +304,7 @@ export function registerProxyTools(
           }
           case "delete": {
             if (!idOrName)
-              return errorResponse("error: proxy_id is required for delete.");
+              return errorResponse("error: id_or_name is required for delete.");
             await client.proxies.delete(idOrName);
             return textResponse("proxy deleted successfully");
           }

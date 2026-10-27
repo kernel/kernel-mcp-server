@@ -22,6 +22,25 @@ async function callAPIKeys(apiKeys: unknown, args: Record<string, unknown>[]) {
 }
 
 describe("manage_api_keys SDK parity", () => {
+  test("rejects an empty api_key_id in the schema", async () => {
+    let called = false;
+    const [result] = await callAPIKeys(
+      {
+        retrieve: async () => {
+          called = true;
+          return { id: "key_1" };
+        },
+      },
+      [{ action: "get", api_key_id: "" }],
+    );
+
+    expect(result.isError).toBe(true);
+    const text = JSON.stringify(result.content);
+    expect(text).toContain("Input validation error");
+    expect(text).toContain("api_key_id");
+    expect(called).toBe(false);
+  });
+
   test("forwards create policy and exact expiry", async () => {
     const calls: unknown[] = [];
     const policy = {
@@ -230,6 +249,11 @@ describe("manage_api_keys SDK parity", () => {
       "create",
       { name: "new", expire_in_days: 1 },
       "error: expire_in_days is rotate-only.",
+    ],
+    [
+      "update",
+      { name: "renamed", days_to_expire: 30 },
+      "error: days_to_expire applies only to create and rotate.",
     ],
   ])(
     "rejects %s parameters the SDK would drop: %p",

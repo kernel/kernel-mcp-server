@@ -82,6 +82,42 @@ describe("manage_proxies", () => {
     }
   });
 
+  test("rejects an empty deprecated proxy_id in the schema", async () => {
+    const { client, close } = await connectTestMcp(
+      registerProxyTools,
+      proxyClient([]),
+    );
+    try {
+      const result = await client.callTool({
+        name: "manage_proxies",
+        arguments: { action: "get", proxy_id: "" },
+      });
+      expect(result.isError).toBe(true);
+      expect(toolResultText(result)).toContain("proxy_id");
+    } finally {
+      await close();
+    }
+  });
+
+  test("names id_or_name when a proxy selector is missing", async () => {
+    const { client, close } = await connectTestMcp(
+      registerProxyTools,
+      proxyClient([]),
+    );
+    try {
+      const result = await client.callTool({
+        name: "manage_proxies",
+        arguments: { action: "delete" },
+      });
+      expect(result.isError).toBe(true);
+      expect(toolResultText(result)).toBe(
+        "error: id_or_name is required for delete.",
+      );
+    } finally {
+      await close();
+    }
+  });
+
   test("keeps the deprecated flat create fields working", async () => {
     const creates: unknown[] = [];
     const { client, close } = await connectTestMcp(
