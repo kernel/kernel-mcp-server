@@ -63,7 +63,7 @@ export function registerAppCapabilities(
     "manage_apps",
     {
       description:
-        'manage KERNEL apps when an agent needs to discover deployed app actions, invoke an app, or inspect deployment/invocation state. use "list_apps" before invoking an unknown app. "invoke" starts an action asynchronously and returns an invocation_id immediately. use "list_invocation_browsers" with that id to discover browser sessions created by the invocation, and use "get_invocation" after a short delay to inspect its state. do not poll indefinitely; if the invocation is still running, report its id. use get/list actions to inspect results and "delete_deployment" to remove a deployment.',
+        'manage KERNEL apps when an agent needs to discover deployed app actions, invoke an app, or inspect deployment/invocation state. use "list_apps" before invoking an unknown app. "invoke" starts an action asynchronously and returns an invocation_id immediately. use "list_invocations" to find runs, "list_invocation_browsers" to discover their browser sessions, and "get_invocation" after a short delay to inspect one state. do not poll indefinitely; if a run is still active, report its id. "delete_invocation_browsers" terminates every active browser created by one invocation. deployment and invocation event streams are intentionally represented by bounded list/get calls rather than an open sse stream.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z
@@ -74,41 +74,75 @@ export function registerAppCapabilities(
             "list_deployments",
             "delete_deployment",
             "get_invocation",
+            "list_invocations",
             "list_invocation_browsers",
+            "delete_invocation_browsers",
           ])
           .describe("operation to perform."),
         app_name: z
           .string()
+          .min(1)
           .describe(
-            "(list_apps, invoke, list_deployments) app name filter or target.",
+            "(list_apps, invoke, list_deployments, list_invocations) app name filter or target.",
           )
           .optional(),
         version: z
           .string()
+          .min(1)
           .describe(
-            "(list_apps, invoke, list_deployments) app version filter. defaults to 'latest' for invoke. deployment version filtering requires app_name.",
+            "(list_apps, invoke, list_deployments, list_invocations) app version filter. defaults to 'latest' for invoke. deployment version filtering requires app_name.",
           )
           .optional(),
         query: z
           .string()
-          .describe("(list_apps) search apps by name.")
+          .min(1)
+          .describe(
+            "(list_apps) search apps by name. (list_deployments) search by deployment id, app name, or version. (list_invocations) search by invocation id, app name, or action name.",
+          )
           .optional(),
         action_name: z
           .string()
-          .describe("(invoke) action to execute within the app.")
+          .min(1)
+          .describe(
+            "(invoke) action to execute within the app. (list_invocations) action-name filter.",
+          )
           .optional(),
         payload: z
           .string()
           .describe("(invoke) json string with action parameters.")
           .optional(),
+        async_timeout_seconds: z
+          .number()
+          .int()
+          .min(10)
+          .max(3600)
+          .describe(
+            "(invoke) timeout for the asynchronous invocation, from 10 to 3600 seconds.",
+          )
+          .optional(),
         deployment_id: z
           .string()
-          .describe("(get_deployment, delete_deployment) deployment id.")
+          .min(1)
+          .describe(
+            "(get_deployment, delete_deployment) deployment id. (list_invocations) deployment filter.",
+          )
           .optional(),
         invocation_id: z
           .string()
+          .min(1)
           .describe(
-            "(get_invocation, list_invocation_browsers) invocation id to inspect.",
+            "(get_invocation, list_invocation_browsers, delete_invocation_browsers) invocation id.",
+          )
+          .optional(),
+        invocation_status: z
+          .enum(["queued", "running", "succeeded", "failed"])
+          .describe("(list_invocations) invocation status filter.")
+          .optional(),
+        since: z
+          .string()
+          .min(1)
+          .describe(
+            "(list_invocations) include runs started since this rfc timestamp or duration such as 5m.",
           )
           .optional(),
         ...paginationParams,
@@ -152,6 +186,9 @@ export function registerAppCapabilities(
               payload: params.payload,
               version: params.version ?? "latest",
               async: true,
+              ...(params.async_timeout_seconds !== undefined && {
+                async_timeout_seconds: params.async_timeout_seconds,
+              }),
             });
             if (!invocation)
               return errorResponse("failed to create invocation");
@@ -182,6 +219,7 @@ export function registerAppCapabilities(
             const page = await client.deployments.list({
               ...(params.app_name && { app_name: params.app_name }),
               ...(params.version && { app_version: params.version }),
+              ...(params.query !== undefined && { query: params.query }),
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
@@ -210,6 +248,28 @@ export function registerAppCapabilities(
               );
             return jsonResponse(invocation);
           }
+          case "list_invocations": {
+            const page = await client.invocations.list({
+              ...(params.action_name !== undefined && {
+                action_name: params.action_name,
+              }),
+              ...(params.app_name !== undefined && {
+                app_name: params.app_name,
+              }),
+              ...(params.deployment_id !== undefined && {
+                deployment_id: params.deployment_id,
+              }),
+              ...(params.query !== undefined && { query: params.query }),
+              ...(params.since !== undefined && { since: params.since }),
+              ...(params.invocation_status !== undefined && {
+                status: params.invocation_status,
+              }),
+              ...(params.version !== undefined && { version: params.version }),
+              ...(params.limit !== undefined && { limit: params.limit }),
+              ...(params.offset !== undefined && { offset: params.offset }),
+            });
+            return paginatedJsonResponse(page);
+          }
           case "list_invocation_browsers": {
             if (!params.invocation_id)
               return errorResponse("error: invocation_id is required.");
@@ -220,8 +280,19 @@ export function registerAppCapabilities(
               browsers: browsers.browsers.map((browser) => ({
                 session_id: browser.session_id,
                 browser_live_view_url: browser.browser_live_view_url,
+                ...(browser.location !== undefined && {
+                  location: browser.location,
+                }),
               })),
             });
+          }
+          case "delete_invocation_browsers": {
+            if (!params.invocation_id)
+              return errorResponse("error: invocation_id is required.");
+            await client.invocations.deleteBrowsers(params.invocation_id);
+            return textResponse(
+              `browser sessions for invocation "${params.invocation_id}" deleted successfully.`,
+            );
           }
         }
       } catch (error) {

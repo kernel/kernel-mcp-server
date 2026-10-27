@@ -152,6 +152,9 @@ describe("managed-auth MCP App registration", () => {
       expect(schema.safeParse({ ...base, region: "eu-west" }).success).toBe(
         true,
       );
+      expect(schema.safeParse({ ...base, region: "us-west" }).success).toBe(
+        true,
+      );
       expect(schema.safeParse({ ...base, region: "emea" }).success).toBe(false);
       const defaults = schema.parse(base);
       expect(defaults.record_session).toBe(true);

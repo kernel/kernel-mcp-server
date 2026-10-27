@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { KernelClient } from "@/lib/mcp/kernel-client";
 
 type BrowserCreateParams = NonNullable<
@@ -17,7 +18,20 @@ export type BrowserProfileParams = {
   save_profile_changes?: boolean;
 };
 
+export const browserExtensionSchema = z
+  .object({
+    id: z.string().min(1).optional(),
+    name: z.string().min(1).optional(),
+  })
+  .strict()
+  .refine((extension) => Boolean(extension.id) !== Boolean(extension.name), {
+    message: "each extension requires exactly one of id or name.",
+  });
+
+export const browserExtensionsSchema = z.array(browserExtensionSchema);
+
 export type BrowserExtensionParams = {
+  extensions?: z.infer<typeof browserExtensionsSchema>;
   extension_id?: string;
   extension_name?: string;
 };
@@ -137,9 +151,18 @@ function buildBrowserProfile(
 function buildBrowserExtensions(
   params: BrowserExtensionParams,
 ): BrowserConfigResult<BrowserExtensionConfig | undefined> {
+  if (
+    params.extensions !== undefined &&
+    (params.extension_id || params.extension_name)
+  ) {
+    return configError(
+      "extensions cannot be combined with extension_id or extension_name.",
+    );
+  }
   if (params.extension_id && params.extension_name) {
     return configError("cannot specify both extension_id and extension_name.");
   }
+  if (params.extensions !== undefined) return configValue(params.extensions);
   if (!params.extension_id && !params.extension_name)
     return configValue(undefined);
   return configValue([

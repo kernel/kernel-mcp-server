@@ -445,7 +445,9 @@ describe("kernel payment recovery", () => {
         if (status === "recovery_required") {
           expect(text).toContain("support@kernel.sh");
           expect(text).toContain("project, vault, item key");
-          expect(text).toContain("do not assume a new card is safe");
+          expect(text).toContain(
+            "deletion is never proof that the original payment did not occur",
+          );
         }
       } finally {
         await fixture.close();

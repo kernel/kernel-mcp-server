@@ -41,7 +41,7 @@ function fallbackOn() {
     .array(z.enum(["error", "timeout", "empty"]))
     .optional()
     .describe(
-      "conditions that advance to the next provider. defaults to error and timeout; empty also advances after zero results. an empty array disables fallback. ignored for pinned strategy.",
+      "conditions that advance to the next provider. defaults to error, timeout, and empty (zero results). an empty array disables fallback. ignored for pinned strategy.",
     );
 }
 const searchContentOptions = z
@@ -379,7 +379,9 @@ export function registerSearchTools(
             return jsonResponse(
               await client.get<unknown>(
                 `/search/${encodeURIComponent(params.search_id)}`,
-                { signal: ctx.mcpReq.signal },
+                {
+                  signal: ctx.mcpReq.signal,
+                },
               ),
             );
           case "contents":

@@ -37,11 +37,13 @@ describe("manage_auth_connections programmatic surface", () => {
     expect(schema?.health_checks).toBeDefined();
     expect(schema?.auto_reauth).toBeDefined();
     expect(schema?.browser_region.safeParse("eu-west").success).toBe(true);
+    expect(schema?.browser_region.safeParse("us-west").success).toBe(true);
     expect(schema?.browser_region.safeParse("emea").success).toBe(false);
     expect(schema?.browser_stealth).toBeDefined();
     expect(schema?.query).toBeDefined();
     expect(schema?.timeline_type).toBeDefined();
     expect(schema?.record_session).toBeDefined();
+    expect(schema?.skill_mode.safeParse("disabled").success).toBe(true);
     expect(schema?.flow_checkpoint).toBeDefined();
     expect(schema?.proxy_id.safeParse("").success).toBe(false);
     expect(schema?.proxy_name.safeParse("").success).toBe(false);
@@ -61,6 +63,7 @@ describe("manage_auth_connections programmatic surface", () => {
         export: {
           otlp: { destination: { name: "managed-auth-telemetry" } },
         },
+        storage: { enabled: false },
       }).success,
     ).toBe(true);
     expect(
@@ -208,6 +211,7 @@ describe("manage_auth_connections programmatic surface", () => {
           action: "login",
           id: "conn_1",
           record_session: false,
+          skill_mode: "disabled",
           browser_region: "ap-southeast",
           browser_telemetry: { enabled: false },
         },
@@ -215,6 +219,7 @@ describe("manage_auth_connections programmatic surface", () => {
       );
       expect(loginBody).toEqual({
         record_session: false,
+        skill_mode: "disabled",
         browser: {
           region: "ap-southeast",
           telemetry: { enabled: false },

@@ -11,7 +11,11 @@ import {
 import type { ManagedAuthBrowserTelemetry } from "@/lib/mcp/tools/managed-auth-telemetry";
 import { proxyConfigError, type ProxyConfig } from "@/lib/mcp/proxy-config";
 
-export type ManagedAuthRegion = "us-east" | "eu-west" | "ap-southeast";
+export type ManagedAuthRegion =
+  | "us-east"
+  | "us-west"
+  | "eu-west"
+  | "ap-southeast";
 
 type ManagedAuthBrowserWithRegion = NonNullable<ManagedAuth["browser"]> & {
   region?: ManagedAuthRegion;

@@ -1,6 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { createKernelClient, type KernelClient } from "@/lib/mcp/kernel-client";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
+import type { KernelClient } from "@/lib/mcp/kernel-client";
 import {
   errorResponse,
   jsonResponse,
@@ -38,7 +42,7 @@ const computerActionSchema = z.object({
     .object({
       x: z.number(),
       y: z.number(),
-      button: z.enum(["left", "right", "middle"]).optional(),
+      button: z.enum(["left", "right", "middle", "back", "forward"]).optional(),
       click_type: z.enum(["down", "up", "click"]).optional(),
       num_clicks: z.number().int().min(1).optional(),
       hold_keys: z.array(z.string()).optional(),
@@ -49,7 +53,9 @@ const computerActionSchema = z.object({
     .object({
       x: z.number(),
       y: z.number(),
+      duration_ms: z.number().int().min(0).optional(),
       hold_keys: z.array(z.string()).optional(),
+      smooth: z.boolean().optional(),
     })
     .describe("params for move_mouse action.")
     .optional(),
@@ -64,6 +70,7 @@ const computerActionSchema = z.object({
     .object({
       keys: z
         .array(z.string())
+        .min(1)
         .describe(
           'each item must be one x11 keysym or chord, such as "Return", "Ctrl+t", or "Ctrl+minus". for sequential or repeated key presses, use separate array items; do not combine keys with spaces or commas. use type_text to enter text.',
         ),
@@ -85,13 +92,16 @@ const computerActionSchema = z.object({
   drag_mouse: z
     .object({
       path: z
-        .array(z.array(z.number()))
+        .array(z.tuple([z.number(), z.number()]))
+        .min(2)
         .describe("ordered [x,y] pairs, at least 2 points."),
       button: z.enum(["left", "middle", "right"]).optional(),
       delay: z.number().int().min(0).optional(),
+      duration_ms: z.number().int().min(0).optional(),
       steps_per_segment: z.number().int().min(1).optional(),
       step_delay_ms: z.number().int().min(0).optional(),
       hold_keys: z.array(z.string()).optional(),
+      smooth: z.boolean().optional(),
     })
     .describe("params for drag_mouse action.")
     .optional(),
@@ -252,7 +262,10 @@ async function executeComputerActionPrefix(
   return { ok: true, executedActionCount };
 }
 
-export function registerComputerActionTool(server: McpServer) {
+export function registerComputerActionTool(
+  server: McpServer,
+  dependencies: McpDependencies = defaultMcpDependencies,
+) {
   // computer_action -- Execute one or more computer actions on a browser session
   server.registerTool(
     "computer_action",
@@ -279,7 +292,7 @@ export function registerComputerActionTool(server: McpServer) {
     },
     async ({ session_id, actions, project, project_id }, ctx) => {
       if (!ctx.http?.authInfo) throw new Error("authentication required");
-      const client = createKernelClient(
+      const client = dependencies.createKernelClient(
         ctx.http.authInfo.token,
         projectForOperation(ctx.http.authInfo, { project, project_id }),
       );

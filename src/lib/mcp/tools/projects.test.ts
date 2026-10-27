@@ -5,6 +5,76 @@ import { connectTestMcp, toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
 import { registerProjectCapabilities } from "@/lib/mcp/tools/projects";
 
 describe("manage_projects", () => {
+  test("forwards exact-name and search list filters with zero offset", async () => {
+    const calls: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerProjectCapabilities,
+      {
+        projects: {
+          list: async (params: unknown) => {
+            calls.push(params);
+            return {
+              getPaginatedItems: () => [],
+              has_more: false,
+              next_offset: null,
+            };
+          },
+        },
+      },
+    );
+    try {
+      await client.callTool({
+        name: "manage_projects",
+        arguments: {
+          action: "list",
+          name: "billing",
+          query: "bill",
+          limit: 10,
+          offset: 0,
+        },
+      });
+      expect(calls).toEqual([
+        { name: "billing", query: "bill", limit: 10, offset: 0 },
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects the deprecated pooled-session limit before an SDK call", async () => {
+    let calls = 0;
+    const { client, close } = await connectTestMcp(
+      registerProjectCapabilities,
+      {
+        projects: {
+          limits: {
+            update: async () => {
+              calls++;
+              return {};
+            },
+          },
+        },
+      },
+    );
+    try {
+      const result = await client.callTool({
+        name: "manage_projects",
+        arguments: {
+          action: "update_limits",
+          project: "billing",
+          max_pooled_sessions: 0,
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain(
+        "pooled browsers count toward max_concurrent_sessions",
+      );
+      expect(calls).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+
   test("requires a non-empty project selector for get", async () => {
     const retrieveArgs: string[] = [];
     const { client, close } = await connectTestMcp(

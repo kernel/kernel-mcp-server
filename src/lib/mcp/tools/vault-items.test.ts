@@ -490,6 +490,263 @@ describe("advertised vault operations", () => {
   );
 });
 
+describe("credential passkey operations", () => {
+  const passkeyItem = {
+    ...item,
+    type: "credential",
+    spec: {
+      provider: "kernel",
+      description: "Example",
+      fields: [
+        {
+          name: "passkey",
+          type: "passkey",
+          required: false,
+          sensitive: true,
+        },
+        {
+          name: "new_passkey",
+          type: "passkey",
+          required: false,
+          sensitive: true,
+        },
+      ],
+    },
+    state: {
+      provider: "kernel",
+      status: "ready",
+      fields: {
+        passkey: { has_value: true },
+        new_passkey: { has_value: false },
+      },
+    },
+  };
+
+  test("advertises passkey inputs and browser-session invocation hints", async () => {
+    const advertised = {
+      ...passkeyItem,
+      available_operations: [
+        { type: "arm_passkey", description: "Arm the stored passkey." },
+        { type: "register_passkey", description: "Register a passkey." },
+        { type: "disarm_passkey", description: "Disarm passkeys." },
+      ],
+    };
+    const fixture = await connectVaultTest([Response.json(advertised)]);
+    try {
+      const { tools } = await fixture.client.listTools();
+      const tool = tools.find(({ name }) => name === "manage_vault_items");
+      const inputsDescription = JSON.stringify(
+        tool?.inputSchema.properties?.inputs,
+      );
+      expect(inputsDescription).toContain(
+        "arm_passkey, register_passkey, and disarm_passkey each take exactly { browser_id, field? }",
+      );
+      expect(inputsDescription).toContain(
+        "field selects the empty passkey field",
+      );
+      expect(tool?.description).toContain(
+        "any script on those pages can trigger sign-in",
+      );
+
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_items", {
+          action: "get",
+          vault: "checkout",
+          key: "login",
+        }),
+      );
+      expect(result.hints.invocation).toEqual(
+        advertised.available_operations.map(({ type }) => ({
+          tool: "manage_vault_items",
+          arguments: {
+            project: "proj_test",
+            vault: "checkout",
+            key: "login",
+            action: "invoke",
+            operation: type,
+          },
+          requires_user_approval: true,
+          required_inputs: ["browser_id"],
+        })),
+      );
+      expect(result.guidance.join(" ")).toContain(
+        "each browser has one pending registration",
+      );
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    {
+      operation: "arm_passkey",
+      inputs: { browser_id: "browser-session-id", field: "passkey" },
+      response: {
+        type: "arm_passkey",
+        status: "armed",
+        rp_id: "example.com",
+      },
+      guidance: "does not mean a page has asked or sign-in succeeded",
+    },
+    {
+      operation: "register_passkey",
+      inputs: { browser_id: "browser-session-id", field: "new_passkey" },
+      response: { type: "register_passkey", status: "armed" },
+      guidance: "does not mean registration finished",
+    },
+    {
+      operation: "disarm_passkey",
+      inputs: { browser_id: "browser-session-id" },
+      response: { type: "disarm_passkey", status: "disarmed" },
+      guidance: "pending registration",
+    },
+  ] as const)(
+    "forwards and handles $operation",
+    async ({ operation, inputs, response, guidance }) => {
+      const advertised = {
+        ...passkeyItem,
+        available_operations: [{ type: operation, description: "Use it." }],
+      };
+      const fixture = await connectVaultTest([
+        Response.json(advertised),
+        Response.json({ ...response, opaque: "hidden" }),
+      ]);
+      try {
+        const result = toolResultJSON(
+          await fixture.call("manage_vault_items", {
+            action: "invoke",
+            vault: "checkout",
+            key: "login",
+            operation,
+            inputs,
+          }),
+        );
+        expect(result.result).toEqual(response);
+        expect(result.guidance).toContain(guidance);
+        expect(JSON.stringify(result)).not.toContain("hidden");
+        expect(fixture.requests).toHaveLength(2);
+        expect(fixture.requests[1]).toMatchObject({
+          method: "POST",
+          path: "/vaults/checkout/items/login/operations",
+          body: { type: operation, ...inputs },
+        });
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test("forwards an optional field when disarming one passkey", async () => {
+    const advertised = {
+      ...passkeyItem,
+      available_operations: [
+        { type: "disarm_passkey", description: "Disarm one field." },
+      ],
+    };
+    const fixture = await connectVaultTest([
+      Response.json(advertised),
+      Response.json({ type: "disarm_passkey", status: "disarmed" }),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "invoke",
+        vault: "checkout",
+        key: "login",
+        operation: "disarm_passkey",
+        inputs: { browser_id: "browser-session-id", field: "passkey" },
+      });
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[1].body).toEqual({
+        type: "disarm_passkey",
+        browser_id: "browser-session-id",
+        field: "passkey",
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    {
+      operation: "arm_passkey",
+      inputs: {},
+      issue: "invalid arm_passkey inputs (browser_id)",
+    },
+    {
+      operation: "register_passkey",
+      inputs: { browser_id: "" },
+      issue: "invalid register_passkey inputs (browser_id)",
+    },
+    {
+      operation: "disarm_passkey",
+      inputs: { browser_id: "browser-session-id", field: "" },
+      issue: "invalid disarm_passkey inputs (field)",
+    },
+    {
+      operation: "arm_passkey",
+      inputs: { browser_id: "browser-session-id", field: "x".repeat(65) },
+      issue: "invalid arm_passkey inputs (field)",
+    },
+    {
+      operation: "register_passkey",
+      inputs: { browser_id: "browser-session-id", extra: true },
+      issue: 'unknown key "extra" in register_passkey inputs',
+    },
+  ])(
+    "rejects invalid $operation inputs without a request",
+    async ({ operation, inputs, issue }) => {
+      const fixture = await connectVaultTest([]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          action: "invoke",
+          vault: "checkout",
+          key: "login",
+          operation,
+          inputs,
+        });
+        expect(result.isError).toBe(true);
+        const text = (result.content as Array<{ text: string }>)[0].text;
+        expect(text).toContain(issue);
+        expect(text).toContain("expected { browser_id, field? }");
+        expect(fixture.requests).toHaveLength(0);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test("rejects an unrecognized passkey result without exposing fields", async () => {
+    const advertised = {
+      ...passkeyItem,
+      available_operations: [
+        { type: "arm_passkey", description: "Arm the passkey." },
+      ],
+    };
+    const fixture = await connectVaultTest([
+      Response.json(advertised),
+      Response.json({
+        type: "arm_passkey",
+        status: "pending",
+        opaque: "hidden",
+      }),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "invoke",
+        vault: "checkout",
+        key: "login",
+        operation: "arm_passkey",
+        inputs: { browser_id: "browser-session-id" },
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain("unrecognized passkey response");
+      expect(JSON.stringify(result)).not.toContain("hidden");
+    } finally {
+      await fixture.close();
+    }
+  });
+});
+
 describe("vault observation and deletion", () => {
   test("advertises wait as get/events-only", async () => {
     const fixture = await connectVaultTest([]);

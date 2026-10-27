@@ -5,7 +5,11 @@ import {
   type McpDependencies,
 } from "@/lib/mcp/dependencies";
 import { longOperationOptions } from "@/lib/mcp/request-options";
-import { jsonResponse, throwToolError } from "@/lib/mcp/responses";
+import {
+  errorResponse,
+  jsonResponse,
+  throwToolError,
+} from "@/lib/mcp/responses";
 import {
   projectForOperation,
   projectSelectionInputSchema,
@@ -44,6 +48,19 @@ export function registerShellTool(
           .string()
           .describe("working directory (absolute path).")
           .optional(),
+        env: z
+          .record(z.string(), z.string())
+          .describe(
+            "non-secret environment variables to set for the command. tool arguments may be logged; do not put passwords, tokens, or private keys here.",
+          )
+          .optional(),
+        as_user: z
+          .string()
+          .min(1)
+          .describe(
+            "run as this vm user. cannot be combined with as_root=true.",
+          )
+          .optional(),
         timeout_sec: z
           .number()
           .int()
@@ -69,6 +86,8 @@ export function registerShellTool(
         command,
         args,
         cwd,
+        env,
+        as_user,
         timeout_sec,
         as_root,
         project,
@@ -83,12 +102,19 @@ export function registerShellTool(
       );
 
       try {
+        if (as_root === true && as_user !== undefined) {
+          return errorResponse(
+            "error: as_root=true cannot be combined with as_user.",
+          );
+        }
         const result = await client.browsers.process.exec(
           session_id,
           {
             command,
             ...(args && { args }),
             ...(cwd && { cwd }),
+            ...(env !== undefined && { env }),
+            ...(as_user !== undefined && { as_user }),
             timeout_sec,
             ...(as_root !== undefined && { as_root }),
           },

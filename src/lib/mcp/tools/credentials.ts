@@ -27,7 +27,7 @@ export function registerCredentialTools(
     "manage_credentials",
     {
       description:
-        'manage credentials stored in KERNEL for managed auth. "list" discovers credentials (optionally filtered by domain), "get" returns a credential\'s metadata (values are never returned), "totp_code" returns the current totp for credentials with a configured totp_secret, "create" stores a new credential, "update" changes its name/values/sso_provider/totp_secret (values are merged with existing). "delete" removes a credential by id or name. totp secrets accept a base32 secret (16-128 characters) or an otpauth:// uri; algorithm, digits, and period are optional settings.',
+        'manage credentials stored in KERNEL for managed auth. "list" discovers credentials (optionally filtered by domain), "get" returns a credential\'s metadata (values are never returned), "totp_code" returns the current totp for credentials with a configured totp_secret, "create" stores a new credential, "update" changes its name/values/sso_provider/totp_secret; values are merged and remove_value_keys deletes selected stored fields. "delete" removes a credential by id or name. totp secrets accept a base32 secret (16-128 characters) or an otpauth:// uri; algorithm, digits, and period are optional settings.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z
@@ -44,6 +44,12 @@ export function registerCredentialTools(
             "(list) filter by domain. (create) target domain this credential is for.",
           )
           .optional(),
+        query: z
+          .string()
+          .describe(
+            "(list) case-insensitive search over credential name and domain; ids match exactly.",
+          )
+          .optional(),
         name: z
           .string()
           .describe(
@@ -54,6 +60,13 @@ export function registerCredentialTools(
           .record(z.string(), z.string())
           .describe(
             "(create, update) field name to value mapping (e.g. username, password). on update, merged with existing values.",
+          )
+          .optional(),
+        remove_value_keys: z
+          .array(z.string().min(1))
+          .min(1)
+          .describe(
+            "(update) stored value keys to delete. can be combined with values to remove old keys and set replacements atomically.",
           )
           .optional(),
         sso_provider: z
@@ -109,12 +122,19 @@ export function registerCredentialTools(
       );
 
       try {
+        if (
+          params.remove_value_keys !== undefined &&
+          params.action !== "update"
+        ) {
+          return errorResponse("error: remove_value_keys is update-only.");
+        }
         switch (params.action) {
           case "list": {
             const page = await client.credentials.list({
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
               ...(params.domain !== undefined && { domain: params.domain }),
+              ...(params.query !== undefined && { query: params.query }),
             });
             return paginatedJsonResponse(page);
           }
@@ -195,6 +215,9 @@ export function registerCredentialTools(
             const updateParams: CredentialUpdateParams = {
               ...(params.name !== undefined && { name: params.name }),
               ...(params.values !== undefined && { values: params.values }),
+              ...(params.remove_value_keys !== undefined && {
+                remove_value_keys: params.remove_value_keys,
+              }),
               ...(params.sso_provider !== undefined && {
                 sso_provider: params.sso_provider,
               }),

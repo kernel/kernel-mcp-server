@@ -82,7 +82,15 @@ export const fillInputsSchema = z
       .min(1)
       .max(32)
       .optional(),
-    timeout_ms: z.number().int().min(1).max(30000).optional(),
+    timeout_ms: z
+      .number()
+      .int()
+      .min(1)
+      .max(30000)
+      .describe(
+        "deprecated compatibility field; accepted and forwarded, but ignored by the api. fill has no operation deadline and adapts typing pace to value length.",
+      )
+      .optional(),
   })
   .strict();
 export type FillInputs = z.infer<typeof fillInputsSchema>;
@@ -103,9 +111,35 @@ export const authorizeInputsSchema = z
   .refine(
     (value) =>
       (value.browser_id === undefined) === (value.page_url === undefined),
-    { path: ["browser_id"] },
+    {
+      path: ["browser_id"],
+    },
   );
 export type AuthorizeInputs = z.infer<typeof authorizeInputsSchema>;
+
+export const passkeyOperationTypes = [
+  "arm_passkey",
+  "register_passkey",
+  "disarm_passkey",
+] as const;
+export type PasskeyOperation = (typeof passkeyOperationTypes)[number];
+const passkeyOperationTypeSet: ReadonlySet<string> = new Set(
+  passkeyOperationTypes,
+);
+
+export function isPasskeyOperation(value: string): value is PasskeyOperation {
+  return passkeyOperationTypeSet.has(value);
+}
+
+export const passkeyInputsShape = "{ browser_id, field? }";
+
+export const passkeyInputsSchema = z
+  .object({
+    browser_id: z.string().min(1),
+    field: z.string().min(1).max(64).optional(),
+  })
+  .strict();
+export type PasskeyInputs = z.infer<typeof passkeyInputsSchema>;
 
 // Names the offending top-level key, never a value or nested key, and shows the shape
 // the API accepts.
@@ -132,6 +166,13 @@ export function fillInputsIssueMessage(error: z.ZodError) {
 
 export function authorizeInputsIssueMessage(error: z.ZodError) {
   return `${operationInputsIssueMessage("authorize", authorizeInputsShape, error)}: pass browser_id and the https page_url of the final checkout page together, or neither.`;
+}
+
+export function passkeyInputsIssueMessage(
+  operation: PasskeyOperation,
+  error: z.ZodError,
+) {
+  return operationInputsIssueMessage(operation, passkeyInputsShape, error);
 }
 
 const integer = () => z.number().int().safe();
@@ -256,7 +297,7 @@ export const agentcardWalletSpecSchema = z
       .string()
       .regex(/^usr_[A-Za-z0-9_]+$/)
       .describe(
-        "an agentcard user already enrolled in this organization under the same provider configuration.",
+        "existing agentcard user to import. with a customer-owned provider_config, KERNEL validates access with that config before creating the wallet and no prior organization enrollment is required. with KERNEL-managed credentials, the user must already be enrolled in this organization under the same configuration.",
       )
       .optional(),
   })
@@ -298,9 +339,9 @@ export const linkCardSpecSchema = z
       ),
     amount: integer()
       .min(1)
-      .max(500000)
+      .max(50000)
       .describe(
-        "integer minor currency units. a virtual card allows at most 50000; a link pay token allows up to 500000. KERNEL chooses which at authorize.",
+        "integer minor currency units, maximum 50000. for recurring purchases, this is the spending limit per period rather than a lifetime total.",
       ),
     currency: currency(),
     merchant_name: z.string().min(1).max(255),
@@ -309,6 +350,19 @@ export const linkCardSpecSchema = z
     line_items: z.array(linkLineItemSchema).optional(),
     totals: z.array(linkTotalSchema()).optional(),
     metadata: z.record(z.string(), z.string()).optional(),
+    recurring: z
+      .object({
+        interval: z.enum(["day", "week", "month", "year"]),
+        interval_count: integer()
+          .min(1)
+          .describe("number of intervals per period; defaults to 1.")
+          .optional(),
+      })
+      .strict()
+      .describe(
+        "recurring terms for a subscription or repeated purchase. the merchant schedules charges and amount is the per-period limit. the card remains ready between charges until deleted or expired; deleting it revokes future link charges but does not cancel the merchant subscription. terms cannot change after authorization.",
+      )
+      .optional(),
   })
   .strict();
 
@@ -398,6 +452,6 @@ export const browserVaultsSchema = z
     "duplicate vault references are not allowed.",
   )
   .describe(
-    "(create only) project-owned vaults to attach, each with exactly one id or name; max 20. bindings are immutable and unavailable for pooled browsers. use a separate vault per end user. attaching grants access to all items, including items added later. credential fill writes real values into the page; it does not isolate them from an agent with browser access. link cards use fill, not aliases or egress substitution. agentcard aliases remain a separate, explicitly chosen egress path; never fall back to aliases after an uncertain fill.",
+    "(create only) project-owned vaults to attach, each with exactly one id or name; max 20. bindings are immutable and unavailable for pooled browsers. use a separate vault per end user. attaching grants access to all items, including items added later. credential fill writes real values into the page; it does not isolate them from an agent with browser access. passkey arm, registration, and disarm operations also require the item's vault to be attached to the browser session. link cards use fill, not aliases or egress substitution. agentcard aliases remain a separate, explicitly chosen egress path; never fall back to aliases after an uncertain fill.",
   )
   .optional();

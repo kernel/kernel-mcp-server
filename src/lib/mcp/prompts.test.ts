@@ -15,6 +15,7 @@ const API_FIELD_NAMES = new Set([
   "manage_browsers:stealth",
   "manage_browsers:captcha",
   "manage_browser_pools:stealth",
+  "manage_browser_pools:captcha",
   "manage_auth_connections:browser_stealth",
   "manage_auth_connections:stealth",
   "open_auth_login:stealth",

@@ -45,6 +45,19 @@ describe("web_search", () => {
     }
   });
 
+  test("documents empty results in the default fallback conditions", async () => {
+    const f = await fixture();
+    try {
+      const { tools } = await f.client.listTools();
+      const tool = tools.find(({ name }) => name === "web_search");
+      expect(JSON.stringify(tool?.inputSchema)).toContain(
+        "defaults to error, timeout, and empty",
+      );
+    } finally {
+      await f.close();
+    }
+  });
+
   test("forwards search options and preserves the API response without retrying", async () => {
     const f = await fixture();
     const request = {

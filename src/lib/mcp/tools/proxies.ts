@@ -105,15 +105,25 @@ export function registerProxyTools(
     "manage_proxies",
     {
       description:
-        'manage proxy configurations for routing browser traffic. use "create" to add a proxy, "list" to see all proxies, "get" to retrieve one, "rename" to change its name, "check" to test connectivity (optionally against a target url), or "delete" to remove one. choose a proxy type that fits the workload and the terms of the target site.',
+        'manage proxy configurations for routing browser traffic. use "create" to add a proxy, "list" to see all proxies, "get" to retrieve one by id or exact name, "rename" to change its name, "check" to test connectivity (optionally against a target url), or "delete" to remove one. names are not unique: an ambiguous get by name fails, while ids are stable and should be used for rename, check, and delete. choose a proxy type that fits the workload and the terms of the target site.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z
           .enum(["create", "list", "get", "rename", "check", "delete"])
           .describe("operation to perform."),
+        id_or_name: z
+          .string()
+          .min(1)
+          .describe(
+            "(get) proxy id or exact name. ids take precedence if a value matches both; ambiguous names fail. (rename, check, delete) use the proxy id.",
+          )
+          .optional(),
         proxy_id: z
           .string()
-          .describe("(get, rename, check, delete) proxy id.")
+          .min(1)
+          .describe(
+            "deprecated alias for id_or_name. use the proxy id for rename, check, and delete.",
+          )
           .optional(),
         check_url: httpUrlSchema
           .describe(
@@ -213,6 +223,12 @@ export function registerProxyTools(
       );
 
       try {
+        if (params.id_or_name && params.proxy_id) {
+          return errorResponse(
+            "error: cannot specify both id_or_name and proxy_id.",
+          );
+        }
+        const idOrName = params.id_or_name ?? params.proxy_id;
         switch (params.action) {
           case "create": {
             if (!params.type)
@@ -258,38 +274,38 @@ export function registerProxyTools(
             });
           }
           case "get": {
-            if (!params.proxy_id) {
-              return errorResponse("error: proxy_id is required for get.");
+            if (!idOrName) {
+              return errorResponse("error: id_or_name is required for get.");
             }
-            const proxy = await client.proxies.retrieve(params.proxy_id);
+            const proxy = await client.proxies.retrieve(idOrName);
             return jsonResponse(proxy);
           }
           case "rename": {
-            if (!params.proxy_id) {
-              return errorResponse("error: proxy_id is required for rename.");
+            if (!idOrName) {
+              return errorResponse("error: id_or_name is required for rename.");
             }
             if (!params.name) {
               return errorResponse("error: name is required for rename.");
             }
-            const proxy = await client.proxies.update(params.proxy_id, {
+            const proxy = await client.proxies.update(idOrName, {
               name: params.name,
             });
             return jsonResponse(proxy);
           }
           case "check": {
-            if (!params.proxy_id) {
-              return errorResponse("error: proxy_id is required for check.");
+            if (!idOrName) {
+              return errorResponse("error: id_or_name is required for check.");
             }
             const result = await client.proxies.check(
-              params.proxy_id,
+              idOrName,
               params.check_url ? { url: params.check_url } : undefined,
             );
             return jsonResponse(result);
           }
           case "delete": {
-            if (!params.proxy_id)
-              return errorResponse("error: proxy_id is required for delete.");
-            await client.proxies.delete(params.proxy_id);
+            if (!idOrName)
+              return errorResponse("error: id_or_name is required for delete.");
+            await client.proxies.delete(idOrName);
             return textResponse("proxy deleted successfully");
           }
         }

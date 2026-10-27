@@ -3,6 +3,7 @@ import { NotFoundError, type Kernel } from "@onkernel/sdk";
 import type { BrowserNetworkConfig } from "@onkernel/sdk/resources/browsers/browsers";
 import { z } from "zod";
 import {
+  browserExtensionsSchema,
   buildBrowserCreateConfig,
   buildBrowserUpdateConfig,
   type BrowserConfigResult,
@@ -43,6 +44,7 @@ import {
   TELEMETRY_EVENT_CATALOG,
   telemetryEventCategories,
 } from "@/lib/mcp/telemetry";
+import { browserTelemetrySchema } from "@/lib/mcp/tools/managed-auth-telemetry";
 
 type BrowserCreateParams = NonNullable<
   Parameters<KernelClient["browsers"]["create"]>[0]
@@ -53,6 +55,7 @@ type TelemetryEventsQuery = NonNullable<
 >;
 
 type TelemetryParams = {
+  telemetry?: BrowserCreateParams["telemetry"];
   telemetry_enabled?: boolean;
   telemetry_console?: boolean;
   telemetry_network?: boolean;
@@ -72,6 +75,23 @@ function buildTelemetry(
 ): BrowserConfigResult<
   BrowserCreateParams["telemetry"] | BrowserUpdateParams["telemetry"]
 > {
+  const flatTelemetrySupplied =
+    params.telemetry_enabled !== undefined ||
+    params.telemetry_console !== undefined ||
+    params.telemetry_network !== undefined ||
+    params.telemetry_page !== undefined ||
+    params.telemetry_interaction !== undefined;
+  if (params.telemetry !== undefined) {
+    if (flatTelemetrySupplied) {
+      return {
+        ok: false,
+        error:
+          "error: telemetry cannot be combined with deprecated telemetry_* fields.",
+      };
+    }
+    return { ok: true, value: params.telemetry };
+  }
+
   const browser: NonNullable<
     NonNullable<BrowserCreateParams["telemetry"]>["browser"]
   > = {};
@@ -214,6 +234,7 @@ type BrowserTelemetryReadParams = {
   project?: string;
   project_id?: string;
   categories?: TelemetryEventsQuery["category"];
+  event_types?: TelemetryEventsQuery["type"];
   limit?: number;
   offset?: number;
   since?: string;
@@ -261,6 +282,7 @@ async function readBrowserTelemetry(
 
   const query: TelemetryEventsQuery = { limit: params.limit ?? 100 };
   if (params.categories) query.category = params.categories;
+  if (params.event_types) query.type = params.event_types;
   if (params.offset !== undefined) query.offset = params.offset;
   if (params.since !== undefined) query.since = params.since;
   if (params.until !== undefined) query.until = params.until;
@@ -281,7 +303,8 @@ async function readBrowserTelemetry(
   const unfilteredExceptSince =
     params.offset === undefined &&
     params.until === undefined &&
-    params.categories === undefined;
+    params.categories === undefined &&
+    params.event_types === undefined;
   const fullSessionRead = unfilteredExceptSince && params.since === undefined;
 
   const page = await client.browsers.telemetry.events(params.session_id, query);
@@ -297,6 +320,7 @@ async function readBrowserTelemetry(
   const ascPagingNote =
     page.has_more &&
     params.categories === undefined &&
+    params.event_types === undefined &&
     params.since === undefined &&
     params.until === undefined &&
     query.order !== "desc"
@@ -324,6 +348,7 @@ async function readBrowserTelemetry(
           ...(params.project && { project: params.project }),
           ...(params.project_id && { project_id: params.project_id }),
           ...(query.category && { categories: query.category }),
+          ...(query.type && { event_types: query.type }),
           limit: Math.min(query.limit ?? 100, maxRawTelemetryEvents),
           ...(query.offset !== undefined && { offset: query.offset }),
           ...(query.since && { since: query.since }),
@@ -505,7 +530,31 @@ export function registerBrowserCapabilities(
             .string()
             .url()
             .describe(
-              "(create) url to open when the browser is created, or (update) url to navigate to after applying the update. when a profile is loaded in the same update, this overrides the profile's restored tabs. navigation is best-effort.",
+              "(create) url to open when the browser is created, or (update) url to navigate to after applying the update. when a profile is loaded in the same update, this overrides the profile's restored tabs. navigation is best-effort and starts after a location update applies.",
+            )
+            .optional(),
+          location: z
+            .object({
+              timezone: z
+                .string()
+                .min(1)
+                .nullable()
+                .describe(
+                  "session-only iana timezone override. on update, null clears the override and restores the region default.",
+                )
+                .optional(),
+              locale: z
+                .string()
+                .min(1)
+                .nullable()
+                .describe(
+                  "session-only canonical bcp 47 locale override. on update, null clears the override and restores the region default.",
+                )
+                .optional(),
+            })
+            .strict()
+            .describe(
+              "(create, update) session-only timezone and locale overrides. on create, omit either field to use the region default; null is update-only. on update, omit a field to leave it unchanged, set a string to override it, or set null to clear it. the api refuses unsupported live location changes before applying other changes; if location application later fails, retry the same update before navigating.",
             )
             .optional(),
           vaults: browserVaultsSchema,
@@ -525,6 +574,18 @@ export function registerBrowserCapabilities(
               "(create) enable gpu acceleration. requires start-up or enterprise plan and headless=false.",
             )
             .optional(),
+          video_memory: z
+            .enum(["2GiB", "4GiB"])
+            .describe(
+              "(create) gpu video memory. requires gpu=true. 2 gib is the default; 4 gib uses the larger gpu shape and may be unavailable at capacity.",
+            )
+            .optional(),
+          memory: z
+            .enum(["1GiB", "2GiB", "4GiB", "8GiB", "16GiB"])
+            .describe(
+              "(create) non-gpu browser memory. headless browsers support 1 gib (default), 2 gib, or 4 gib; headful browsers support 8 gib (default) or 16 gib.",
+            )
+            .optional(),
           stealth: z
             .boolean()
             .describe(
@@ -532,9 +593,9 @@ export function registerBrowserCapabilities(
             )
             .optional(),
           region: z
-            .enum(["us-east", "eu-west"])
+            .enum(["us-east", "us-west", "eu-west", "ap-southeast"])
             .describe(
-              "(create) geographic region for the browser session. fixed once created; requires start-up or enterprise plan, defaults to us-east. (list) filter sessions by region.",
+              "(create) geographic region for the browser session. fixed once created; region selection requires start-up or enterprise, and create defaults to us-east. (list) filter sessions by region.",
             )
             .optional(),
           timeout_seconds: z
@@ -586,6 +647,22 @@ export function registerBrowserCapabilities(
                     "the browser",
                     "on update, a list replaces the allowlist and null removes it; a browser created without an allowlist cannot be given one, and a removed allowlist cannot be added back. open connections to removed hosts close within about 30 seconds.",
                   ),
+                )
+                .optional(),
+              expected_allowlist_revision: z
+                .string()
+                .length(64)
+                .describe(
+                  "(update) network.allowlist_state.revision from the last browser snapshot. supply together with mutation_id for a conditional allowed_hosts update; stale revisions fail atomically with stale_network.",
+                )
+                .optional(),
+              mutation_id: z
+                .string()
+                .min(1)
+                .max(64)
+                .regex(/^[A-Za-z0-9_-]+$/)
+                .describe(
+                  "(update) unique id paired with expected_allowlist_revision. retry an uncertain allowlist change with the same pair and identical allowed_hosts payload; these fields guard only allowed_hosts.",
                 )
                 .optional(),
             })
@@ -642,7 +719,9 @@ export function registerBrowserCapabilities(
             .number()
             .int()
             .min(1)
-            .describe("(create, update) display refresh rate in hz.")
+            .describe(
+              "(create, update) display refresh rate in hz. when omitted, gpu browsers default to 60 and other browsers derive it from the dimensions.",
+            )
             .optional(),
           viewport_force: z
             .boolean()
@@ -650,13 +729,22 @@ export function registerBrowserCapabilities(
               "(update) force viewport changes even when live view or recording is active.",
             )
             .optional(),
+          extensions: browserExtensionsSchema
+            .describe(
+              "(create) extensions to load, each selected by exactly one id or name. use this array for multiple extensions; cannot be combined with extension_id or extension_name.",
+            )
+            .optional(),
           extension_id: z
             .string()
-            .describe("(create) extension id to load.")
+            .describe(
+              "deprecated: use extensions. (create) one extension id to load.",
+            )
             .optional(),
           extension_name: z
             .string()
-            .describe("(create) extension name to load.")
+            .describe(
+              "deprecated: use extensions. (create) one extension name to load.",
+            )
             .optional(),
           local_forward: z
             .string()
@@ -674,6 +762,12 @@ export function registerBrowserCapabilities(
             .enum(["active", "deleted", "all"])
             .describe('(list) filter by status. default "active".')
             .optional(),
+          include_deleted: z
+            .boolean()
+            .describe(
+              "(get) include a soft-deleted session for audit. a deleted session must be addressed by id, not name.",
+            )
+            .optional(),
           limit: paginationParams.limit.describe(
             "(list, get_telemetry) max results per page (1-100). get_telemetry defaults to 100; the list default is set by the api.",
           ),
@@ -685,6 +779,13 @@ export function registerBrowserCapabilities(
             .min(1)
             .describe(
               `(get_telemetry) restrict results to these event categories. a filtered page can be empty while has_more is true. ${TELEMETRY_EVENT_CATALOG}`,
+            )
+            .optional(),
+          event_types: z
+            .array(z.string().min(1))
+            .min(1)
+            .describe(
+              "(get_telemetry) restrict results to event types such as page_crashed, captcha_solve_started, or captcha_challenge_result. combines with categories, so an event must match both filters.",
             )
             .optional(),
           since: z
@@ -711,10 +812,16 @@ export function registerBrowserCapabilities(
               "(get_telemetry) defaults to true. compact items flatten the event envelope, add an iso time, and omit data fields named body, headers, post_data, or png plus any data field over 8 kib; omitted_fields lists removals. an eligible category-filtered compact response includes raw_replay_best_effort arguments targeting the same page start, but late events or retention may change results between calls. raw mode requires explicit categories and limit<=5, rejects screenshot pngs, and caps the serialized response at 1 mib.",
             )
             .optional(),
+          telemetry: browserTelemetrySchema
+            .nullable()
+            .describe(
+              "(create, update) full telemetry configuration. enabled=true starts the default operational categories; browser controls every category, including screenshot/platform and control cdp exclusions; export selects an existing otlp destination; storage.enabled=false requires export and is creation-only for a browser. null or {} means no telemetry on create and no change on update. cannot be combined with deprecated telemetry_* fields.",
+            )
+            .optional(),
           telemetry_enabled: z
             .boolean()
             .describe(
-              "(create, update) enable telemetry, or disable telemetry when false. telemetry is off unless requested. the default category set is the lightweight operational bundle (control, connection, system, captcha) and does not include console, network, or page — enable those explicitly when you intend to debug page behavior.",
+              "deprecated: use telemetry.enabled. (create, update) enable telemetry, or disable telemetry when false. telemetry is off unless requested. the default category set is the lightweight operational bundle (control, connection, system, captcha) and does not include console, network, or page — enable those explicitly when you intend to debug page behavior.",
             )
             .optional(),
           telemetry_console: z
@@ -767,6 +874,16 @@ export function registerBrowserCapabilities(
         }
         if (
           params.action !== "create" &&
+          (params.extensions !== undefined ||
+            params.extension_id !== undefined ||
+            params.extension_name !== undefined)
+        ) {
+          return errorResponse(
+            "extensions are creation-only; use a new browser for a different stored extension set.",
+          );
+        }
+        if (
+          params.action !== "create" &&
           (params.proxy_routes !== undefined ||
             params.network?.proxy_routes !== undefined ||
             params.network?.private_hosts !== undefined)
@@ -790,6 +907,19 @@ export function registerBrowserCapabilities(
             deprecatedParamConflict("network", params, ["proxy_routes"]) ??
             proxyRoutesError(params.network.proxy_routes);
           if (error) return errorResponse(`error: ${error}`);
+          const hasRevision =
+            params.network.expected_allowlist_revision !== undefined;
+          const hasMutation = params.network.mutation_id !== undefined;
+          if (hasRevision !== hasMutation) {
+            return errorResponse(
+              "error: network.expected_allowlist_revision and network.mutation_id must be supplied together.",
+            );
+          }
+          if (params.action !== "update" && (hasRevision || hasMutation)) {
+            return errorResponse(
+              "error: conditional allowlist fields are update-only.",
+            );
+          }
         }
         switch (params.action) {
           case "create": {
@@ -799,6 +929,10 @@ export function registerBrowserCapabilities(
             if (params.headless !== undefined)
               createParams.headless = params.headless;
             if (params.gpu !== undefined) createParams.gpu = params.gpu;
+            if (params.video_memory !== undefined)
+              createParams.video_memory = params.video_memory;
+            if (params.memory !== undefined)
+              createParams.memory = params.memory;
             if (params.stealth !== undefined)
               createParams.stealth = params.stealth;
             if (params.region !== undefined)
@@ -815,8 +949,25 @@ export function registerBrowserCapabilities(
             }
             if (params.proxy !== undefined) createParams.proxy = params.proxy;
             if (params.proxy_id) createParams.proxy_id = params.proxy_id;
+            if (params.location !== undefined) {
+              const { timezone, locale } = params.location;
+              if (timezone === null || locale === null) {
+                return errorResponse(
+                  "error: null location fields are update-only; omit the field to use the region default on create.",
+                );
+              }
+              createParams.location = {
+                ...(timezone !== undefined && { timezone }),
+                ...(locale !== undefined && { locale }),
+              };
+            }
             if (params.network !== undefined) {
-              const { allowed_hosts, ...network } = params.network;
+              const {
+                allowed_hosts,
+                expected_allowlist_revision: _expectedRevision,
+                mutation_id: _mutationID,
+                ...network
+              } = params.network;
               if (allowed_hosts === null) {
                 return errorResponse(
                   "error: a null network.allowed_hosts is update-only; omit it for unfiltered egress.",
@@ -885,6 +1036,15 @@ export function registerBrowserCapabilities(
               return errorResponse(
                 "error: session_id is required for update action.",
               );
+            if (
+              params.memory !== undefined ||
+              params.video_memory !== undefined ||
+              params.region !== undefined
+            ) {
+              return errorResponse(
+                "error: memory, video_memory, and region are creation-only.",
+              );
+            }
             if (params.proxy_id && params.clear_proxy) {
               return errorResponse(
                 "error: cannot specify both proxy_id and clear_proxy.",
@@ -901,11 +1061,27 @@ export function registerBrowserCapabilities(
             } else if (params.proxy_id !== undefined) {
               updateParams.proxy_id = params.proxy_id;
             }
-            if (params.network?.allowed_hosts !== undefined) {
+            if (
+              params.network?.allowed_hosts !== undefined ||
+              params.network?.expected_allowlist_revision !== undefined ||
+              params.network?.mutation_id !== undefined
+            ) {
               updateParams.network = {
-                allowed_hosts: params.network.allowed_hosts,
+                ...(params.network.allowed_hosts !== undefined && {
+                  allowed_hosts: params.network.allowed_hosts,
+                }),
+                ...(params.network.expected_allowlist_revision !==
+                  undefined && {
+                  expected_allowlist_revision:
+                    params.network.expected_allowlist_revision,
+                }),
+                ...(params.network.mutation_id !== undefined && {
+                  mutation_id: params.network.mutation_id,
+                }),
               };
             }
+            if (params.location !== undefined)
+              updateParams.location = params.location;
             if (params.name !== undefined) updateParams.name = params.name;
             if (params.tags !== undefined) updateParams.tags = params.tags;
             const browserConfig = buildBrowserUpdateConfig(params);
@@ -952,7 +1128,12 @@ export function registerBrowserCapabilities(
               return errorResponse(
                 "error: session_id is required for get action.",
               );
-            const browser = await client.browsers.retrieve(params.session_id);
+            const browser = await client.browsers.retrieve(
+              params.session_id,
+              params.include_deleted !== undefined
+                ? { include_deleted: params.include_deleted }
+                : undefined,
+            );
             if (!browser)
               return errorResponse(
                 `browser session "${params.session_id}" not found`,
@@ -974,6 +1155,7 @@ export function registerBrowserCapabilities(
               project: params.project,
               project_id: params.project_id,
               categories: params.categories,
+              event_types: params.event_types,
               limit: params.limit,
               offset: params.offset,
               since: params.since,

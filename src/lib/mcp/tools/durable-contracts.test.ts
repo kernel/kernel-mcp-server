@@ -50,6 +50,34 @@ function profilePage(profiles: Array<{ id: string; name: string }>) {
 const auth = projectScopedExtra();
 
 describe("durable profile contracts", () => {
+  test("forwards exact-name and search profile filters", async () => {
+    const listCalls: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerProfileCapabilities,
+      {
+        profiles: {
+          list: (params: unknown) => {
+            listCalls.push(params);
+            return profilePage([]);
+          },
+        },
+      },
+    );
+    try {
+      await client.callTool({
+        name: "manage_profiles",
+        arguments: {
+          action: "list",
+          profile_name: "billing",
+          query: "bill",
+        },
+      });
+      expect(listCalls).toEqual([{ name: "billing", query: "bill" }]);
+    } finally {
+      await close();
+    }
+  });
+
   test("creates a profile when no exact match exists", async () => {
     const listCalls: unknown[] = [];
     const createCalls: unknown[] = [];
@@ -441,7 +469,7 @@ describe("durable proxy contracts", () => {
     [
       "no proxy ID",
       { name: "Renamed" },
-      "error: proxy_id is required for rename.",
+      "error: id_or_name is required for rename.",
     ],
     ["no name", { proxy_id: "proxy-1" }, "error: name is required for rename."],
   ])("rejects rename with %s", async (_name, params, wantError) => {

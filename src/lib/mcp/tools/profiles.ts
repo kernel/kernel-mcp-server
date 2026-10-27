@@ -114,7 +114,7 @@ export function registerProfileCapabilities(
         profile_name: z
           .string()
           .describe(
-            "(setup, get, rename, delete) profile name. for setup: 1-255 chars.",
+            "(setup, get, rename, delete) profile name. (list) exact-match name filter. for setup: 1-255 chars.",
           )
           .optional(),
         profile_id: z
@@ -212,12 +212,24 @@ export function registerProfileCapabilities(
             if (params.limit === undefined && params.offset === undefined) {
               const profiles = await listProfiles(
                 client,
-                params.query ? { query: params.query } : undefined,
+                params.profile_name !== undefined || params.query !== undefined
+                  ? {
+                      ...(params.profile_name !== undefined && {
+                        name: params.profile_name,
+                      }),
+                      ...(params.query !== undefined && {
+                        query: params.query,
+                      }),
+                    }
+                  : undefined,
               );
               return fullProfileListResponse(profiles, params.query);
             }
 
             const page = await client.profiles.list({
+              ...(params.profile_name !== undefined && {
+                name: params.profile_name,
+              }),
               ...(params.query && { query: params.query }),
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),

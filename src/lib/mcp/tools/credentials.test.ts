@@ -2,6 +2,70 @@ import { describe, expect, test } from "bun:test";
 import { connectTestMcp } from "@/lib/mcp/mcp-test-fixtures";
 import { registerCredentialTools } from "./credentials";
 
+describe("manage_credentials SDK coverage", () => {
+  test("forwards list search and atomic value removals", async () => {
+    const listCalls: unknown[] = [];
+    const updateCalls: unknown[] = [];
+    const { client, close } = await connectTestMcp(registerCredentialTools, {
+      credentials: {
+        list: async (params: unknown) => {
+          listCalls.push(params);
+          return {
+            getPaginatedItems: () => [],
+            has_more: false,
+            next_offset: null,
+          };
+        },
+        update: async (...args: unknown[]) => {
+          updateCalls.push(args);
+          return { id: "credential-1" };
+        },
+      },
+    });
+    try {
+      await client.callTool({
+        name: "manage_credentials",
+        arguments: {
+          action: "list",
+          domain: "example.com",
+          query: "work",
+          limit: 10,
+          offset: 0,
+        },
+      });
+      await client.callTool({
+        name: "manage_credentials",
+        arguments: {
+          action: "update",
+          id_or_name: "credential-1",
+          remove_value_keys: ["old_username", "old_password"],
+          values: { username: "replacement" },
+        },
+      });
+
+      expect(listCalls).toEqual([
+        {
+          domain: "example.com",
+          query: "work",
+          limit: 10,
+          offset: 0,
+        },
+      ]);
+      expect(updateCalls).toEqual([
+        [
+          "credential-1",
+          {
+            remove_value_keys: ["old_username", "old_password"],
+            values: { username: "replacement" },
+          },
+        ],
+      ]);
+    } finally {
+      await close();
+    }
+  });
+});
+
 describe("manage_credentials TOTP inputs", () => {
   test("advertises configurable settings with API bounds", async () => {
     const { client, close } = await connectTestMcp(registerCredentialTools, {});
