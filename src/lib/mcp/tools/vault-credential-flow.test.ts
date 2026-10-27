@@ -222,6 +222,19 @@ describe("MCP credential flow", () => {
       const items = tools.find((tool) => tool.name === "manage_vault_items");
       expect(credentials?.inputSchema.properties).toHaveProperty("spec");
       expect(JSON.stringify(credentials?.inputSchema)).toContain('"label"');
+      expect(JSON.stringify(credentials?.inputSchema)).toContain('"passkey"');
+      expect(JSON.stringify(credentials?.inputSchema)).toContain(
+        "passkeys are not selector-filled",
+      );
+      expect(JSON.stringify(credentials?.inputSchema)).toContain(
+        "optional empty passkey field can be populated later with register_passkey",
+      );
+      expect(JSON.stringify(credentials?.inputSchema)).toContain(
+        '"add_fields"',
+      );
+      expect(JSON.stringify(credentials?.inputSchema)).toContain(
+        '"remove_fields"',
+      );
       expect(JSON.stringify(credentials?.inputSchema)).toContain(
         "128 utf-8 bytes",
       );
@@ -229,6 +242,9 @@ describe("MCP credential flow", () => {
         "expected_item_id",
       );
       expect(items?.inputSchema.properties).toHaveProperty("inputs");
+      expect(JSON.stringify(items?.inputSchema.properties?.inputs)).toContain(
+        "register_passkey",
+      );
       expect(
         JSON.stringify([credentials?.inputSchema, items?.inputSchema]),
       ).not.toContain('"$ref"');
@@ -479,6 +495,146 @@ describe("MCP credential flow", () => {
     }
   });
 
+  test("atomically removes and adds passkey fields while redacting the value", async () => {
+    const passkey = JSON.stringify({
+      credentialId: "credential-id",
+      userHandle: "user-handle",
+      key: "private-pkcs8-key",
+      rpId: "example.com",
+    });
+    const response = {
+      ...ready,
+      version: 3,
+      spec: {
+        description: "Example",
+        fields: [
+          {
+            name: "passkey",
+            label: "Sign-in passkey",
+            type: "passkey",
+            required: true,
+            sensitive: true,
+          },
+        ],
+      },
+      state: {
+        status: "ready",
+        fields: { passkey: { has_value: true, value: passkey } },
+      },
+    };
+    const fixture = await connectVaultTest([Response.json(response)]);
+    try {
+      const update = {
+        remove_fields: ["username", "password"],
+        add_fields: [
+          {
+            name: "passkey",
+            label: "Sign-in passkey",
+            type: "passkey",
+            required: true,
+            sensitive: true,
+          },
+        ],
+        fields: { passkey: { value: passkey } },
+      };
+      const result = await fixture.call("manage_vault_credentials", {
+        ...target,
+        action: "update",
+        version: 2,
+        expected_item_id: "item-1",
+        spec: update,
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[0].body).toEqual({
+        type: "credential",
+        version: 2,
+        expected_item_id: "item-1",
+        spec: update,
+      });
+      expect(toolResultJSON(result).item.spec.fields[0].type).toBe("passkey");
+      expect(toolResultJSON(result).item.state.fields.passkey).toEqual({
+        has_value: true,
+      });
+      expect(JSON.stringify(result)).not.toContain("private-pkcs8-key");
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("adds an optional empty passkey field for browser registration", async () => {
+    const response = {
+      ...ready,
+      version: 3,
+      spec: {
+        description: "Example",
+        fields: [
+          ...spec.fields,
+          {
+            name: "passkey",
+            label: "Sign-in passkey",
+            type: "passkey",
+            required: false,
+            sensitive: true,
+          },
+        ],
+      },
+      state: {
+        status: "ready",
+        fields: {
+          ...ready.state.fields,
+          passkey: { has_value: false },
+        },
+      },
+      available_operations: [
+        {
+          type: "register_passkey",
+          description: "Register into the empty passkey field.",
+        },
+      ],
+    };
+    const fixture = await connectVaultTest([Response.json(response)]);
+    try {
+      const update = {
+        add_fields: [
+          {
+            name: "passkey",
+            label: "Sign-in passkey",
+            type: "passkey",
+            required: false,
+            sensitive: true,
+          },
+        ],
+      };
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_credentials", {
+          ...target,
+          action: "update",
+          version: 2,
+          spec: update,
+        }),
+      );
+
+      expect(fixture.requests[0].body).toEqual({
+        type: "credential",
+        version: 2,
+        spec: update,
+      });
+      expect(fixture.requests[0].body).toHaveProperty(
+        "spec.add_fields.0.required",
+        false,
+      );
+      expect(fixture.requests[0].body).not.toHaveProperty("spec.fields");
+      expect(result.item.state.fields.passkey).toEqual({ has_value: false });
+      expect(result.hints.invocation[0]).toMatchObject({
+        arguments: { operation: "register_passkey" },
+        required_inputs: ["browser_id"],
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test("redacts supplied initial values even if echoed in metadata", async () => {
     const secret = "private-password-value";
     const fixture = await connectVaultTest([
@@ -575,6 +731,19 @@ describe("MCP credential flow", () => {
       action: "create",
       spec: {
         fields: [{ name: "password", type: "password", sensitive: false }],
+      },
+    },
+    {
+      action: "create",
+      spec: {
+        fields: [{ name: "passkey", type: "passkey", sensitive: false }],
+      },
+    },
+    {
+      action: "update",
+      version: 1,
+      spec: {
+        add_fields: [{ name: "passkey", type: "passkey", required: true }],
       },
     },
     ...[

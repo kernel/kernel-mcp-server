@@ -1,6 +1,10 @@
 /// <reference types="bun-types" />
 import { describe, expect, test } from "bun:test";
-import { connectTestMcp, toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
+import {
+  connectTestMcp,
+  toolResultJSON,
+  toolResultText,
+} from "@/lib/mcp/mcp-test-fixtures";
 import { registerProxyTools } from "@/lib/mcp/tools/proxies";
 
 function proxyClient(creates: unknown[], lists: unknown[] = []) {
@@ -56,6 +60,23 @@ describe("manage_proxies", () => {
         },
         { type: "custom", config: custom.config },
       ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects an empty id_or_name in the schema", async () => {
+    const { client, close } = await connectTestMcp(
+      registerProxyTools,
+      proxyClient([]),
+    );
+    try {
+      const result = await client.callTool({
+        name: "manage_proxies",
+        arguments: { action: "get", id_or_name: "" },
+      });
+      expect(result.isError).toBe(true);
+      expect(toolResultText(result)).toContain("id_or_name");
     } finally {
       await close();
     }
@@ -119,6 +140,90 @@ describe("manage_proxies", () => {
         expect(JSON.stringify(result.content)).toContain(message);
       }
       expect(creates).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("forwards id_or_name to get and write actions", async () => {
+    const calls: unknown[] = [];
+    const { client, close } = await connectTestMcp(registerProxyTools, {
+      proxies: {
+        retrieve: async (idOrName: string) => {
+          calls.push(["get", idOrName]);
+          return { id: "proxy-1", name: idOrName };
+        },
+        update: async (idOrName: string, params: unknown) => {
+          calls.push(["rename", idOrName, params]);
+          return { id: idOrName };
+        },
+        check: async (idOrName: string, params: unknown) => {
+          calls.push(["check", idOrName, params]);
+          return { ok: true };
+        },
+        delete: async (idOrName: string) => {
+          calls.push(["delete", idOrName]);
+        },
+      },
+    });
+    try {
+      await client.callTool({
+        name: "manage_proxies",
+        arguments: { action: "get", id_or_name: "exact-name" },
+      });
+      await client.callTool({
+        name: "manage_proxies",
+        arguments: {
+          action: "rename",
+          id_or_name: "prx_1",
+          name: "renamed",
+        },
+      });
+      await client.callTool({
+        name: "manage_proxies",
+        arguments: {
+          action: "check",
+          id_or_name: "prx_1",
+          check_url: "https://example.com",
+        },
+      });
+      await client.callTool({
+        name: "manage_proxies",
+        arguments: { action: "delete", id_or_name: "prx_1" },
+      });
+
+      expect(calls).toEqual([
+        ["get", "exact-name"],
+        ["rename", "prx_1", { name: "renamed" }],
+        ["check", "prx_1", { url: "https://example.com" }],
+        ["delete", "prx_1"],
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects id_or_name mixed with the legacy proxy_id", async () => {
+    let calls = 0;
+    const { client, close } = await connectTestMcp(registerProxyTools, {
+      proxies: {
+        retrieve: async () => {
+          calls++;
+          return {};
+        },
+      },
+    });
+    try {
+      const result = await client.callTool({
+        name: "manage_proxies",
+        arguments: {
+          action: "get",
+          id_or_name: "proxy-name",
+          proxy_id: "prx_1",
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(calls).toBe(0);
     } finally {
       await close();
     }

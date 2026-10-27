@@ -79,7 +79,7 @@ const authLoginInputSchema = () =>
           )
           .optional(),
         region: z
-          .enum(["us-east", "eu-west", "ap-southeast"])
+          .enum(["us-east", "us-west", "eu-west", "ap-southeast"])
           .describe("region for the managed-auth browser session.")
           .optional(),
         stealth: z
@@ -104,7 +104,7 @@ const authLoginInputSchema = () =>
       )
       .optional(),
     region: z
-      .enum(["us-east", "eu-west", "ap-southeast"])
+      .enum(["us-east", "us-west", "eu-west", "ap-southeast"])
       .describe(
         "deprecated: use `browser.region` instead. region for the managed-auth browser session. sets the connection default for a new login or overrides it for this reauth.",
       )

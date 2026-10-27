@@ -145,6 +145,12 @@ export function registerAuthConnectionTools(server: McpServer) {
             "(create, update) set the connection default for recording replay video of future login, reauth, and health-check browser sessions. (login) override that default for this login only. omitted preserves the api default or inherited value.",
           )
           .optional(),
+        skill_mode: z
+          .enum(["enabled", "disabled"])
+          .describe(
+            "(login) enable or disable reading and writing learned domain login skills for this accepted login. defaults to enabled; automatic reauth inherits the selected mode until a later accepted login enables it or omits this field.",
+          )
+          .optional(),
         browser: z
           .object({
             proxy: proxyConfigSchema()
@@ -153,7 +159,7 @@ export function registerAuthConnectionTools(server: McpServer) {
               )
               .optional(),
             region: z
-              .enum(["us-east", "eu-west", "ap-southeast"])
+              .enum(["us-east", "us-west", "eu-west", "ap-southeast"])
               .describe(
                 "region for managed-auth browser sessions. defaults to us-east on create; omitted on update or login preserves or inherits the connection setting.",
               )
@@ -166,7 +172,7 @@ export function registerAuthConnectionTools(server: McpServer) {
               .optional(),
             telemetry: managedAuthBrowserTelemetrySchema
               .describe(
-                "use { enabled: true } for the default operational categories (control, connection, system, captcha); browser category settings can opt into console, network, page, interaction, screenshot, or platform capture, tune control cdp exclusions, and configure otlp export. omitted preserves the api default or inherited value.",
+                "use { enabled: true } for the default operational categories (control, connection, system, captcha); browser category settings can opt into console, network, page, interaction, screenshot, or platform capture, tune control cdp exclusions, and configure otlp export or storage. omitted preserves the api default or inherited value.",
               )
               .optional(),
           })
@@ -176,11 +182,11 @@ export function registerAuthConnectionTools(server: McpServer) {
           .optional(),
         browser_telemetry: managedAuthBrowserTelemetrySchema
           .describe(
-            "deprecated: use `browser.telemetry` instead. (create, update) set the connection default for browser telemetry. (login) override it for this login only. use { enabled: true } for the default operational categories (control, connection, system, captcha); browser category settings can opt into console, network, page, interaction, screenshot, or platform capture, tune control cdp exclusions, and configure otlp export. omitted preserves the api default or inherited value.",
+            "deprecated: use `browser.telemetry` instead. (create, update) set the connection default for browser telemetry. (login) override it for this login only. use { enabled: true } for the default operational categories (control, connection, system, captcha); browser category settings can opt into console, network, page, interaction, screenshot, or platform capture, tune control cdp exclusions, and configure otlp export or storage. omitted preserves the api default or inherited value.",
           )
           .optional(),
         browser_region: z
-          .enum(["us-east", "eu-west", "ap-southeast"])
+          .enum(["us-east", "us-west", "eu-west", "ap-southeast"])
           .describe(
             "deprecated: use `browser.region` instead. (create, update) set the region for future managed-auth browser sessions. (login) override the region for this login only. defaults to us-east on create; omitted on update or login preserves or inherits the connection setting.",
           )
@@ -406,6 +412,9 @@ export function registerAuthConnectionTools(server: McpServer) {
             "error: provide exactly one of proxy_id, proxy_name, or proxy_mode.",
           );
         }
+        if (params.skill_mode !== undefined && params.action !== "login") {
+          return errorResponse("error: skill_mode is login-only.");
+        }
 
         switch (params.action) {
           case "create": {
@@ -523,7 +532,9 @@ export function registerAuthConnectionTools(server: McpServer) {
               return errorResponse("error: id is required for login.");
             const browser = buildBrowser();
             const hasOverrides =
-              browser !== undefined || params.record_session !== undefined;
+              browser !== undefined ||
+              params.record_session !== undefined ||
+              params.skill_mode !== undefined;
             const response = await client.auth.connections.login(
               params.id,
               hasOverrides
@@ -531,6 +542,9 @@ export function registerAuthConnectionTools(server: McpServer) {
                     ...(browser && { browser }),
                     ...(params.record_session !== undefined && {
                       record_session: params.record_session,
+                    }),
+                    ...(params.skill_mode !== undefined && {
+                      skill_mode: params.skill_mode,
                     }),
                   }
                 : undefined,

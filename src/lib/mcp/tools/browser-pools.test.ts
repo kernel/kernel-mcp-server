@@ -88,6 +88,10 @@ describe("browser-pool contract parity", () => {
       true,
     );
     expect(schema.start_url.safeParse("not-a-url").success).toBe(false);
+    for (const memory of ["1GiB", "2GiB", "4GiB", "8GiB", "16GiB"])
+      expect(schema.memory.safeParse(memory).success).toBe(true);
+    expect(schema.memory.safeParse("6GiB").success).toBe(false);
+    expect(schema.expected_network.safeParse({}).success).toBe(true);
   });
 
   test("keeps ordinary create valid", async () => {
@@ -229,6 +233,88 @@ describe("browser-pool contract parity", () => {
     expect(response.browser_pool.config).not.toHaveProperty("extensions");
   });
 
+  test("forwards memory, region, optimistic network state, false, and zero", async () => {
+    const createCalls: unknown[] = [];
+    const updateCalls: unknown[] = [];
+    kernelClientMock.factory = () => ({
+      browserPools: {
+        create: async (params: unknown) => {
+          createCalls.push(params);
+          return pool();
+        },
+        update: async (...args: unknown[]) => {
+          updateCalls.push(args);
+          return pool();
+        },
+      },
+    });
+    const { handler } = captureBrowserPoolTool();
+
+    await handler(
+      {
+        action: "create",
+        size: 1,
+        headless: true,
+        memory: "4GiB",
+        region: "ap-southeast",
+        fill_rate_per_minute: 0,
+        refresh_on_profile_update: false,
+        extensions: [{ id: "ext_1" }, { name: "second-extension" }],
+        telemetry: {
+          enabled: true,
+          browser: { screenshot: { enabled: true } },
+        },
+      },
+      auth,
+    );
+    await handler(
+      {
+        action: "update",
+        id_or_name: "pool_1",
+        headless: false,
+        memory: "1GiB",
+        expected_network: {},
+        discard_all_idle: false,
+        fill_rate_per_minute: 0,
+        refresh_on_profile_update: false,
+        extensions: [],
+        telemetry: { enabled: false },
+      },
+      auth,
+    );
+
+    expect(createCalls).toEqual([
+      {
+        size: 1,
+        headless: true,
+        memory: "4GiB",
+        region: "ap-southeast",
+        fill_rate_per_minute: 0,
+        refresh_on_profile_update: false,
+        extensions: [{ id: "ext_1" }, { name: "second-extension" }],
+        telemetry: {
+          enabled: true,
+          browser: { screenshot: { enabled: true } },
+        },
+      },
+    ]);
+    expect(updateCalls).toEqual([
+      [
+        "pool_1",
+        {
+          headless: false,
+          memory: "1GiB",
+          expected_network: {},
+          discard_all_idle: false,
+          fill_rate_per_minute: 0,
+          refresh_on_profile_update: false,
+          extensions: [],
+          telemetry: { enabled: false },
+        },
+      ],
+    ]);
+  });
+
   test("passes network settings through create and update", async () => {
     const createCalls: unknown[] = [];
     const updateCalls: unknown[] = [];
@@ -318,25 +404,103 @@ describe("browser-pool contract parity", () => {
     });
   });
 
-  test("returns the network of an acquired browser", async () => {
+  test("forwards acquire overrides and returns network, memory, and location", async () => {
     const network = { allowed_hosts: ["example.com"] };
+    const location = {
+      timezone: "America/New_York",
+      timezone_source: "default",
+      locale: "en-US",
+      locale_source: "override",
+    };
+    const acquireCalls: unknown[] = [];
     kernelClientMock.factory = () => ({
       browserPools: {
-        acquire: async () => ({
-          session_id: "brr_1",
-          pool: { id: "pool_1" },
-          network,
-        }),
+        acquire: async (...args: unknown[]) => {
+          acquireCalls.push(args);
+          return {
+            session_id: "brr_1",
+            pool: { id: "pool_1" },
+            network,
+            memory: "2GiB",
+            location,
+          };
+        },
       },
     });
     const { handler } = captureBrowserPoolTool();
 
     const result = await handler(
-      { action: "acquire", id_or_name: "pool_1" },
+      {
+        action: "acquire",
+        id_or_name: "pool_1",
+        acquire_timeout_seconds: 0,
+        name: "checkout-lease",
+        profile_id: "profile_1",
+        save_profile_changes: false,
+        start_url: "https://example.com",
+        tags: { flow: "checkout" },
+        telemetry: { browser: { network: { enabled: false } } },
+      },
       auth,
     );
 
-    expect(JSON.parse(result.content[0].text).browser.network).toEqual(network);
+    expect(acquireCalls).toEqual([
+      [
+        "pool_1",
+        {
+          acquire_timeout_seconds: 0,
+          name: "checkout-lease",
+          profile: { id: "profile_1", save_changes: false },
+          start_url: "https://example.com",
+          tags: { flow: "checkout" },
+          telemetry: { browser: { network: { enabled: false } } },
+        },
+      ],
+    ]);
+    expect(JSON.parse(result.content[0].text).browser).toMatchObject({
+      network,
+      memory: "2GiB",
+      location,
+    });
+  });
+
+  test("forwards list filters and pagination", async () => {
+    const listCalls: unknown[] = [];
+    kernelClientMock.factory = () => ({
+      browserPools: {
+        list: async (params: unknown) => {
+          listCalls.push(params);
+          return {
+            getPaginatedItems: () => [],
+            has_more: false,
+            next_offset: null,
+          };
+        },
+      },
+    });
+    const { handler } = captureBrowserPoolTool();
+
+    await handler(
+      {
+        action: "list",
+        name: "production",
+        query: "prod",
+        region: "us-west",
+        limit: 5,
+        offset: 0,
+      },
+      auth,
+    );
+
+    expect(listCalls).toEqual([
+      {
+        name: "production",
+        query: "prod",
+        region: "us-west",
+        limit: 5,
+        offset: 0,
+      },
+    ]);
   });
 
   test.each([
@@ -346,7 +510,7 @@ describe("browser-pool contract parity", () => {
     ],
     [
       { clear_extensions: true, extension_name: "ublock" },
-      "error: clear_extensions cannot be combined with extension_id or extension_name.",
+      "error: clear_extensions cannot be combined with extensions, extension_id, or extension_name.",
     ],
   ])("rejects conflicting clear and set values", async (params, wantError) => {
     kernelClientMock.factory = () => ({ browserPools: {} });

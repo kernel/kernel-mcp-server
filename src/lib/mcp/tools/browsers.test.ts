@@ -171,6 +171,57 @@ describe("manage_browsers telemetry", () => {
     }
   });
 
+  test("forwards event-type filters and preserves new captcha metadata", async () => {
+    const queries: unknown[] = [];
+    const captchaEvent = {
+      seq: 43,
+      event: {
+        ts: 1_700_000_000_000_001,
+        category: "captcha",
+        type: "captcha_solve_result",
+        source: { service: "captcha" },
+        data: { captcha_provider: "binance", media: "video" },
+      },
+    };
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      telemetryClient(queries, [captchaEvent]),
+    );
+
+    try {
+      const result = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action: "get_telemetry",
+            session_id: "brr_123",
+            categories: ["captcha", "platform"],
+            event_types: ["captcha_solve_result"],
+            limit: 1,
+          },
+        }),
+      );
+
+      expect(queries).toEqual([
+        {
+          limit: 1,
+          category: ["captcha", "platform"],
+          type: ["captcha_solve_result"],
+          since: "1970-01-01T00:00:00Z",
+        },
+      ]);
+      expect(result.items[0].data).toEqual({
+        captcha_provider: "binance",
+        media: "video",
+      });
+      expect(result.raw_replay_best_effort.event_types).toEqual([
+        "captcha_solve_result",
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
   test("requires an explicit small raw limit", async () => {
     const queries: unknown[] = [];
     const { client, close } = await connectTestMcp(
@@ -848,6 +899,194 @@ describe("manage_browsers proxy", () => {
         expect(result.isError).toBe(true);
       }
       expect(calls).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe("manage_browsers location, memory, and conditional allowlists", () => {
+  test("forwards create and update fields including false and null", async () => {
+    const creates: unknown[] = [];
+    const updates: unknown[] = [];
+    const revision = "a".repeat(64);
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (params: unknown) => {
+            creates.push(params);
+            return { session_id: "brr_123" };
+          },
+          update: async (sessionId: string, params: unknown) => {
+            updates.push([sessionId, params]);
+            return { session_id: sessionId };
+          },
+        },
+      },
+    );
+
+    try {
+      const telemetry = {
+        enabled: true,
+        browser: {
+          control: { enabled: false },
+          screenshot: { enabled: true },
+        },
+        export: {
+          otlp: { destination: { id: "otel_1" } },
+        },
+        storage: { enabled: false },
+      };
+      const extensions = [{ id: "ext_1" }, { name: "second-extension" }];
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "create",
+          headless: false,
+          memory: "8GiB",
+          extensions,
+          telemetry,
+          location: {
+            timezone: "America/Los_Angeles",
+            locale: "en-US",
+          },
+        },
+      });
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "create",
+          gpu: true,
+          video_memory: "4GiB",
+        },
+      });
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "update",
+          session_id: "brr_123",
+          location: { timezone: null, locale: "fr-FR" },
+          telemetry: { enabled: false },
+          network: {
+            allowed_hosts: null,
+            expected_allowlist_revision: revision,
+            mutation_id: "allowlist_retry_0",
+          },
+        },
+      });
+
+      expect(creates).toEqual([
+        {
+          headless: false,
+          memory: "8GiB",
+          extensions,
+          telemetry,
+          location: {
+            timezone: "America/Los_Angeles",
+            locale: "en-US",
+          },
+        },
+        { gpu: true, video_memory: "4GiB" },
+      ]);
+      expect(updates).toEqual([
+        [
+          "brr_123",
+          {
+            location: { timezone: null, locale: "fr-FR" },
+            telemetry: { enabled: false },
+            network: {
+              allowed_hosts: null,
+              expected_allowlist_revision: revision,
+              mutation_id: "allowlist_retry_0",
+            },
+          },
+        ],
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("requires the conditional allowlist pair and keeps null out of create", async () => {
+    let calls = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+          update: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+
+    try {
+      for (const arguments_ of [
+        {
+          action: "create",
+          location: { timezone: null },
+        },
+        {
+          action: "update",
+          session_id: "brr_123",
+          network: {
+            allowed_hosts: ["example.com"],
+            expected_allowlist_revision: "a".repeat(64),
+          },
+        },
+        {
+          action: "create",
+          telemetry: { enabled: true },
+          telemetry_network: false,
+        },
+        {
+          action: "create",
+          extensions: [{ id: "ext_1" }],
+          extension_name: "legacy-extension",
+        },
+      ]) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: arguments_,
+        });
+        expect(result.isError).toBe(true);
+      }
+      expect(calls).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+
+  test("forwards include_deleted=false on get", async () => {
+    const calls: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          retrieve: async (...args: unknown[]) => {
+            calls.push(args);
+            return { session_id: "brr_deleted" };
+          },
+        },
+      },
+    );
+
+    try {
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "get",
+          session_id: "brr_deleted",
+          include_deleted: false,
+        },
+      });
+      expect(calls).toEqual([["brr_deleted", { include_deleted: false }]]);
     } finally {
       await close();
     }

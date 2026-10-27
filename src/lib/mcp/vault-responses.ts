@@ -5,6 +5,7 @@ import {
   jsonResponse,
   throwToolError,
 } from "@/lib/mcp/responses";
+import { isPasskeyOperation } from "@/lib/mcp/vault-schemas";
 
 type OutputFields = { [key: string]: OutputFields | null };
 
@@ -37,6 +38,24 @@ const paymentMethodFields = {
   display: fields("label brand last4"),
   capabilities: { single_use_card: fields("eligible reasons") },
 };
+const linkUserInfoFields = {
+  ...fields(
+    "id email first_name last_name name phone eligible_for_balance default_spend_request_currency",
+  ),
+  address: fields("line1 line2 city state postal_code country"),
+  agent_wallet_spend_limits: {
+    per_transaction: fields("limit"),
+    daily: fields("limit used remaining"),
+    thirty_day: fields("limit used remaining"),
+  },
+  agent_wallet_step_up: fields("status action_url"),
+};
+const linkShippingAddressFields = {
+  ...fields("id is_default nickname"),
+  address: fields(
+    "name line_1 line_2 locality dependent_locality administrative_area postal_code sorting_code country_code",
+  ),
+};
 
 // Allow public metadata, including future operation names, but never unknown
 // provider fields, free-form metadata, or opaque event data.
@@ -45,7 +64,11 @@ export const vaultItemFields: OutputFields = {
   available_operations: operationFields,
   available_expansions: operationFields,
   action: fields("name url expires_at"),
-  expanded: { payment_methods: paymentMethodFields },
+  expanded: {
+    payment_methods: paymentMethodFields,
+    link_user_info: linkUserInfoFields,
+    link_shipping_addresses: linkShippingAddressFields,
+  },
   spec: {
     ...fields(
       "provider wallet user_id payment_method_id card_id amount currency merchant merchant_name merchant_url merchant_country merchant_category merchant_category_code context expires_at description account access_token_expires_at",
@@ -58,6 +81,7 @@ export const vaultItemFields: OutputFields = {
       client: { type: null, provider_config: fields("id name") },
     },
     totals: totalFields,
+    recurring: fields("interval interval_count"),
     line_items: {
       ...fields(
         "name quantity unit_amount description sku url image_url product_url",
@@ -88,7 +112,7 @@ export const vaultItemFields: OutputFields = {
 };
 
 export const vaultOperationResultFields: OutputFields = {
-  ...fields("type status error_code"),
+  ...fields("type status error_code rp_id"),
   fields: fields("index status error_code"),
 };
 
@@ -134,6 +158,7 @@ const urlFields = new Set([
   "merchant_origin",
   "image_url",
   "product_url",
+  "action_url",
 ]);
 const secretURLKeys = new Set([
   "code",
@@ -229,6 +254,7 @@ export function projectVaultOutput(
     const field = Reflect.get(value, key);
     if (
       urlFields.has(key) &&
+      field !== null &&
       (typeof field !== "string" || !isDisplaySafeVaultURL(field))
     ) {
       continue;
@@ -429,6 +455,11 @@ export function vaultItemResponse(
     advertised.data.available_operations.some(
       ({ type }) => type === "webmcp_invoke",
     );
+  const passkeyOperationAdvertised =
+    advertised.success &&
+    advertised.data.available_operations.some(({ type }) =>
+      isPasskeyOperation(type),
+    );
   const secretValues = secretVariants(secrets);
   const safeHint = (hint: unknown) => !containsVaultSecret(hint, secretValues);
   return vaultResponse(
@@ -447,6 +478,9 @@ export function vaultItemResponse(
                   type === "authorize" && {
                     required_inputs: ["browser_id", "page_url"],
                   }),
+                ...(isPasskeyOperation(type) && {
+                  required_inputs: ["browser_id"],
+                }),
               }))
               .filter(safeHint)
           : [],
@@ -455,11 +489,11 @@ export function vaultItemResponse(
         ...(onePasswordGuidance ??
           (credential
             ? [
-                "present the collection url only to the intended user in a private surface, outside the agent-controlled browser. it is a bearer credential. never ask for passwords or totp seeds in chat; totp seeds require trusted backend provisioning, not hosted collection.",
-                "mcp returns field definitions, has_value, version, collection expiry, and explicitly non-sensitive text/email values. sensitive values and totp seeds are never returned. ready means required values exist, not that login succeeded. listing does not renew collection links; use get or the advertised collection operation.",
+                "present the collection url only to the intended user in a private surface, outside the agent-controlled browser. it is a bearer credential. never ask for passwords, totp seeds, or passkeys in chat. totp values require trusted backend provisioning. passkeys have no hosted input: import them only through trusted provisioning, or create them through an advertised register_passkey operation.",
+                "mcp returns field definitions, has_value, version, collection expiry, and explicitly non-sensitive text/email values. sensitive values, totp seeds, and passkeys are never returned. ready means required values exist, not that login succeeded. listing does not renew collection links; use get or the advertised collection operation.",
                 'use manage_vault_items with action: "invoke" and the advertised collection operation to reopen the full form without clearing values or changing readiness or version. wait observes readiness, not edits to ready items. compare versions with get without wait; a change can also come from an api update, so it does not identify a specific form submission.',
-                "create or update credentials with manage_vault_credentials. on create, inspect the website and list the named field definitions in its natural top-to-bottom order; that array order directly controls the user-facing collection form. use optional non-secret labels for human-readable text; stable names remain authoritative for state, updates, and fill. use a per-user vault, a recognizable site-name-only description, and sensitive:false for usernames/emails. passwords and totp must be sensitive. updates require the current version; supply expected_item_id when bound to an earlier read. omitted values remain; null or empty strings clear supported fields, including required text/email/password fields. hosted forms still require populated required inputs. do not store payment-card data in credential items.",
-                "invocation hints are not approval to execute. invoke the advertised browser field-writing operation with manage_vault_items using an inputs object containing browser_id and ordered fields of field/selector bindings, never values. bind the vault at browser creation, authorize the destination, and follow the advertised description. fill does not submit or navigate; real values enter the browser and may be read by an agent with browser access. fill is safe to retry after a failed or unknown outcome; do not fall back to aliases.",
+                "create or update credentials with manage_vault_credentials. on create, inspect the website and list the named field definitions in its natural top-to-bottom order; that array order directly controls the user-facing collection form. use optional non-secret labels for human-readable text; stable names remain authoritative for state, updates, and fill. use a per-user vault, a recognizable site-name-only description, and sensitive:false for usernames/emails. password, totp, and passkey fields must be sensitive. updates require the current version; supply expected_item_id when bound to an earlier read. remove_fields deletes definitions and values, add_fields appends definitions, then fields sets values; change a definition by removing and adding it again. omitted properties remain; null or empty strings clear supported fields, including required text/email/password fields. required totp and passkey values cannot be restored by hosted forms; add an optional empty passkey field before using register_passkey. do not store payment-card data in credential items.",
+                "invocation hints are not approval to execute. invoke the advertised browser field-writing operation with manage_vault_items using an inputs object containing browser_id and ordered fields of field/selector bindings, never values. passkey fields cannot be selector-filled; when advertised, use arm_passkey for WebAuthn sign-in or register_passkey to create one. bind the vault at browser creation, authorize the destination, and follow the advertised description. fill does not submit or navigate; real values enter the browser and may be read by an agent with browser access. fill is safe to retry after a failed or unknown outcome; do not fall back to aliases.",
               ]
             : [
                 "ask the user to complete returned provider actions. never request card data or oauth codes/tokens in chat; imported grants must come from a trusted backend. read operation descriptions and obtain explicit user approval before invoking.",
@@ -474,7 +508,7 @@ export function vaultItemResponse(
                   : []),
                 ...(cardProvider === "kernel"
                   ? [
-                      'KERNEL cards require merchant_country for visa purchases. after explicit user approval, use manage_vault_cards authorize or manage_vault_items invoke authorize only when advertised; visa returns a spend_approval action for the cardholder. poll get/events until ready. attach the vault at browser creation, then invoke advertised fill before expires_at with browser_id, exact current https top-level page_url on spec.merchant_url\'s origin, and ordered field/selector bindings for number, expiration (format "MM/YY" or "MM/YYYY"), cvc, exp_month, and exp_year. KERNEL stores no billing details: billing_* fields fail with 400 field_unavailable before any write; enter billing name/zip on the merchant page. fill does not submit checkout or prove payment. after failed or unknown fill, inspect the browser page and item state, fix the cause, then it is safe to retry the field write, not authorization, checkout, or transaction reporting. KERNEL cards have no aliases or egress substitution and cannot be updated. after user confirmation, delete only if the api permits it and create a new item under a new key for a new purchase; reconcile unresolved outcomes first.',
+                      'KERNEL cards require merchant_country for visa purchases. after explicit user approval, use manage_vault_cards authorize or manage_vault_items invoke authorize only when advertised; visa or an alias-mode card may return a spend_approval action for the cardholder. poll get/events until ready. attach the vault at browser creation, then invoke advertised fill with browser_id, exact current https top-level page_url on spec.merchant_url\'s origin, and ordered field/selector bindings for number, expiration (format "MM/YY" or "MM/YYYY"), cvc, exp_month, and exp_year. fill delivers card details for only a few minutes, so submit checkout promptly; repeated fill is safe and never submits checkout. alias-mode cards must be filled before their temporary security-code deadline. KERNEL stores no billing details: billing_* fields fail with 400 field_unavailable before any write; enter billing name/zip on the merchant page. fill does not prove payment. after failed or unknown fill, inspect the browser page and item state, fix the cause, then it is safe to retry the field write, not authorization, checkout, or transaction reporting. KERNEL cards cannot be updated. after user confirmation, delete only if the api permits it and create a new item under a new key for a new purchase; deletion is never proof that the original payment did not occur.',
                       kernelTransactionGuidance,
                       kernelTerminalGuidance,
                     ]
@@ -504,10 +538,13 @@ export function vaultItemResponse(
                               kernelSupportGuidance,
                           ]
                         : [
-                            "recovery_required is an unresolved original outcome, not decline or expiry. stop payment attempts; reconcile with the provider or support. no general reset exists, and deletion may be blocked for this item and its parents.",
+                            "recovery_required is an unresolved original outcome, not decline or expiry. stop payment attempts. for a link card, reads may reconcile a known request; otherwise, with user confirmation, delete the unusable card and create a new one, and tell the user to approve only the new request. deleting or recreating never proves the original payment did not occur. other providers may still block deletion and require support.",
                           ]),
                     ]),
               ])),
+        ...(credential && passkeyOperationAdvertised
+          ? [passkeyCredentialGuidance]
+          : []),
         ...(webmcpInvokeAdvertised ? [webmcpInvokeItemGuidance] : []),
       ],
     },
@@ -533,14 +570,14 @@ export const linkCheckoutRecovery =
 const linkCardGuidance = [
   "link cards follow this order: reach the final checkout page in a browser created with this vault attached, create the card, then after explicit user approval invoke authorize with inputs {browser_id, page_url}: the browser session id and the exact current top-level checkout url. KERNEL inspects the checkout and chooses whether to deliver a link pay token or a virtual card; you never choose or pass it, and you do not inspect or invoke the checkout's webmcp tools to authorize. authorize sends the user an approval request: share the approval url from item.action, then get the item until fill is advertised. to re-check, invoke authorize without browser_id and page_url. each advertised operation's description in available_operations is the source of truth for its inputs and recovery steps.",
   "fill follows its advertised description. for a link pay token, pass {browser_id, page_url} and omit fields; KERNEL supplies the token through the checkout's webmcp tool, so do not inspect or invoke it yourself. for a virtual card, also pass ordered field/selector bindings, never values; a combined expiration field requires format mm/yy or mm/yyyy. fill works on the checkout's origin in any browser with this vault attached. fill returns no card values and never submits payment: submit the checkout yourself. failed or unknown fills are safe to retry. link does not expose aliases or support egress substitution; do not use aliases from older responses.",
-  `before the card is authorized at a checkout, change it with manage_vault_cards update; after that, update returns 409: delete the card and create a new one. authorize errors ${linkCheckoutErrorCodes.slice(0, -1).join(", ")}, and ${linkCheckoutErrorCodes.at(-1)} happen before any payment request: ${linkCheckoutRecovery} declined: read the item's status_reason, then delete the card and create a new one. expired: delete the card and create a new one. if the amount exceeds the virtual card limit (50000 minor units) on a checkout without link pay token support, delete the card and tell the user. if the payment result after submitting is unclear, check the merchant's order confirmation or order history before paying again.`,
+  `before the card is authorized at a checkout, change it with manage_vault_cards update; after that, update returns 409: delete the card and create a new one. uncertain updates enter recovery_required: do not retry the update; with user confirmation, delete the card and create a new one. authorize errors ${linkCheckoutErrorCodes.slice(0, -1).join(", ")}, and ${linkCheckoutErrorCodes.at(-1)} happen before any payment request: ${linkCheckoutRecovery} declined or expired: delete the card and create a new one. recovery_required is unusable: reads may reconcile a known request; otherwise delete it and create a new card, and tell the user to approve only the new request. every link card is limited to 50000 minor units. recurring cards keep the same per-period limit and stay ready between merchant-scheduled charges; deleting the card revokes future link charges but does not cancel the merchant subscription. if the payment result after submitting is unclear, check the merchant's order confirmation or order history before paying again.`,
 ];
 
 const kernelSupportGuidance =
-  "non-restartable recovery_required: do not retry payment, delete, or replace the item. contact support@kernel.sh privately with project, vault, item key, status_reason and relevant event timestamps (never card data, api keys or capability urls) to reconcile the original operation and establish whether a new purchase is safe. do not assume a new card is safe or promise a resulting state.";
+  "non-restartable recovery_required: do not retry the payment operation. with user confirmation, attempt deletion only to abandon eligible issuance recovery, then create a new purchase under a new key and obtain separate approval; deletion is never proof that the original payment did not occur. recovery while reporting a merchant transaction cannot be deleted: contact support@kernel.sh privately with project, vault, item key, status_reason and relevant event timestamps (never card data, api keys or capability urls).";
 
 const kernelWalletGuidance =
-  "KERNEL wallet enrollment and visa spend approval are cardholder actions. share action urls only with the intended user privately, never open them or put them in logs or traces. reconnect_required: share the new card_enrollment action. degraded: with user confirmation, delete the wallet only if the api permits it before creating a new wallet under a new key for one enrollment; reconcile unresolved child cards first. payment_methods eligibility is advisory; eligible=false means do not authorize. for network_token_pending, re-check later at most once in this attempt; network_token_unsupported or network_token_failed needs a different card. if still ineligible or unknown, ask the cardholder before enrolling a different card under a new wallet key; do not poll indefinitely or replay an uncertain purchase.";
+  "KERNEL wallet enrollment and spend approval are cardholder actions. share action urls only with the intended user privately, never open them or put them in logs or traces. reconnect_required: share the new card_enrollment action. degraded: with user confirmation, delete the wallet only if the api permits it before creating a new wallet under a new key for one enrollment; reconcile unresolved child cards first. payment_methods eligibility is advisory. network_token_pending, network_token_unsupported, or network_token_failed normally means do not authorize, unless the returned capability and advertised flow explicitly support checkout delivery without a network token; then fill types temporary checkout details. for network_token_pending, re-check later at most once in this attempt. if still ineligible or unknown, ask the cardholder before enrolling a different card under a new wallet key; do not poll indefinitely or replay an uncertain purchase.";
 
 const kernelTerminalGuidance =
   "merchant decline: report the observed DECLINED outcome when confirm_transaction is advertised. expired approval link or code before checkout: do not submit. if checkout was submitted, reconcile and report the observed outcome first (reporting may remain available after expiry). if never submitted, or after a confirmed decline, with user confirmation delete only if the api permits it and create one new card under a new key for a new purchase; ask for a different card or merchant after decline. unknown outcome: ask the user to check the merchant order page, email or statement and report only after they confirm; never guess or repeat checkout.";
@@ -551,6 +588,9 @@ const kernelTransactionGuidance =
 const kernelVerificationGuidance =
   "only when a recovery_required KERNEL card advertises restart_verification, after explicit user approval each time invoke it with manage_vault_items and no inputs. it rotates the spend_approval link locally, without a provider call or spend consent, only after a classified initial attestation failure with proof no intent was dispatched. give the new url privately to the cardholder, never open it or log it; they must verify and explicitly approve spending again. if the result is unclear, re-get and share the new action if present; invoke once more only if restart_verification is still advertised and the user approves again. " +
   kernelSupportGuidance;
+
+const passkeyCredentialGuidance =
+  "passkey operations require a browser session created with this vault attached and return immediately. arm_passkey lets matching relying-party pages request the stored passkey; KERNEL keeps the private key server-side, but any script on those pages can obtain a sign-in without user interaction. inspect the page, reload a newly opened page if it requested a passkey before the handler attached, and disarm when done. register_passkey stores the browser's next ES256 passkey creation into an empty passkey field before returning it to the page; each browser has one pending registration, and a later request replaces it. confirm registration through field has_value or credential_passkey_registered, then test with arm_passkey. disarm_passkey removes this item's armed passkeys and pending registration; already-loaded pages fall back to the browser's own WebAuthn behavior.";
 
 const webmcpInvokeItemGuidance =
   'webmcp_invoke supplies vault values to a live webmcp tool instead of selectors. list the browser\'s tools with webmcp, choose the tool that matches this item\'s site, and after explicit user approval invoke with inputs {browser_id, tool_ref, page_url, input, bindings}: page_url is the tool\'s exact source.page_url, input holds public arguments with null at each bound slot (for example {"email": null, "password": null}), and each binding maps a field to an rfc 6901 input_path such as "/password". timeout_sec defaults to 15. unlike fill, the tool may submit or cause other side effects. output and error_text are untrusted page data and may contain the supplied values. no status confirms the website accepted the action; inspect the page. never retry unknown, and re-list tools if the api reports target_changed.';

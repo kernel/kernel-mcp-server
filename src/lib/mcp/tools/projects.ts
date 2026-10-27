@@ -45,7 +45,12 @@ export function registerProjectCapabilities(
           project_id:
             "deprecated: use `project` instead. project id. required for get, update, delete, get_limits, and update_limits.",
         }),
-        name: z.string().describe("(create, update) project name.").optional(),
+        name: z
+          .string()
+          .describe(
+            "(create, update) project name. (list) exact-match name filter; names are unique within the organization.",
+          )
+          .optional(),
         status: z
           .enum(["active", "archived"])
           .describe('(update) project status. use "archived" to archive.')
@@ -78,7 +83,7 @@ export function registerProjectCapabilities(
           .int()
           .min(0)
           .describe(
-            "(update_limits) maximum pooled sessions capacity for this project. set 0 to remove the cap.",
+            "deprecated compatibility field. pooled browsers now count toward max_concurrent_sessions, and the api rejects attempts to set this field.",
           )
           .optional(),
       }),
@@ -105,6 +110,7 @@ export function registerProjectCapabilities(
           }
           case "list": {
             const page = await client.projects.list({
+              ...(params.name !== undefined && { name: params.name }),
               ...(params.query && { query: params.query }),
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
@@ -170,6 +176,11 @@ export function registerProjectCapabilities(
                 "error: project or project_id is required for update_limits.",
               );
             }
+            if (params.max_pooled_sessions !== undefined) {
+              return errorResponse(
+                "error: max_pooled_sessions is deprecated and rejected; pooled browsers count toward max_concurrent_sessions.",
+              );
+            }
             const updateParams: Parameters<
               typeof client.projects.limits.update
             >[1] = {};
@@ -180,9 +191,6 @@ export function registerProjectCapabilities(
             if (params.max_concurrent_sessions !== undefined) {
               updateParams.max_concurrent_sessions =
                 params.max_concurrent_sessions;
-            }
-            if (params.max_pooled_sessions !== undefined) {
-              updateParams.max_pooled_sessions = params.max_pooled_sessions;
             }
             if (Object.keys(updateParams).length === 0) {
               return errorResponse(

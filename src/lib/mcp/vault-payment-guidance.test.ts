@@ -101,9 +101,10 @@ describe("provider-specific vault payment guidance", () => {
       "browser_not_found, browser_unavailable, destination_denied, page_not_found, ambiguous_page, timeout, and browser_error happen before any payment request",
       "make sure the checkout is open in exactly one tab at page_url, then authorize again",
       "authorize without browser_id and page_url to issue a virtual card for the merchant_url origin",
-      "declined: read the item's status_reason, then delete the card and create a new one",
-      "expired: delete the card and create a new one",
-      "exceeds the virtual card limit (50000 minor units)",
+      "declined or expired: delete the card and create a new one",
+      "every link card is limited to 50000 minor units",
+      "recurring cards keep the same per-period limit",
+      "deleting or recreating never proves the original payment did not occur",
       "check the merchant's order confirmation or order history before paying again",
     ])
       expect(guidance).toContain(text);
@@ -218,13 +219,13 @@ describe("provider-specific vault payment guidance", () => {
     },
   );
 
-  test("credential fill guidance is unchanged and does not inherit provider guidance", () => {
+  test("credential fill guidance distinguishes passkey WebAuthn operations", () => {
     const result = toolResultJSON(
       vaultItemResponse({ type: "credential" }, target),
     );
     expect(result.guidance).toHaveLength(5);
     expect(result.guidance[4]).toBe(
-      "invocation hints are not approval to execute. invoke the advertised browser field-writing operation with manage_vault_items using an inputs object containing browser_id and ordered fields of field/selector bindings, never values. bind the vault at browser creation, authorize the destination, and follow the advertised description. fill does not submit or navigate; real values enter the browser and may be read by an agent with browser access. fill is safe to retry after a failed or unknown outcome; do not fall back to aliases.",
+      "invocation hints are not approval to execute. invoke the advertised browser field-writing operation with manage_vault_items using an inputs object containing browser_id and ordered fields of field/selector bindings, never values. passkey fields cannot be selector-filled; when advertised, use arm_passkey for WebAuthn sign-in or register_passkey to create one. bind the vault at browser creation, authorize the destination, and follow the advertised description. fill does not submit or navigate; real values enter the browser and may be read by an agent with browser access. fill is safe to retry after a failed or unknown outcome; do not fall back to aliases.",
     );
     expect(result.guidance.join(" ")).not.toContain("link cards");
     expect(result.guidance.join(" ")).not.toContain("agentcard aliases");

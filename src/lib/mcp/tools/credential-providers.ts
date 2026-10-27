@@ -1,6 +1,9 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { createKernelClient } from "@/lib/mcp/kernel-client";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
 import {
   errorResponse,
   jsonResponse,
@@ -10,7 +13,10 @@ import {
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
 
-export function registerCredentialProviderTools(server: McpServer) {
+export function registerCredentialProviderTools(
+  server: McpServer,
+  dependencies: McpDependencies = defaultMcpDependencies,
+) {
   // manage_credential_providers -- Manage external credential providers
   server.registerTool(
     "manage_credential_providers",
@@ -36,6 +42,12 @@ export function registerCredentialProviderTools(server: McpServer) {
           )
           .optional(),
         ...paginationParams,
+        query: z
+          .string()
+          .describe(
+            "(list) case-insensitive search over provider name and type; ids match exactly.",
+          )
+          .optional(),
         name: z
           .string()
           .describe("(create, update) human-readable name (unique per org).")
@@ -81,12 +93,13 @@ export function registerCredentialProviderTools(server: McpServer) {
     },
     async (params, ctx) => {
       if (!ctx.http?.authInfo) throw new Error("authentication required");
-      const client = createKernelClient(ctx.http.authInfo.token);
+      const client = dependencies.createKernelClient(ctx.http.authInfo.token);
 
       try {
         switch (params.action) {
           case "list": {
             const page = await client.credentialProviders.list({
+              ...(params.query !== undefined && { query: params.query }),
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });

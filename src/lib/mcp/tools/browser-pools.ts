@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
+  browserExtensionsSchema,
   buildBrowserCreateConfig,
   buildBrowserSharedConfig,
   type BrowserConfigResult,
@@ -30,6 +31,7 @@ import {
   projectForOperation,
   projectSelectionInputSchema,
 } from "@/lib/mcp/project-selection";
+import { browserTelemetrySchema } from "@/lib/mcp/tools/managed-auth-telemetry";
 
 type BrowserPoolCreateParams = Parameters<
   KernelClient["browserPools"]["create"]
@@ -57,7 +59,15 @@ type PoolConfigParams = Omit<
   fill_rate_per_minute?: number;
   chrome_policy?: Record<string, unknown>;
   kiosk_mode?: boolean;
+  memory?: BrowserPoolCreateParams["memory"];
+  region?: BrowserPoolCreateParams["region"];
+  refresh_on_profile_update?: boolean;
+  telemetry?:
+    | BrowserPoolCreateParams["telemetry"]
+    | BrowserPoolUpdateParams["telemetry"];
   network?: BrowserPoolCreateParams["network"];
+  expected_network?: BrowserPoolUpdateParams["expected_network"];
+  save_profile_changes?: boolean;
   clear_profile?: boolean;
   clear_extensions?: boolean;
 };
@@ -75,6 +85,18 @@ function buildPoolCreateParams(
     return {
       ok: false,
       error: "error: clear_profile and clear_extensions are update-only.",
+    };
+  }
+  if (params.expected_network !== undefined) {
+    return {
+      ok: false,
+      error: "error: expected_network is update-only.",
+    };
+  }
+  if (params.save_profile_changes !== undefined) {
+    return {
+      ok: false,
+      error: "error: save_profile_changes is acquire-only.",
     };
   }
   if (params.start_url === "") {
@@ -110,6 +132,12 @@ function buildPoolCreateParams(
       }),
       ...(chromePolicy && { chrome_policy: chromePolicy }),
       ...(params.kiosk_mode !== undefined && { kiosk_mode: params.kiosk_mode }),
+      ...(params.memory !== undefined && { memory: params.memory }),
+      ...(params.region !== undefined && { region: params.region }),
+      ...(params.refresh_on_profile_update !== undefined && {
+        refresh_on_profile_update: params.refresh_on_profile_update,
+      }),
+      ...(params.telemetry !== undefined && { telemetry: params.telemetry }),
       ...(params.network !== undefined && { network: params.network }),
       ...browserConfig.value,
     },
@@ -119,6 +147,12 @@ function buildPoolCreateParams(
 function buildPoolUpdateParams(
   params: PoolConfigParams & { discard_all_idle?: boolean },
 ): BrowserConfigResult<BrowserPoolUpdateParams> {
+  if (params.save_profile_changes !== undefined) {
+    return {
+      ok: false,
+      error: "error: save_profile_changes is acquire-only.",
+    };
+  }
   if (params.clear_profile && (params.profile_id || params.profile_name)) {
     return {
       ok: false,
@@ -128,16 +162,20 @@ function buildPoolUpdateParams(
   }
   if (
     params.clear_extensions &&
-    (params.extension_id || params.extension_name)
+    (params.extensions !== undefined ||
+      params.extension_id ||
+      params.extension_name)
   ) {
     return {
       ok: false,
       error:
-        "error: clear_extensions cannot be combined with extension_id or extension_name.",
+        "error: clear_extensions cannot be combined with extensions, extension_id, or extension_name.",
     };
   }
 
-  const networkError = proxyRoutesError(params.network?.proxy_routes);
+  const networkError =
+    proxyRoutesError(params.network?.proxy_routes) ??
+    proxyRoutesError(params.expected_network?.proxy_routes);
   if (networkError) return { ok: false, error: `error: ${networkError}` };
 
   const browserConfig = buildBrowserSharedConfig(params);
@@ -168,8 +206,16 @@ function buildPoolUpdateParams(
         chrome_policy: params.chrome_policy,
       }),
       ...(params.kiosk_mode !== undefined && { kiosk_mode: params.kiosk_mode }),
+      ...(params.memory !== undefined && { memory: params.memory }),
+      ...(params.refresh_on_profile_update !== undefined && {
+        refresh_on_profile_update: params.refresh_on_profile_update,
+      }),
+      ...(params.telemetry !== undefined && { telemetry: params.telemetry }),
       ...(params.start_url !== undefined && { start_url: params.start_url }),
       ...(params.network !== undefined && { network: params.network }),
+      ...(params.expected_network !== undefined && {
+        expected_network: params.expected_network,
+      }),
       ...browserConfig.value,
       ...(params.clear_profile && { profile: { id: "" } }),
       ...(params.clear_extensions && { extensions: [] }),
@@ -186,6 +232,7 @@ function summarizeBrowserPool(pool: BrowserPool) {
     id: pool.id,
     name: pool.name,
     created_at: pool.created_at,
+    region: pool.region,
     counts: {
       size: config.size,
       available: pool.available_count,
@@ -195,8 +242,10 @@ function summarizeBrowserPool(pool: BrowserPool) {
       headless: config.headless,
       stealth: config.stealth,
       kiosk_mode: config.kiosk_mode,
+      memory: config.memory,
       timeout_seconds: config.timeout_seconds,
       fill_rate_per_minute: config.fill_rate_per_minute,
+      refresh_on_profile_update: config.refresh_on_profile_update,
       start_url: config.start_url,
       profile_id: pool.profile_id,
       proxy_id: config.proxy_id,
@@ -225,6 +274,8 @@ function summarizeAcquiredBrowser(browser: BrowserPoolAcquireResponse) {
     headless: browser.headless,
     stealth: browser.stealth,
     timeout_seconds: browser.timeout_seconds,
+    memory: browser.memory,
+    location: browser.location,
     pool: browser.pool,
     profile: browser.profile,
     proxy_id: browser.proxy_id,
@@ -294,7 +345,28 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           .optional(),
         name: z
           .string()
-          .describe("(create, update) unique pool name.")
+          .describe(
+            "(create, update) unique pool name. (list) exact-match name filter. (acquire) lease-only browser session name, unique among active sessions in the project.",
+          )
+          .optional(),
+        query: z
+          .string()
+          .describe(
+            "(list) case-insensitive substring match against pool name; ids match exactly.",
+          )
+          .optional(),
+        tags: z
+          .record(z.string(), z.string())
+          .refine((value) => Object.keys(value).length <= 50)
+          .describe(
+            "(acquire) lease-only key-value tags for finding and grouping the acquired browser; up to 50 pairs and cleared on release.",
+          )
+          .optional(),
+        region: z
+          .enum(["us-east", "us-west", "eu-west", "ap-southeast"])
+          .describe(
+            "(create) fixed pool region; selection requires start-up or enterprise and defaults to us-east. (list) filter by region.",
+          )
           .optional(),
         headless: z
           .boolean()
@@ -314,13 +386,19 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
         profile_name: z
           .string()
           .describe(
-            "(create, update) profile name to load into pool browsers. cannot use with profile_id.",
+            "(create, update) profile name for pool browsers. (acquire) lease-only profile override. cannot use with profile_id.",
           )
           .optional(),
         profile_id: z
           .string()
           .describe(
-            "(create, update) profile id to load into pool browsers. cannot use with profile_name.",
+            "(create, update) profile id for pool browsers. (acquire) lease-only profile override. cannot use with profile_name.",
+          )
+          .optional(),
+        save_profile_changes: z
+          .boolean()
+          .describe(
+            "(acquire) save lease changes back to the acquire-time profile when the session ends. requires profile_id or profile_name and is not a pool default.",
           )
           .optional(),
         clear_profile: z
@@ -343,7 +421,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
         start_url: z
           .union([z.literal(""), z.string().url()])
           .describe(
-            "(create, update) url to open when a browser is warmed into the pool. on update, an empty string clears it. navigation is best-effort.",
+            "(create, update) url to open when a browser is warmed into the pool; on update, an empty string clears it. (acquire) lease-only navigation override; empty is invalid. navigation is best-effort.",
           )
           .optional(),
         chrome_policy: z
@@ -355,6 +433,18 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
         kiosk_mode: z
           .boolean()
           .describe("(create, update) hide address bar/tabs in live view.")
+          .optional(),
+        memory: z
+          .enum(["1GiB", "2GiB", "4GiB", "8GiB", "16GiB"])
+          .describe(
+            "(create, update) memory for newly warmed non-gpu browsers. headless supports 1 gib (default), 2 gib, or 4 gib; headful supports 8 gib (default) or 16 gib. existing browsers keep their allocation until replaced; use discard_all_idle to replace idle browsers.",
+          )
+          .optional(),
+        refresh_on_profile_update: z
+          .boolean()
+          .describe(
+            "(create, update) flush idle browsers when the attached profile changes so newly acquired browsers use the latest profile. requires a profile; defaults to true when a profile is first attached.",
+          )
           .optional(),
         network: z
           .object({
@@ -373,13 +463,33 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
             "(create, update) network settings for pool browsers. on update, replaces the pool's whole network config: include every field to keep, or pass {} to remove it. private_hosts and proxy_routes changes only reach browsers created afterward (see discard_all_idle).",
           )
           .optional(),
+        expected_network: z
+          .object({
+            private_hosts: privateHostsSchema().optional(),
+            proxy_routes: proxyRoutesSchema().optional(),
+            allowed_hosts: allowedHostsSchema().optional(),
+          })
+          .strict()
+          .describe(
+            "(update) optimistic concurrency precondition. send the exact network config from the last pool response, or {} if it had none. the whole update fails atomically with stale_network if the saved config differs. explicit empty lists differ from omitted lists, and proxy routes must use the resolved references from the response.",
+          )
+          .optional(),
+        extensions: browserExtensionsSchema
+          .describe(
+            "(create, update) complete extension selection, each by exactly one id or name. on update, the array replaces the existing list and [] clears it. cannot be combined with extension_id, extension_name, or clear_extensions.",
+          )
+          .optional(),
         extension_id: z
           .string()
-          .describe("(create, update) extension id to load.")
+          .describe(
+            "deprecated: use extensions. (create, update) one extension id to load.",
+          )
           .optional(),
         extension_name: z
           .string()
-          .describe("(create, update) extension name to load.")
+          .describe(
+            "deprecated: use extensions. (create, update) one extension name to load.",
+          )
           .optional(),
         clear_extensions: z
           .boolean()
@@ -407,7 +517,15 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           .number()
           .int()
           .min(1)
-          .describe("(create, update) display refresh rate in hz.")
+          .describe(
+            "(create, update) display refresh rate in hz. when omitted, gpu browsers default to 60 and other browsers derive it from the dimensions.",
+          )
+          .optional(),
+        telemetry: browserTelemetrySchema
+          .nullable()
+          .describe(
+            "(create, update, acquire) full browser telemetry configuration, including all categories, control cdp exclusions, existing otlp destination export, and storage. create applies it to newly warmed browsers; update changes the pool baseline for future browsers; acquire is a lease-only override reset on release. enabled=false preserves false and stops capture. null or {} means no telemetry on create, no baseline change on update, and no override on acquire.",
+          )
           .optional(),
         discard_all_idle: z
           .boolean()
@@ -499,6 +617,9 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           }
           case "list": {
             const page = await client.browserPools.list({
+              ...(params.name !== undefined && { name: params.name }),
+              ...(params.query !== undefined && { query: params.query }),
+              ...(params.region !== undefined && { region: params.region }),
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
@@ -539,11 +660,47 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
               return errorResponse(
                 "error: id_or_name is required for acquire.",
               );
+            if (params.profile_id && params.profile_name) {
+              return errorResponse(
+                "error: cannot specify both profile_name and profile_id.",
+              );
+            }
+            if (
+              params.save_profile_changes !== undefined &&
+              !params.profile_id &&
+              !params.profile_name
+            ) {
+              return errorResponse(
+                "error: profile_name or profile_id is required when save_profile_changes is set.",
+              );
+            }
+            if (params.start_url === "") {
+              return errorResponse(
+                "error: an empty start_url is not valid for acquire.",
+              );
+            }
             const browser = await client.browserPools.acquire(
               params.id_or_name,
               {
                 ...(params.acquire_timeout_seconds !== undefined && {
                   acquire_timeout_seconds: params.acquire_timeout_seconds,
+                }),
+                ...(params.name !== undefined && { name: params.name }),
+                ...((params.profile_id || params.profile_name) && {
+                  profile: {
+                    ...(params.profile_id && { id: params.profile_id }),
+                    ...(params.profile_name && { name: params.profile_name }),
+                    ...(params.save_profile_changes !== undefined && {
+                      save_changes: params.save_profile_changes,
+                    }),
+                  },
+                }),
+                ...(params.start_url !== undefined && {
+                  start_url: params.start_url,
+                }),
+                ...(params.tags !== undefined && { tags: params.tags }),
+                ...(params.telemetry !== undefined && {
+                  telemetry: params.telemetry,
                 }),
               },
             );

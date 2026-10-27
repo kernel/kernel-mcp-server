@@ -319,6 +319,98 @@ describe("vault SDK request contracts", () => {
       await fixture.close();
     }
   });
+
+  test("requests and projects Link user and shipping expansions with false, zero, and null", async () => {
+    const expanded = {
+      ...item,
+      type: "wallet",
+      spec: { provider: "link" },
+      state: { provider: "link", status: "connected" },
+      available_operations: [],
+      available_expansions: [
+        { type: "link_user_info", description: "Read user info" },
+        {
+          type: "link_shipping_addresses",
+          description: "Read shipping addresses",
+        },
+      ],
+      expanded: {
+        link_user_info: {
+          id: "usr_link",
+          email: "jane@example.com",
+          first_name: "Jane",
+          last_name: "Doe",
+          name: "Jane Doe",
+          phone: null,
+          eligible_for_balance: false,
+          default_spend_request_currency: "usd",
+          agent_wallet_spend_limits: {
+            per_transaction: { limit: 0 },
+            daily: { limit: null, used: 0, remaining: null },
+            thirty_day: { limit: 50000, used: 0, remaining: 50000 },
+          },
+          agent_wallet_step_up: {
+            status: "not_required",
+            action_url: null,
+          },
+          hidden: "provider-secret",
+        },
+        link_shipping_addresses: [
+          {
+            id: "sa_1",
+            is_default: false,
+            nickname: null,
+            address: {
+              name: "Jane Doe",
+              line_1: "510 Townsend St",
+              line_2: null,
+              locality: "San Francisco",
+              dependent_locality: null,
+              administrative_area: "CA",
+              postal_code: "94103",
+              sorting_code: null,
+              country_code: "US",
+            },
+            hidden: "provider-secret",
+          },
+        ],
+      },
+    };
+    const fixture = await connectVaultTest([Response.json(expanded)]);
+    try {
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_items", {
+          action: "get",
+          vault: "checkout",
+          key: "wallet-1",
+          expand: ["link_user_info", "link_shipping_addresses"],
+        }),
+      );
+      expect(result.item.expanded.link_user_info).toMatchObject({
+        eligible_for_balance: false,
+        phone: null,
+        agent_wallet_spend_limits: {
+          per_transaction: { limit: 0 },
+          daily: { limit: null, used: 0, remaining: null },
+        },
+        agent_wallet_step_up: {
+          status: "not_required",
+          action_url: null,
+        },
+      });
+      expect(result.item.expanded.link_shipping_addresses[0]).toMatchObject({
+        is_default: false,
+        nickname: null,
+      });
+      expect(JSON.stringify(result)).not.toContain("provider-secret");
+      const url = new URL(fixture.requests[0].path, "https://api.example");
+      expect(url.searchParams.getAll("expand")).toEqual([
+        "link_user_info,link_shipping_addresses",
+      ]);
+    } finally {
+      await fixture.close();
+    }
+  });
 });
 
 describe("vault scopes and input validation", () => {
@@ -480,7 +572,7 @@ describe("vault scopes and input validation", () => {
   test.each([
     { ...linkSpec, provider: "agentcard" },
     { ...linkSpec, amount: 1.1 },
-    { ...linkSpec, amount: 500001 },
+    { ...linkSpec, amount: 50001 },
     { ...linkSpec, expires_at: 4102444800 },
     {
       ...linkSpec,
@@ -572,6 +664,38 @@ describe("Link checkout through manage_vault_cards", () => {
         ])
           expect(text).not.toContain(term);
       }
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("forwards recurring Link terms and the 50000 amount boundary", async () => {
+    const recurringSpec = {
+      ...linkSpec,
+      amount: 50000,
+      recurring: { interval: "week", interval_count: 2 },
+    };
+    const fixture = await connectVaultTest([
+      Response.json({
+        ...item,
+        spec: { ...recurringSpec, provider: "link" },
+      }),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_cards", {
+        ...target,
+        action: "create",
+        provider: "link",
+        spec: recurringSpec,
+      });
+      expect(result.isError).toBeUndefined();
+      expect(toolResultJSON(result).item.spec.recurring).toEqual(
+        recurringSpec.recurring,
+      );
+      expect(fixture.requests[0].body).toEqual({
+        type: "card",
+        spec: { ...recurringSpec, provider: "link" },
+      });
     } finally {
       await fixture.close();
     }

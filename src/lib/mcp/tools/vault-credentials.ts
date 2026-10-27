@@ -25,35 +25,52 @@ const fieldLabel = () =>
     .refine((label) => label === label.trim())
     .refine((label) => Buffer.byteLength(label, "utf8") <= 128)
     .refine((label) => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(label));
+const credentialFieldType = z
+  .enum(["text", "email", "password", "totp", "passkey"])
+  .describe(
+    'credential field type. passkeys are not selector-filled; when advertised, use manage_vault_items action "invoke" with operation "arm_passkey" to sign in or "register_passkey" to create one.',
+  );
+const fieldDefinitionShape = {
+  name: fieldName().describe(
+    "stable field name used for updates and browser fills.",
+  ),
+  label: fieldLabel()
+    .optional()
+    .describe(
+      "optional non-secret display text for users. must be nonempty, have no leading or trailing whitespace, be at most 128 utf-8 bytes, and contain no control, formatting, or line-separator characters. the form falls back to name. labels never affect updates or browser fills.",
+    ),
+  type: credentialFieldType,
+  required: z.boolean().optional(),
+  sensitive: z
+    .boolean()
+    .optional()
+    .describe(
+      "explicitly false for ordinary usernames/emails. password, totp, and passkey fields must be true; omission defaults to true.",
+    ),
+};
+const validFieldSensitivity = (field: {
+  type: z.infer<typeof credentialFieldType>;
+  sensitive?: boolean;
+}) =>
+  !(
+    ["password", "totp", "passkey"].includes(field.type) &&
+    field.sensitive === false
+  );
+const definitionInput = z
+  .object(fieldDefinitionShape)
+  .strict()
+  .refine(validFieldSensitivity);
 const definition = z
   .object({
-    name: fieldName().describe(
-      "stable field name used for updates and browser fills.",
-    ),
-    label: fieldLabel()
-      .optional()
-      .describe(
-        "optional non-secret display text for users. must be nonempty, have no leading or trailing whitespace, be at most 128 utf-8 bytes, and contain no control, formatting, or line-separator characters. the form falls back to name. labels never affect updates or browser fills.",
-      ),
-    type: z.enum(["text", "email", "password", "totp"]),
-    required: z.boolean().optional(),
-    sensitive: z
-      .boolean()
-      .optional()
-      .describe(
-        "explicitly false for ordinary usernames/emails. passwords/totp must be true; omission defaults to true.",
-      ),
+    ...fieldDefinitionShape,
     value: text()
       .optional()
       .describe(
-        "optional initial value. omit secrets for private human collection; totp uses a seed, not a current code.",
+        "optional initial value. omit secrets for private human collection; totp uses a generator seed and passkey uses a json-encoded fido cxf passkey object. neither accepts a current code or hosted form input. to create a passkey on a website, leave an optional passkey field empty and use register_passkey.",
       ),
   })
   .strict()
-  .refine(
-    (field) =>
-      !(["password", "totp"].includes(field.type) && field.sensitive === false),
-  );
+  .refine(validFieldSensitivity);
 const createSpec = z
   .object({
     description: text()
@@ -148,6 +165,28 @@ const updateSpec = z
       .describe(
         "replacement site/service display name. empty string clears it.",
       ),
+    remove_fields: z
+      .array(fieldName())
+      .min(1)
+      .max(32)
+      .refine((names) => new Set(names).size === names.length)
+      .describe(
+        "field names to delete together with their stored values. at least one field must remain.",
+      )
+      .optional(),
+    add_fields: z
+      .array(definitionInput)
+      .min(1)
+      .max(32)
+      .refine(
+        (fields) =>
+          new Set(fields.map((field) => field.name)).size === fields.length,
+        "field names must be unique.",
+      )
+      .describe(
+        "field definitions to append after removals. set values for added fields in fields in the same update; a required totp or passkey field needs a value there. an optional empty passkey field can be populated later with register_passkey.",
+      )
+      .optional(),
     fields: z
       .record(fieldName(), z.object({ value: text().nullable() }).strict())
       .refine(
@@ -158,7 +197,22 @@ const updateSpec = z
   })
   .strict()
   .refine(
-    (spec) => spec.description !== undefined || spec.fields !== undefined,
+    (spec) =>
+      spec.description !== undefined ||
+      spec.remove_fields !== undefined ||
+      spec.add_fields !== undefined ||
+      spec.fields !== undefined,
+  )
+  .refine((spec) =>
+    (spec.add_fields ?? []).every((field) => {
+      if (
+        field.required === false ||
+        (field.type !== "totp" && field.type !== "passkey")
+      )
+        return true;
+      const value = spec.fields?.[field.name]?.value;
+      return typeof value === "string" && value.length > 0;
+    }),
   );
 
 export function registerVaultCredentialTools(
@@ -170,7 +224,7 @@ export function registerVaultCredentialTools(
     {
       description:
         'create or update credential items in a per-end-user vault. first list the vault with manage_vault_items and reuse an existing credential for the site: use a ready KERNEL credential with fill or an advertised webmcp_invoke, 1pw_fill a ready 1password credential, and reuse a connected 1password credential_account for new 1password credentials. never claim access the vault does not hold. there are two credential paths. before creating any credential, ask the user which they prefer by asking where their login for the site lives, for example: "is your example.com login saved in your own 1password, or would you rather enter it in a secure KERNEL form?" set provider to match; never choose for them. provider:"kernel" is KERNEL-hosted collection: the user enters values in a KERNEL-hosted form and the agent uses them through value-free bindings. provider:"1password" is 1password brokered approval: the user connects their 1password account once, approves each login request in the 1password app, and the 1password extension, loaded into the browser on demand, fills and submits; KERNEL stores no values. 1password supports only logins in the owner\'s own non-shared vault, not shared-vault items or passkeys; use KERNEL-hosted collection for those, or if the user declines 1password or that path fails. ' +
-        'KERNEL path: use only the recognizable site name as description; explicitly set sensitive:false for ordinary usernames/emails. each field may include an optional non-secret human-readable label; name remains the stable key for updates and browser fills. passwords and totp seeds must be sensitive. never store payment-card data here. for human collection, omit values and present the returned bearer collection url privately to the intended user, outside the agent-controlled browser. never ask for passwords or totp seeds in chat. totp seeds require trusted provisioning and have no hosted input. on create, fields is an ordered array of named definitions: inspect the website and list fields in its natural top-to-bottom order because this directly controls the user-facing collection form. update fields remain keyed by name and contain only value. updates require the latest version and optionally expected_item_id from an earlier read; definitions are immutable. omitted values are preserved; null or empty strings clear supported values. clearing required totp is unsupported. hosted forms require populated required inputs. to reopen collection, use manage_vault_items with action: "invoke" and operation: "collect". use manage_vault_items get with wait for readiness. once ready, choosing an operation is separate from the provider choice above: invoke fill to write fields into an ordinary web form without submitting it; invoke webmcp_invoke, only when listed in available_operations, to bind credential fields to null input slots of a live webmcp tool, which may submit the form or have other side effects. obtain explicit user approval before either, and never automatically retry an uncertain fill or an unknown webmcp_invoke outcome. for edits to already-ready items compare versions without wait. explicitly non-sensitive text/email values are returned; sensitive values and totp seeds are omitted. ' +
+        'KERNEL path: use only the recognizable site name as description; explicitly set sensitive:false for ordinary usernames/emails. each field may include an optional non-secret human-readable label; name remains the stable key for updates and browser fills. passwords, totp seeds, and passkeys must be sensitive. never store payment-card data here. for human collection, omit values and present the returned bearer collection url privately to the intended user, outside the agent-controlled browser. never ask for passwords, totp seeds, or passkeys in chat. totp values require trusted provisioning and have no hosted input. passkeys also have no hosted input: import a json-encoded fido cxf passkey object through trusted provisioning, or declare an optional empty passkey field and use manage_vault_items operation register_passkey to create one on a website. on create, fields is an ordered array of named definitions: inspect the website and list fields in its natural top-to-bottom order because this directly controls the user-facing collection form. updates can atomically remove definitions and their values, append add_fields, then set values through fields keyed by name. to change an existing definition, remove and add it again; the old value is deleted. updates require the latest version and optionally expected_item_id from an earlier read. omitted properties are preserved; null or empty strings clear supported values. clearing a required totp or passkey is unsupported because hosted collection cannot restore it. hosted forms require populated required inputs. to reopen collection, use manage_vault_items with action: "invoke" and operation: "collect". use manage_vault_items get with wait for readiness. once ready, choosing an operation is separate from the provider choice above: invoke fill to write supported fields into an ordinary web form without submitting it; passkeys cannot be selector-filled. when advertised, invoke arm_passkey to sign in through webauthn, register_passkey to create and store a passkey in an empty field, and disarm_passkey after the browser task. invoke webmcp_invoke, only when listed in available_operations, to bind supported credential fields to null input slots of a live webmcp tool, which may submit the form or have other side effects. obtain explicit user approval before either, and never automatically retry an uncertain fill or an unknown webmcp_invoke outcome. for edits to already-ready items compare versions without wait. explicitly non-sensitive text/email values are returned; sensitive values, totp seeds, and passkeys are omitted. ' +
         '1password path: reuse a connected credential_account in the vault; otherwise use action "connect_account" with provider:"1password" and a new key, and present the returned 1password authorization url only to the account owner, outside the agent-controlled browser, once manage_vault_items get reports the account connected, confirm with the owner which site logins to request (1-5, approved together), then create the credential with provider:"1password" and spec {account: the account item key, logins: [{website, optional reason/keywords}], optional goal}. 1password credentials cannot be updated. then invoke 1pw_create_access_request; it needs no browser, and no approval link exists before that request. create a browser with this vault attached only when the login is ready to fill. approval is a human action in the 1password app: give the returned native onepassword:// approval link unmodified only to the account owner, outside the agent-controlled browser, and never open, decode, or approve it yourself. credentials backed by a customer-supplied 1password access token and integration key are created and rotated by the integrating developer through the KERNEL api, not through mcp; never ask for or accept those secrets in chat. this is unrelated to manage_credential_providers. ' +
         "writes are never automatically retried; reconcile conflicts or uncertain outcomes before any further write.",
       inputSchema: vaultToolInput({
@@ -186,7 +240,7 @@ export function registerVaultCredentialTools(
         spec: z
           .union([createSpec, onePasswordCreateSpec, updateSpec])
           .describe(
-            "(create, update) KERNEL create: description and ordered fields. 1password create: account key, 1-5 logins, and optional goal. update (KERNEL only): description and/or fields keyed by name.",
+            "(create, update) KERNEL create: description and ordered fields. 1password create: account key, 1-5 logins, and optional goal. update (KERNEL only): description, remove_fields, add_fields, and/or values keyed by field name.",
           )
           .refine(
             (spec) =>
@@ -309,7 +363,7 @@ export function registerVaultCredentialTools(
           const parsed = updateSpec.safeParse(params.spec);
           if (!parsed.success)
             return errorResponse(
-              "update requires spec {description?, fields?} keyed by field name. no request was sent.",
+              "update requires spec {description?, remove_fields?, add_fields?, fields?}. no request was sent.",
             );
           const spec = parsed.data;
           item = await client.vaults.items.update(

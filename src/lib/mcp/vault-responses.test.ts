@@ -32,6 +32,7 @@ const unsafeItem = {
   action: {
     name: "spend_approval",
     url: "https://provider.example/approval",
+    capture_token: "hidden-capture-token",
     ciphertext: "hidden-action",
   },
   state: {
@@ -94,6 +95,7 @@ describe("vault public responses", () => {
       },
     });
     expect(projected).not.toHaveProperty("expires_at");
+    expect(projected).not.toHaveProperty("action.capture_token");
     expect(projected).not.toHaveProperty("state.authorization.approval_url");
   });
 
@@ -130,7 +132,9 @@ describe("vault public responses", () => {
         { action: { name: "spend_approval", url } },
         vaultItemFields,
       ),
-    ).toEqual({ action: { name: "spend_approval" } });
+    ).toEqual({
+      action: { name: "spend_approval" },
+    });
   });
 
   test("keeps full safe action URLs and operation descriptions", () => {
