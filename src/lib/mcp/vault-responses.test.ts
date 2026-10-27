@@ -137,6 +137,29 @@ describe("vault public responses", () => {
     });
   });
 
+  test("omits null URLs except agent_wallet_step_up.action_url", () => {
+    expect(
+      projectVaultOutput(
+        {
+          action: { name: "spend_approval", url: null },
+          expanded: {
+            link_user_info: {
+              agent_wallet_step_up: { status: "none", action_url: null },
+            },
+          },
+        },
+        vaultItemFields,
+      ),
+    ).toEqual({
+      action: { name: "spend_approval" },
+      expanded: {
+        link_user_info: {
+          agent_wallet_step_up: { status: "none", action_url: null },
+        },
+      },
+    });
+  });
+
   test("keeps full safe action URLs and operation descriptions", () => {
     const url = "https://provider.example/approve?request=" + "x".repeat(300);
     expect(

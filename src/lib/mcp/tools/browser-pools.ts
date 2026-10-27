@@ -68,6 +68,7 @@ type PoolConfigParams = Omit<
   network?: BrowserPoolCreateParams["network"];
   expected_network?: BrowserPoolUpdateParams["expected_network"];
   save_profile_changes?: boolean;
+  tags?: Record<string, string>;
   clear_profile?: boolean;
   clear_extensions?: boolean;
 };
@@ -98,6 +99,9 @@ function buildPoolCreateParams(
       ok: false,
       error: "error: save_profile_changes is acquire-only.",
     };
+  }
+  if (params.tags !== undefined) {
+    return { ok: false, error: "error: tags is acquire-only." };
   }
   if (params.start_url === "") {
     return {
@@ -151,6 +155,15 @@ function buildPoolUpdateParams(
     return {
       ok: false,
       error: "error: save_profile_changes is acquire-only.",
+    };
+  }
+  if (params.tags !== undefined) {
+    return { ok: false, error: "error: tags is acquire-only." };
+  }
+  if (params.region !== undefined) {
+    return {
+      ok: false,
+      error: "error: region is fixed at create; on list it filters pools.",
     };
   }
   if (params.clear_profile && (params.profile_id || params.profile_name)) {

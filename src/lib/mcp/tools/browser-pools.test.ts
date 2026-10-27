@@ -526,4 +526,41 @@ describe("browser-pool contract parity", () => {
       isError: true,
     });
   });
+
+  test.each([
+    [
+      { action: "create", size: 1, tags: { team: "qa" } },
+      "error: tags is acquire-only.",
+    ],
+    [
+      { action: "update", id_or_name: "pool_1", tags: { team: "qa" } },
+      "error: tags is acquire-only.",
+    ],
+    [
+      { action: "update", id_or_name: "pool_1", region: "us-west", size: 5 },
+      "error: region is fixed at create; on list it filters pools.",
+    ],
+    [
+      { action: "update", id_or_name: "pool_1", region: "us-west" },
+      "error: region is fixed at create; on list it filters pools.",
+    ],
+  ])("rejects fields the action would ignore: %p", async (params, text) => {
+    let called = false;
+    const record = async () => {
+      called = true;
+      return pool();
+    };
+    kernelClientMock.factory = () => ({
+      browserPools: { create: record, update: record },
+    });
+    const { handler } = captureBrowserPoolTool();
+
+    const result = await handler(params, auth);
+
+    expect(result).toEqual({
+      content: [{ type: "text", text }],
+      isError: true,
+    });
+    expect(called).toBe(false);
+  });
 });

@@ -1036,6 +1036,15 @@ export function registerBrowserCapabilities(
               return errorResponse(
                 "error: session_id is required for update action.",
               );
+            if (
+              params.memory !== undefined ||
+              params.video_memory !== undefined ||
+              params.region !== undefined
+            ) {
+              return errorResponse(
+                "error: memory, video_memory, and region are creation-only.",
+              );
+            }
             if (params.proxy_id && params.clear_proxy) {
               return errorResponse(
                 "error: cannot specify both proxy_id and clear_proxy.",

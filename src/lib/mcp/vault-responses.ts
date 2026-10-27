@@ -254,7 +254,7 @@ export function projectVaultOutput(
     const field = Reflect.get(value, key);
     if (
       urlFields.has(key) &&
-      field !== null &&
+      !(key === "action_url" && field === null) &&
       (typeof field !== "string" || !isDisplaySafeVaultURL(field))
     ) {
       continue;

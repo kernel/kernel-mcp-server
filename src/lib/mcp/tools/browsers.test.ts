@@ -618,6 +618,38 @@ describe("manage_browsers proxy routes", () => {
     }
   });
 
+  test.each([
+    { memory: "16GiB" },
+    { video_memory: "4GiB" },
+    { region: "us-west" },
+  ])("rejects creation-only %p on update", async (extra) => {
+    let updates = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          update: async () => {
+            updates++;
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+    try {
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: { action: "update", session_id: "brr_123", ...extra },
+      });
+      expect(result.isError).toBe(true);
+      expect(toolResultText(result)).toBe(
+        "error: memory, video_memory, and region are creation-only.",
+      );
+      expect(updates).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+
   test("rejects routes on update without calling the SDK", async () => {
     let updates = 0;
     const { client, close } = await connectTestMcp(

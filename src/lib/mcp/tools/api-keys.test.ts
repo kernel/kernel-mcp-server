@@ -200,4 +200,53 @@ describe("manage_api_keys SDK parity", () => {
     for (const result of results) expect(result.isError).toBe(true);
     expect(calls).toBe(0);
   });
+
+  test.each([
+    [
+      "rotate",
+      { expires_at: "2027-01-01T00:00:00Z" },
+      "error: expires_at and policy are create-only.",
+    ],
+    [
+      "rotate",
+      {
+        policy: {
+          statements: [{ action: "browsers:use", resource: "*" }],
+        },
+      },
+      "error: expires_at and policy are create-only.",
+    ],
+    [
+      "update",
+      {
+        name: "renamed",
+        policy: {
+          statements: [{ action: "browsers:use", resource: "*" }],
+        },
+      },
+      "error: expires_at and policy are create-only.",
+    ],
+    [
+      "create",
+      { name: "new", expire_in_days: 1 },
+      "error: expire_in_days is rotate-only.",
+    ],
+  ])(
+    "rejects %s parameters the SDK would drop: %p",
+    async (action, extra, message) => {
+      let called = false;
+      const record = async () => {
+        called = true;
+        return { id: "key_1" };
+      };
+      const [result] = await callAPIKeys(
+        { create: record, update: record, rotate: record },
+        [{ action, api_key_id: "key_1", ...extra }],
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([{ type: "text", text: message }]);
+      expect(called).toBe(false);
+    },
+  );
 });

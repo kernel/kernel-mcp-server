@@ -135,6 +135,16 @@ export function registerAPIKeyCapabilities(
       if (!ctx.http?.authInfo) throw new Error("authentication required");
       const client = options.createKernelClient(ctx.http.authInfo.token);
 
+      if (
+        params.action !== "create" &&
+        (params.expires_at !== undefined || params.policy !== undefined)
+      ) {
+        return errorResponse("error: expires_at and policy are create-only.");
+      }
+      if (params.action !== "rotate" && params.expire_in_days !== undefined) {
+        return errorResponse("error: expire_in_days is rotate-only.");
+      }
+
       try {
         switch (params.action) {
           case "create": {
