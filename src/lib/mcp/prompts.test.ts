@@ -4,6 +4,7 @@ import { registerKernelPrompts } from "@/lib/mcp/prompts";
 import { registerBrowserCapabilities } from "@/lib/mcp/tools/browsers";
 import { instrumentMcpAnalytics } from "@/lib/mcp/analytics";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
+import { BUNDLED_SKILLS } from "@/lib/mcp/skills/generated/skills";
 
 const BLOCKED_LANGUAGE =
   /stealth|bot[ _-]?detect|anti-?bot|bot-protected|fingerprint|akamai|cloudflare|imperva|evad|evasion|bypass|scrap|automation detection|unblock|\bsolv/gi;
@@ -82,6 +83,21 @@ async function advertisedTexts(
       issue_description: "page fails to load",
     }),
   );
+  // Skill bodies quote api fields such as `stealth` in code, so only their
+  // prose is held to the advertised-language rules.
+  for (const skill of BUNDLED_SKILLS) {
+    texts.push(skill.frontmatter.description);
+    for (const file of skill.files) {
+      if ("text" in file && file.mimeType === "text/markdown") {
+        texts.push(
+          file.text
+            .replace(/^---[\s\S]*?\n---\n/, "")
+            .replace(/```[\s\S]*?```/g, "")
+            .replace(/`[^`]*`/g, ""),
+        );
+      }
+    }
+  }
   return texts;
 }
 

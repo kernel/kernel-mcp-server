@@ -81,6 +81,10 @@ bun run format
 
 Prettier formats the following file types: `*.ts`, `*.js`, `*.json`, `*.md`
 
+### Skills
+
+The server serves agent skills through the MCP Skills extension (`io.modelcontextprotocol/skills`). They come from [kernel/skills](https://github.com/kernel/skills) at the commit pinned in `scripts/build-skills.mjs` and are committed as `src/lib/mcp/skills/generated/skills.ts`. To pick up skill changes, bump `SKILLS_COMMIT` (or add a directory to `SKILL_DIRECTORIES`) and run `bun run build:skills`. CI runs `bun run check:skills` to confirm the committed module matches the pin.
+
 ### MCP responses
 
 Model-facing JSON (tool results and resources) is compact: use `jsonResponse` or `JSON.stringify(value)` without indentation.

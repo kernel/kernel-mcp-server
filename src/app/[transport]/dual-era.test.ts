@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Client as LegacyClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport as LegacyTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { ResultSchema as LegacyResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import {
   Client,
   StreamableHTTPClientTransport,
@@ -10,6 +11,7 @@ import {
   type StoredOAuthTokens,
 } from "@modelcontextprotocol/client";
 import { CallToolResultSchema } from "@modelcontextprotocol/core";
+import { z } from "zod";
 
 const fixture = Bun.spawn({
   cmd: [
@@ -427,6 +429,52 @@ for (const era of ["legacy", "modern"] as const) {
         } finally {
           await attempt.client.close();
         }
+      }
+    });
+
+    test("serves bundled skills through the skills extension", async () => {
+      const { client, connect, exchanges } = connection(era, {
+        token: "sk_valid",
+      });
+      try {
+        await connect();
+        // The v1 SDK drops capability extensions, so read them off the wire.
+        const handshake = exchanges.find(
+          (exchange) =>
+            exchange.body?.method ===
+            (era === "legacy" ? "initialize" : "server/discover"),
+        );
+        expect(
+          wireResult(handshake!).capabilities.extensions[
+            "io.modelcontextprotocol/skills"
+          ],
+        ).toEqual({});
+        const listSkills = { method: "skills/list", params: {} };
+        const ListSkillsResult = z.object({
+          skills: z.array(
+            z.object({
+              uri: z.string(),
+              resources: z.array(z.object({ uri: z.string() })),
+            }),
+          ),
+        });
+        const { skills } = ListSkillsResult.parse(
+          client instanceof LegacyClient
+            ? await client.request(listSkills, LegacyResultSchema)
+            : await client.request(listSkills, ListSkillsResult),
+        );
+        const skill = skills.find(
+          (entry) => entry.uri === "skill://kernel-mcp/SKILL.md",
+        );
+        expect(skill?.resources.map((resource) => resource.uri)).toContain(
+          "skill://kernel-mcp/SKILL.md",
+        );
+        const { contents } = await client.readResource({
+          uri: "skill://kernel-mcp/SKILL.md",
+        });
+        expect(contents[0]).toMatchObject({ mimeType: "text/markdown" });
+      } finally {
+        await client.close();
       }
     });
 

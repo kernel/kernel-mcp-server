@@ -33,6 +33,9 @@ jobs:
       - name: Check managed-auth App bundle
         run: bun run check:managed-auth-app
 
+      - name: Check bundled skills
+        run: bun run check:skills
+
       - name: Type check
         run: bunx tsc --noEmit --incremental false
 
