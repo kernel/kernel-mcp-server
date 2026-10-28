@@ -113,7 +113,7 @@ const EXPECTED_ANNOTATIONS: Record<string, [boolean, boolean, boolean]> = {
   manage_vault_items: [false, true, true],
   manage_vault_credentials: [false, true, true],
   manage_vault_cards: [false, true, true],
-  manage_vault_wallets: [false, false, true],
+  manage_vault_wallets: [false, true, true],
   manage_vault_provider_configs: [false, true, true],
 };
 
