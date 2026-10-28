@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Client as LegacyClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport as LegacyTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { ResultSchema as LegacyResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import {
   Client,
   StreamableHTTPClientTransport,
@@ -448,16 +449,19 @@ for (const era of ["legacy", "modern"] as const) {
             "io.modelcontextprotocol/skills"
           ],
         ).toEqual({});
-        const { skills } = await client.request(
-          { method: "skills/list", params: {} },
-          z.object({
-            skills: z.array(
-              z.object({
-                uri: z.string(),
-                resources: z.array(z.object({ uri: z.string() })),
-              }),
-            ),
-          }),
+        const listSkills = { method: "skills/list", params: {} };
+        const ListSkillsResult = z.object({
+          skills: z.array(
+            z.object({
+              uri: z.string(),
+              resources: z.array(z.object({ uri: z.string() })),
+            }),
+          ),
+        });
+        const { skills } = ListSkillsResult.parse(
+          client instanceof LegacyClient
+            ? await client.request(listSkills, LegacyResultSchema)
+            : await client.request(listSkills, ListSkillsResult),
         );
         const skill = skills.find(
           (entry) => entry.uri === "skill://kernel-mcp/SKILL.md",
