@@ -127,6 +127,22 @@ const onePasswordCreateSpec = z
   })
   .strict();
 
+const managedAuthCreateSpec = z
+  .object({
+    connection_id: z
+      .string()
+      .min(1)
+      .describe(
+        "managed auth connection id from manage_auth_connections action list or get. it must be in the vault's project and have a saved KERNEL credential; a connection that needs reauthentication qualifies, while one without a saved credential or with an external credential provider does not.",
+      ),
+    description: text()
+      .optional()
+      .describe(
+        "optional site or service display name. set only at creation and immutable afterward.",
+      ),
+  })
+  .strict();
+
 function onePasswordCredentialSpec(
   spec: z.infer<typeof onePasswordCreateSpec>,
 ) {
@@ -223,24 +239,29 @@ export function registerVaultCredentialTools(
     "manage_vault_credentials",
     {
       description:
-        'create or update credential items in a per-end-user vault. first list the vault with manage_vault_items and reuse an existing credential for the site: use a ready KERNEL credential with fill or an advertised webmcp_invoke, 1pw_fill a ready 1password credential, and reuse a connected 1password credential_account for new 1password credentials. never claim access the vault does not hold. there are two credential paths. before creating any credential, ask the user which they prefer by asking where their login for the site lives, for example: "is your example.com login saved in your own 1password, or would you rather enter it in a secure KERNEL form?" set provider to match; never choose for them. provider:"kernel" is KERNEL-hosted collection: the user enters values in a KERNEL-hosted form and the agent uses them through value-free bindings. provider:"1password" is 1password brokered approval: the user connects their 1password account once, approves each login request in the 1password app, and the 1password extension, loaded into the browser on demand, fills and submits; KERNEL stores no values. 1password supports only logins in the owner\'s own non-shared vault, not shared-vault items or passkeys; use KERNEL-hosted collection for those, or if the user declines 1password or that path fails. ' +
+        'create or update credential items in a per-end-user vault. first list the vault with manage_vault_items and reuse an existing credential for the site: use a ready KERNEL or managed_auth credential with fill or an advertised webmcp_invoke, 1pw_fill a ready 1password credential, and reuse a connected 1password credential_account for new 1password credentials. never claim access the vault does not hold. an existing managed auth connection in the same project with a saved KERNEL credential can be reused with provider:"managed_auth" and spec {connection_id, optional description}; the vault item stores no values, follows future saved-credential changes, and offers no collection form. this is a reuse path, not a new collection choice. otherwise there are two credential paths for collecting a new login. before creating one, ask the user which they prefer by asking where their login for the site lives, for example: "is your example.com login saved in your own 1password, or would you rather enter it in a secure KERNEL form?" set provider to match; never choose for them. provider:"kernel" is KERNEL-hosted collection: the user enters values in a KERNEL-hosted form and the agent uses them through value-free bindings. provider:"1password" is 1password brokered approval: the user connects their 1password account once, approves each login request in the 1password app, and the 1password extension, loaded into the browser on demand, fills and submits; KERNEL stores no values. 1password supports only logins in the owner\'s own non-shared vault, not shared-vault items or passkeys; use KERNEL-hosted collection for those, or if the user declines 1password or that path fails. ' +
         'KERNEL path: use only the recognizable site name as description; explicitly set sensitive:false for ordinary usernames/emails. each field may include an optional non-secret human-readable label; name remains the stable key for updates and browser fills. passwords, totp seeds, and passkeys must be sensitive. never store payment-card data here; use wallet, payment_request, or card items for payment checkout. for human collection, omit values and present the returned bearer collection url privately to the intended user, outside the agent-controlled browser. never ask for passwords, totp seeds, or passkeys in chat. totp values require trusted provisioning and have no hosted input. passkeys also have no hosted input: import a json-encoded fido cxf passkey object through trusted provisioning, or declare an optional empty passkey field and use manage_vault_items operation register_passkey to create one on a website. on create, fields is an ordered array of named definitions: inspect the website and list fields in its natural top-to-bottom order because this directly controls the user-facing collection form. updates can atomically remove definitions and their values, append add_fields, then set values through fields keyed by name. to change an existing definition, remove and add it again; the old value is deleted. updates require the latest version and optionally expected_item_id from an earlier read. omitted properties are preserved; null or empty strings clear supported values. clearing a required totp or passkey is unsupported because hosted collection cannot restore it. hosted forms require populated required inputs. to reopen collection, use manage_vault_items with action: "invoke" and operation: "collect". use manage_vault_items get with wait for readiness. once ready, choosing an operation is separate from the provider choice above: invoke fill to write supported fields into an ordinary web form without submitting it; passkeys cannot be selector-filled. when advertised, invoke arm_passkey to sign in through webauthn, register_passkey to create and store a passkey in an empty field, and disarm_passkey after the browser task. invoke webmcp_invoke, only when listed in available_operations, to bind supported credential fields to null input slots of a live webmcp tool, which may submit the form or have other side effects. obtain explicit user approval before either, and never automatically retry an uncertain fill or an unknown webmcp_invoke outcome. for edits to already-ready items compare versions without wait. explicitly non-sensitive text/email values are returned; sensitive values, totp seeds, and passkeys are omitted. ' +
-        '1password path: reuse a connected credential_account in the vault; otherwise use action "connect_account" with provider:"1password" and a new key, and present the returned 1password authorization url only to the account owner, outside the agent-controlled browser, once manage_vault_items get reports the account connected, confirm with the owner which site logins to request (1-5, approved together), then create the credential with provider:"1password" and spec {account: the account item key, logins: [{website, optional reason/keywords}], optional goal}. 1password credentials cannot be updated. then invoke 1pw_create_access_request; it needs no browser, and no approval link exists before that request. create a browser with this vault attached only when the login is ready to fill. approval is a human action in the 1password app: give the returned native onepassword:// approval link unmodified only to the account owner, outside the agent-controlled browser, and never open, decode, or approve it yourself. credentials backed by a customer-supplied 1password access token and integration key are created and rotated by the integrating developer through the KERNEL api, not through mcp; never ask for or accept those secrets in chat. this is unrelated to manage_credential_providers. ' +
+        '1password path: reuse a connected credential_account in the vault; otherwise use action "connect_account" with provider:"1password" and a new key, and present the returned 1password authorization url only to the account owner, outside the agent-controlled browser, once manage_vault_items get reports the account connected, confirm with the owner which site logins to request (1-5, approved together), then create the credential with provider:"1password" and spec {account: the account item key, logins: [{website, optional reason/keywords}], optional goal}. 1password credentials cannot be updated. then invoke 1pw_create_access_request; it needs no browser, and no approval link exists before that request. create a browser with this vault attached only when the login is ready to fill. approval is a human action in the 1password app: give the returned native onepassword:// approval link unmodified only to the account owner, outside the agent-controlled browser, and never open, decode, or approve it yourself. credentials backed by a customer-supplied 1password access token and integration key are created and rotated by the integrating developer through the KERNEL api, not through mcp. importing an access request already approved with those same secrets also requires its request and entry identifiers plus resolved credential references; it creates a ready item without another request and remains api-only. never ask for or accept those secrets or references in chat. this is unrelated to manage_credential_providers. ' +
         "writes are never automatically retried; reconcile conflicts or uncertain outcomes before any further write.",
       inputSchema: vaultToolInput({
         ...vaultItemSchema,
         key: vaultKeySchema(),
         action: z.enum(["create", "update", "connect_account"]),
         provider: z
-          .enum(["kernel", "1password"])
+          .enum(["kernel", "1password", "managed_auth"])
           .describe(
-            '(create, connect_account) the path the user chose. ask the user before creating. connect_account supports only "1password". update accepts only KERNEL credentials.',
+            '(create, connect_account) credential source. managed_auth reuses an existing connection with a saved KERNEL credential. for a newly collected credential, ask the user to choose between "kernel" and "1password". connect_account supports only "1password". update accepts only KERNEL credentials.',
           )
           .optional(),
         spec: z
-          .union([createSpec, onePasswordCreateSpec, updateSpec])
+          .union([
+            createSpec,
+            onePasswordCreateSpec,
+            managedAuthCreateSpec,
+            updateSpec,
+          ])
           .describe(
-            "(create, update) KERNEL create: description and ordered fields. 1password create: account key, 1-5 logins, and optional goal. update (KERNEL only): description, remove_fields, add_fields, and/or values keyed by field name.",
+            "(create, update) KERNEL create: description and ordered fields. 1password create: account key, 1-5 logins, and optional goal. managed_auth create: connection_id and optional immutable description. update (KERNEL only): description, remove_fields, add_fields, and/or values keyed by field name.",
           )
           .refine(
             (spec) =>
@@ -285,11 +306,17 @@ export function registerVaultCredentialTools(
             params.expected_item_id !== undefined)
         )
           return errorResponse("version and expected_item_id are update-only.");
-        if (params.action === "update" && params.provider === "1password")
-          return errorResponse("1password credentials cannot be updated.");
+        if (
+          params.action === "update" &&
+          params.provider !== undefined &&
+          params.provider !== "kernel"
+        )
+          return errorResponse(
+            `${params.provider} credentials cannot be updated.`,
+          );
         if (params.action !== "update" && params.provider === undefined)
           return errorResponse(
-            'provider is required. ask the user whether they prefer KERNEL-hosted collection (provider: "kernel") or 1password brokered approval (provider: "1password") before creating credentials.',
+            'provider is required. use provider: "managed_auth" only to reuse an existing connection with a saved KERNEL credential; otherwise ask the user whether they prefer KERNEL-hosted collection (provider: "kernel") or 1password brokered approval (provider: "1password") before creating credentials.',
           );
         const target = { project, vault: params.vault, key: params.key };
         if (params.action === "connect_account") {
@@ -330,6 +357,23 @@ export function registerVaultCredentialTools(
               id_or_name: params.vault,
               type: "credential",
               spec: onePasswordCredentialSpec(spec.data),
+            },
+            options,
+          );
+          return vaultItemResponse(credential, target);
+        }
+        if (params.action === "create" && params.provider === "managed_auth") {
+          const spec = managedAuthCreateSpec.safeParse(params.spec);
+          if (!spec.success)
+            return errorResponse(
+              'provider: "managed_auth" create requires spec {connection_id, description?}. no request was sent.',
+            );
+          const credential = await client.vaults.items.upsert(
+            params.key,
+            {
+              id_or_name: params.vault,
+              type: "credential",
+              spec: { provider: "managed_auth", ...spec.data },
             },
             options,
           );

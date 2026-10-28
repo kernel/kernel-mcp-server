@@ -73,7 +73,7 @@ export const vaultItemFields: OutputFields = {
   },
   spec: {
     ...fields(
-      "provider wallet user_id payment_method_id card_id amount currency merchant merchant_name merchant_url merchant_country merchant_category merchant_category_code context expires_at description account access_token_expires_at",
+      "provider wallet user_id payment_method_id card_id amount currency merchant merchant_name merchant_url merchant_country merchant_category merchant_category_code context expires_at description account connection_id access_token_expires_at",
     ),
     requests: onePasswordRequestFields,
     fields: fields("name label type required sensitive"),
@@ -95,7 +95,7 @@ export const vaultItemFields: OutputFields = {
     ...fields(
       "provider status status_reason user_id domains payment_method_id funding_status",
     ),
-    fields: { "*": fields("has_value") },
+    fields: { "*": fields("has_value type") },
     access_request: {
       ...fields("state has_autofill_token granted_count goal"),
       request: {
@@ -429,15 +429,24 @@ export function vaultItemResponse(
     typed.success &&
     typed.data.type === "credential" &&
     typed.data.spec?.provider === "1password";
+  const managedAuthCredential =
+    typed.success &&
+    typed.data.type === "credential" &&
+    typed.data.spec?.provider === "managed_auth";
   const credential =
-    typed.success && typed.data.type === "credential" && !onePasswordCredential;
-  const onePasswordGuidance = onePasswordAccount
+    typed.success &&
+    typed.data.type === "credential" &&
+    !onePasswordCredential &&
+    !managedAuthCredential;
+  const credentialProviderGuidance = onePasswordAccount
     ? onePasswordAccountGuidance
     : onePasswordCredential
       ? typed.data.spec?.account === undefined
         ? [...onePasswordCredentialGuidance, onePasswordStoredTokenGuidance]
         : onePasswordCredentialGuidance
-      : undefined;
+      : managedAuthCredential
+        ? managedAuthCredentialGuidance
+        : undefined;
   const advertised = advertisedOperationsSchema.safeParse(projected);
   const payment = z
     .object({
@@ -502,7 +511,7 @@ export function vaultItemResponse(
           : [],
       },
       guidance: [
-        ...(onePasswordGuidance ??
+        ...(credentialProviderGuidance ??
           (credential
             ? [
                 "present the collection url only to the intended user in a private surface, outside the agent-controlled browser. it is a bearer credential. never ask for passwords, totp seeds, or passkeys in chat. totp values require trusted backend provisioning. passkeys have no hosted input: import them only through trusted provisioning, or create them through an advertised register_passkey operation.",
@@ -703,7 +712,13 @@ const onePasswordCredentialGuidance = [
 ];
 
 const onePasswordStoredTokenGuidance =
-  "this credential has no account: it uses a customer-supplied 1password access token stored encrypted by KERNEL, and spec.access_token_expires_at is optional expiry metadata. the integrating developer replaces the token through the KERNEL api; 1pw_update_access_token is not available through mcp. the api can return granted credential references in state.access_request.resolved for direct 1password sdk use, but mcp intentionally omits those references because it does not expose the access token or integration key; use the advertised 1pw_fill operation instead. never ask for or accept 1password tokens or integration keys in chat. while the token is expired, request and fill are unavailable.";
+  "this credential has no account: it uses a customer-supplied 1password access token stored encrypted by KERNEL, and spec.access_token_expires_at is optional expiry metadata. the integrating developer creates it, may import an access request already approved with the same token and integration key so the item starts ready without a new request, and replaces the token through the KERNEL api. those writes and 1pw_update_access_token are not available through mcp. mcp does not accept the access token, integration key, approved access-request id, request entry ids, or resolved credential references. the api can return granted references in state.access_request.resolved for direct 1password sdk use, but mcp intentionally omits them because it does not expose the matching secrets; use the advertised 1pw_fill operation instead. never ask for or accept 1password tokens, integration keys, or resolved references in chat. while the token is expired, request and fill are unavailable.";
+
+const managedAuthCredentialGuidance = [
+  "this credential references the managed auth connection in spec.connection_id and stores no values of its own. it reads that connection's saved KERNEL credential at fill time, so saved-credential changes apply immediately. state.fields lists only the names and types of currently usable fields; values are never returned.",
+  "ready means the connection has a saved KERNEL credential, not that login succeeded. a connection that needs reauthentication can remain ready; an authenticated connection without a saved credential does not qualify. unavailable means the connection was deleted, its credential was removed or emptied, or it moved to an external provider; inspect status_reason and manage the connection with manage_auth_connections.",
+  "there is no collection form and this vault item cannot be updated. create it with manage_vault_credentials provider managed_auth and a connection_id from manage_auth_connections in the same project. invoke only advertised operations with a browser created with this vault attached. fill uses the current saved values, and a totp field produces a current code rather than exposing its seed.",
+];
 
 // The API's error already says what happened and what to do next. The only
 // text added here is for a request that got no response at all.

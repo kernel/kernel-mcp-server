@@ -124,6 +124,7 @@ describe("vault SDK request contracts", () => {
         toolResultJSON(
           await fixture.call("manage_vaults", {
             action: "list",
+            query: "check",
             limit: 20,
             offset: 20,
           }),
@@ -143,7 +144,11 @@ describe("vault SDK request contracts", () => {
       ).toEqual([
         { method: "POST", path: "/vaults", body: { name: "checkout" } },
         { method: "GET", path: "/vaults/vlt_123", body: undefined },
-        { method: "GET", path: "/vaults?limit=20&offset=20", body: undefined },
+        {
+          method: "GET",
+          path: "/vaults?query=check&limit=20&offset=20",
+          body: undefined,
+        },
         { method: "GET", path: "/vaults?offset=40", body: undefined },
       ]);
       for (const request of fixture.requests) {
