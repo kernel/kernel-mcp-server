@@ -157,7 +157,7 @@ describe("MCP Apps additive registration", () => {
         "manage_auth_connections",
       ]);
       expect(base.appTools).toEqual([]);
-      expect(base.resources).toEqual([]);
+      expect(base.resources).toEqual(["kernel-mcp"]);
 
       const withApps = await captureRegistration(true);
       expect(withApps.legacyTools).toEqual([
@@ -168,7 +168,10 @@ describe("MCP Apps additive registration", () => {
         "open_auth_login",
         "begin_auth_login",
       ]);
-      expect(withApps.resources).toEqual(["kernel-managed-auth-login"]);
+      expect(withApps.resources).toEqual([
+        "kernel-mcp",
+        "kernel-managed-auth-login",
+      ]);
     } finally {
       if (previous === undefined) {
         delete process.env.KERNEL_MCP_DISABLED_TOOLSETS;
@@ -259,7 +262,7 @@ describe("MCP toolset allowlist", () => {
         "browser_repl",
       ]);
       expect(registration.appTools).toEqual([]);
-      expect(registration.resources).toEqual([]);
+      expect(registration.resources).toEqual(["kernel-mcp"]);
     } finally {
       if (previousEnabled === undefined) {
         delete process.env.KERNEL_MCP_ENABLED_TOOLSETS;

@@ -10,6 +10,7 @@ import {
   type StoredOAuthTokens,
 } from "@modelcontextprotocol/client";
 import { CallToolResultSchema } from "@modelcontextprotocol/core";
+import { z } from "zod";
 
 const fixture = Bun.spawn({
   cmd: [
@@ -427,6 +428,49 @@ for (const era of ["legacy", "modern"] as const) {
         } finally {
           await attempt.client.close();
         }
+      }
+    });
+
+    test("serves bundled skills through the skills extension", async () => {
+      const { client, connect, exchanges } = connection(era, {
+        token: "sk_valid",
+      });
+      try {
+        await connect();
+        // The v1 SDK drops capability extensions, so read them off the wire.
+        const handshake = exchanges.find(
+          (exchange) =>
+            exchange.body?.method ===
+            (era === "legacy" ? "initialize" : "server/discover"),
+        );
+        expect(
+          wireResult(handshake!).capabilities.extensions[
+            "io.modelcontextprotocol/skills"
+          ],
+        ).toEqual({});
+        const { skills } = await client.request(
+          { method: "skills/list", params: {} },
+          z.object({
+            skills: z.array(
+              z.object({
+                uri: z.string(),
+                resources: z.array(z.object({ uri: z.string() })),
+              }),
+            ),
+          }),
+        );
+        const skill = skills.find(
+          (entry) => entry.uri === "skill://kernel-mcp/SKILL.md",
+        );
+        expect(skill?.resources.map((resource) => resource.uri)).toContain(
+          "skill://kernel-mcp/SKILL.md",
+        );
+        const { contents } = await client.readResource({
+          uri: "skill://kernel-mcp/SKILL.md",
+        });
+        expect(contents[0]).toMatchObject({ mimeType: "text/markdown" });
+      } finally {
+        await client.close();
       }
     });
 

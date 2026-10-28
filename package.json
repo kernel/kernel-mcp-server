@@ -24,6 +24,8 @@
     "dev": "next dev -p 3002",
     "build:managed-auth-app": "bun scripts/build-managed-auth-app.mjs",
     "check:managed-auth-app": "bun scripts/build-managed-auth-app.mjs --check",
+    "build:skills": "bun scripts/build-skills.mjs",
+    "check:skills": "bun scripts/build-skills.mjs --check",
     "build": "bun run check:managed-auth-app && next build",
     "start": "next start -p 3002",
     "lint": "next lint",
