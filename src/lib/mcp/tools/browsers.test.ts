@@ -1215,14 +1215,21 @@ describe("manage_browsers save profile", () => {
         "create when no matching profile exists",
       );
       expect(browser?.description).toContain(
-        "active cdp and webdriver connections close",
+        "active cdp, playwright, and webdriver connections close and must reconnect",
+      );
+      expect(browser?.description).toContain(
+        "call save_profile at a stable point, such as right after a login completes",
+      );
+      expect(browser?.description).toContain(
+        "a browser_busy conflict is temporary; retry the call",
+      );
+      expect(browser?.description).toContain(
+        "browser_not_active (the browser is no longer running) are not retryable",
       );
       expect(browser?.description).toContain(
         "caches, service worker storage, and google drive indexeddb data are omitted",
       );
-      expect(browser?.description).toContain(
-        "the most recently started wins",
-      );
+      expect(browser?.description).toContain("the most recently started wins");
       expect(browser?.description).toContain(
         "a successful save restarts timeout_seconds",
       );
@@ -1233,6 +1240,7 @@ describe("manage_browsers save profile", () => {
 
   test("forwards exactly one destination by id or name", async () => {
     const calls: unknown[] = [];
+    const requestOptions: unknown[] = [];
     const { client, close } = await connectTestMcp(
       registerBrowserCapabilities,
       {
@@ -1240,8 +1248,13 @@ describe("manage_browsers save profile", () => {
           saveProfile: async (
             sessionId: string,
             destination: { id?: string; name?: string },
+            options?: { maxRetries?: number; timeout?: number },
           ) => {
             calls.push([sessionId, destination]);
+            requestOptions.push({
+              maxRetries: options?.maxRetries,
+              timeout: options?.timeout,
+            });
             return {
               id: destination.id ?? "prf_created_from_name",
               name: destination.name ?? "existing-profile",
@@ -1276,6 +1289,11 @@ describe("manage_browsers save profile", () => {
       expect(calls).toEqual([
         ["checkout-flow", { id: "prf_existing" }],
         ["brr_123", { name: "checkout.snapshot-1" }],
+      ]);
+      // A slow save must not time out at the SDK default or start a second save.
+      expect(requestOptions).toEqual([
+        { maxRetries: 0, timeout: 190_000 },
+        { maxRetries: 0, timeout: 190_000 },
       ]);
       expect(byId).toEqual({
         id: "prf_existing",
