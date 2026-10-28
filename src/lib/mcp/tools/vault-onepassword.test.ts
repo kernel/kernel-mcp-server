@@ -118,6 +118,10 @@ describe("1Password vault credentials", () => {
       expect(credentials).toContain("first list the vault");
       expect(credentials).toContain("not shared-vault items or passkeys");
       expect(credentials).toContain("not through mcp");
+      expect(credentials).toContain(
+        "importing an access request already approved",
+      );
+      expect(credentials).toContain("resolved credential references");
       expect(descriptionOf("manage_vaults")).toContain(
         "reuse an existing credential for the site first",
       );
@@ -204,6 +208,21 @@ describe("1Password vault credentials", () => {
       action: "create",
       provider: "1password",
       spec: {
+        account: "onepassword",
+        access_request_id: requestID,
+        resolved: [{ reference }],
+        logins: [
+          {
+            id: "entry-1",
+            website: "https://example.com",
+          },
+        ],
+      },
+    },
+    {
+      action: "create",
+      provider: "1password",
+      spec: {
         logins: [{ website: "https://example.com" }],
         access_token: "private-access-token",
         integration_key: "private-integration-key",
@@ -247,6 +266,7 @@ describe("1Password vault credentials", () => {
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result)).not.toContain("private-integration-key");
       expect(JSON.stringify(result)).not.toContain("private-access-token");
+      expectNoReferences(result);
       expect(fixture.requests).toHaveLength(0);
     } finally {
       await fixture.close();
@@ -819,12 +839,17 @@ describe("1Password vault credentials", () => {
     },
   );
 
-  test("describes stored-token credentials without exposing or accepting tokens", async () => {
+  test("describes stored-token credentials without exposing or accepting import data", async () => {
     const storedToken = {
       ...readyCredential,
       spec: {
         provider: "1password",
-        requests,
+        access_request_id: requestID,
+        requests: {
+          ...requests,
+          entries: [{ ...requests.entries[0], id: "import-entry-1" }],
+        },
+        resolved: [{ entryId: "import-entry-1", reference }],
         access_token_expires_at: "2026-10-01T00:00:00Z",
         access_token: "private-access-token",
         integration_key: "private-integration-key",
@@ -853,11 +878,16 @@ describe("1Password vault credentials", () => {
         requests,
         access_token_expires_at: "2026-10-01T00:00:00Z",
       });
+      expect(body.item.spec).not.toHaveProperty("access_request_id");
+      expect(body.item.spec.requests.entries[0]).not.toHaveProperty("id");
       expect(body.guidance.join(" ")).toContain(
-        "1pw_update_access_token is not available through mcp",
+        "1pw_update_access_token are not available through mcp",
       );
       expect(body.guidance.join(" ")).toContain(
-        "mcp intentionally omits those references",
+        "may import an access request already approved",
+      );
+      expect(body.guidance.join(" ")).toContain(
+        "mcp intentionally omits them",
       );
       expect(body.item.state.access_request).not.toHaveProperty("resolved");
       expectNoReferences(read);
