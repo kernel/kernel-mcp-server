@@ -484,7 +484,7 @@ export function registerBrowserCapabilities(
     "manage_browsers",
     {
       description:
-        'manage the browser sessions that every web task runs in, and their archived telemetry. once a session exists, drive it with webmcp, browser_repl, execute_playwright_code, or computer_action, preferring the first that can carry the current step. use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished. live sessions can be addressed by id or by the name given at creation or set on update; deleted sessions only by id. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
+        'manage the browser sessions that every web task runs in, and their archived telemetry. once a session exists, drive it with webmcp, browser_repl, execute_playwright_code, or computer_action, preferring the first that can carry the current step. use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, "save_profile" to snapshot a running session to an existing or new profile without ending it, and "delete" when finished. live sessions can be addressed by id or by the name given at creation or set on update; deleted sessions only by id. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed. save_profile accepts exactly one destination: profile_id must identify an existing profile, while profile_name overwrites the matching profile in the browser project or creates it. saving restarts the browser: active cdp and webdriver connections close, webdriver clients need a new session, restored tabs reload, and in-memory page state is lost. the browser is stopped only while its user data is copied, and the action returns after the restarted browser accepts cdp connections and the profile upload completes. caches, service worker storage, and google drive indexeddb data are omitted from the saved profile but remain in the running browser. saving neither attaches the destination profile nor changes save_profile_changes. active browsers already using that profile keep their in-memory state; pools with refresh_on_profile_update enabled replace idle sessions from the new snapshot, while other browsers use it when they next load the profile. among overlapping save_profile calls to the same profile, the most recently started wins even if an earlier call finishes later; an automatic session-end save with save_profile_changes is ordered against them by finish time. a successful save restarts timeout_seconds, while a failed save leaves it unchanged. the action can conflict when the browser is no longer active, a pooled browser was released or reacquired after the call began (browser_lease_changed), or the browser is temporarily busy (browser_busy); the call can be retried.',
       inputSchema: z.strictObject(
         {
           ...projectSelectionInputSchema(),
@@ -495,6 +495,7 @@ export function registerBrowserCapabilities(
               "list",
               "get",
               "get_telemetry",
+              "save_profile",
               "delete",
             ])
             .describe("operation to perform."),
@@ -505,7 +506,7 @@ export function registerBrowserCapabilities(
           session_id: z
             .string()
             .describe(
-              "browser session id or name. required for update, get, get_telemetry, and delete actions. a name resolves only a live session; for a deleted session (get_telemetry) pass its id.",
+              "browser session id or name. required for update, get, get_telemetry, save_profile, and delete actions. a name resolves only a live session; for a deleted session (get_telemetry) pass its id.",
             )
             .optional(),
           name: z
@@ -609,14 +610,18 @@ export function registerBrowserCapabilities(
             .optional(),
           profile_name: z
             .string()
+            .min(1)
+            .max(255)
+            .regex(/^[a-zA-Z0-9._-]{1,255}$/)
             .describe(
-              "(create, update) profile name to load saved cookies/logins. cannot use with profile_id.",
+              "(create, update) profile name to load saved cookies/logins. (save_profile) destination profile name to overwrite, or create when no matching profile exists in the browser project. must be 1-255 letters, digits, '.', '_' or '-'; cannot use with profile_id.",
             )
             .optional(),
           profile_id: z
             .string()
+            .min(1)
             .describe(
-              "(create, update) profile id to load. cannot use with profile_name.",
+              "(create, update) existing profile id to load. (save_profile) existing destination profile id to overwrite. cannot use with profile_name.",
             )
             .optional(),
           save_profile_changes: z
@@ -1163,6 +1168,44 @@ export function registerBrowserCapabilities(
               order: params.order,
               compact: params.compact,
             });
+          }
+          case "save_profile": {
+            if (!params.session_id) {
+              return errorResponse(
+                "error: session_id is required for save_profile action.",
+              );
+            }
+            if (
+              params.profile_id !== undefined &&
+              params.profile_name !== undefined
+            ) {
+              return errorResponse(
+                "error: cannot specify both profile_name and profile_id for save_profile.",
+              );
+            }
+            if (
+              params.profile_id === undefined &&
+              params.profile_name === undefined
+            ) {
+              return errorResponse(
+                "error: profile_name or profile_id is required for save_profile.",
+              );
+            }
+            if (params.save_profile_changes !== undefined) {
+              return errorResponse(
+                "error: save_profile_changes does not apply to save_profile; saving does not attach the destination profile or change the browser's session-end save setting.",
+              );
+            }
+
+            const profile =
+              params.profile_id !== undefined
+                ? await client.browsers.saveProfile(params.session_id, {
+                    id: params.profile_id,
+                  })
+                : await client.browsers.saveProfile(params.session_id, {
+                    name: params.profile_name,
+                  });
+            return jsonResponse(profile);
           }
           case "delete": {
             if (!params.session_id)
