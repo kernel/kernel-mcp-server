@@ -50,6 +50,7 @@ const ENTITLEMENT_GATED_TOOLS = new Set([
   "manage_vaults",
   "manage_vault_wallets",
   "manage_vault_cards",
+  "manage_vault_payment_requests",
   "manage_vault_credentials",
   "manage_vault_items",
   "manage_vault_provider_configs",
