@@ -16,6 +16,7 @@ import {
   authorizeInputsSchema,
   linkCardSpecSchema,
   kernelCardSpecSchema,
+  kernelPaymentRequestSpecSchema,
   vaultItemSchema,
   vaultKeySchema,
   vaultProviderSchema,
@@ -33,12 +34,18 @@ export function registerVaultCardTools(
       description:
         'configure payment card requests in a per-end-user vault, not merchant payments. link cards pay at a checkout in this order: reach the final checkout page in a browser created with this vault attached and gather the amount, currency, merchant name and url, and a payment_method_id from the wallet\'s payment_methods expansion; "create" the card (this does not contact link: the card is requested and advertises authorize); after explicit user approval, "authorize" with browser_id (browser session id) and page_url (the exact current top-level checkout url). KERNEL inspects the checkout, chooses whether to deliver a link pay token or a virtual card, limits fill to that checkout\'s origin, and sends the user an approval request: share the approval url from the item\'s action, then get the item with manage_vault_items until fill is advertised; re-check with "authorize" without browser_id and page_url. then fill as the item\'s advertised fill description says and submit the checkout yourself; fill never submits payment. read the item\'s available_operations descriptions for inputs and recovery steps. "update" can change a link card until it is authorized at a checkout; after that it returns 409: delete the card and create a new one. authorize errors such as page_not_found or ambiguous_page happen before any payment request: ' +
         linkCheckoutRecovery +
-        ' declined or expired: delete the card and create a new one. recovery_required means the card is unusable; reads may reconcile a known request, otherwise with user confirmation delete it, create a new card, and tell the user to approve only the new request. all link cards are limited to 50000 minor units. recurring terms make amount the per-period limit; keep the same card for merchant-scheduled charges, and remember that deleting it revokes future link charges but does not cancel the merchant subscription. if the payment result is unclear, check the merchant\'s order confirmation or order history before paying again. KERNEL cards use a connected KERNEL wallet, amount in minor units, https merchant_url and optional iso merchant_country (required by visa), actual merchant_category and four-digit merchant_category_code (not 0000); omit categories rather than invent them. for KERNEL cards, "authorize" after explicit user approval invokes the currently advertised authorize operation with no browser_id or page_url, returning a spend_approval action for visa approval or fresh security-code collection when required, or an immediately ready card when no hosted approval is needed. give action urls only to the intended user privately; do not open them or include them in logs/traces. KERNEL cards cannot be updated; after user confirmation delete only if the api permits it and create a new item under a new key for a new purchase. authorize is equivalent to manage_vault_items invoke authorize. use advertised fill only when ready: number, expiration (format "MM/YY" or "MM/YYYY"), cvc, exp_month, exp_year. fill delivers details for a few minutes, so submit promptly; repeated fill is safe and never submits checkout. alias-mode cards also expire at their temporary security-code deadline. billing_* fields fail with 400 field_unavailable before any write; enter billing name/zip on the merchant page. after the user submits checkout and the merchant outcome is observed, use manage_vault_items invoke confirm_transaction only when advertised with status, transaction_type, amount, matching approved uppercase currency, occurred_at. "PENDING" means an explicitly accepted pending merchant transaction; "ERROR" means an explicit merchant transaction error, not transport loss or ambiguous processing. unknown outcomes: ask the user to check merchant orders, email or statement, then report the confirmed outcome even after expiry. on a lost report response re-get and send the identical report once more only if freshly advertised; never repeat checkout. only if a recovery_required KERNEL card advertises restart_verification, invoke it with no inputs after user approval each time and give the new spend_approval url privately to the cardholder; they must verify and approve spending again. if the result is unclear re-get; share a new action if present or invoke once more only if still advertised with renewed user approval. otherwise do not retry the payment operation. with user confirmation, delete only to abandon eligible issuance recovery and create a separately approved purchase; recovery while reporting a merchant transaction cannot be deleted and requires "support@kernel.sh" with project, vault, key, status_reason and event timestamps. deletion never proves no payment occurred; never include card data, api keys or capability urls. card enrollment is hosted; never accept card numbers, cvc, or expiration data in tool inputs or credential items. mode is determined by the wallet credentials, not a per-item test flag; never assume a test transaction. "create" creates or retrieves an identical card request by immutable key. "update" replaces requested-card specs. pending issuance updates preserve omitted optional fields and clear explicit empty lists, only for provider-supported edits allowed by the api. wallet/provider binding cannot change after authorization starts. uncertain updates enter recovery_required; do not retry the update. delete the card and create a new one rather than attempting the update again. neither implicitly authorizes a card. for agentcard, optional checkout_origin is a caller-declared canonical https origin (or localhost http origin) that KERNEL forwards for eligible autopilot rule matching on non-prepared checkout authorizations. KERNEL does not compare it with the browser page; it does not enable autopilot or ensure payment success. omitting it retains the existing approval flow, and autopilot may fall back to user approval. prepared checkout uses preparation.merchant_origin. eligible unused agentcard cards advertise a checkout-preparation operation for supported tokenization checkout; invoke it through manage_vault_items with the api-required checkout inputs. keep the returned approval page open, poll until ready_to_submit, and submit native pay before preparation.expires_at. preparations are single-use, even after failure or expiry. amounts are integer minor currency units. no card data, oauth tokens, provider secrets, or domain configuration. never reconfigure a card to retry a failed, timed-out, rejected, or indeterminate payment. requests are not automatically retried.',
+        ' declined or expired: delete the card and create a new one. recovery_required means the card is unusable; reads may reconcile a known request, otherwise with user confirmation delete it, create a new card, and tell the user to approve only the new request. all link cards are limited to 50000 minor units. recurring terms make amount the per-period limit; keep the same card for merchant-scheduled charges, and remember that deleting it revokes future link charges but does not cancel the merchant subscription. if the payment result is unclear, check the merchant\'s order confirmation or order history before paying again. item_type payment_request creates a link or KERNEL purchase as a payment_request item where the organization has payment requests enabled; it has the same operations and lifecycle as a card, and update must also pass item_type payment_request. agentcard purchases stay card items. a purchase\'s wallet and payment method are fixed at creation; an update that changes them returns 409. KERNEL cards use a connected KERNEL wallet, a payment_method_id from its payment_methods (optional on a card, where omitting it selects the default card, card, and never another card; required on a payment_request and must be active and eligible), amount in minor units, https merchant_url and optional iso merchant_country (required by visa), actual merchant_category and four-digit merchant_category_code (not 0000); omit categories rather than invent them. for KERNEL cards, "authorize" after explicit user approval invokes the currently advertised authorize operation with no browser_id or page_url, returning a spend_approval action for visa approval or fresh security-code collection when required, or an immediately ready card when no hosted approval is needed. give action urls only to the intended user privately; do not open them or include them in logs/traces. KERNEL cards cannot be updated; after user confirmation delete only if the api permits it and create a new item under a new key for a new purchase. authorize is equivalent to manage_vault_items invoke authorize. use advertised fill only when ready: number, expiration (format "MM/YY" or "MM/YYYY"), cvc, exp_month, exp_year. fill delivers details for a few minutes, so submit promptly; repeated fill is safe and never submits checkout. alias-mode cards also expire at their temporary security-code deadline. billing_* fields fail with 400 field_unavailable before any write; enter billing name/zip on the merchant page. after the user submits checkout and the merchant outcome is observed, use manage_vault_items invoke confirm_transaction only when advertised with status, transaction_type, amount, matching approved uppercase currency, occurred_at. "PENDING" means an explicitly accepted pending merchant transaction; "ERROR" means an explicit merchant transaction error, not transport loss or ambiguous processing. unknown outcomes: ask the user to check merchant orders, email or statement, then report the confirmed outcome even after expiry. on a lost report response re-get and send the identical report once more only if freshly advertised; never repeat checkout. only if a recovery_required KERNEL card advertises restart_verification, invoke it with no inputs after user approval each time and give the new spend_approval url privately to the cardholder; they must verify and approve spending again. if the result is unclear re-get; share a new action if present or invoke once more only if still advertised with renewed user approval. otherwise do not retry the payment operation. with user confirmation, delete only to abandon eligible issuance recovery and create a separately approved purchase; recovery while reporting a merchant transaction cannot be deleted and requires "support@kernel.sh" with project, vault, key, status_reason and event timestamps. deletion never proves no payment occurred; never include card data, api keys or capability urls. card enrollment is hosted; never accept card numbers, cvc, or expiration data in tool inputs or credential items. mode is determined by the wallet credentials, not a per-item test flag; never assume a test transaction. "create" creates or retrieves an identical card request by immutable key. "update" replaces requested-card specs. pending issuance updates preserve omitted optional fields and clear explicit empty lists, only for provider-supported edits allowed by the api. wallet/provider binding cannot change after authorization starts. uncertain updates enter recovery_required; do not retry the update. delete the card and create a new one rather than attempting the update again. neither implicitly authorizes a card. for agentcard, optional checkout_origin is a caller-declared canonical https origin (or localhost http origin) that KERNEL forwards for eligible autopilot rule matching on non-prepared checkout authorizations. KERNEL does not compare it with the browser page; it does not enable autopilot or ensure payment success. omitting it retains the existing approval flow, and autopilot may fall back to user approval. prepared checkout uses preparation.merchant_origin. eligible unused agentcard cards advertise a checkout-preparation operation for supported tokenization checkout; invoke it through manage_vault_items with the api-required checkout inputs. keep the returned approval page open, poll until ready_to_submit, and submit native pay before preparation.expires_at. preparations are single-use, even after failure or expiry. amounts are integer minor currency units. no card data, oauth tokens, provider secrets, or domain configuration. never reconfigure a card to retry a failed, timed-out, rejected, or indeterminate payment. requests are not automatically retried.',
       inputSchema: vaultToolInput({
         ...vaultItemSchema,
         key: vaultKeySchema(),
         action: z.enum(["create", "update", "authorize"]),
         provider: vaultProviderSchema.optional(),
+        item_type: z
+          .enum(["card", "payment_request"])
+          .describe(
+            "(create/update) item type; defaults to card. payment_request is for link and KERNEL purchases where the organization has payment requests enabled; agentcard uses card. update must use the item's existing type.",
+          )
+          .optional(),
         browser_id: z
           .string()
           .min(1)
@@ -59,7 +66,7 @@ export function registerVaultCardTools(
             kernelCardSpecSchema,
           ])
           .describe(
-            "(create/update) full provider specification object, not a {type, spec} envelope. embedded provider must match provider. link supports optional recurring {interval, interval_count?}; amount is capped at 50000 and is the per-period limit when recurring. KERNEL requires wallet, amount, currency, merchant_name, https merchant_url, and merchant_country for visa. no defaults or normalization are applied.",
+            "(create/update) full provider specification object, not a {type, spec} envelope. embedded provider must match provider. link supports optional recurring {interval, interval_count?}; amount is capped at 50000 and is the per-period limit when recurring. KERNEL requires wallet, amount, currency, merchant_name, https merchant_url, and merchant_country for visa; payment_method_id is optional on a card and required on a payment_request. no defaults or normalization are applied.",
           )
           .optional(),
       }),
@@ -102,6 +109,15 @@ export function registerVaultCardTools(
       });
       if (!checkout.success)
         return errorResponse(authorizeInputsIssueMessage(checkout.error));
+      if (params.item_type !== undefined && params.action === "authorize")
+        return errorResponse(
+          "item_type is only for create/update; authorize reads the item.",
+        );
+      const itemType = params.item_type ?? "card";
+      if (itemType === "payment_request" && params.provider === "agentcard")
+        return errorResponse(
+          "agentcard purchases are card items; payment_request is only for link and kernel.",
+        );
       if (params.provider === "kernel" && params.action === "update")
         return errorResponse(
           "kernel cards cannot be updated; after user confirmation, delete only if the api permits it and create a new item under a new key for a new purchase. reconcile unresolved outcomes first.",
@@ -111,24 +127,29 @@ export function registerVaultCardTools(
           ? undefined
           : (params.provider === "link"
               ? linkCardSpecSchema.transform((spec) => ({
-                  ...spec,
-                  provider: "link" as const,
+                  type: itemType,
+                  spec: { ...spec, provider: "link" as const },
                 }))
               : params.provider === "agentcard"
                 ? agentcardCardSpecSchema.transform((spec) => ({
-                    ...spec,
-                    provider: "agentcard" as const,
+                    type: "card" as const,
+                    spec: { ...spec, provider: "agentcard" as const },
                   }))
-                : kernelCardSpecSchema.transform((spec) => ({
-                    ...spec,
-                    provider: "kernel" as const,
-                  }))
+                : itemType === "payment_request"
+                  ? kernelPaymentRequestSpecSchema.transform((spec) => ({
+                      type: "payment_request" as const,
+                      spec: { ...spec, provider: "kernel" as const },
+                    }))
+                  : kernelCardSpecSchema.transform((spec) => ({
+                      type: "card" as const,
+                      spec: { ...spec, provider: "kernel" as const },
+                    }))
             ).safeParse(params.spec);
       if (parsed && !parsed.success)
         return errorResponse(
-          `invalid ${params.provider} card spec (${topLevelIssueKeys(parsed.error).join(", ") || "spec"}); no request was sent. correct these fields before creating or updating.`,
+          `invalid ${params.provider} ${itemType} spec (${topLevelIssueKeys(parsed.error).join(", ") || "spec"}); no request was sent. correct these fields before creating or updating.`,
         );
-      const spec = parsed?.success ? parsed.data : undefined;
+      const request = parsed?.success ? parsed.data : undefined;
       let authorizationSubmitted = false;
       let linkCard = params.provider === "link";
       try {
@@ -138,14 +159,16 @@ export function registerVaultCardTools(
             { id_or_name: params.vault },
             options,
           );
-          const provider = current.type === "card" && current.spec.provider;
+          const provider =
+            (current.type === "card" || current.type === "payment_request") &&
+            current.spec.provider;
           linkCard = provider === "link";
           if (
             (provider !== "kernel" && provider !== "link") ||
             (params.provider !== undefined && params.provider !== provider)
           )
             return errorResponse(
-              "authorize is only for link and kernel cards; the item is not a card from the given provider.",
+              "authorize is only for link and kernel cards; the item is not a card or payment_request from the given provider.",
             );
           if (provider === "kernel" && checkout.data.browser_id !== undefined)
             return errorResponse(
@@ -165,17 +188,20 @@ export function registerVaultCardTools(
           );
           return vaultItemResponse(item, target);
         }
-        if (!spec) return errorResponse("spec is required for create/update.");
+        if (!request)
+          return errorResponse("spec is required for create/update.");
         const item =
           params.action === "create"
             ? await client.vaults.items.upsert(
                 params.key,
-                { id_or_name: params.vault, type: "card", spec },
+                { id_or_name: params.vault, ...request },
                 options,
               )
             : await client.vaults.items.update(
                 params.key,
-                { id_or_name: params.vault, spec },
+                request.type === "payment_request"
+                  ? { id_or_name: params.vault, ...request }
+                  : { id_or_name: params.vault, spec: request.spec },
                 options,
               );
         return vaultItemResponse(item, target);

@@ -92,6 +92,49 @@ describe("provider-specific vault payment guidance", () => {
     expect(result.hints.invocation[0]).not.toHaveProperty("required_inputs");
   });
 
+  test("a requested Link payment_request gets the card checkout flow", () => {
+    const result = toolResultJSON(
+      vaultItemResponse({ ...item, type: "payment_request" }, target),
+    );
+    expect(result.guidance.join(" ")).toContain(
+      "invoke authorize with inputs {browser_id, page_url}",
+    );
+    expect(result.hints.invocation[0]).toMatchObject({
+      arguments: { operation: "authorize" },
+      required_inputs: ["browser_id", "page_url"],
+    });
+  });
+
+  test("a recovery_required KERNEL payment_request is limited like a card", () => {
+    const result = toolResultJSON(
+      vaultItemResponse(
+        {
+          ...item,
+          type: "payment_request",
+          spec: { provider: "kernel", wallet: "wallet-1" },
+          state: { provider: "kernel", status: "recovery_required" },
+          action: {
+            name: "spend_approval",
+            url: "https://vault.example/approve",
+          },
+          available_operations: [
+            { type: "fill", description: "Fill card fields" },
+            {
+              type: "restart_verification",
+              description: "Restart verification",
+            },
+          ],
+        },
+        target,
+      ),
+    );
+    expect(result.item).not.toHaveProperty("action");
+    expect(result.item.available_operations).toEqual([
+      { type: "restart_verification", description: "Restart verification" },
+    ]);
+    expect(result.guidance.join(" ")).toContain("restart_verification");
+  });
+
   test("Link guidance gives every failure a recovery step", () => {
     const guidance = toolResultJSON(
       vaultItemResponse(item, target),

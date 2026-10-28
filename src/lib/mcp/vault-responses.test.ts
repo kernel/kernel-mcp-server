@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import {
   isDisplaySafeVaultURL,
   projectVaultOutput,
+  vaultEventFields,
   vaultItemFields,
+  vaultOperationResultFields,
 } from "@/lib/mcp/vault-responses";
 import { toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
 import {
@@ -97,6 +99,117 @@ describe("vault public responses", () => {
     expect(projected).not.toHaveProperty("expires_at");
     expect(projected).not.toHaveProperty("action.capture_token");
     expect(projected).not.toHaveProperty("state.authorization.approval_url");
+  });
+
+  test("projects payment-method lifecycle and purchase funding fields", () => {
+    const method = {
+      id: "pm_2",
+      provider: "kernel",
+      type: "card",
+      is_default: false,
+      status: "pending_enrollment",
+      status_reason: "awaiting cardholder",
+      expires_at: "2026-10-28T12:30:00Z",
+      display: {},
+      capabilities: { single_use_card: { eligible: false, reasons: [] } },
+      action: {
+        name: "card_enrollment",
+        url: "https://vault.example/enroll",
+        capture_token: "hidden-capture-token",
+      },
+      raw: "hidden-method",
+    };
+    const projected = projectVaultOutput(
+      {
+        ...item,
+        type: "payment_request",
+        state: {
+          provider: "kernel",
+          status: "requested",
+          payment_method_id: "pm_2",
+          funding_status: "removed",
+        },
+        expanded: { payment_methods: [method] },
+      },
+      vaultItemFields,
+    );
+    expect(JSON.stringify(projected)).not.toContain("hidden");
+    const { raw: _raw, ...rest } = method;
+    const publicMethod = {
+      ...rest,
+      action: { name: "card_enrollment", url: "https://vault.example/enroll" },
+    };
+    expect(projected).toMatchObject({
+      state: { payment_method_id: "pm_2", funding_status: "removed" },
+      expanded: { payment_methods: [publicMethod] },
+    });
+    expect(
+      projectVaultOutput(
+        { type: "add_payment_method", payment_method: method },
+        vaultOperationResultFields,
+      ),
+    ).toEqual({
+      type: "add_payment_method",
+      payment_method: publicMethod,
+    });
+    expect(
+      projectVaultOutput(
+        {
+          type: "remove_payment_method",
+          payment_method_id: "pm_2",
+          status: "removed",
+        },
+        vaultOperationResultFields,
+      ),
+    ).toEqual({
+      type: "remove_payment_method",
+      payment_method_id: "pm_2",
+      status: "removed",
+    });
+  });
+
+  test("projects payment-method and purchase event data", () => {
+    expect(
+      projectVaultOutput(
+        [
+          {
+            id: "evt_1",
+            name: "purchase_created",
+            created_at: "2026-10-28T12:00:00Z",
+            data: {
+              item_type: "payment_request",
+              provider: "kernel",
+              payment_method_id_present: true,
+              raw: "hidden",
+            },
+          },
+          {
+            id: "evt_2",
+            name: "payment_method_removed",
+            created_at: "2026-10-28T12:01:00Z",
+            data: { payment_method_id: "pm_2" },
+          },
+        ],
+        vaultEventFields,
+      ),
+    ).toEqual([
+      {
+        id: "evt_1",
+        name: "purchase_created",
+        created_at: "2026-10-28T12:00:00Z",
+        data: {
+          item_type: "payment_request",
+          provider: "kernel",
+          payment_method_id_present: true,
+        },
+      },
+      {
+        id: "evt_2",
+        name: "payment_method_removed",
+        created_at: "2026-10-28T12:01:00Z",
+        data: { payment_method_id: "pm_2" },
+      },
+    ]);
   });
 
   test("does not pass opaque objects through scalar leaves", () => {
