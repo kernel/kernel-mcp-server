@@ -643,6 +643,63 @@ describe("1Password vault credentials", () => {
     },
   );
 
+  test("forwards target_id when duplicate pages share the exact URL", async () => {
+    const fixture = await connectVaultTest([
+      Response.json(readyCredential),
+      Response.json({ type: "1pw_fill", status: "fill_submitted" }),
+    ]);
+    try {
+      const inputs = {
+        browser_id: "browser-1",
+        page_url: "https://example.com/login",
+        target_id: "target-page-2",
+        timeout_ms: 30000,
+      };
+      const result = await fixture.call("manage_vault_items", {
+        ...target,
+        action: "invoke",
+        operation: "1pw_fill",
+        inputs,
+      });
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[1].body).toEqual({
+        type: "1pw_fill",
+        ...inputs,
+      });
+      expect(toolResultJSON(result).guidance).toContain(
+        "not that login succeeded",
+      );
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    { target_id: "" },
+    { target_id: "target-page-2", unexpected: false },
+  ])(
+    "rejects invalid target selection without reading the item",
+    async (inputs) => {
+      const fixture = await connectVaultTest([]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          ...target,
+          action: "invoke",
+          operation: "1pw_fill",
+          inputs: {
+            browser_id: "browser-1",
+            page_url: "https://example.com/login",
+            ...inputs,
+          },
+        });
+        expect(result.isError).toBe(true);
+        expect(fixture.requests).toHaveLength(0);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
   test("requests several logins and fills the one the owner picks", async () => {
     const logins = [
       { website: "https://example.com/login" },
@@ -772,6 +829,13 @@ describe("1Password vault credentials", () => {
         access_token: "private-access-token",
         integration_key: "private-integration-key",
       },
+      state: {
+        ...readyCredential.state,
+        access_request: {
+          ...readyCredential.state.access_request,
+          resolved: [{ entryId: "entry-1", reference }],
+        },
+      },
       available_operations: [
         ...readyCredential.available_operations,
         { type: "1pw_update_access_token", description: "Replace the token." },
@@ -792,6 +856,11 @@ describe("1Password vault credentials", () => {
       expect(body.guidance.join(" ")).toContain(
         "1pw_update_access_token is not available through mcp",
       );
+      expect(body.guidance.join(" ")).toContain(
+        "mcp intentionally omits those references",
+      );
+      expect(body.item.state.access_request).not.toHaveProperty("resolved");
+      expectNoReferences(read);
       expect(
         body.hints.invocation.map(
           (hint: { arguments: { operation: string } }) =>

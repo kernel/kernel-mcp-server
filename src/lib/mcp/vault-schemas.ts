@@ -117,6 +117,20 @@ export const authorizeInputsSchema = z
   );
 export type AuthorizeInputs = z.infer<typeof authorizeInputsSchema>;
 
+export const onePasswordFillInputsShape =
+  "{ browser_id, page_url, entry_id?, target_id?, timeout_ms? }";
+
+export const onePasswordFillInputsSchema = z
+  .object({
+    browser_id: z.string().min(1),
+    page_url: z.url(),
+    entry_id: z.string().min(1).optional(),
+    target_id: z.string().min(1).optional(),
+    timeout_ms: z.number().int().min(1).max(30000).optional(),
+  })
+  .strict();
+export type OnePasswordFillInputs = z.infer<typeof onePasswordFillInputsSchema>;
+
 export const passkeyOperationTypes = [
   "arm_passkey",
   "register_passkey",
@@ -140,6 +154,22 @@ export const passkeyInputsSchema = z
   })
   .strict();
 export type PasskeyInputs = z.infer<typeof passkeyInputsSchema>;
+
+export const addPaymentMethodInputsShape = "{}";
+export const addPaymentMethodInputsSchema = z.object({}).strict();
+export type AddPaymentMethodInputs = z.infer<
+  typeof addPaymentMethodInputsSchema
+>;
+
+export const removePaymentMethodInputsShape = "{ payment_method_id }";
+export const removePaymentMethodInputsSchema = z
+  .object({
+    payment_method_id: z.string().min(1).max(128),
+  })
+  .strict();
+export type RemovePaymentMethodInputs = z.infer<
+  typeof removePaymentMethodInputsSchema
+>;
 
 // Names the offending top-level key, never a value or nested key, and shows the shape
 // the API accepts.
@@ -168,6 +198,14 @@ export function authorizeInputsIssueMessage(error: z.ZodError) {
   return `${operationInputsIssueMessage("authorize", authorizeInputsShape, error)}: pass browser_id and the https page_url of the final checkout page together, or neither.`;
 }
 
+export function onePasswordFillInputsIssueMessage(error: z.ZodError) {
+  return operationInputsIssueMessage(
+    "1pw_fill",
+    onePasswordFillInputsShape,
+    error,
+  );
+}
+
 export function passkeyInputsIssueMessage(
   operation: PasskeyOperation,
   error: z.ZodError,
@@ -175,8 +213,34 @@ export function passkeyInputsIssueMessage(
   return operationInputsIssueMessage(operation, passkeyInputsShape, error);
 }
 
+export function addPaymentMethodInputsIssueMessage(error: z.ZodError) {
+  return operationInputsIssueMessage(
+    "add_payment_method",
+    addPaymentMethodInputsShape,
+    error,
+  );
+}
+
+export function removePaymentMethodInputsIssueMessage(error: z.ZodError) {
+  return operationInputsIssueMessage(
+    "remove_payment_method",
+    removePaymentMethodInputsShape,
+    error,
+  );
+}
+
 const integer = () => z.number().int().safe();
 const currency = () => z.string().regex(/^[A-Za-z]{3}$/);
+const kernelCurrency = () =>
+  currency().describe(
+    "iso 4217 code. supported: aud, brl, cad, chf, czk, dkk, eur, gbp, hkd, inr, jpy, krw, mxn, nok, nzd, pln, sek, sgd, usd, zar.",
+  );
+const kernelPaymentMethodID = () =>
+  z
+    .string()
+    .min(1)
+    .max(128)
+    .describe("payment method id from the wallet's payment_methods expansion.");
 
 export function providerConfigReferenceSchema() {
   return z
@@ -366,34 +430,58 @@ export const linkCardSpecSchema = z
   })
   .strict();
 
+const kernelPurchaseSpecShape = {
+  provider: z.literal("kernel").optional(),
+  wallet: vaultKeySchema(),
+  amount: integer()
+    .min(1)
+    .max(1_000_000)
+    .describe("integer minor currency units, maximum 1000000."),
+  currency: kernelCurrency(),
+  merchant_name: z.string().min(1).max(255),
+  merchant_url: z
+    .string()
+    .url()
+    .startsWith("https://")
+    .describe(
+      "merchant checkout url. fill is allowed only on this url's origin.",
+    ),
+  merchant_country: z
+    .string()
+    .regex(/^[A-Za-z]{2}$/)
+    .describe("iso 3166-1 alpha-2 country code; required for visa purchases.")
+    .optional(),
+  merchant_category: z
+    .string()
+    .min(1)
+    .max(255)
+    .describe("actual merchant category; omit rather than invent.")
+    .optional(),
+  merchant_category_code: z
+    .string()
+    .regex(/^[0-9]{4}$/)
+    .refine((value) => value !== "0000")
+    .describe("actual merchant mcc; omit rather than invent.")
+    .optional(),
+};
+
 export const kernelCardSpecSchema = z
   .object({
-    provider: z.literal("kernel").optional(),
-    wallet: vaultKeySchema(),
-    amount: integer()
-      .min(1)
-      .max(1_000_000)
-      .describe("integer minor currency units, maximum 1000000."),
-    currency: currency(),
-    merchant_name: z.string().min(1).max(255),
-    merchant_url: z.string().url().startsWith("https://"),
-    merchant_country: z
-      .string()
-      .regex(/^[A-Za-z]{2}$/)
-      .describe("iso 3166-1 alpha-2 country code; required for visa purchases.")
+    ...kernelPurchaseSpecShape,
+    payment_method_id: kernelPaymentMethodID()
+      .describe(
+        "wallet-scoped id from payment_methods. omit only to select the wallet's default card (id card); there is no fallback, and wallets without a default card require this id. the purchase stays bound to this method.",
+      )
       .optional(),
-    merchant_category: z
-      .string()
-      .min(1)
-      .max(255)
-      .describe("actual merchant category; omit rather than invent.")
-      .optional(),
-    merchant_category_code: z
-      .string()
-      .regex(/^[0-9]{4}$/)
-      .refine((value) => value !== "0000")
-      .describe("actual merchant mcc; omit rather than invent.")
-      .optional(),
+  })
+  .strict();
+
+export const kernelPaymentRequestSpecSchema = z
+  .object({
+    ...kernelPurchaseSpecShape,
+    payment_method_id: kernelPaymentMethodID().describe(
+      "required wallet-scoped id from payment_methods. the method must be active and eligible; the purchase stays bound to it and cannot switch funding.",
+    ),
   })
   .strict();
 
