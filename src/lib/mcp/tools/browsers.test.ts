@@ -1176,6 +1176,181 @@ describe("manage_browsers region", () => {
   });
 });
 
+describe("manage_browsers save profile", () => {
+  test("advertises the restart and destination contract", async () => {
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {},
+    );
+
+    try {
+      const { tools } = await client.listTools();
+      const browser = tools.find(({ name }) => name === "manage_browsers");
+      const action = browser?.inputSchema.properties?.action as
+        | { enum?: string[] }
+        | undefined;
+      const profileId = browser?.inputSchema.properties?.profile_id as
+        | { minLength?: number; description?: string }
+        | undefined;
+      const profileName = browser?.inputSchema.properties?.profile_name as
+        | {
+            minLength?: number;
+            maxLength?: number;
+            pattern?: string;
+            description?: string;
+          }
+        | undefined;
+
+      expect(action?.enum).toContain("save_profile");
+      expect(profileId).toMatchObject({ minLength: 1 });
+      expect(profileId?.description).toContain(
+        "existing destination profile id to overwrite",
+      );
+      expect(profileName).toMatchObject({
+        minLength: 1,
+        maxLength: 255,
+        pattern: "^[a-zA-Z0-9._-]{1,255}$",
+      });
+      expect(profileName?.description).toContain(
+        "create when no matching profile exists",
+      );
+      expect(browser?.description).toContain(
+        "active cdp and webdriver connections close",
+      );
+      expect(browser?.description).toContain(
+        "caches, service worker storage, and google drive indexeddb data are omitted",
+      );
+      expect(browser?.description).toContain(
+        "the most recently started wins",
+      );
+      expect(browser?.description).toContain(
+        "a successful save restarts timeout_seconds",
+      );
+    } finally {
+      await close();
+    }
+  });
+
+  test("forwards exactly one destination by id or name", async () => {
+    const calls: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          saveProfile: async (
+            sessionId: string,
+            destination: { id?: string; name?: string },
+          ) => {
+            calls.push([sessionId, destination]);
+            return {
+              id: destination.id ?? "prf_created_from_name",
+              name: destination.name ?? "existing-profile",
+            };
+          },
+        },
+      },
+    );
+
+    try {
+      const byId = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action: "save_profile",
+            session_id: "checkout-flow",
+            profile_id: "prf_existing",
+          },
+        }),
+      );
+      const byName = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action: "save_profile",
+            session_id: "brr_123",
+            profile_name: "checkout.snapshot-1",
+          },
+        }),
+      );
+
+      expect(calls).toEqual([
+        ["checkout-flow", { id: "prf_existing" }],
+        ["brr_123", { name: "checkout.snapshot-1" }],
+      ]);
+      expect(byId).toEqual({
+        id: "prf_existing",
+        name: "existing-profile",
+      });
+      expect(byName).toEqual({
+        id: "prf_created_from_name",
+        name: "checkout.snapshot-1",
+      });
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects missing, ambiguous, and inapplicable save inputs", async () => {
+    let saves = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          saveProfile: async () => {
+            saves++;
+            return { id: "prf_123", name: "profile" };
+          },
+        },
+      },
+    );
+
+    try {
+      const cases: Array<Record<string, unknown>> = [
+        { action: "save_profile", profile_id: "prf_123" },
+        { action: "save_profile", session_id: "brr_123" },
+        {
+          action: "save_profile",
+          session_id: "brr_123",
+          profile_id: "prf_123",
+          profile_name: "profile",
+        },
+        {
+          action: "save_profile",
+          session_id: "brr_123",
+          profile_id: "prf_123",
+          save_profile_changes: false,
+        },
+        {
+          action: "save_profile",
+          session_id: "brr_123",
+          profile_name: "invalid profile name",
+        },
+        {
+          action: "save_profile",
+          session_id: "brr_123",
+          profile_id: "",
+        },
+        {
+          action: "save_profile",
+          session_id: "brr_123",
+          profile_name: "x".repeat(256),
+        },
+      ];
+
+      for (const arguments_ of cases) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: arguments_,
+        });
+        expect(result.isError).toBe(true);
+      }
+      expect(saves).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+});
+
 describe("manage_browsers id or name", () => {
   test("passes name and tags through create and update", async () => {
     const createCalls: unknown[] = [];
