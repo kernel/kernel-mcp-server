@@ -105,7 +105,7 @@ describe("kernel-managed payment tools", () => {
       for (const name of ["manage_vault_wallets", "manage_vault_cards"]) {
         const schema = tools.find((tool) => tool.name === name)?.inputSchema;
         expect(schema?.properties?.provider).toMatchObject({
-          enum: ["link", "agentcard", "kernel"],
+          enum: ["link", "agentcard", "kernel", "shop_pay"],
         });
         expect(schema?.properties).not.toHaveProperty("card_number");
         expect(schema?.properties).not.toHaveProperty("cvc");
@@ -753,7 +753,17 @@ describe("kernel-managed payment tools", () => {
                   fields: [{ field: "number", selector: "#number" }],
                 },
               }
-            : {}),
+            : operation === "confirm_transaction"
+              ? {
+                  inputs: {
+                    status: "APPROVED",
+                    transaction_type: "PURCHASE",
+                    amount: 0,
+                    currency: "USD",
+                    occurred_at: "2026-10-01T12:00:00Z",
+                  },
+                }
+              : {}),
         });
         const text = JSON.stringify(result);
         expect(result.isError).toBe(true);

@@ -451,7 +451,9 @@ export function vaultItemResponse(
   const payment = z
     .object({
       type: z.enum(["card", "wallet", "payment_request"]),
-      spec: z.object({ provider: z.enum(["link", "agentcard", "kernel"]) }),
+      spec: z.object({
+        provider: z.enum(["link", "agentcard", "kernel", "shop_pay"]),
+      }),
     })
     .safeParse(projected);
   const cardProvider =
@@ -463,9 +465,9 @@ export function vaultItemResponse(
       ? payment.data.spec.provider
       : undefined;
   const purchaseProvider = cardProvider ?? paymentRequestProvider;
-  // A requested Link purchase's authorize hint is incomplete without checkout context.
+  // A requested Link or Shop Pay purchase's authorize hint is incomplete without checkout context.
   const checkoutAuthorize =
-    purchaseProvider === "link" &&
+    (purchaseProvider === "link" || purchaseProvider === "shop_pay") &&
     z
       .object({ state: z.object({ status: z.literal("requested") }) })
       .safeParse(projected).success;
@@ -506,6 +508,15 @@ export function vaultItemResponse(
                 ...(type === "remove_payment_method" && {
                   required_inputs: ["payment_method_id"],
                 }),
+                ...(type === "confirm_transaction" && {
+                  required_inputs: [
+                    "status",
+                    "transaction_type",
+                    "amount",
+                    "currency",
+                    "occurred_at",
+                  ],
+                }),
               }))
               .filter(safeHint)
           : [],
@@ -525,11 +536,16 @@ export function vaultItemResponse(
                 "invocation hints are not approval to execute. availability may change; invoke rechecks the advertised operations. ready does not mean paid.",
                 ...(payment.success && payment.data.type === "wallet"
                   ? [
-                      "wallets connect a payment provider; they are not fillable cards. when item.description is present, follow it for this provider's checkout flow. use manage_vault_payment_requests where enabled for one link or KERNEL purchase, or manage_vault_cards for card items and agentcard reusable cards, then inspect the purchase item's state and advertised operations.",
+                      "wallets connect a payment provider; they are not fillable cards. when item.description is present, follow it for this provider's checkout flow. use manage_vault_payment_requests where enabled for one link or KERNEL purchase, or manage_vault_cards for link, KERNEL, shop pay, and agentcard card items, then inspect the purchase item's state and advertised operations.",
                     ]
                   : []),
                 ...(payment.success && payment.data.spec.provider === "kernel"
                   ? [kernelWalletGuidance]
+                  : []),
+                ...(payment.success &&
+                payment.data.type === "wallet" &&
+                payment.data.spec.provider === "shop_pay"
+                  ? [shopPayWalletGuidance]
                   : []),
                 ...(cardProvider === "kernel"
                   ? [
@@ -539,6 +555,7 @@ export function vaultItemResponse(
                     ]
                   : []),
                 ...(cardProvider === "link" ? linkCardGuidance : []),
+                ...(cardProvider === "shop_pay" ? shopPayCardGuidance : []),
                 ...(paymentRequestProvider === "link"
                   ? linkPaymentRequestGuidance
                   : []),
@@ -555,7 +572,8 @@ export function vaultItemResponse(
                       "for checkout preparation, supply the api-required checkout context and deliver the returned approval url and keep the approval page open. poll the item until ready_to_submit, then submit native pay before state.preparation.expires_at. readiness lasts at most 30 seconds; polling does not extend it. preparations are single-use even after failure or expiry. preparation consumed means claimed, not payment success.",
                     ]
                   : []),
-                ...(purchaseProvider === "link"
+                ...(purchaseProvider === "link" ||
+                purchaseProvider === "shop_pay"
                   ? []
                   : [
                       "observe get/events for outcomes. do not retry failed, timed-out, rejected, or indeterminate payments or reconfigure a card to retry them.",
@@ -572,9 +590,11 @@ export function vaultItemResponse(
                             "recovery_required is an unresolved original outcome, not decline or expiry. stop payment attempts; " +
                               kernelSupportGuidance,
                           ]
-                        : [
-                            "recovery_required is an unresolved original outcome, not decline or expiry. stop payment attempts. for a link purchase, reads may reconcile a known request; otherwise, with user confirmation, delete the unusable item and create a new one, and tell the user to approve only the new request. deleting or recreating never proves the original payment did not occur. other providers may still block deletion and require support.",
-                          ]),
+                        : purchaseProvider === "shop_pay"
+                          ? [shopPayRecoveryGuidance]
+                          : [
+                              "recovery_required is an unresolved original outcome, not decline or expiry. stop payment attempts. for a link purchase, reads may reconcile a known request; otherwise, with user confirmation, delete the unusable item and create a new one, and tell the user to approve only the new request. deleting or recreating never proves the original payment did not occur. other providers may still block deletion and require support.",
+                            ]),
                     ]),
               ])),
         ...(credential && passkeyOperationAdvertised
@@ -637,8 +657,8 @@ export function paymentMethodOperationResponse(result: unknown) {
   });
 }
 
-// Checkout inspection fails before Link receives a payment request, so the
-// agent can fix the browser tab and authorize again.
+// Checkout inspection fails before Link or Shop Pay receives a payment request,
+// so the agent can fix the browser tab and authorize again.
 export const linkCheckoutErrorCodes = [
   "browser_not_found",
   "browser_unavailable",
@@ -651,6 +671,8 @@ export const linkCheckoutErrorCodes = [
 
 export const linkCheckoutRecovery =
   "make sure the checkout is open in exactly one tab at page_url, then authorize again. if checkout inspection keeps failing, authorize without browser_id and page_url to issue a virtual card for the merchant_url origin.";
+export const shopPayCheckoutRecovery =
+  "make sure the checkout is open in exactly one tab at page_url, then authorize again. if checkout inspection keeps failing, authorize without browser_id and page_url to authorize for merchant_url.";
 
 const linkCardGuidance = [
   "link cards follow this order: reach the final checkout page in a browser created with this vault attached, create the card, then after explicit user approval invoke authorize with inputs {browser_id, page_url}: the browser session id and the exact current top-level checkout url. KERNEL inspects the checkout and chooses whether to deliver a link pay token or a virtual card; you never choose or pass it, and you do not inspect or invoke the checkout's webmcp tools to authorize. authorize sends the user an approval request: share the approval url from item.action, then get the item until fill is advertised. to re-check, invoke authorize without browser_id and page_url. each advertised operation's description in available_operations is the source of truth for its inputs and recovery steps.",
@@ -663,6 +685,19 @@ const linkPaymentRequestGuidance = [
   "fill follows its advertised description. for a link pay token, pass {browser_id, page_url} and omit fields; for a virtual card, also pass ordered field/selector bindings, never values. fill never submits payment. failed or unknown fills are safe to retry, but do not retry an uncertain authorization or merchant checkout.",
   `before authorization, update the full request with manage_vault_payment_requests. after authorization, unsupported changes return an api conflict; delete and create a new request only after reconciling outcomes. authorize errors ${linkCheckoutErrorCodes.slice(0, -1).join(", ")}, and ${linkCheckoutErrorCodes.at(-1)} occur before link receives a payment request: ${linkCheckoutRecovery} amount is limited to 50000 minor units; with recurring terms it is the per-period limit, and deleting the request revokes future link charges but does not cancel the merchant subscription.`,
 ];
+
+const shopPayWalletGuidance =
+  "a shop pay wallet connects through KERNEL's shop app. when item.action.name is shop_pay_oauth, share item.action.url unchanged only with the shopper in a private surface so they can sign in to shop and approve the connection; never open, alter, or log it. once state.status is connected, request the payment_methods expansion to list the shopper's saved shop pay cards before creating a purchase.";
+
+const shopPayCardGuidance = [
+  "a shop pay card is one purchase. spec.amount is the shopper's approval limit in minor units, up to 1000000; spec.currency must be usd. spec.context is the 100-500 character explanation shown to the shopper, and spec.totals must contain exactly one positive total no greater than amount. payment_method_id selects a card from the wallet's payment_methods expansion; omission uses the shopper's preferred card.",
+  `after explicit user approval, invoke authorize with browser_id and the exact current top-level https page_url while final checkout is open. KERNEL confirms that checkout is open, sends the page to shop as the merchant, and limits fill to that origin in any browser with this vault attached. omitting both authorizes for spec.merchant_url. checkout inspection errors happen before shop pay receives a payment request: ${shopPayCheckoutRecovery} when item.action contains an approval url, share it unchanged only with the shopper, then observe get/events until fill is advertised.`,
+  'invoke advertised fill with ordered field/selector bindings and never values. card fields include number, expiration (format "MM/YY" or "MM/YYYY"), cvc, exp_month, and exp_year. shop pay can also supply its stored billing address. billing_first_name and billing_last_name are available only when shop pay returns them separately; billing_name is never split. request only needed billing fields because an absent or empty field returns field_unavailable before any browser write. fill never submits checkout or proves payment.',
+  'after the merchant outcome is observed, invoke confirm_transaction exactly once. shop pay accepts transaction_type `PURCHASE`, `AUTHORIZATION`, or `CAPTURE`. required inputs are status, transaction_type, actual amount, matching uppercase currency, and occurred_at. for `APPROVED`, optional order_id and https order_url identify the order. for another outcome, optional failure_code explains why; payment_declined is used only with `DECLINED`, which takes no other code. reporting consumes the card and removes its stored card material whatever the outcome. if the outcome is unknown, reconcile manually rather than retrying checkout or guessing.',
+];
+
+const shopPayRecoveryGuidance =
+  "recovery_required is an unresolved shop pay provider outcome, not decline or expiry, and the card cannot be used. when status_reason says retrieval was refused before acceptance, a later read retries. otherwise, with user confirmation, issuance recovery may be abandoned by deleting the card and creating a separately approved purchase. recovery while reporting a merchant transaction cannot be deleted and must be reconciled with support. deletion or recreation never proves the original payment did not occur.";
 
 const kernelSupportGuidance =
   "non-restartable recovery_required: do not retry the payment operation. with user confirmation, attempt deletion only to abandon eligible issuance recovery, then create a new purchase under a new key and obtain separate approval; deletion is never proof that the original payment did not occur. recovery while reporting a merchant transaction cannot be deleted: contact support@kernel.sh privately with project, vault, item key, status_reason and relevant event timestamps (never card data, api keys or capability urls).";
@@ -738,6 +773,7 @@ export function throwKernelVaultError(
   action: string,
   error: unknown,
   operationSubmitted = false,
+  additionalNote?: string,
 ): never {
   const status = error instanceof APIError ? error.status : undefined;
   const code =
@@ -755,11 +791,14 @@ export function throwKernelVaultError(
     (/^\d+$/.test(retryAfter) || !Number.isNaN(Date.parse(retryAfter)))
       ? `retry-after: ${retryAfter}. `
       : "";
+  const note = [noResponseNote(error, operationSubmitted), additionalNote]
+    .filter((value): value is string => value !== undefined)
+    .join(" ");
   throwToolError(
     tool,
     action,
     error,
-    noResponseNote(error, operationSubmitted),
+    note || undefined,
     `${status !== undefined ? `http status: ${status}. ` : ""}${code ? `api code: ${code}. ` : ""}${retryAfterNote}${error instanceof APIError && typeof error.error?.message === "string" ? error.error.message.replace(/https?:\/\/\S+/gi, "[redacted url]") : "request failed."}`,
   );
 }
@@ -779,6 +818,24 @@ export function throwLinkAuthorizeError(
       `no payment request was made. ${linkCheckoutRecovery}`,
     );
   throwVaultError(tool, action, error, operationSubmitted);
+}
+
+export function throwShopPayAuthorizeError(
+  tool: string,
+  action: string,
+  error: unknown,
+  operationSubmitted = false,
+): never {
+  const code = error instanceof APIError ? apiErrorCode(error) : undefined;
+  throwKernelVaultError(
+    tool,
+    action,
+    error,
+    operationSubmitted,
+    code && (linkCheckoutErrorCodes as readonly string[]).includes(code)
+      ? `no payment request was made. ${shopPayCheckoutRecovery}`
+      : undefined,
+  );
 }
 
 export function throwVaultError(

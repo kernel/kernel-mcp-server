@@ -566,6 +566,17 @@ export function registerBrowserCapabilities(
               "(create) chrome enterprise policy overrides. KERNEL-managed policies such as extensions, proxy, cdp, and automation are blocked by the api.",
             )
             .optional(),
+          fingerprint: z
+            .object({
+              os: z
+                .literal("macos")
+                .describe("operating system the browser reports to websites."),
+            })
+            .strict()
+            .describe(
+              "(create) closed beta overrides for browser attributes presented to websites. currently supports only os=macos and requires the site-compatibility setting to be true, headless=false, gpu=false, and omitted memory so the default is used. contact KERNEL to enable this capability for the organization; omit it to preserve default browser behavior.",
+            )
+            .optional(),
           headless: z
             .boolean()
             .describe("(create) launch without gui. faster but no live view.")
@@ -878,6 +889,11 @@ export function registerBrowserCapabilities(
             "vault bindings are creation-only; they cannot be added to an existing browser.",
           );
         }
+        if (params.action !== "create" && params.fingerprint !== undefined) {
+          return errorResponse(
+            "fingerprint overrides are creation-only; use a new browser to change them.",
+          );
+        }
         if (
           params.action !== "create" &&
           (params.extensions !== undefined ||
@@ -929,9 +945,22 @@ export function registerBrowserCapabilities(
         }
         switch (params.action) {
           case "create": {
+            if (
+              params.fingerprint !== undefined &&
+              (params.stealth !== true ||
+                params.headless !== false ||
+                params.gpu !== false ||
+                params.memory !== undefined)
+            ) {
+              return errorResponse(
+                "error: fingerprint requires stealth=true, headless=false, gpu=false, and omitted memory so the default is used.",
+              );
+            }
             const createParams: Kernel.BrowserCreateParams = {};
             if (params.vaults !== undefined)
               createParams.vaults = params.vaults;
+            if (params.fingerprint !== undefined)
+              createParams.fingerprint = params.fingerprint;
             if (params.headless !== undefined)
               createParams.headless = params.headless;
             if (params.gpu !== undefined) createParams.gpu = params.gpu;
