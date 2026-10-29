@@ -362,6 +362,51 @@ describe("manage_browsers telemetry", () => {
     }
   });
 
+  test("preserves the payment-window proxy error and documents its meaning", async () => {
+    const queries: unknown[] = [];
+    const proxyError = {
+      seq: 44,
+      event: {
+        ts: 1_700_000_000_000_002,
+        category: "network",
+        type: "browser_proxy_error",
+        source: { service: "proxy" },
+        data: { code: "payment_window_expired" },
+      },
+    };
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      telemetryClient(queries, [proxyError]),
+    );
+
+    try {
+      const result = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action: "get_telemetry",
+            session_id: "brr_123",
+            categories: ["network"],
+            limit: 1,
+          },
+        }),
+      );
+      expect(result.items[0].data).toEqual({
+        code: "payment_window_expired",
+      });
+
+      const { tools } = await client.listTools();
+      const tool = tools.find(({ name }) => name === "manage_browsers");
+      const categories = tool?.inputSchema.properties?.categories as
+        | { description?: string }
+        | undefined;
+      expect(categories?.description).toContain("payment_window_expired");
+      expect(categories?.description).toContain("raw_code");
+    } finally {
+      await close();
+    }
+  });
+
   test("documents bounded best-effort raw replay", async () => {
     const kernelClient = { browsers: {} };
     const { client, close } = await connectTestMcp(
@@ -1119,6 +1164,114 @@ describe("manage_browsers location, memory, and conditional allowlists", () => {
         },
       });
       expect(calls).toEqual([["brr_deleted", { include_deleted: false }]]);
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe("manage_browsers fingerprint overrides", () => {
+  test("advertises and forwards the closed-beta macos override with required false values", async () => {
+    const creates: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (params: unknown) => {
+            creates.push(params);
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+
+    try {
+      const { tools } = await client.listTools();
+      const browser = tools.find(({ name }) => name === "manage_browsers");
+      const fingerprint = browser?.inputSchema.properties?.fingerprint as
+        | {
+            description?: string;
+            properties?: { os?: { const?: string; description?: string } };
+          }
+        | undefined;
+      expect(fingerprint?.properties?.os).toMatchObject({ const: "macos" });
+      expect(fingerprint?.description).toContain("closed beta");
+      expect(fingerprint?.description).toContain("headless=false");
+      expect(fingerprint?.description).toContain("gpu=false");
+      expect(fingerprint?.description).toContain("omitted memory");
+
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "create",
+          fingerprint: { os: "macos" },
+          stealth: true,
+          headless: false,
+          gpu: false,
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(creates).toEqual([
+        {
+          fingerprint: { os: "macos" },
+          stealth: true,
+          headless: false,
+          gpu: false,
+        },
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects invalid or update-time fingerprint overrides before the SDK", async () => {
+    let calls = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+          update: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+
+    try {
+      for (const arguments_ of [
+        {
+          action: "create",
+          fingerprint: { os: "macos" },
+          stealth: true,
+          headless: false,
+          gpu: false,
+          memory: "8GiB",
+        },
+        {
+          action: "create",
+          fingerprint: { os: "macos" },
+          stealth: true,
+          headless: true,
+          gpu: false,
+        },
+        {
+          action: "update",
+          session_id: "brr_123",
+          fingerprint: { os: "macos" },
+        },
+      ]) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: arguments_,
+        });
+        expect(result.isError).toBe(true);
+      }
+      expect(calls).toBe(0);
     } finally {
       await close();
     }
