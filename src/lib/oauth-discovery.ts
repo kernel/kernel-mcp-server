@@ -22,13 +22,20 @@ export function oauthResourceMetadataUrl(request: Request): string {
   return `${oauthRequestOrigin(request)}${OAUTH_RESOURCE_METADATA_PATH}`;
 }
 
+// Returns the hosted Go authorization server for the production and dev MCP
+// origins, or null where this app still serves OAuth itself.
+export function hostedAuthorizationServer(request: Request): string | null {
+  const origin = oauthRequestOrigin(request);
+  if (origin === MCP_ORIGIN) return OAUTH_ORIGIN;
+  if (origin === DEV_MCP_ORIGIN) return DEV_OAUTH_ORIGIN;
+  return null;
+}
+
 export function oauthResourceMetadata(
   request: Request,
 ): Record<string, unknown> {
   const origin = oauthRequestOrigin(request);
-  let authorizationServer = origin;
-  if (origin === MCP_ORIGIN) authorizationServer = OAUTH_ORIGIN;
-  if (origin === DEV_MCP_ORIGIN) authorizationServer = DEV_OAUTH_ORIGIN;
+  const authorizationServer = hostedAuthorizationServer(request) ?? origin;
 
   return {
     resource: `${origin}/mcp`,
