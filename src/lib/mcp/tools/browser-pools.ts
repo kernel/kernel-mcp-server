@@ -282,6 +282,7 @@ function poolNextActions(pool: BrowserPool) {
 function summarizeAcquiredBrowser(browser: BrowserPoolAcquireResponse) {
   return {
     session_id: browser.session_id,
+    leased_at: browser.leased_at,
     browser_live_view_url: browser.browser_live_view_url,
     base_url: browser.base_url,
     headless: browser.headless,
@@ -327,7 +328,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
     "manage_browser_pools",
     {
       description:
-        'manage pre-warmed browser pools when an agent needs fast browser acquisition or reusable session capacity. use "list" for a compact pool inventory, "get" for full details, "acquire" before controlling a pooled browser, and "release" when the browser should return to the pool.',
+        'manage pre-warmed browser pools when an agent needs fast browser acquisition or reusable session capacity. use "list" for a compact pool inventory, "get" for full details, "acquire" before controlling a pooled browser, and "release" when the browser should return to the pool. acquire returns leased_at for the leased pooled session, showing when it was last leased.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z

@@ -24,23 +24,28 @@ type ToolHandler = (
 function captureBrowserPoolTool() {
   let handler: ToolHandler | undefined;
   let schema: Record<string, z.ZodType> | undefined;
+  let description: string | undefined;
   const server = {
     registerResource() {},
     registerTool(
       name: string,
-      config: { inputSchema: z.ZodObject<Record<string, z.ZodType>> },
+      config: {
+        description: string;
+        inputSchema: z.ZodObject<Record<string, z.ZodType>>;
+      },
       callback: ToolHandler,
     ) {
       if (name !== "manage_browser_pools") return;
+      description = config.description;
       schema = config.inputSchema.shape;
       handler = callback;
     },
   } as unknown as McpServer;
 
   registerBrowserPoolCapabilities(server);
-  if (!handler || !schema)
+  if (!handler || !schema || !description)
     throw new Error("manage_browser_pools was not registered");
-  return { handler, schema };
+  return { handler, schema, description };
 }
 
 const auth = projectScopedExtra();
@@ -406,7 +411,7 @@ describe("browser-pool contract parity", () => {
     });
   });
 
-  test("forwards acquire overrides and returns network, memory, and location", async () => {
+  test("forwards acquire overrides and returns leased time, network, memory, and location", async () => {
     const network = { allowed_hosts: ["example.com"] };
     const location = {
       timezone: "America/New_York",
@@ -421,6 +426,7 @@ describe("browser-pool contract parity", () => {
           acquireCalls.push(args);
           return {
             session_id: "brr_1",
+            leased_at: "2026-08-08T12:34:56Z",
             pool: { id: "pool_1" },
             network,
             memory: "2GiB",
@@ -429,7 +435,7 @@ describe("browser-pool contract parity", () => {
         },
       },
     });
-    const { handler } = captureBrowserPoolTool();
+    const { handler, description } = captureBrowserPoolTool();
 
     const result = await handler(
       {
@@ -446,6 +452,7 @@ describe("browser-pool contract parity", () => {
       auth,
     );
 
+    expect(description).toContain("leased_at");
     expect(acquireCalls).toEqual([
       [
         "pool_1",
@@ -460,6 +467,7 @@ describe("browser-pool contract parity", () => {
       ],
     ]);
     expect(JSON.parse(result.content[0].text).browser).toMatchObject({
+      leased_at: "2026-08-08T12:34:56Z",
       network,
       memory: "2GiB",
       location,
