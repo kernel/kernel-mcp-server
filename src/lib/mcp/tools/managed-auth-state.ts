@@ -37,6 +37,7 @@ export interface SafeAuthConnection {
     | "DISCOVERING"
     | "AWAITING_INPUT"
     | "AWAITING_EXTERNAL_ACTION"
+    | "AWAITING_HUMAN_INTERVENTION"
     | "SUBMITTING"
     | "COMPLETED"
     | null;
@@ -331,6 +332,9 @@ export async function waitForAuthConnection(
           if (flowFailed && selector.connectionId) {
             return { state: "failed", connection: latest };
           }
+        }
+        if (latest.flow_step === "AWAITING_HUMAN_INTERVENTION") {
+          return { state: "pending", connection: latest };
         }
       }
     } catch (error) {
