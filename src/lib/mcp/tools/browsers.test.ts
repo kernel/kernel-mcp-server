@@ -477,7 +477,11 @@ describe("manage_browsers proxy routes", () => {
         { hosts: ["example.com", "*.example.org"], proxy: { id: "prx_route" } },
       ],
     };
-    const browser = { session_id: "brr_123", network };
+    const browser = {
+      session_id: "brr_123",
+      leased_at: "2026-08-08T00:05:00Z",
+      network,
+    };
     const { client, close } = await connectTestMcp(
       registerBrowserCapabilities,
       {
@@ -518,6 +522,7 @@ describe("manage_browsers proxy routes", () => {
         },
       ]);
       expect(created.browser.network).toEqual(network);
+      expect(created.browser.leased_at).toBe("2026-08-08T00:05:00Z");
       const retrieved = toolResultJSON(
         await client.callTool({
           name: "manage_browsers",
@@ -525,6 +530,7 @@ describe("manage_browsers proxy routes", () => {
         }),
       );
       expect(retrieved.network).toEqual(network);
+      expect(retrieved.leased_at).toBe("2026-08-08T00:05:00Z");
     } finally {
       await close();
     }
@@ -1292,7 +1298,11 @@ describe("manage_browsers region", () => {
           listCalls.push(params);
           return {
             getPaginatedItems: () => [
-              { session_id: "brr_eu", cdp_ws_url: "ws://example.test" },
+              {
+                session_id: "brr_eu",
+                leased_at: "2026-08-08T00:05:00Z",
+                cdp_ws_url: "ws://example.test",
+              },
             ],
             has_more: false,
             next_offset: null,
@@ -1322,7 +1332,12 @@ describe("manage_browsers region", () => {
         }),
       );
       expect(listCalls).toEqual([{ region: "eu-west" }]);
-      expect(listed.items).toEqual([{ session_id: "brr_eu" }]);
+      expect(listed.items).toEqual([
+        {
+          session_id: "brr_eu",
+          leased_at: "2026-08-08T00:05:00Z",
+        },
+      ]);
     } finally {
       await close();
     }
@@ -1367,6 +1382,7 @@ describe("manage_browsers save profile", () => {
       expect(profileName?.description).toContain(
         "create when no matching profile exists",
       );
+      expect(browser?.description).toContain("leased_at");
       expect(browser?.description).toContain(
         "active cdp, playwright, and webdriver connections close and must reconnect",
       );
@@ -1534,7 +1550,10 @@ describe("manage_browsers id or name", () => {
         },
         update: async (idOrName: string, params: unknown) => {
           updateCalls.push([idOrName, params]);
-          return { session_id: "brr_123" };
+          return {
+            session_id: "brr_123",
+            leased_at: "2026-08-08T00:05:00Z",
+          };
         },
       },
     };
@@ -1556,16 +1575,19 @@ describe("manage_browsers id or name", () => {
         { name: "checkout-flow", tags: { team: "payments" } },
       ]);
 
-      await client.callTool({
-        name: "manage_browsers",
-        arguments: {
-          action: "update",
-          session_id: "checkout-flow",
-          name: "checkout-flow-2",
-          tags: {},
-          start_url: "https://example.com/checkout",
-        },
-      });
+      const updated = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action: "update",
+            session_id: "checkout-flow",
+            name: "checkout-flow-2",
+            tags: {},
+            start_url: "https://example.com/checkout",
+          },
+        }),
+      );
+      expect(updated.browser.leased_at).toBe("2026-08-08T00:05:00Z");
       expect(updateCalls).toEqual([
         [
           "checkout-flow",

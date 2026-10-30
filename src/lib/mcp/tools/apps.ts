@@ -63,7 +63,7 @@ export function registerAppCapabilities(
     "manage_apps",
     {
       description:
-        'manage KERNEL apps when an agent needs to discover deployed app actions, invoke an app, or inspect deployment/invocation state. use "list_apps" before invoking an unknown app. "invoke" starts an action asynchronously and returns an invocation_id immediately. use "list_invocations" to find runs, "list_invocation_browsers" to discover their browser sessions, and "get_invocation" after a short delay to inspect one state. do not poll indefinitely; if a run is still active, report its id. "delete_invocation_browsers" terminates every active browser created by one invocation. deployment and invocation event streams are intentionally represented by bounded list/get calls rather than an open sse stream.',
+        'manage KERNEL apps when an agent needs to discover deployed app actions, invoke an app, or inspect deployment/invocation state. use "list_apps" before invoking an unknown app. "invoke" starts an action asynchronously and returns an invocation_id immediately. use "list_invocations" to find runs, "list_invocation_browsers" to discover their browser sessions, and "get_invocation" after a short delay to inspect one state. list_invocation_browsers includes leased_at only for leased pooled sessions, showing when each was last leased. do not poll indefinitely; if a run is still active, report its id. "delete_invocation_browsers" terminates every active browser created by one invocation. deployment and invocation event streams are intentionally represented by bounded list/get calls rather than an open sse stream.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z
@@ -280,6 +280,9 @@ export function registerAppCapabilities(
               browsers: browsers.browsers.map((browser) => ({
                 session_id: browser.session_id,
                 browser_live_view_url: browser.browser_live_view_url,
+                ...(browser.leased_at !== undefined && {
+                  leased_at: browser.leased_at,
+                }),
                 ...(browser.location !== undefined && {
                   location: browser.location,
                 }),
