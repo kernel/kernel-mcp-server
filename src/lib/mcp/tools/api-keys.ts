@@ -115,8 +115,10 @@ export function registerAPIKeyCapabilities(
           .describe("(list) key status filter. defaults to active.")
           .optional(),
         sort_by: z
-          .enum(["created_at", "name", "expires_at"])
-          .describe("(list) field to sort by.")
+          .enum(["created_at", "name", "expires_at", "last_used_at"])
+          .describe(
+            "(list) field to sort by. when sorting by expires_at or last_used_at, keys missing that value sort last in either direction.",
+          )
           .optional(),
         sort_direction: z
           .enum(["asc", "desc"])

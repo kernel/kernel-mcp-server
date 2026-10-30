@@ -21,6 +21,7 @@ describe("vault SDK request contracts", () => {
         "manage_vault_cards",
         "manage_vault_credentials",
         "manage_vault_items",
+        "manage_vault_payment_requests",
         "manage_vault_provider_configs",
         "manage_vault_wallets",
         "manage_vaults",
@@ -39,6 +40,9 @@ describe("vault SDK request contracts", () => {
         });
       }
       const cards = tools.find((tool) => tool.name === "manage_vault_cards");
+      const paymentRequests = tools.find(
+        (tool) => tool.name === "manage_vault_payment_requests",
+      );
       expect(cards?.description).toContain(
         "mode is determined by the wallet credentials",
       );
@@ -52,6 +56,10 @@ describe("vault SDK request contracts", () => {
       );
       expect(cards?.description).toContain(
         "prepared checkout uses preparation.merchant_origin",
+      );
+      expect(paymentRequests?.description).toContain("payment_request item");
+      expect(paymentRequests?.description).toContain(
+        "agentcard reusable cards remain card items",
       );
       expect(fixture.requests).toHaveLength(0);
     } finally {
@@ -116,6 +124,7 @@ describe("vault SDK request contracts", () => {
         toolResultJSON(
           await fixture.call("manage_vaults", {
             action: "list",
+            query: "check",
             limit: 20,
             offset: 20,
           }),
@@ -135,7 +144,11 @@ describe("vault SDK request contracts", () => {
       ).toEqual([
         { method: "POST", path: "/vaults", body: { name: "checkout" } },
         { method: "GET", path: "/vaults/vlt_123", body: undefined },
-        { method: "GET", path: "/vaults?limit=20&offset=20", body: undefined },
+        {
+          method: "GET",
+          path: "/vaults?query=check&limit=20&offset=20",
+          body: undefined,
+        },
         { method: "GET", path: "/vaults?offset=40", body: undefined },
       ]);
       for (const request of fixture.requests) {
@@ -463,6 +476,23 @@ describe("vault scopes and input validation", () => {
         key: "order-1",
         provider: "agentcard",
         spec: agentcardSpec,
+      },
+    ],
+    [
+      "manage_vault_payment_requests",
+      {
+        action: "create",
+        vault: "checkout",
+        key: "order-1",
+        provider: "kernel",
+        spec: {
+          wallet: "wallet-1",
+          payment_method_id: "pm_1",
+          amount: 1234,
+          currency: "USD",
+          merchant_name: "Example Shop",
+          merchant_url: "https://shop.example/checkout",
+        },
       },
     ],
     [

@@ -13,6 +13,7 @@ const BLOCKED_LANGUAGE =
 const BLOCKED_NAMES = new RegExp(`${BLOCKED_LANGUAGE.source}|captcha`, "i");
 const API_FIELD_NAMES = new Set([
   "manage_browsers:stealth",
+  "manage_browsers:fingerprint",
   "manage_browsers:captcha",
   "manage_browser_pools:stealth",
   "manage_browser_pools:captcha",

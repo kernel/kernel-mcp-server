@@ -27,7 +27,12 @@ export function vaultKeySchema() {
     "immutable item key within the vault, not the item id.",
   );
 }
-export const vaultProviderSchema = z.enum(["link", "agentcard", "kernel"]);
+export const vaultProviderSchema = z.enum([
+  "link",
+  "agentcard",
+  "kernel",
+  "shop_pay",
+]);
 export const vaultWaitSchema = z
   .number()
   .int()
@@ -95,8 +100,9 @@ export const fillInputsSchema = z
   .strict();
 export type FillInputs = z.infer<typeof fillInputsSchema>;
 
-// Mirrors AuthorizeVaultItemOperationRequest: Link cards take checkout context
-// from the final checkout page, or none for a virtual card on the merchant_url origin.
+// Mirrors AuthorizeVaultItemOperationRequest: Link and Shop Pay cards take
+// checkout context from the final checkout page, or none for merchant_url-based
+// authorization.
 export const authorizeInputsShape = "{} or { browser_id, page_url }";
 
 export const authorizeInputsSchema = z
@@ -116,6 +122,20 @@ export const authorizeInputsSchema = z
     },
   );
 export type AuthorizeInputs = z.infer<typeof authorizeInputsSchema>;
+
+export const onePasswordFillInputsShape =
+  "{ browser_id, page_url, entry_id?, target_id?, timeout_ms? }";
+
+export const onePasswordFillInputsSchema = z
+  .object({
+    browser_id: z.string().min(1),
+    page_url: z.url(),
+    entry_id: z.string().min(1).optional(),
+    target_id: z.string().min(1).optional(),
+    timeout_ms: z.number().int().min(1).max(30000).optional(),
+  })
+  .strict();
+export type OnePasswordFillInputs = z.infer<typeof onePasswordFillInputsSchema>;
 
 export const passkeyOperationTypes = [
   "arm_passkey",
@@ -140,6 +160,22 @@ export const passkeyInputsSchema = z
   })
   .strict();
 export type PasskeyInputs = z.infer<typeof passkeyInputsSchema>;
+
+export const addPaymentMethodInputsShape = "{}";
+export const addPaymentMethodInputsSchema = z.object({}).strict();
+export type AddPaymentMethodInputs = z.infer<
+  typeof addPaymentMethodInputsSchema
+>;
+
+export const removePaymentMethodInputsShape = "{ payment_method_id }";
+export const removePaymentMethodInputsSchema = z
+  .object({
+    payment_method_id: z.string().min(1).max(128),
+  })
+  .strict();
+export type RemovePaymentMethodInputs = z.infer<
+  typeof removePaymentMethodInputsSchema
+>;
 
 // Names the offending top-level key, never a value or nested key, and shows the shape
 // the API accepts.
@@ -168,6 +204,14 @@ export function authorizeInputsIssueMessage(error: z.ZodError) {
   return `${operationInputsIssueMessage("authorize", authorizeInputsShape, error)}: pass browser_id and the https page_url of the final checkout page together, or neither.`;
 }
 
+export function onePasswordFillInputsIssueMessage(error: z.ZodError) {
+  return operationInputsIssueMessage(
+    "1pw_fill",
+    onePasswordFillInputsShape,
+    error,
+  );
+}
+
 export function passkeyInputsIssueMessage(
   operation: PasskeyOperation,
   error: z.ZodError,
@@ -175,8 +219,80 @@ export function passkeyInputsIssueMessage(
   return operationInputsIssueMessage(operation, passkeyInputsShape, error);
 }
 
+export function addPaymentMethodInputsIssueMessage(error: z.ZodError) {
+  return operationInputsIssueMessage(
+    "add_payment_method",
+    addPaymentMethodInputsShape,
+    error,
+  );
+}
+
+export function removePaymentMethodInputsIssueMessage(error: z.ZodError) {
+  return operationInputsIssueMessage(
+    "remove_payment_method",
+    removePaymentMethodInputsShape,
+    error,
+  );
+}
+
+export const confirmTransactionInputsShape =
+  "{ status, transaction_type, amount, currency, occurred_at, order_id?, order_url?, failure_code? }";
+export const confirmTransactionInputsSchema = z
+  .object({
+    status: z.enum([
+      "APPROVED",
+      "DECLINED",
+      "PENDING",
+      "ERROR",
+      "CANCELLED",
+    ]),
+    transaction_type: z.enum([
+      "PURCHASE",
+      "AUTHORIZATION",
+      "CAPTURE",
+      "REFUND",
+      "REVERSAL",
+      "VERIFICATION",
+      "CHARGEBACK",
+      "FRAUD",
+    ]),
+    amount: z.number().int().safe().min(0).max(1_000_000),
+    currency: z.string().regex(/^[A-Z]{3}$/),
+    occurred_at: z.string().datetime({ offset: true }),
+    order_id: z.string().min(1).max(255).optional(),
+    order_url: z
+      .string()
+      .url()
+      .startsWith("https://")
+      .max(2048)
+      .optional(),
+    failure_code: z.string().regex(/^[a-z0-9_]{1,64}$/).optional(),
+  })
+  .strict();
+export type ConfirmTransactionInputs = z.infer<
+  typeof confirmTransactionInputsSchema
+>;
+
+export function confirmTransactionInputsIssueMessage(error: z.ZodError) {
+  return operationInputsIssueMessage(
+    "confirm_transaction",
+    confirmTransactionInputsShape,
+    error,
+  );
+}
+
 const integer = () => z.number().int().safe();
 const currency = () => z.string().regex(/^[A-Za-z]{3}$/);
+const kernelCurrency = () =>
+  currency().describe(
+    "iso 4217 code. supported: aud, brl, cad, chf, czk, dkk, eur, gbp, hkd, inr, jpy, krw, mxn, nok, nzd, pln, sek, sgd, usd, zar.",
+  );
+const kernelPaymentMethodID = () =>
+  z
+    .string()
+    .min(1)
+    .max(128)
+    .describe("payment method id from the wallet's payment_methods expansion.");
 
 export function providerConfigReferenceSchema() {
   return z
@@ -289,6 +405,18 @@ export const kernelWalletSpecSchema = z
   .object({ provider: z.literal("kernel").optional() })
   .strict();
 
+export const shopPayWalletSpecSchema = z
+  .object({
+    provider: z.literal("shop_pay").optional(),
+    authorization: z
+      .object({
+        method: z.literal("oauth"),
+        client: z.object({ type: z.literal("kernel_managed") }).strict(),
+      })
+      .strict(),
+  })
+  .strict();
+
 export const agentcardWalletSpecSchema = z
   .object({
     provider: z.literal("agentcard").optional(),
@@ -366,36 +494,149 @@ export const linkCardSpecSchema = z
   })
   .strict();
 
+const kernelPurchaseSpecShape = {
+  provider: z.literal("kernel").optional(),
+  wallet: vaultKeySchema(),
+  amount: integer()
+    .min(1)
+    .max(1_000_000)
+    .describe("integer minor currency units, maximum 1000000."),
+  currency: kernelCurrency(),
+  merchant_name: z.string().min(1).max(255),
+  merchant_url: z
+    .string()
+    .url()
+    .startsWith("https://")
+    .describe(
+      "merchant checkout url. fill is allowed only on this url's origin.",
+    ),
+  merchant_country: z
+    .string()
+    .regex(/^[A-Za-z]{2}$/)
+    .describe("iso 3166-1 alpha-2 country code; required for visa purchases.")
+    .optional(),
+  merchant_category: z
+    .string()
+    .min(1)
+    .max(255)
+    .describe("actual merchant category; omit rather than invent.")
+    .optional(),
+  merchant_category_code: z
+    .string()
+    .regex(/^[0-9]{4}$/)
+    .refine((value) => value !== "0000")
+    .describe("actual merchant mcc; omit rather than invent.")
+    .optional(),
+};
+
 export const kernelCardSpecSchema = z
   .object({
-    provider: z.literal("kernel").optional(),
-    wallet: vaultKeySchema(),
-    amount: integer()
-      .min(1)
-      .max(1_000_000)
-      .describe("integer minor currency units, maximum 1000000."),
-    currency: currency(),
-    merchant_name: z.string().min(1).max(255),
-    merchant_url: z.string().url().startsWith("https://"),
-    merchant_country: z
-      .string()
-      .regex(/^[A-Za-z]{2}$/)
-      .describe("iso 3166-1 alpha-2 country code; required for visa purchases.")
-      .optional(),
-    merchant_category: z
-      .string()
-      .min(1)
-      .max(255)
-      .describe("actual merchant category; omit rather than invent.")
-      .optional(),
-    merchant_category_code: z
-      .string()
-      .regex(/^[0-9]{4}$/)
-      .refine((value) => value !== "0000")
-      .describe("actual merchant mcc; omit rather than invent.")
+    ...kernelPurchaseSpecShape,
+    payment_method_id: kernelPaymentMethodID()
+      .describe(
+        "wallet-scoped id from payment_methods. omit only to select the wallet's default card (id card); there is no fallback, and wallets without a default card require this id. the purchase stays bound to this method.",
+      )
       .optional(),
   })
   .strict();
+
+export const kernelPaymentRequestSpecSchema = z
+  .object({
+    ...kernelPurchaseSpecShape,
+    payment_method_id: kernelPaymentMethodID().describe(
+      "required wallet-scoped id from payment_methods. the method must be active and eligible; the purchase stays bound to it and cannot switch funding.",
+    ),
+  })
+  .strict();
+
+const shopPayTotalSchema = z
+  .object({
+    type: z
+      .string()
+      .min(1)
+      .describe(
+        "total category, such as subtotal, fulfillment, tax, discount, or total.",
+      ),
+    amount: integer().describe(
+      "integer minor currency units; discounts are negative.",
+    ),
+  })
+  .strict();
+
+const shopPayLineItemSchema = z
+  .object({
+    name: z.string().min(1),
+    quantity: integer().min(1),
+    unit_amount: integer()
+      .min(0)
+      .describe("unit price in integer minor currency units."),
+  })
+  .strict();
+
+export const shopPayCardSpecSchema = z
+  .object({
+    provider: z.literal("shop_pay").optional(),
+    wallet: vaultKeySchema().describe("connected shop pay wallet item key."),
+    payment_method_id: z
+      .string()
+      .min(1)
+      .describe(
+        "card id from the wallet's payment_methods expansion. omit to use the shopper's preferred card.",
+      )
+      .optional(),
+    amount: integer()
+      .min(1)
+      .max(1_000_000)
+      .describe(
+        "shopper approval limit in integer minor currency units, maximum 1000000.",
+      ),
+    currency: z
+      .string()
+      .regex(/^[Uu][Ss][Dd]$/)
+      .describe("shop pay accepts usd spend requests only."),
+    merchant_name: z.string().min(1).max(255),
+    merchant_url: z
+      .string()
+      .url()
+      .startsWith("https://")
+      .describe("merchant's https url."),
+    merchant_country: z
+      .string()
+      .regex(/^[A-Za-z]{2}$/)
+      .describe("iso 3166-1 alpha-2 country of the merchant.")
+      .optional(),
+    context: z
+      .string()
+      .min(100)
+      .max(500)
+      .describe("what is being bought and why, written for the shopper."),
+    line_items: z.array(shopPayLineItemSchema).optional(),
+    totals: z
+      .array(shopPayTotalSchema)
+      .min(1)
+      .describe(
+        "purchase totals. include exactly one positive total no greater than amount.",
+      ),
+  })
+  .strict()
+  .superRefine((spec, ctx) => {
+    const totals = spec.totals.filter(({ type }) => type === "total");
+    if (totals.length !== 1) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["totals"],
+        message: 'must contain exactly one entry with type "total"',
+      });
+      return;
+    }
+    if (totals[0].amount <= 0 || totals[0].amount > spec.amount) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["totals"],
+        message: "total must be positive and no greater than amount",
+      });
+    }
+  });
 
 export const agentcardCheckoutOriginSchema = z.string().refine((value) => {
   try {

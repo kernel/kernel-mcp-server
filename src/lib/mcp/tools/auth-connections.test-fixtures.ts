@@ -17,6 +17,7 @@ export function connection(overrides: Partial<ManagedAuth> = {}): ManagedAuth {
   return {
     id: "conn_1",
     domain: "example.com",
+    hitl: false,
     profile_name: "work",
     status: "NEEDS_AUTH",
     record_session: false,
