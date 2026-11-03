@@ -79,6 +79,33 @@ async function requestRequiresMcpEntitlements(req: Request): Promise<boolean> {
   );
 }
 
+// Transport route credentials must arrive in the Authorization header. Query
+// strings are recorded verbatim in platform request logs, so a credential sent
+// as ?api_key= or ?token= lands in log drains in cleartext. Reject these
+// requests before authentication so clients migrate to the header.
+const CREDENTIAL_QUERY_PARAMS = new Set([
+  "api_key",
+  "apikey",
+  "api-key",
+  "token",
+  "access_token",
+]);
+
+function credentialInQueryString(req: Request): string | null {
+  for (const name of new URL(req.url).searchParams.keys()) {
+    if (CREDENTIAL_QUERY_PARAMS.has(name.toLowerCase())) return name;
+  }
+  return null;
+}
+
+function credentialQueryErrorResponse(name: string): Response {
+  return errorResponse(
+    400,
+    "credentials_in_query_string",
+    `Found "${name}" in the URL query string. Query strings are recorded in request logs, so credentials must be sent in the Authorization header (Authorization: Bearer <token>) instead. The query parameter was rejected and never used.`,
+  );
+}
+
 function errorResponse(
   status: number,
   error: string,
@@ -328,11 +355,16 @@ function withCors(response: Response): Response {
 
 export async function GET(req: NextRequest): Promise<Response> {
   after(flushMcpAnalytics);
+  const credentialParam = credentialInQueryString(req);
+  if (credentialParam) return credentialQueryErrorResponse(credentialParam);
   return withCors(await handleAuthenticatedRequest(req));
 }
 
 export async function POST(req: NextRequest): Promise<Response> {
   after(flushMcpAnalytics);
+
+  const credentialParam = credentialInQueryString(req);
+  if (credentialParam) return credentialQueryErrorResponse(credentialParam);
 
   // Modern requests carry capabilities per call and must never acquire a session.
   if (!(await isLegacyRequest(req))) {

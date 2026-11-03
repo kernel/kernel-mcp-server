@@ -115,6 +115,37 @@ describe("unauthenticated discovery", () => {
   }
 });
 
+describe("credentials in the query string", () => {
+  for (const method of ["GET", "POST"]) {
+    for (const param of ["api_key", "token"]) {
+      test(`${method} rejects a credential passed as ?${param}=`, async () => {
+        const req = new nextServer.NextRequest(
+          `https://mcp.example.test/mcp?${param}=sk_leaked_key`,
+          { method, headers: { Authorization: "Bearer sk_leaked_key" } },
+        );
+        const response = await (method === "GET" ? GET : POST)(req);
+        expect(response.status).toBe(400);
+        const body = (await response.json()) as {
+          error: string;
+          error_description: string;
+        };
+        expect(body.error).toBe("credentials_in_query_string");
+        expect(body.error_description).toContain("Authorization header");
+        expect(body.error_description).not.toContain("sk_leaked_key");
+      });
+    }
+  }
+
+  test("ignores non-credential query params", async () => {
+    const req = new nextServer.NextRequest(
+      "https://mcp.example.test/mcp?foo=bar",
+      { method: "GET" },
+    );
+    const response = await GET(req);
+    expect(response.status).toBe(401);
+  });
+});
+
 describe("connection scope failures through the handler", () => {
   test("answers a refused credential with 401 rather than a server error", async () => {
     failingAuthContext(Object.assign(new Error("revoked"), { status: 401 }));
