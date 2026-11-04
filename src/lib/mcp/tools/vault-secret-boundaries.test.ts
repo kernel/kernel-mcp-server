@@ -121,9 +121,16 @@ describe("vault validation boundary", () => {
                 anyOf: expect.arrayContaining([
                   expect.objectContaining({
                     properties: expect.objectContaining({
+                      token_refresh: expect.objectContaining({
+                        enum: ["kernel", "customer"],
+                      }),
                       tokens: expect.objectContaining({
                         type: "object",
                         additionalProperties: false,
+                        properties: expect.objectContaining({
+                          access_token: expect.any(Object),
+                          refresh_token: expect.any(Object),
+                        }),
                       }),
                     }),
                   }),

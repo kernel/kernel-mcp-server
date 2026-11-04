@@ -544,6 +544,99 @@ describe("configured wallets and recovery", () => {
     },
   );
 
+  test.each(["kernel", "customer"] as const)(
+    "forwards token_refresh=%s with the required imported Link tokens",
+    async (tokenRefresh) => {
+      const tokens =
+        tokenRefresh === "kernel"
+          ? { access_token: access, refresh_token: refresh }
+          : { access_token: access };
+      const authorization = {
+        ...importedSpec.authorization,
+        token_refresh: tokenRefresh,
+        tokens,
+      };
+      const fixture = await connectVaultTest([
+        Response.json({
+          ...item,
+          type: "wallet",
+          spec: {
+            provider: "link",
+            authorization: {
+              method: "oauth",
+              client: {
+                type: "customer_managed",
+                provider_config: { id: config.id },
+              },
+              token_refresh: tokenRefresh,
+              tokens,
+            },
+          },
+          state: { provider: "link", status: "connected" },
+          available_operations:
+            tokenRefresh === "customer"
+              ? [
+                  {
+                    type: "update_access_token",
+                    description: "Replace the stored access token.",
+                  },
+                ]
+              : [],
+        }),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_wallets", {
+          ...importedCreate,
+          spec: { authorization },
+        });
+        expect(result.isError).not.toBe(true);
+        expectSecretFree(result);
+        const body = toolResultJSON(result);
+        expect(body.item.spec.authorization).toEqual({
+          method: "oauth",
+          client: {
+            type: "customer_managed",
+            provider_config: { id: config.id },
+          },
+          token_refresh: tokenRefresh,
+        });
+        expect(body.guidance.join(" ")).toContain(
+          tokenRefresh === "customer"
+            ? "update_access_token is intentionally unavailable through mcp"
+            : "KERNEL owns and rotates the refresh token",
+        );
+        expect(body.hints.invocation).toEqual([]);
+        expect(fixture.requests[0].body).toEqual({
+          type: "wallet",
+          spec: { provider: "link", authorization },
+        });
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test("refuses secret Link access-token replacement through MCP", async () => {
+    const fixture = await connectVaultTest([]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "invoke",
+        vault: "checkout",
+        key: "imported-wallet",
+        operation: "update_access_token",
+        inputs: { access_token: access },
+      });
+      expect(result.isError).toBe(true);
+      expectSecretFree(result);
+      expect(JSON.stringify(result)).toContain(
+        "update_access_token takes a secret access token",
+      );
+      expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test.each([{ id: config.id }, { name: config.name }])(
     "selects AgentCard configuration without user grants",
     async (reference) => {
@@ -590,6 +683,18 @@ describe("configured wallets and recovery", () => {
       authorization: {
         ...importedSpec.authorization,
         tokens: { ...importedSpec.authorization.tokens, [secret]: secret },
+      },
+    },
+    {
+      authorization: {
+        ...importedSpec.authorization,
+        token_refresh: "customer",
+      },
+    },
+    {
+      authorization: {
+        ...importedSpec.authorization,
+        token_refresh: "other",
       },
     },
     {

@@ -43,12 +43,23 @@ export const vaultWaitSchema = z
   )
   .optional();
 
+const MAX_VAULT_WEBMCP_INPUT_BYTES = 64 * 1024;
+
 export const webmcpInvokeInputsSchema = z
   .object({
     browser_id: z.string().min(1),
     tool_ref: z.string().min(1).max(128),
     page_url: z.string().min(1),
-    input: z.record(z.string(), z.unknown()),
+    input: z
+      .record(z.string(), z.unknown())
+      .refine(
+        (value) =>
+          Buffer.byteLength(JSON.stringify(value), "utf8") <=
+          MAX_VAULT_WEBMCP_INPUT_BYTES,
+      )
+      .describe(
+        "public tool arguments with null at each binding path. at most 64 kib after json serialization, including values substituted by the api; never include vault values here.",
+      ),
     bindings: z
       .array(
         z
@@ -367,6 +378,50 @@ export const providerCredentialsSchema = z
   .strict();
 
 // Keep provider specifications in sync with https://api.onkernel.com/spec.yaml.
+const importedLinkAuthorizationSchema = z
+  .object({
+    method: z.literal("oauth"),
+    client: z
+      .object({
+        type: z.literal("customer_managed"),
+        provider_config: providerConfigReferenceSchema(),
+      })
+      .strict(),
+    token_refresh: z
+      .enum(["kernel", "customer"])
+      .describe(
+        "who refreshes the imported link grant. omit or use `kernel` for KERNEL-owned refresh-token rotation; use `customer` when the trusted backend keeps the refresh token and replaces access tokens through the KERNEL api. fixed at wallet creation.",
+      )
+      .optional(),
+    tokens: z
+      .object({
+        access_token: z.string().min(1),
+        refresh_token: z.string().min(1).optional(),
+      })
+      .strict()
+      .describe(
+        "write-only tokens from the imported grant. supply through a trusted backend, never chat. `token_refresh=kernel` (and the default when omitted) requires access_token and refresh_token; `token_refresh=customer` requires access_token only and rejects refresh_token.",
+      ),
+  })
+  .strict()
+  .superRefine(({ token_refresh, tokens }, ctx) => {
+    const refreshOwner = token_refresh ?? "kernel";
+    if (refreshOwner === "kernel" && tokens.refresh_token === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["tokens", "refresh_token"],
+        message: "refresh_token is required when token_refresh is kernel",
+      });
+    }
+    if (refreshOwner === "customer" && tokens.refresh_token !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["tokens", "refresh_token"],
+        message: "refresh_token is not accepted when token_refresh is customer",
+      });
+    }
+  });
+
 export const linkWalletSpecSchema = z
   .object({
     provider: z.literal("link").optional(),
@@ -377,26 +432,7 @@ export const linkWalletSpecSchema = z
           client: z.object({ type: z.literal("kernel_managed") }).strict(),
         })
         .strict(),
-      z
-        .object({
-          method: z.literal("oauth"),
-          client: z
-            .object({
-              type: z.literal("customer_managed"),
-              provider_config: providerConfigReferenceSchema(),
-            })
-            .strict(),
-          tokens: z
-            .object({
-              access_token: z.string().min(1),
-              refresh_token: z.string().min(1),
-            })
-            .strict()
-            .describe(
-              "write-only token pair from the same grant. supply through a trusted backend, never chat. KERNEL owns subsequent refresh rotation.",
-            ),
-        })
-        .strict(),
+      importedLinkAuthorizationSchema,
     ]),
   })
   .strict();

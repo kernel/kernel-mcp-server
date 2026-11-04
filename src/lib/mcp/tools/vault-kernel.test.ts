@@ -116,6 +116,117 @@ describe("kernel-managed payment tools", () => {
     }
   });
 
+  test("intentionally excludes secret single-use card creation inputs", async () => {
+    const fixture = await connectVaultTest([]);
+    try {
+      const { tools } = await fixture.client.listTools();
+      const tool = tools.find(({ name }) => name === "manage_vault_cards");
+      expect(tool?.description).toContain("single-use card details");
+      expect(tool?.description).toContain(
+        "intentionally unavailable through mcp",
+      );
+      const kernelSpec = (
+        tool?.inputSchema.properties?.spec as {
+          anyOf?: Array<{
+            properties?: Record<string, unknown>;
+          }>;
+        }
+      )?.anyOf?.find(
+        ({ properties }) =>
+          (properties?.provider as { const?: string } | undefined)?.const ===
+          "kernel",
+      );
+      expect(kernelSpec?.properties).not.toHaveProperty("single_use_card");
+      expect(kernelSpec?.properties).not.toHaveProperty("expires_at");
+
+      const result = await fixture.call("manage_vault_cards", {
+        action: "create",
+        provider: "kernel",
+        vault: "checkout",
+        key: "secret-card",
+        spec: {
+          ...card.spec,
+          single_use_card: {
+            number: "4242424242424242",
+            cvc: "123",
+            exp_month: "12",
+            exp_year: "2030",
+          },
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("4242424242424242");
+      expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("projects and guides existing API-created single-use Kernel cards", async () => {
+    const singleUseCard = {
+      ...card,
+      expires_at: "2026-11-04T18:00:00Z",
+      spec: {
+        ...card.spec,
+        expires_at: "2026-11-04T18:00:00Z",
+        single_use_card: {
+          number: "4242424242424242",
+          cvc: "123",
+          exp_month: "12",
+          exp_year: "2030",
+          name: "Private Cardholder",
+          billing_address: { postal_code: "12345" },
+          reference: "issuer-card-1",
+        },
+      },
+      state: {
+        provider: "kernel",
+        source: "single_use_card",
+        status: "ready",
+        domains: ["shop.example"],
+      },
+      action: undefined,
+      available_operations: [
+        { type: "fill", description: "Fill the supplied card." },
+      ],
+    };
+    const fixture = await connectVaultTest([Response.json(singleUseCard)]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "get",
+        vault: "checkout",
+        key: "order-1",
+      });
+      expect(result.isError).toBeUndefined();
+      const body = toolResultJSON(result);
+      expect(body.item.spec.single_use_card).toEqual({
+        reference: "issuer-card-1",
+      });
+      expect(body.item.state).toMatchObject({
+        source: "single_use_card",
+        status: "ready",
+        domains: ["shop.example"],
+      });
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain("4242424242424242");
+      expect(serialized).not.toContain("Private Cardholder");
+      expect(serialized).not.toContain("12345");
+      const guidance = body.guidance.join(" ");
+      expect(guidance).toContain("supports only advertised fill");
+      expect(guidance).toContain("registrable domain");
+      expect(guidance).toContain("no more than 24 hours");
+      expect(guidance).toContain("mcp intentionally cannot create one");
+      expect(
+        body.hints.invocation.map(
+          (hint: { arguments: { operation: string } }) =>
+            hint.arguments.operation,
+        ),
+      ).toEqual(["fill"]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test("advertises the Kernel card amount cap in tools/list", async () => {
     const fixture = await connectVaultTest([]);
     try {

@@ -79,9 +79,10 @@ export const vaultItemFields: OutputFields = {
     fields: fields("name label type required sensitive"),
     provider_config: fields("id name"),
     authorization: {
-      method: null,
+      ...fields("method token_refresh"),
       client: { type: null, provider_config: fields("id name") },
     },
+    single_use_card: fields("reference"),
     totals: totalFields,
     recurring: fields("interval interval_count"),
     line_items: {
@@ -93,7 +94,7 @@ export const vaultItemFields: OutputFields = {
   },
   state: {
     ...fields(
-      "provider status status_reason user_id domains payment_method_id funding_status",
+      "provider status status_reason user_id domains payment_method_id funding_status source",
     ),
     fields: { "*": fields("has_value type") },
     access_request: {
@@ -465,6 +466,30 @@ export function vaultItemResponse(
       ? payment.data.spec.provider
       : undefined;
   const purchaseProvider = cardProvider ?? paymentRequestProvider;
+  const kernelCardSource = z
+    .object({
+      type: z.literal("card"),
+      spec: z.object({ provider: z.literal("kernel") }),
+      state: z.object({
+        source: z.enum(["payment_method", "single_use_card"]).optional(),
+      }),
+    })
+    .safeParse(projected);
+  const singleUseKernelCard =
+    kernelCardSource.success &&
+    kernelCardSource.data.state.source === "single_use_card";
+  const importedLinkWallet = z
+    .object({
+      type: z.literal("wallet"),
+      spec: z.object({
+        provider: z.literal("link"),
+        authorization: z.object({
+          client: z.object({ type: z.literal("customer_managed") }),
+          token_refresh: z.enum(["kernel", "customer"]).optional(),
+        }),
+      }),
+    })
+    .safeParse(projected);
   // A requested Link or Shop Pay purchase's authorize hint is incomplete without checkout context.
   const checkoutAuthorize =
     (purchaseProvider === "link" || purchaseProvider === "shop_pay") &&
@@ -490,7 +515,11 @@ export function vaultItemResponse(
         observation: vaultObservationHints(target).filter(safeHint),
         invocation: advertised.success
           ? advertised.data.available_operations
-              .filter(({ type }) => type !== "1pw_update_access_token")
+              .filter(
+                ({ type }) =>
+                  type !== "1pw_update_access_token" &&
+                  type !== "update_access_token",
+              )
               .map(({ type }) => ({
                 tool: "manage_vault_items",
                 arguments: { ...target, action: "invoke", operation: type },
@@ -539,8 +568,18 @@ export function vaultItemResponse(
                       "wallets connect a payment provider; they are not fillable cards. when item.description is present, follow it for this provider's checkout flow. use manage_vault_payment_requests where enabled for one link or KERNEL purchase, or manage_vault_cards for link, KERNEL, shop pay, and agentcard card items, then inspect the purchase item's state and advertised operations.",
                     ]
                   : []),
-                ...(payment.success && payment.data.spec.provider === "kernel"
+                ...(payment.success &&
+                payment.data.spec.provider === "kernel" &&
+                !singleUseKernelCard
                   ? [kernelWalletGuidance]
+                  : []),
+                ...(importedLinkWallet.success
+                  ? [
+                      importedLinkWallet.data.spec.authorization
+                        .token_refresh === "customer"
+                        ? customerRefreshedLinkWalletGuidance
+                        : kernelRefreshedLinkWalletGuidance,
+                    ]
                   : []),
                 ...(payment.success &&
                 payment.data.type === "wallet" &&
@@ -548,11 +587,13 @@ export function vaultItemResponse(
                   ? [shopPayWalletGuidance]
                   : []),
                 ...(cardProvider === "kernel"
-                  ? [
-                      'KERNEL cards require merchant_country for visa purchases. state.payment_method_id identifies the method bound at creation; funding_status unavailable blocks authorization, fill, and confirmation while removal or recovery is in progress, and removed means this purchase needs a new item funded by another method. after explicit user approval, use manage_vault_cards authorize or manage_vault_items invoke authorize only when advertised; visa or an alias-mode card may return a spend_approval action for the cardholder. poll get/events until ready. attach the vault at browser creation, then invoke advertised fill with browser_id, exact current https top-level page_url on spec.merchant_url\'s origin, and ordered field/selector bindings for number, expiration (format "MM/YY" or "MM/YYYY"), cvc, exp_month, and exp_year. fill delivers card details for only a few minutes, so submit checkout promptly; repeated fill is safe and never submits checkout. alias-mode cards must be filled before their temporary security-code deadline. KERNEL stores no billing details: billing_* fields fail with 400 field_unavailable before any write; enter billing name/zip on the merchant page. fill does not prove payment. after failed or unknown fill, inspect the browser page and item state, fix the cause, then it is safe to retry the field write, not authorization, checkout, or transaction reporting. KERNEL cards cannot be updated. after user confirmation, delete only if the api permits it and create a new item under a new key for a new purchase; deletion is never proof that the original payment did not occur.',
-                      kernelTransactionGuidance,
-                      kernelTerminalGuidance,
-                    ]
+                  ? singleUseKernelCard
+                    ? [kernelSingleUseCardGuidance]
+                    : [
+                        kernelPaymentMethodCardGuidance,
+                        kernelTransactionGuidance,
+                        kernelTerminalGuidance,
+                      ]
                   : []),
                 ...(cardProvider === "link" ? linkCardGuidance : []),
                 ...(cardProvider === "shop_pay" ? shopPayCardGuidance : []),
@@ -578,24 +619,26 @@ export function vaultItemResponse(
                   : [
                       "observe get/events for outcomes. do not retry failed, timed-out, rejected, or indeterminate payments or reconfigure a card to retry them.",
                     ]),
-                ...(purchaseProvider === "kernel" &&
-                advertised.success &&
-                advertised.data.available_operations.some(
-                  ({ type }) => type === "restart_verification",
-                )
-                  ? [kernelVerificationGuidance]
-                  : [
-                      ...(purchaseProvider === "kernel"
-                        ? [
-                            "recovery_required is an unresolved original outcome, not decline or expiry. stop payment attempts; " +
-                              kernelSupportGuidance,
-                          ]
-                        : purchaseProvider === "shop_pay"
-                          ? [shopPayRecoveryGuidance]
-                          : [
-                              "recovery_required is an unresolved original outcome, not decline or expiry. stop payment attempts. for a link purchase, reads may reconcile a known request; otherwise, with user confirmation, delete the unusable item and create a new one, and tell the user to approve only the new request. deleting or recreating never proves the original payment did not occur. other providers may still block deletion and require support.",
-                            ]),
-                    ]),
+                ...(singleUseKernelCard
+                  ? []
+                  : purchaseProvider === "kernel" &&
+                      advertised.success &&
+                      advertised.data.available_operations.some(
+                        ({ type }) => type === "restart_verification",
+                      )
+                    ? [kernelVerificationGuidance]
+                    : [
+                        ...(purchaseProvider === "kernel"
+                          ? [
+                              "recovery_required is an unresolved original outcome, not decline or expiry. stop payment attempts; " +
+                                kernelSupportGuidance,
+                            ]
+                          : purchaseProvider === "shop_pay"
+                            ? [shopPayRecoveryGuidance]
+                            : [
+                                "recovery_required is an unresolved original outcome, not decline or expiry. stop payment attempts. for a link purchase, reads may reconcile a known request; otherwise, with user confirmation, delete the unusable item and create a new one, and tell the user to approve only the new request. deleting or recreating never proves the original payment did not occur. other providers may still block deletion and require support.",
+                              ]),
+                      ]),
               ])),
         ...(credential && passkeyOperationAdvertised
           ? [passkeyCredentialGuidance]
@@ -705,6 +748,18 @@ const kernelSupportGuidance =
 const kernelWalletGuidance =
   "KERNEL wallet enrollment and spend approval are cardholder actions. share action urls only with the intended user privately, never open them or put them in logs or traces. a connected wallet can hold zero or more cards in payment_methods. when add_payment_method and remove_payment_method are advertised, use manage_vault_wallets to enroll or remove individual cards; add returns a separate single-use link that expires after 30 minutes, and removing one method does not disconnect the wallet. otherwise the wallet uses one legacy default card: creation returns its card_enrollment action, pending_authorization waits for enrollment, and degraded means an uncertain enrollment requires deleting the wallet before adding another card. reconnect_required is a legacy wallet awaiting an operator upgrade; reads preserve it, but payment and deletion requests are refused until the upgrade. payment method is_default identifies only the legacy default card; wallets with payment methods enabled have no default. pending_enrollment uses its card_enrollment action. removal_pending refuses payments after an uncertain removal outcome; retry remove_payment_method later only when advertised. recovery_required after an uncertain enrollment may be removable, while an unreadable stored card requires private support and can refuse removal with 409; follow status_reason. payment_methods eligibility is advisory. network_token_pending, network_token_unsupported, or network_token_failed normally means do not authorize, unless the returned capability and advertised flow explicitly support checkout delivery without a network token; then fill types temporary checkout details. for network_token_pending, re-check later at most once in this attempt. if still ineligible or unknown, ask the cardholder before enrolling a different card; do not poll indefinitely or replay an uncertain purchase.";
 
+const kernelRefreshedLinkWalletGuidance =
+  "this imported link wallet uses token_refresh kernel (the default): KERNEL owns and rotates the refresh token after import, so the customer backend must stop refreshing that grant. if the grant later becomes unusable, do not replace tokens on this wallet through mcp. obtain a fresh grant in the trusted backend and create a new wallet key for new payments only, while retaining unresolved old payments for reconciliation.";
+
+const customerRefreshedLinkWalletGuidance =
+  "this imported link wallet uses token_refresh customer: the trusted backend keeps and rotates the refresh token, while KERNEL stores only the current access token and never refreshes or revokes the grant. before each step that reaches link, such as creating, authorizing, or filling a card, the backend replaces the token through the KERNEL api. update_access_token is intentionally unavailable through mcp because it takes a secret; never ask for the token in chat. when link rejects the stored token, update it and retry only the same provider step that did not start; never replay an uncertain payment.";
+
+const kernelPaymentMethodCardGuidance =
+  'this wallet-funded KERNEL card requires merchant_country for visa purchases. state.source is payment_method when present. state.payment_method_id identifies the method bound at creation; funding_status unavailable blocks authorization, fill, and confirmation while removal or recovery is in progress, and removed means this purchase needs a new item funded by another method. after explicit user approval, use manage_vault_cards authorize or manage_vault_items invoke authorize only when advertised; visa or an alias-mode card may return a spend_approval action for the cardholder. poll get/events until ready. attach the vault at browser creation, then invoke advertised fill with browser_id, exact current https top-level page_url on spec.merchant_url\'s origin, and ordered field/selector bindings for number, expiration (format "MM/YY" or "MM/YYYY"), cvc, exp_month, and exp_year. fill delivers card details for only a few minutes, so submit checkout promptly; repeated fill is safe and never submits checkout. alias-mode cards must be filled before their temporary security-code deadline. wallet-funded KERNEL cards store no billing details: billing_* fields fail with 400 field_unavailable before any write; enter billing name/zip on the merchant page. fill does not prove payment. after failed or unknown fill, inspect the browser page and item state, fix the cause, then it is safe to retry the field write, not authorization, checkout, or transaction reporting. KERNEL cards cannot be updated. after user confirmation, delete only if the api permits it and create a new item under a new key for a new purchase; deletion is never proof that the original payment did not occur.';
+
+const kernelSingleUseCardGuidance =
+  "this KERNEL card has state.source single_use_card. it was created through the KERNEL api with caller-supplied card details; mcp intentionally cannot create one because raw number, cvc, and expiry are secrets. it is ready on creation, supports only advertised fill, and is not funded by a wallet payment method, so do not authorize or confirm it. attach the vault at browser creation and fill only on an https page whose registrable domain matches spec.merchant_url, including its subdomains. fill does not consume the card and may include billing_* fields that were supplied with it. spec.expires_at defaults to two hours after creation, is capped at the end of the card expiry month, and when explicitly requested must be in the future and no more than 24 hours after creation; after expiry fill is refused and KERNEL deletes the stored details shortly afterward. deleting the card, wallet, or vault deletes them immediately. amount, currency, and merchant metadata are recorded but not enforced. never ask the user for the card details in chat, and reconcile the merchant outcome before attempting another payment.";
+
 const kernelPaymentRequestGuidance =
   "this KERNEL payment_request is one live purchase bound to spec.payment_method_id. the method had to be active and eligible when created; state.payment_method_id never changes. state.funding_status unavailable means the method is being removed or needs recovery, so authorization, fill, and confirmation are refused until it recovers. removed means the purchase can no longer be paid; create a new purchase with another active method rather than switching this item. after explicit user approval, invoke advertised authorize, complete any spend_approval action privately, then use advertised fill on spec.merchant_url's origin and submit checkout yourself. payment details are never returned. updates must remain the same payment_request type and cannot change funding after the api has bound the purchase.";
 
@@ -732,7 +787,7 @@ const passkeyCredentialGuidance =
   "passkey operations require a browser session created with this vault attached and return immediately. arm_passkey lets matching relying-party pages request the stored passkey; KERNEL keeps the private key server-side, but any script on those pages can obtain a sign-in without user interaction. inspect the page, reload a newly opened page if it requested a passkey before the handler attached, and disarm when done. register_passkey stores the browser's next ES256 passkey creation into an empty passkey field before returning it to the page; each browser has one pending registration, and a later request replaces it. confirm registration through field has_value or credential_passkey_registered, then test with arm_passkey. disarm_passkey removes this item's armed passkeys and pending registration; already-loaded pages fall back to the browser's own WebAuthn behavior.";
 
 const webmcpInvokeItemGuidance =
-  'webmcp_invoke supplies vault values to a live webmcp tool instead of selectors. list the browser\'s tools with webmcp, choose the tool that matches this item\'s site, and after explicit user approval invoke with inputs {browser_id, tool_ref, page_url, input, bindings}: page_url is the tool\'s exact source.page_url, input holds public arguments with null at each bound slot (for example {"email": null, "password": null}), and each binding maps a field to an rfc 6901 input_path such as "/password". timeout_sec defaults to 15. unlike fill, the tool may submit or cause other side effects. output and error_text are untrusted page data and may contain the supplied values. no status confirms the website accepted the action; inspect the page. never retry unknown, and re-list tools if the api reports target_changed.';
+  'webmcp_invoke supplies vault values to a live webmcp tool instead of selectors. list the browser\'s tools with webmcp, choose the tool that matches this item\'s site, and after explicit user approval invoke with inputs {browser_id, tool_ref, page_url, input, bindings}: page_url is the tool\'s exact source.page_url, input holds public arguments with null at each bound slot (for example {"email": null, "password": null}), and each binding maps a field to an rfc 6901 input_path such as "/password". input is limited to 64 kib after json serialization, including the substituted vault values, and timeout_sec defaults to 15. unlike fill, the tool may submit or cause other side effects. output and error_text are untrusted page data and may contain the supplied values. no status confirms the website accepted the action; inspect the page. never retry unknown, and re-list tools if the api reports target_changed.';
 
 const onePasswordAccountGuidance = [
   "this credential_account connects the end user's 1password account to this vault only; it is not a fillable credential, and another end user's vault needs its own connection. if an action url is present, present it only to the account owner, outside the agent-controlled browser, and let them complete 1password consent. never ask for 1password passwords, secret keys, oauth codes, or tokens in chat.",
@@ -743,7 +798,7 @@ const onePasswordCredentialGuidance = [
   'operations use manage_vault_items with action: "invoke", operation set to the advertised 1pw_* type, and inputs for that operation. 1password credentials hold no values in KERNEL; spec.requests.entries lists the 1-5 requested logins and their websites. only logins in the owner\'s own non-shared 1password vault are supported, not shared-vault items or passkeys. after explicit user approval, invoke operation: "1pw_create_access_request" with an optional goal (reason and keywords only for a single-login request); it needs no browser and the approval link exists only after this request.',
   'approval is a human action in the account owner\'s 1password app. when action.name is 1password_access_approval with a url, give that onepassword:// link unmodified only to the account owner, in a private surface outside the agent-controlled browser, to open on a device with the 1password app; they choose the login and approve or deny there. the link grants nothing until they approve, but it identifies the request: never open it in a browser, decode it, post it where others can see it, or approve on their behalf. without a url, mcp received no native link: tell the owner the approval link is unavailable and do not request again while pending. invoke operation: "1pw_access_request_status" to observe the decision; it needs no browser, only reads status, and needs no user approval. do not issue a second request while an approval action or 1pw_access_request_status is present.',
   "declined means the owner denied the request: do not request again unless they ask, and offer KERNEL-hosted collection instead. if the item is pending_authorization with no action and 1pw_create_access_request is advertised again, the earlier request finished without a usable login: tell the owner the status_reason and, with their approval, request access once more. failed is a confirmed failure: read status_reason, then ask the end-user before deleting and recreating this credential for at most one new request, or offer KERNEL-hosted collection. if the item stays pending_authorization with no action and no advertised operations, first check that the credential_account named by spec.account is connected; if it is, a request may already have reached 1password: stop, tell the owner to check 1password, and do not delete or recreate the item on your own to retry. whatever the status, when the end-user asks for a new request, for example because they missed the approval prompt, delete and recreate this credential for one new request.",
-  'when ready, create a browser with this vault attached (KERNEL loads the 1password extension into it on demand) and invoke operation: "1pw_fill" with inputs {browser_id, page_url}, where page_url is the exact current top-level url on a requested login origin. if several approved logins share that origin, ask the owner which one to use and add entry_id from state.access_request entries; never guess. if several open pages have the same page_url, also pass target_id from execute_playwright_code tab.target_id; KERNEL verifies that page still has page_url and brings it to the front before filling. the extension selects fields and submits; you cannot supply selectors or values. fill_submitted means the form was submitted, not that login succeeded: check the page. fill_failed with `noExistingCredentials` means the owner\'s 1password has no usable login for the page: tell the owner instead of retrying. fill_unknown means the form may have been filled or submitted: inspect the page to see the result of the fill.',
+  'when ready, create a browser with this vault attached (KERNEL loads the 1password extension into it on demand) and invoke operation: "1pw_fill" with inputs {browser_id, page_url}, where page_url is the exact current top-level url. the 1password extension decides whether an approved login matches the page and refuses pages that do not. when several entries are approved and the page origin does not identify exactly one, ask the owner which one to use and add entry_id from state.access_request entries; never guess. if several open pages have the same page_url, also pass target_id from execute_playwright_code tab.target_id; KERNEL verifies that page still has page_url and brings it to the front before filling. the extension selects fields and submits; you cannot supply selectors or values. fill_submitted means the form was submitted, not that login succeeded: check the page. fill_failed with `noExistingCredentials` means the owner\'s 1password has no usable login for the page: tell the owner instead of retrying. fill_unknown means the form may have been filled or submitted: inspect the page to see the result of the fill.',
 ];
 
 const onePasswordStoredTokenGuidance =

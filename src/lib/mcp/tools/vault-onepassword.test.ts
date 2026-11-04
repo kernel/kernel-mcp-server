@@ -132,6 +132,10 @@ describe("1Password vault credentials", () => {
       expect(items).toContain(
         "1pw_create_access_request and 1pw_access_request_status need no browser",
       );
+      expect(items).toContain(
+        "the 1password extension decides whether an approved login matches the page",
+      );
+      expect(items).toContain("page origin does not identify exactly one");
       expect(credentials).toContain(
         "no approval link exists before that request",
       );
@@ -781,6 +785,9 @@ describe("1Password vault credentials", () => {
           (entry: { id: string }) => entry.id,
         ),
       ).toEqual(["entry-1", "entry-2", "entry-3"]);
+      expect(read.guidance.join(" ")).toContain(
+        "page origin does not identify exactly one",
+      );
       expect(read.guidance.join(" ")).toContain(
         "ask the owner which one to use and add entry_id",
       );
