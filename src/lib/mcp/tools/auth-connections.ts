@@ -44,7 +44,7 @@ export function registerAuthConnectionTools(server: McpServer) {
     "manage_auth_connections",
     {
       description:
-        'manage reusable authenticated profiles for third-party websites. before a browser task that needs a user account, call "list" with the exact domain_filter and inspect every page. if one relevant connection is authenticated, create the browser with its profile_name. if multiple relevant accounts exist, ask the user which one to use. if authentication is needed and open_auth_login is available, prefer that secure app so credentials and mfa never enter chat: a direct user request to log in is already consent; if login is only discovered incidentally, ask first. for a new app login, choose a concise stable profile name derived from the service unless the user specified one. the programmatic actions remain available for every client: "create" or "update" a connection, "login" to start a hosted flow, "submit" fields or choices, "get" status, inspect the "timeline", "delete", or "wait" for completion. prefer interaction_id with canonical field_values or selected_choice_id when the connection returns fields or choices. after authentication, resume the original task with manage_browsers using the verified profile_name.',
+        'manage reusable authenticated profiles for third-party websites. before a browser task that needs a user account, call "list" with the exact domain_filter and inspect every page. if one relevant connection is authenticated, create the browser with its profile_name. if multiple relevant accounts exist, ask the user which one to use. if authentication is needed and open_auth_login is available, prefer that secure app so credentials and mfa never enter chat: a direct user request to log in is already consent; if login is only discovered incidentally, ask first. for a new app login, choose a concise stable profile name derived from the service unless the user specified one. the programmatic actions remain available for every client: "create" or "update" a connection, "login" to start a hosted flow, "submit" fields or choices, "get" status, inspect the "timeline", "delete", or "wait" for completion. prefer interaction_id with canonical field_values or selected_choice_id when the connection returns fields or choices. when hitl is enabled and get returns flow_step=AWAITING_HUMAN_INTERVENTION, have the person complete the challenge in live_view_url, then submit the returned human_intervention choice. reauthentication never pauses for this step. after authentication, resume the original task with manage_browsers using the verified profile_name.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z
@@ -125,6 +125,12 @@ export function registerAuthConnectionTools(server: McpServer) {
           .boolean()
           .describe(
             "(create, update) enable scheduled authentication health checks. defaults to true on create.",
+          )
+          .optional(),
+        hitl: z
+          .boolean()
+          .describe(
+            "(create, update) when a login is blocked by a captcha the browser cannot complete, pause for a person instead of failing. the flow moves to AWAITING_HUMAN_INTERVENTION; have the person complete the challenge in live_view_url, then submit the returned human_intervention choice. reauthentication never pauses. defaults to false on create.",
           )
           .optional(),
         auto_reauth: z
@@ -243,7 +249,7 @@ export function registerAuthConnectionTools(server: McpServer) {
           .string()
           .min(1)
           .describe(
-            "(submit) canonical choice id. use with interaction_id when `get` returns choices.",
+            "(submit) canonical choice id. use with interaction_id when `get` returns choices. submit a human_intervention choice only after the person finishes the challenge in live_view_url.",
           )
           .optional(),
         fields: z
@@ -440,6 +446,7 @@ export function registerAuthConnectionTools(server: McpServer) {
               ...(params.health_checks !== undefined && {
                 health_checks: params.health_checks,
               }),
+              ...(params.hitl !== undefined && { hitl: params.hitl }),
               ...(params.auto_reauth !== undefined && {
                 auto_reauth: params.auto_reauth,
               }),
@@ -485,6 +492,7 @@ export function registerAuthConnectionTools(server: McpServer) {
               params.login_url !== undefined ||
               params.health_check_interval !== undefined ||
               params.health_checks !== undefined ||
+              params.hitl !== undefined ||
               params.auto_reauth !== undefined ||
               params.save_credentials !== undefined ||
               params.record_session !== undefined ||
@@ -508,6 +516,7 @@ export function registerAuthConnectionTools(server: McpServer) {
               ...(params.health_checks !== undefined && {
                 health_checks: params.health_checks,
               }),
+              ...(params.hitl !== undefined && { hitl: params.hitl }),
               ...(params.auto_reauth !== undefined && {
                 auto_reauth: params.auto_reauth,
               }),
@@ -685,7 +694,10 @@ export function registerAuthConnectionTools(server: McpServer) {
                   ? "authentication is verified. continue the pending task now, using this profile_name when creating the browser."
                   : result.state === "failed"
                     ? "authentication did not complete. explain the safe error and ask whether to retry the login flow."
-                    : "authentication is still pending. immediately call manage_auth_connections with action=wait and the same selector again. do not ask the user to report completion.",
+                    : result.connection?.flow_step ===
+                        "AWAITING_HUMAN_INTERVENTION"
+                      ? "authentication needs a person to complete a challenge. call manage_auth_connections with action=get and this connection id to read live_view_url, interaction_id, and choices. have the person finish the challenge in the live view, then submit the human_intervention choice with interaction_id and selected_choice_id. do not keep waiting before that submission."
+                      : "authentication is still pending. immediately call manage_auth_connections with action=wait and the same selector again. do not ask the user to report completion.",
             });
           }
         }

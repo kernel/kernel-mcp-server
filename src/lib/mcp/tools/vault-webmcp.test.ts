@@ -265,6 +265,39 @@ describe("vault WebMCP invocation", () => {
     },
   );
 
+  test("accepts 64 KiB of public input and rejects one byte more", async () => {
+    const maxBytes = 64 * 1024;
+    const overhead = Buffer.byteLength(JSON.stringify({ payload: "" }), "utf8");
+    const exactInput = { payload: "x".repeat(maxBytes - overhead) };
+    const fixture = await connectVaultTest([
+      Response.json(resyLogin),
+      Response.json({ type: "webmcp_invoke", status: "completed" }),
+    ]);
+    try {
+      const accepted = await fixture.call("manage_vault_items", {
+        ...invoke,
+        inputs: { ...inputs, input: exactInput },
+      });
+      expect(accepted.isError).toBeUndefined();
+      expect(fixture.requests).toHaveLength(2);
+
+      const rejected = await fixture.call("manage_vault_items", {
+        ...invoke,
+        inputs: {
+          ...inputs,
+          input: { payload: `${exactInput.payload}x` },
+        },
+      });
+      expect(rejected.isError).toBe(true);
+      expect(JSON.stringify(rejected)).toContain(
+        "invalid webmcp_invoke inputs",
+      );
+      expect(fixture.requests).toHaveLength(2);
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test("requires webmcp_invoke to be advertised", async () => {
     const fixture = await connectVaultTest([
       Response.json({
@@ -339,6 +372,7 @@ describe("vault WebMCP invocation", () => {
       expect(advertised.guidance.join(" ")).toContain(
         "webmcp_invoke supplies vault values",
       );
+      expect(advertised.guidance.join(" ")).toContain("64 kib");
       expect(
         advertised.hints.invocation.find(
           (hint: { arguments: { operation: string } }) =>

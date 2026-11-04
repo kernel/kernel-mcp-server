@@ -450,6 +450,54 @@ describe("webmcp", () => {
     }
   });
 
+  test("accepts 4 MiB of serialized invoke input and rejects one byte more", async () => {
+    const maxBytes = 4 * 1024 * 1024;
+    const overhead = Buffer.byteLength(JSON.stringify({ payload: "" }), "utf8");
+    const exactInput = { payload: "x".repeat(maxBytes - overhead) };
+    const calls: unknown[] = [];
+    const { client, close } = await connectTestMcp(registerWebMcpTool, {
+      browsers: {
+        webmcp: {
+          invokeTool: async (_sessionId: string, body: unknown) => {
+            calls.push(body);
+            return {
+              invocation_id: "invoke-sized",
+              status: "completed" as const,
+            };
+          },
+        },
+      },
+    });
+
+    try {
+      const accepted = await client.callTool({
+        name: "webmcp",
+        arguments: {
+          action: "invoke",
+          session_id: "ses_1",
+          tool_ref: "opaque-ref",
+          input: exactInput,
+        },
+      });
+      expect(accepted.isError).toBeUndefined();
+      expect(calls).toHaveLength(1);
+
+      const rejected = await client.callTool({
+        name: "webmcp",
+        arguments: {
+          action: "invoke",
+          session_id: "ses_1",
+          tool_ref: "opaque-ref",
+          input: { payload: `${exactInput.payload}x` },
+        },
+      });
+      expect(rejected.isError).toBe(true);
+      expect(calls).toHaveLength(1);
+    } finally {
+      await close();
+    }
+  });
+
   test("validates custom arguments before calling the SDK", async () => {
     let calls = 0;
     const record = async () => {
@@ -596,57 +644,60 @@ describe("webmcp", () => {
     }
   });
 
-  test("preserves outcome_unknown details and never retries", async () => {
-    let calls = 0;
-    let requestBody: unknown;
-    let requestOptions: unknown;
-    const failure = {
-      code: "outcome_unknown",
-      message: "do not retry automatically",
-      invocation_id: "invoke-2",
-    };
-    const { client, close } = await connectTestMcp(registerWebMcpTool, {
-      browsers: {
-        webmcp: {
-          invokeTool: async (
-            _sessionId: string,
-            body: unknown,
-            options: unknown,
-          ) => {
-            calls += 1;
-            requestBody = body;
-            requestOptions = options;
-            throw new APIError(504, failure, undefined, new Headers());
+  test.each(["outcome_unknown", "tool_page_unloaded"] as const)(
+    "preserves %s details and never retries",
+    async (code) => {
+      let calls = 0;
+      let requestBody: unknown;
+      let requestOptions: unknown;
+      const failure = {
+        code,
+        message: "do not retry automatically",
+        invocation_id: "invoke-2",
+      };
+      const { client, close } = await connectTestMcp(registerWebMcpTool, {
+        browsers: {
+          webmcp: {
+            invokeTool: async (
+              _sessionId: string,
+              body: unknown,
+              options: unknown,
+            ) => {
+              calls += 1;
+              requestBody = body;
+              requestOptions = options;
+              throw new APIError(504, failure, undefined, new Headers());
+            },
           },
         },
-      },
-    });
+      });
 
-    try {
-      const result = await client.callTool({
-        name: "webmcp",
-        arguments: {
-          action: "invoke",
-          session_id: "ses_1",
+      try {
+        const result = await client.callTool({
+          name: "webmcp",
+          arguments: {
+            action: "invoke",
+            session_id: "ses_1",
+            tool_ref: "opaque-ref",
+            input: {},
+          },
+        });
+
+        expect(result.isError).toBe(true);
+        expect(calls).toBe(1);
+        expect(requestBody).toEqual({
           tool_ref: "opaque-ref",
           input: {},
-        },
-      });
-
-      expect(result.isError).toBe(true);
-      expect(calls).toBe(1);
-      expect(requestBody).toEqual({
-        tool_ref: "opaque-ref",
-        input: {},
-        timeout_sec: 60,
-      });
-      expect(requestOptions).toEqual({ timeout: 90_000, maxRetries: 0 });
-      const text = (result.content as Array<{ text: string }>)[0].text;
-      expect(text).toContain(JSON.stringify(failure));
-    } finally {
-      await close();
-    }
-  });
+          timeout_sec: 60,
+        });
+        expect(requestOptions).toEqual({ timeout: 90_000, maxRetries: 0 });
+        const text = (result.content as Array<{ text: string }>)[0].text;
+        expect(text).toContain(JSON.stringify(failure));
+      } finally {
+        await close();
+      }
+    },
+  );
 
   test("warns against retrying a transport failure", async () => {
     let calls = 0;
@@ -707,6 +758,7 @@ describe("webmcp", () => {
 
       expect(tool?.description).toContain("untrusted page-provided data");
       expect(tool?.description).toContain("never retry invoke automatically");
+      expect(tool?.description).toContain("tool_page_unloaded");
       expect(schema.properties).toHaveProperty("project");
       expect(schema.properties).not.toHaveProperty("project_id");
       expect(schema.properties?.action.enum).toEqual([
@@ -719,6 +771,7 @@ describe("webmcp", () => {
       expect(schema.properties?.input.description).toContain(
         "tool.inputSchema",
       );
+      expect(schema.properties?.input.description).toContain("4 mib");
       expect(schema.properties?.input.description).not.toContain(
         "input_schema",
       );
