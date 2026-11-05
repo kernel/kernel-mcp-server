@@ -30,6 +30,7 @@ import {
   MCP_USED_PROJECT_ID_PROPERTY,
   MCP_USED_PROJECT_PROPERTY,
   MCP_DEPRECATED_PARAMS_PROPERTY,
+  MCP_REMOVED_PARAMS_PROPERTY,
   OAUTH_TOKEN_EXCHANGE_EVENT,
   sanitizeMcpAnalyticsEvent,
 } from "@/lib/mcp/analytics";
@@ -560,6 +561,7 @@ describe("sanitizeMcpAnalyticsEvent", () => {
               action: "update",
               session_id: "brr_123",
               proxy_id: "prx_secret",
+              disable_default_proxy: false,
               clear_proxy: false,
             },
           },
@@ -571,18 +573,21 @@ describe("sanitizeMcpAnalyticsEvent", () => {
 
     expect(result?.properties[MCP_DEPRECATED_PARAMS_PROPERTY]).toEqual([
       "proxy_id",
+      "disable_default_proxy",
+    ]);
+    expect(result?.properties[MCP_REMOVED_PARAMS_PROPERTY]).toEqual([
       "clear_proxy",
     ]);
     expect(JSON.stringify(result)).not.toContain("prx_secret");
   });
 
-  test("records an empty deprecated parameter list for current inputs only", async () => {
+  test("records empty deprecated and removed parameter lists for current inputs only", async () => {
     const event = toolCallEvent({
-      [PostHogMCPAnalyticsProperty.ToolName]: "manage_proxies",
+      [PostHogMCPAnalyticsProperty.ToolName]: "manage_browsers",
       [PostHogMCPAnalyticsProperty.Parameters]: {
         request: {
           params: {
-            arguments: { action: "create", type: "isp", config: {} },
+            arguments: { action: "create", proxy: { name: "residential" } },
           },
         },
       },
@@ -591,6 +596,29 @@ describe("sanitizeMcpAnalyticsEvent", () => {
     const result = await sanitizeMcpAnalyticsEvent(event);
 
     expect(result?.properties[MCP_DEPRECATED_PARAMS_PROPERTY]).toEqual([]);
+    expect(result?.properties[MCP_REMOVED_PARAMS_PROPERTY]).toEqual([]);
+  });
+
+  test("records removed parameter names for a tool with no deprecated inputs left", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.ToolName]: "manage_proxies",
+      [PostHogMCPAnalyticsProperty.Parameters]: {
+        request: {
+          params: {
+            arguments: { action: "create", type: "isp", country: "US" },
+          },
+        },
+      },
+    });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    expect(result?.properties).not.toHaveProperty(
+      MCP_DEPRECATED_PARAMS_PROPERTY,
+    );
+    expect(result?.properties[MCP_REMOVED_PARAMS_PROPERTY]).toEqual([
+      "country",
+    ]);
   });
 
   test("omits the deprecated parameter list for tools without deprecated inputs", async () => {
@@ -603,6 +631,7 @@ describe("sanitizeMcpAnalyticsEvent", () => {
     expect(result?.properties).not.toHaveProperty(
       MCP_DEPRECATED_PARAMS_PROPERTY,
     );
+    expect(result?.properties).not.toHaveProperty(MCP_REMOVED_PARAMS_PROPERTY);
   });
 
   test("records false/false when a tool call omits both project selectors", async () => {

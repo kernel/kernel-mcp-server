@@ -447,30 +447,22 @@ describe("manage_browsers proxy routes", () => {
     );
 
     try {
-      const routes = [
-        { hosts: ["example.com", "*.example.org"], proxy_id: "prx_route" },
-        { hosts: ["other.example.com"], proxy_name: "backup" },
+      const proxy_routes = [
+        { hosts: ["example.com", "*.example.org"], proxy: { id: "prx_route" } },
+        { hosts: ["other.example.com"], proxy: { name: "backup" } },
       ];
       const created = toolResultJSON(
         await client.callTool({
           name: "manage_browsers",
           arguments: {
             action: "create",
-            proxy_id: "prx_default",
-            proxy_routes: routes,
+            proxy: { id: "prx_default" },
+            network: { proxy_routes },
           },
         }),
       );
       expect(requests).toEqual([
-        {
-          proxy_id: "prx_default",
-          network: {
-            proxy_routes: [
-              { hosts: routes[0].hosts, proxy: { id: "prx_route" } },
-              { hosts: routes[1].hosts, proxy: { name: "backup" } },
-            ],
-          },
-        },
+        { proxy: { id: "prx_default" }, network: { proxy_routes } },
       ]);
       expect(created.browser.network).toEqual(network);
       const retrieved = toolResultJSON(
@@ -501,18 +493,18 @@ describe("manage_browsers proxy routes", () => {
     try {
       const invalid = [
         [{ hosts: ["example.com"] }],
-        [{ hosts: ["example.com"], proxy_id: "one", proxy_name: "two" }],
-        [{ hosts: [], proxy_id: "one" }],
-        [{ hosts: Array(51).fill("example.com"), proxy_id: "one" }],
+        [{ hosts: ["example.com"], proxy: { id: "one", name: "two" } }],
+        [{ hosts: [], proxy: { id: "one" } }],
+        [{ hosts: Array(51).fill("example.com"), proxy: { id: "one" } }],
         Array.from({ length: 11 }, () => ({
           hosts: ["example.com"],
-          proxy_id: "one",
+          proxy: { id: "one" },
         })),
       ];
       for (const proxy_routes of invalid) {
         const result = await client.callTool({
           name: "manage_browsers",
-          arguments: { action: "create", proxy_routes },
+          arguments: { action: "create", network: { proxy_routes } },
         });
         expect(result.isError).toBe(true);
       }
@@ -598,10 +590,9 @@ describe("manage_browsers proxy routes", () => {
         ],
         [
           {
-            network: { proxy_routes: [] },
             proxy_routes: [{ hosts: ["example.com"], proxy_id: "prx_route" }],
           },
-          "network cannot be combined with proxy_routes",
+          "proxy_routes was removed; use `network.proxy_routes` instead.",
         ],
       ];
       for (const [args, message] of cases) {
@@ -650,7 +641,7 @@ describe("manage_browsers proxy routes", () => {
     }
   });
 
-  test("rejects routes on update without calling the SDK", async () => {
+  test("rejects a removed flat proxy input with its replacement", async () => {
     let updates = 0;
     const { client, close } = await connectTestMcp(
       registerBrowserCapabilities,
@@ -670,11 +661,13 @@ describe("manage_browsers proxy routes", () => {
           action: "update",
           session_id: "brr_123",
           name: "renamed",
-          proxy_routes: [{ hosts: ["example.com"], proxy_id: "prx_route" }],
+          clear_proxy: true,
         },
       });
       expect(result.isError).toBe(true);
-      expect(toolResultText(result)).toContain("creation-only");
+      expect(toolResultText(result)).toContain(
+        'clear_proxy was removed; use `proxy: { mode: "default" }` instead.',
+      );
       expect(updates).toBe(0);
     } finally {
       await close();
@@ -914,7 +907,7 @@ describe("manage_browsers proxy", () => {
           action: "update",
           session_id: "brr_123",
           proxy: { name: "residential" },
-          clear_proxy: true,
+          proxy_id: "prx_123",
         },
         {
           action: "update",

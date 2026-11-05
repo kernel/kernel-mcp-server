@@ -17,6 +17,7 @@ import { paginationParams } from "@/lib/mcp/schemas";
 import {
   DEPRECATED_TOOL_PARAMS,
   deprecatedParamConflict,
+  objectRejectingRemovedParams,
 } from "@/lib/mcp/deprecated-params";
 import { proxyConfigError, proxyConfigSchema } from "@/lib/mcp/proxy-config";
 import {
@@ -45,7 +46,7 @@ export function registerAuthConnectionTools(server: McpServer) {
     {
       description:
         'manage reusable authenticated profiles for third-party websites. before a browser task that needs a user account, call "list" with the exact domain_filter and inspect every page. if one relevant connection is authenticated, create the browser with its profile_name. if multiple relevant accounts exist, ask the user which one to use. if authentication is needed and open_auth_login is available, prefer that secure app so credentials and mfa never enter chat: a direct user request to log in is already consent; if login is only discovered incidentally, ask first. for a new app login, choose a concise stable profile name derived from the service unless the user specified one. the programmatic actions remain available for every client: "create" or "update" a connection, "login" to start a hosted flow, "submit" fields or choices, "get" status, inspect the "timeline", "delete", or "wait" for completion. prefer interaction_id with canonical field_values or selected_choice_id when the connection returns fields or choices. after authentication, resume the original task with manage_browsers using the verified profile_name.',
-      inputSchema: z.object({
+      inputSchema: objectRejectingRemovedParams("manage_auth_connections")({
         ...projectSelectionInputSchema(),
         action: z
           .enum([
@@ -177,7 +178,7 @@ export function registerAuthConnectionTools(server: McpServer) {
               .optional(),
           })
           .describe(
-            "(create, update) set the connection defaults for future managed-auth browser sessions. (login) override them for this login only. cannot be combined with the deprecated browser_*, proxy_id, proxy_name, or proxy_mode fields.",
+            "(create, update) set the connection defaults for future managed-auth browser sessions. (login) override them for this login only. cannot be combined with the deprecated browser_* or proxy_mode fields.",
           )
           .optional(),
         browser_telemetry: managedAuthBrowserTelemetrySchema
@@ -197,24 +198,10 @@ export function registerAuthConnectionTools(server: McpServer) {
             "deprecated: use the site-compatibility setting in `browser` instead. (create, update, login) whether managed-auth browser sessions use site-compatibility settings. defaults to true on create; omitted on update or login preserves or inherits the connection setting.",
           )
           .optional(),
-        proxy_id: z
-          .string()
-          .min(1)
-          .describe(
-            "deprecated: use `browser.proxy.id` instead. (create, update, login) proxy id to route managed-auth browser sessions through.",
-          )
-          .optional(),
-        proxy_name: z
-          .string()
-          .min(1)
-          .describe(
-            "deprecated: use `browser.proxy.name` instead. (create, update, login) proxy name to route managed-auth browser sessions through.",
-          )
-          .optional(),
         proxy_mode: z
           .enum(["direct", "default"])
           .describe(
-            "deprecated: use `browser.proxy.mode` instead. (create, update, login) proxy mode. direct disables proxy egress; default restores the session's default proxy setting. cannot be combined with proxy_id or proxy_name.",
+            "deprecated: use `browser.proxy.mode` instead. (create, update, login) proxy mode. direct disables proxy egress; default restores the session's default proxy setting.",
           )
           .optional(),
         domain_filter: z
@@ -315,19 +302,8 @@ export function registerAuthConnectionTools(server: McpServer) {
         projectForOperation(ctx.http.authInfo, params),
       );
 
-      const proxySelectors = [
-        params.proxy_id,
-        params.proxy_name,
-        params.proxy_mode,
-      ].filter((value) => value !== undefined);
       const buildProxy = () =>
-        proxySelectors.length === 1
-          ? {
-              ...(params.proxy_id && { id: params.proxy_id }),
-              ...(params.proxy_name && { name: params.proxy_name }),
-              ...(params.proxy_mode && { mode: params.proxy_mode }),
-            }
-          : undefined;
+        params.proxy_mode ? { mode: params.proxy_mode } : undefined;
       const buildBrowser = () => {
         if (params.browser !== undefined) {
           return Object.keys(params.browser).length > 0
@@ -406,11 +382,6 @@ export function registerAuthConnectionTools(server: McpServer) {
             (params.browser.proxy &&
               proxyConfigError("browser.proxy", params.browser.proxy));
           if (error) return errorResponse(`error: ${error}`);
-        }
-        if (proxySelectors.length > 1) {
-          return errorResponse(
-            "error: provide exactly one of proxy_id, proxy_name, or proxy_mode.",
-          );
         }
         if (params.skill_mode !== undefined && params.action !== "login") {
           return errorResponse("error: skill_mode is login-only.");

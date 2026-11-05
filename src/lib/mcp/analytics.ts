@@ -24,6 +24,7 @@ import { MCP_INTENT_ARGUMENT_DESCRIPTION } from "@/lib/mcp/analytics-context";
 import {
   DEPRECATED_TOOL_PARAMS,
   deprecatedParamsUsed,
+  REMOVED_TOOL_PARAMS,
 } from "@/lib/mcp/deprecated-params";
 import {
   type KernelFeedback,
@@ -113,6 +114,7 @@ const posthog = projectToken
 export const MCP_USED_PROJECT_ID_PROPERTY = "$mcp_used_project_id";
 export const MCP_USED_PROJECT_PROPERTY = "$mcp_used_project";
 export const MCP_DEPRECATED_PARAMS_PROPERTY = "$mcp_deprecated_params";
+export const MCP_REMOVED_PARAMS_PROPERTY = "$mcp_removed_params";
 export const MCP_CLIENT_SUPPORTS_SAMPLING_PROPERTY =
   "$mcp_client_supports_sampling";
 export const MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY =
@@ -154,7 +156,7 @@ const CLIENT_EXTENSION_PROPERTIES = {
 // can't start flowing on an upgrade. Deliberately absent: $mcp_parameters and
 // $mcp_response (call payloads), and $mcp_error_message (the text a failed tool
 // returned). $mcp_used_project_id / $mcp_used_project are presence flags only, and
-// $mcp_deprecated_params lists parameter names, never values.
+// $mcp_deprecated_params and $mcp_removed_params list parameter names, never values.
 const SENT_PROPERTIES = new Set<string>([
   "$groups",
   "$insert_id",
@@ -166,6 +168,7 @@ const SENT_PROPERTIES = new Set<string>([
   MCP_USED_PROJECT_ID_PROPERTY,
   MCP_USED_PROJECT_PROPERTY,
   MCP_DEPRECATED_PARAMS_PROPERTY,
+  MCP_REMOVED_PARAMS_PROPERTY,
   MCP_CLIENT_SUPPORTS_SAMPLING_PROPERTY,
   MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY,
   MCP_CLIENT_ELICITATION_MODE_PROPERTY,
@@ -353,16 +356,22 @@ function annotateProjectParamUsage(properties: Record<string, unknown>) {
 
 function annotateDeprecatedParamUsage(properties: Record<string, unknown>) {
   const toolName = properties[PostHogMCPAnalyticsProperty.ToolName];
-  if (
-    typeof toolName !== "string" ||
-    !Object.prototype.hasOwnProperty.call(DEPRECATED_TOOL_PARAMS, toolName)
-  ) {
-    return;
+  if (typeof toolName !== "string") return;
+  const args = toolCallArguments(properties) ?? {};
+  if (Object.prototype.hasOwnProperty.call(DEPRECATED_TOOL_PARAMS, toolName)) {
+    properties[MCP_DEPRECATED_PARAMS_PROPERTY] = deprecatedParamsUsed(
+      args,
+      DEPRECATED_TOOL_PARAMS[toolName as keyof typeof DEPRECATED_TOOL_PARAMS],
+    );
   }
-  properties[MCP_DEPRECATED_PARAMS_PROPERTY] = deprecatedParamsUsed(
-    toolCallArguments(properties) ?? {},
-    DEPRECATED_TOOL_PARAMS[toolName as keyof typeof DEPRECATED_TOOL_PARAMS],
-  );
+  if (Object.prototype.hasOwnProperty.call(REMOVED_TOOL_PARAMS, toolName)) {
+    properties[MCP_REMOVED_PARAMS_PROPERTY] = deprecatedParamsUsed(
+      args,
+      Object.keys(
+        REMOVED_TOOL_PARAMS[toolName as keyof typeof REMOVED_TOOL_PARAMS],
+      ),
+    );
+  }
 }
 
 const IPV6_CANDIDATE_PATTERN =

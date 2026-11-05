@@ -135,7 +135,7 @@ describe("managed-auth MCP App registration", () => {
     ).toBe(false);
   });
 
-  test("login schemas reject empty proxy identifiers", () => {
+  test("login schemas reject the removed proxy identifiers", () => {
     const { tools } = captureRegistration();
     const base = {
       mode: "new_login",
@@ -144,11 +144,12 @@ describe("managed-auth MCP App registration", () => {
     };
     for (const name of ["open_auth_login", "begin_auth_login"]) {
       const schema = tools.get(name)!.config.inputSchema;
-      expect(schema.safeParse({ ...base, proxy_id: "" }).success).toBe(false);
-      expect(schema.safeParse({ ...base, proxy_name: "" }).success).toBe(false);
       expect(schema.safeParse({ ...base, proxy_id: "proxy_1" }).success).toBe(
-        true,
+        false,
       );
+      expect(
+        schema.safeParse({ ...base, proxy_name: "residential" }).success,
+      ).toBe(false);
       expect(schema.safeParse({ ...base, region: "eu-west" }).success).toBe(
         true,
       );
@@ -230,10 +231,6 @@ describe("managed-auth MCP App registration", () => {
       ],
       [
         { ...base, browser: { proxy: { id: "proxy_1", name: "residential" } } },
-        "proxy requires exactly one of id, name, or mode",
-      ],
-      [
-        { ...base, proxy_id: "proxy_1", proxy_name: "residential" },
         "proxy requires exactly one of id, name, or mode",
       ],
     ];

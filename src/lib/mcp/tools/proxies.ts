@@ -12,10 +12,7 @@ import {
   throwToolError,
 } from "@/lib/mcp/responses";
 import { paginationParams } from "@/lib/mcp/schemas";
-import {
-  DEPRECATED_TOOL_PARAMS,
-  deprecatedParamConflict,
-} from "@/lib/mcp/deprecated-params";
+import { objectRejectingRemovedParams } from "@/lib/mcp/deprecated-params";
 import {
   projectForOperation,
   projectSelectionInputSchema,
@@ -65,35 +62,6 @@ const proxyCreateConfigSchema = z.object({
     .optional(),
 });
 
-function legacyProxyConfig(params: {
-  type?: string;
-  country?: string;
-  city?: string;
-  state?: string;
-  custom_host?: string;
-  custom_port?: number;
-  custom_username?: string;
-  custom_password?: string;
-}): z.infer<typeof proxyCreateConfigSchema> | undefined {
-  if (params.type === "custom") {
-    return params.custom_host || params.custom_port
-      ? {
-          host: params.custom_host,
-          port: params.custom_port,
-          ...(params.custom_username && { username: params.custom_username }),
-          ...(params.custom_password && { password: params.custom_password }),
-        }
-      : undefined;
-  }
-  return params.country || params.city || params.state
-    ? {
-        ...(params.country && { country: params.country }),
-        ...(params.city && { city: params.city }),
-        ...(params.state && { state: params.state }),
-      }
-    : undefined;
-}
-
 export function registerProxyTools(
   server: McpServer,
   options: McpDependencies = {
@@ -106,7 +74,7 @@ export function registerProxyTools(
     {
       description:
         'manage proxy configurations for routing browser traffic. use "create" to add a proxy, "list" to see all proxies, "get" to retrieve one by id or exact name, "rename" to change its name, "check" to test connectivity (optionally against a target url), or "delete" to remove one. names are not unique: an ambiguous get by name fails, while ids are stable and should be used for rename, check, and delete. choose a proxy type that fits the workload and the terms of the target site.',
-      inputSchema: z.object({
+      inputSchema: objectRejectingRemovedParams("manage_proxies")({
         ...projectSelectionInputSchema(),
         action: z
           .enum(["create", "list", "get", "rename", "check", "delete"])
@@ -150,7 +118,7 @@ export function registerProxyTools(
           .optional(),
         config: proxyCreateConfigSchema
           .describe(
-            "(create) settings for the selected type. isp accepts country; residential accepts country, state, city, zip, and asn; mobile accepts country, state, and city; custom requires host and port. cannot be combined with the deprecated country, city, state, or custom_* fields.",
+            "(create) settings for the selected type. isp accepts country; residential accepts country, state, city, zip, and asn; mobile accepts country, state, and city; custom requires host and port.",
           )
           .optional(),
         bypass_hosts: z
@@ -162,48 +130,6 @@ export function registerProxyTools(
         protocol: z
           .enum(["http", "https"])
           .describe("(create) protocol for the proxy connection.")
-          .optional(),
-        country: z
-          .string()
-          .describe(
-            'deprecated: use `config.country` instead. (create) iso 3166 country code (e.g., "US").',
-          )
-          .optional(),
-        city: z
-          .string()
-          .describe(
-            "deprecated: use `config.city` instead. (create) city name without spaces (e.g., 'sanfrancisco'). requires country.",
-          )
-          .optional(),
-        state: z
-          .string()
-          .describe(
-            "deprecated: use `config.state` instead. (create) two-letter state code.",
-          )
-          .optional(),
-        custom_host: z
-          .string()
-          .describe(
-            "deprecated: use `config.host` instead. (create, custom type) proxy host address.",
-          )
-          .optional(),
-        custom_port: z
-          .number()
-          .describe(
-            "deprecated: use `config.port` instead. (create, custom type) proxy port.",
-          )
-          .optional(),
-        custom_username: z
-          .string()
-          .describe(
-            "deprecated: use `config.username` instead. (create, custom type) auth username.",
-          )
-          .optional(),
-        custom_password: z
-          .string()
-          .describe(
-            "deprecated: use `config.password` instead. (create, custom type) auth password.",
-          )
           .optional(),
         ...paginationParams,
       }),
@@ -233,20 +159,10 @@ export function registerProxyTools(
           case "create": {
             if (!params.type)
               return errorResponse("error: type is required for create.");
-            if (params.config !== undefined) {
-              const conflict = deprecatedParamConflict(
-                "config",
-                params,
-                DEPRECATED_TOOL_PARAMS.manage_proxies,
-              );
-              if (conflict) return errorResponse(`error: ${conflict}`);
-            }
-            const config = params.config ?? legacyProxyConfig(params);
+            const { config } = params;
             if (params.type === "custom" && (!config?.host || !config.port)) {
               return errorResponse(
-                params.config
-                  ? "error: config.host and config.port are required for custom proxy type."
-                  : "error: custom_host and custom_port are required for custom proxy type.",
+                "error: config.host and config.port are required for custom proxy type.",
               );
             }
             const createParams: Parameters<typeof client.proxies.create>[0] = {
