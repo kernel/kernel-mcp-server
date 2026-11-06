@@ -53,6 +53,13 @@ const proxyCreateConfigSchema = z.object({
     .string()
     .describe("(residential) autonomous system number.")
     .optional(),
+  ip_address: z
+    .string()
+    .min(1)
+    .describe(
+      "(isp) reserved exit ip to pin the proxy to. only for organizations with reserved isp ips; country defaults to the ip's own.",
+    )
+    .optional(),
   host: z.string().describe("(custom) proxy host address.").optional(),
   port: z.number().int().describe("(custom) proxy port.").optional(),
   username: z.string().describe("(custom) auth username.").optional(),
@@ -105,17 +112,27 @@ export function registerProxyTools(
     "manage_proxies",
     {
       description:
-        'manage proxy configurations for routing browser traffic. use "create" to add a proxy, "list" to see all proxies, "get" to retrieve one by id or exact name, "rename" to change its name, "check" to test connectivity (optionally against a target url), or "delete" to remove one. names are not unique: an ambiguous get by name fails, while ids are stable and should be used for rename, check, and delete. choose a proxy type that fits the workload and the terms of the target site.',
+        'manage proxy configurations for routing browser traffic. use "create" to add a proxy, "list" to see all proxies, "get" to retrieve one by id or exact name, "rename" to change its name, "check" to test connectivity (optionally against a target url), or "delete" to remove one. names are not unique: an ambiguous get by name fails, while ids are stable and should be used for rename, move, check, and delete. organizations with reserved isp ips can also use "list_reserved_ips" and "get_reserved_ip" to see their allocation and "move" to switch an isp proxy to another reserved exit ip; other organizations get a reserved_isp_not_enabled error. choose a proxy type that fits the workload and the terms of the target site.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z
-          .enum(["create", "list", "get", "rename", "check", "delete"])
+          .enum([
+            "create",
+            "list",
+            "get",
+            "rename",
+            "move",
+            "check",
+            "delete",
+            "list_reserved_ips",
+            "get_reserved_ip",
+          ])
           .describe("operation to perform."),
         id_or_name: z
           .string()
           .min(1)
           .describe(
-            "(get) proxy id or exact name. ids take precedence if a value matches both; ambiguous names fail. (rename, check, delete) use the proxy id.",
+            "(get) proxy id or exact name. ids take precedence if a value matches both; ambiguous names fail. (rename, move, check, delete) use the proxy id.",
           )
           .optional(),
         proxy_id: z
@@ -148,9 +165,22 @@ export function registerProxyTools(
             "(list) case-insensitive substring match against proxy name, host, or ip address. ids match by exact value.",
           )
           .optional(),
+        ip_address: z
+          .string()
+          .min(1)
+          .describe(
+            "(list) isp proxies whose primary exit ip is this address. (move) reserved exit ip to move the isp proxy to; it must be active and in the proxy's country, and the proxy keeps its id. (get_reserved_ip) the reserved ip to look up. for create, use config.ip_address.",
+          )
+          .optional(),
+        status: z
+          .enum(["active", "excluded"])
+          .describe(
+            "(list_reserved_ips) filter by whether the ip can currently be assigned. excluded ips cannot be pinned or moved to.",
+          )
+          .optional(),
         config: proxyCreateConfigSchema
           .describe(
-            "(create) settings for the selected type. isp accepts country; residential accepts country, state, city, zip, and asn; mobile accepts country, state, and city; custom requires host and port. cannot be combined with the deprecated country, city, state, or custom_* fields.",
+            "(create) settings for the selected type. isp accepts country and ip_address; residential accepts country, state, city, zip, and asn; mobile accepts country, state, and city; custom requires host and port. cannot be combined with the deprecated country, city, state, or custom_* fields.",
           )
           .optional(),
         bypass_hosts: z
@@ -233,6 +263,11 @@ export function registerProxyTools(
           case "create": {
             if (!params.type)
               return errorResponse("error: type is required for create.");
+            if (params.ip_address) {
+              return errorResponse(
+                "error: use config.ip_address to pin a new isp proxy to a reserved ip.",
+              );
+            }
             if (params.config !== undefined) {
               const conflict = deprecatedParamConflict(
                 "config",
@@ -266,12 +301,32 @@ export function registerProxyTools(
             const page = await client.proxies.list({
               ...(params.name && { name: params.name }),
               ...(params.query && { query: params.query }),
+              ...(params.ip_address && { ip_address: params.ip_address }),
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
             });
             return paginatedJsonResponse(page, {
               emptyText: "no proxies found",
             });
+          }
+          case "list_reserved_ips": {
+            const page = await client.proxyIPs.list({
+              ...(params.status && { status: params.status }),
+              ...(params.limit !== undefined && { limit: params.limit }),
+              ...(params.offset !== undefined && { offset: params.offset }),
+            });
+            return paginatedJsonResponse(page, {
+              emptyText: "no reserved ips found",
+            });
+          }
+          case "get_reserved_ip": {
+            if (!params.ip_address) {
+              return errorResponse(
+                "error: ip_address is required for get_reserved_ip.",
+              );
+            }
+            const ip = await client.proxyIPs.retrieve(params.ip_address);
+            return jsonResponse(ip);
           }
           case "get": {
             if (!idOrName) {
@@ -289,6 +344,18 @@ export function registerProxyTools(
             }
             const proxy = await client.proxies.update(idOrName, {
               name: params.name,
+            });
+            return jsonResponse(proxy);
+          }
+          case "move": {
+            if (!idOrName) {
+              return errorResponse("error: id_or_name is required for move.");
+            }
+            if (!params.ip_address) {
+              return errorResponse("error: ip_address is required for move.");
+            }
+            const proxy = await client.proxies.update(idOrName, {
+              config: { ip_address: params.ip_address },
             });
             return jsonResponse(proxy);
           }
