@@ -25,23 +25,10 @@ export interface SafeAuthConnection {
   id: string;
   domain: string;
   profile_name: string;
-  status: "AUTHENTICATED" | "NEEDS_AUTH";
-  flow_status:
-    | "IN_PROGRESS"
-    | "SUCCESS"
-    | "FAILED"
-    | "EXPIRED"
-    | "CANCELED"
-    | null;
-  flow_step:
-    | "DISCOVERING"
-    | "AWAITING_INPUT"
-    | "AWAITING_EXTERNAL_ACTION"
-    | "AWAITING_HUMAN_INTERVENTION"
-    | "SUBMITTING"
-    | "COMPLETED"
-    | null;
-  flow_type: "LOGIN" | "REAUTH" | null;
+  status: ManagedAuth["status"];
+  flow_status: NonNullable<ManagedAuth["flow_status"]> | null;
+  flow_step: NonNullable<ManagedAuth["flow_step"]> | null;
+  flow_type: NonNullable<ManagedAuth["flow_type"]> | null;
   flow_expires_at: string | null;
   can_reauth: boolean | null;
   can_reauth_reason: string | null;
