@@ -106,7 +106,7 @@ export function registerProxyTools(
     ...defaultMcpDependencies,
   },
 ) {
-  // manage_proxies -- Create, list, get, rename, check, and delete proxy configurations
+  // manage_proxies -- Create, list, get, rename, move, check, and delete proxy configurations, and list reserved ISP IPs
   server.registerTool(
     "manage_proxies",
     {
@@ -315,6 +315,11 @@ export function registerProxyTools(
             });
           }
           case "list_reserved_ips": {
+            if (params.country) {
+              return errorResponse(
+                "error: use ip_country to filter reserved ips by country.",
+              );
+            }
             const page = await client.proxyIPs.list({
               ...(params.ip_country && { country: params.ip_country }),
               ...(params.status && { status: params.status }),

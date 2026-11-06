@@ -454,6 +454,14 @@ describe("manage_proxies", () => {
       expect(toolResultText(missing)).toBe(
         "error: ip_address is required for get_reserved_ip.",
       );
+      const deprecatedCountry = await client.callTool({
+        name: "manage_proxies",
+        arguments: { action: "list_reserved_ips", country: "GB" },
+      });
+      expect(deprecatedCountry.isError).toBe(true);
+      expect(toolResultText(deprecatedCountry)).toBe(
+        "error: use ip_country to filter reserved ips by country.",
+      );
       expect(calls).toEqual([
         ["list", { country: "GB", status: "active", limit: 5 }],
         ["get", "203.0.113.10"],
