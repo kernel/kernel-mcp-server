@@ -99,6 +99,41 @@ describe("manage_proxies", () => {
     }
   });
 
+  test("rejects a non-ipv4 ip_address in the schema", async () => {
+    const creates: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerProxyTools,
+      proxyClient(creates),
+    );
+    try {
+      const cases: Array<[Record<string, unknown>, string]> = [
+        [
+          { action: "move", id_or_name: "prx_1", ip_address: "2001:db8::1" },
+          "ip_address",
+        ],
+        [
+          {
+            action: "create",
+            type: "isp",
+            config: { ip_address: "not-an-ip" },
+          },
+          "config.ip_address",
+        ],
+      ];
+      for (const [args, field] of cases) {
+        const result = await client.callTool({
+          name: "manage_proxies",
+          arguments: args,
+        });
+        expect(result.isError).toBe(true);
+        expect(toolResultText(result)).toContain(field);
+      }
+      expect(creates).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
   test("names id_or_name when a proxy selector is missing", async () => {
     const { client, close } = await connectTestMcp(
       registerProxyTools,
@@ -280,9 +315,156 @@ describe("manage_proxies", () => {
         name: "manage_proxies",
         arguments: { action: "list", query: "residential", limit: 5 },
       });
+      await client.callTool({
+        name: "manage_proxies",
+        arguments: { action: "list", ip_address: "203.0.113.10" },
+      });
       expect(lists).toEqual([
         { name: "us-residential" },
         { query: "residential", limit: 5 },
+        { ip_address: "203.0.113.10" },
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("pins a new isp proxy only through config.ip_address", async () => {
+    const creates: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerProxyTools,
+      proxyClient(creates),
+    );
+    try {
+      await client.callTool({
+        name: "manage_proxies",
+        arguments: {
+          action: "create",
+          type: "isp",
+          config: { ip_address: "203.0.113.10" },
+        },
+      });
+      const result = await client.callTool({
+        name: "manage_proxies",
+        arguments: {
+          action: "create",
+          type: "isp",
+          ip_address: "203.0.113.10",
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(toolResultText(result)).toBe(
+        "error: use config.ip_address to pin a new isp proxy to a reserved ip.",
+      );
+      expect(creates).toEqual([
+        { type: "isp", config: { ip_address: "203.0.113.10" } },
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("moves an isp proxy to a reserved ip", async () => {
+    const updates: unknown[] = [];
+    const { client, close } = await connectTestMcp(registerProxyTools, {
+      proxies: {
+        update: async (idOrName: string, params: unknown) => {
+          updates.push([idOrName, params]);
+          return { id: idOrName };
+        },
+      },
+    });
+    try {
+      const moved = await client.callTool({
+        name: "manage_proxies",
+        arguments: {
+          action: "move",
+          id_or_name: "prx_1",
+          ip_address: "203.0.113.10",
+        },
+      });
+      expect(toolResultJSON(moved)).toEqual({ id: "prx_1" });
+
+      const cases: Array<[Record<string, unknown>, string]> = [
+        [
+          { ip_address: "203.0.113.10" },
+          "error: id_or_name is required for move.",
+        ],
+        [{ id_or_name: "prx_1" }, "error: ip_address is required for move."],
+      ];
+      for (const [args, message] of cases) {
+        const result = await client.callTool({
+          name: "manage_proxies",
+          arguments: { action: "move", ...args },
+        });
+        expect(result.isError).toBe(true);
+        expect(toolResultText(result)).toBe(message);
+      }
+      expect(updates).toEqual([
+        ["prx_1", { config: { ip_address: "203.0.113.10" } }],
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("lists and gets reserved ips", async () => {
+    const calls: unknown[] = [];
+    const { client, close } = await connectTestMcp(registerProxyTools, {
+      proxyIPs: {
+        list: async (params: unknown) => {
+          calls.push(["list", params]);
+          return {
+            getPaginatedItems: () => [
+              { ip_address: "203.0.113.10", country: "US", status: "active" },
+            ],
+            has_more: false,
+          };
+        },
+        retrieve: async (ip: string) => {
+          calls.push(["get", ip]);
+          return { ip_address: ip, proxy_count: 0, proxies: [] };
+        },
+      },
+    });
+    try {
+      await client.callTool({
+        name: "manage_proxies",
+        arguments: {
+          action: "list_reserved_ips",
+          ip_country: "GB",
+          status: "active",
+          limit: 5,
+        },
+      });
+      const got = await client.callTool({
+        name: "manage_proxies",
+        arguments: { action: "get_reserved_ip", ip_address: "203.0.113.10" },
+      });
+      expect(toolResultJSON(got)).toEqual({
+        ip_address: "203.0.113.10",
+        proxy_count: 0,
+        proxies: [],
+      });
+      const missing = await client.callTool({
+        name: "manage_proxies",
+        arguments: { action: "get_reserved_ip" },
+      });
+      expect(missing.isError).toBe(true);
+      expect(toolResultText(missing)).toBe(
+        "error: ip_address is required for get_reserved_ip.",
+      );
+      const deprecatedCountry = await client.callTool({
+        name: "manage_proxies",
+        arguments: { action: "list_reserved_ips", country: "GB" },
+      });
+      expect(deprecatedCountry.isError).toBe(true);
+      expect(toolResultText(deprecatedCountry)).toBe(
+        "error: use ip_country to filter reserved ips by country.",
+      );
+      expect(calls).toEqual([
+        ["list", { country: "GB", status: "active", limit: 5 }],
+        ["get", "203.0.113.10"],
       ]);
     } finally {
       await close();
