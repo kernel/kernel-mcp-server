@@ -4,6 +4,7 @@ import {
   type McpDependencies,
 } from "@/lib/mcp/dependencies";
 import { registerKernelPrompts } from "@/lib/mcp/prompts";
+import { registerSkills } from "@/lib/mcp/skills";
 import { registerAPIKeyCapabilities } from "@/lib/mcp/tools/api-keys";
 import { registerAppCapabilities } from "@/lib/mcp/tools/apps";
 import { registerAuthConnectionTools } from "@/lib/mcp/tools/auth-connections";
@@ -203,6 +204,7 @@ export function registerMcpCapabilities(
   const disabledToolsets = disabledMcpToolsetsFromEnv();
 
   registerKernelPrompts(server);
+  registerSkills(server);
   // Connection metadata remains available so clients can select the correct
   // project target even when other toolsets are disabled.
   registerConnectionContextTool(server);
