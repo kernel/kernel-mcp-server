@@ -575,9 +575,9 @@ export function registerBrowserCapabilities(
             )
             .optional(),
           video_memory: z
-            .enum(["2GiB", "4GiB"])
+            .enum(["3GiB", "6GiB"])
             .describe(
-              "(create) gpu video memory. requires gpu=true. 2 gib is the default; 4 gib uses the larger gpu shape and may be unavailable at capacity.",
+              "(create) gpu video memory. requires gpu=true. 3 gib (default) comes with 4 vcpu and 6 gib memory; 6 gib comes with 8 vcpu and 12 gib memory and may be unavailable at capacity.",
             )
             .optional(),
           memory: z

@@ -620,7 +620,7 @@ describe("manage_browsers proxy routes", () => {
 
   test.each([
     { memory: "16GiB" },
-    { video_memory: "4GiB" },
+    { video_memory: "6GiB" },
     { region: "us-west" },
   ])("rejects creation-only %p on update", async (extra) => {
     let updates = 0;
@@ -990,7 +990,7 @@ describe("manage_browsers location, memory, and conditional allowlists", () => {
         arguments: {
           action: "create",
           gpu: true,
-          video_memory: "4GiB",
+          video_memory: "6GiB",
         },
       });
       await client.callTool({
@@ -1019,7 +1019,7 @@ describe("manage_browsers location, memory, and conditional allowlists", () => {
             locale: "en-US",
           },
         },
-        { gpu: true, video_memory: "4GiB" },
+        { gpu: true, video_memory: "6GiB" },
       ]);
       expect(updates).toEqual([
         [

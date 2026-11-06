@@ -37,6 +37,7 @@ export interface SafeAuthConnection {
     | "DISCOVERING"
     | "AWAITING_INPUT"
     | "AWAITING_EXTERNAL_ACTION"
+    | "AWAITING_HUMAN_INTERVENTION"
     | "SUBMITTING"
     | "COMPLETED"
     | null;
