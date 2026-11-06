@@ -118,39 +118,7 @@ describe("manage_proxies", () => {
     }
   });
 
-  test("keeps the deprecated flat create fields working", async () => {
-    const creates: unknown[] = [];
-    const { client, close } = await connectTestMcp(
-      registerProxyTools,
-      proxyClient(creates),
-    );
-    try {
-      await client.callTool({
-        name: "manage_proxies",
-        arguments: { action: "create", type: "isp", country: "US" },
-      });
-      await client.callTool({
-        name: "manage_proxies",
-        arguments: {
-          action: "create",
-          type: "custom",
-          custom_host: "proxy.example.com",
-          custom_port: 8080,
-        },
-      });
-      expect(creates).toEqual([
-        { type: "isp", config: { country: "US" } },
-        {
-          type: "custom",
-          config: { host: "proxy.example.com", port: 8080 },
-        },
-      ]);
-    } finally {
-      await close();
-    }
-  });
-
-  test("rejects config mixed with deprecated fields or missing custom host and port", async () => {
+  test("rejects removed flat fields or missing custom host and port", async () => {
     const creates: unknown[] = [];
     const { client, close } = await connectTestMcp(
       registerProxyTools,
@@ -159,8 +127,16 @@ describe("manage_proxies", () => {
     try {
       const cases: Array<[Record<string, unknown>, string]> = [
         [
-          { type: "isp", config: { country: "US" }, country: "CA" },
-          "config cannot be combined with country",
+          { type: "isp", country: "US" },
+          "country was removed; use `config.country` instead.",
+        ],
+        [
+          {
+            type: "custom",
+            custom_host: "proxy.example.com",
+            custom_port: 8080,
+          },
+          "custom_host was removed; use `config.host` instead.",
         ],
         [
           { type: "custom", config: { host: "proxy.example.com" } },
