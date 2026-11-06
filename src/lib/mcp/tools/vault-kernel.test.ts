@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
-import { connectVaultTest, item } from "@/lib/mcp/tools/vaults.test-fixtures";
+import {
+  connectVaultTest,
+  item,
+  linkSpec,
+} from "@/lib/mcp/tools/vaults.test-fixtures";
 
 const actionURL = "https://vault.example/approve#token=private-capability";
 const wallet = {
@@ -813,6 +817,455 @@ describe("kernel-managed payment tools", () => {
       expect(JSON.stringify(result)).toContain("api code: invalid_wallet");
       expect(JSON.stringify(result)).toContain("failed: [redacted url]");
       expect(JSON.stringify(result)).not.toContain("the request was rejected");
+    } finally {
+      await fixture.close();
+    }
+  });
+});
+
+describe("kernel wallet payment methods", () => {
+  const captureToken = "private-capture-token";
+  const connected = {
+    ...wallet,
+    state: { provider: "kernel", status: "connected" },
+    action: undefined,
+    available_operations: [
+      { type: "add_payment_method", description: "Enroll a card." },
+      { type: "remove_payment_method", description: "Remove a card." },
+    ],
+  };
+  const pending = {
+    id: "pm_2",
+    provider: "kernel",
+    type: "card",
+    is_default: false,
+    status: "pending_enrollment",
+    display: {},
+    capabilities: {
+      single_use_card: { eligible: false, reasons: ["pending_enrollment"] },
+    },
+    action: {
+      name: "card_enrollment",
+      url: actionURL,
+      capture_token: captureToken,
+    },
+    expires_at: "2026-10-28T12:30:00Z",
+  };
+
+  async function callWallet(
+    replies: Response[],
+    args: Record<string, unknown>,
+  ) {
+    const fixture = await connectVaultTest(replies);
+    const result = await fixture.call("manage_vault_wallets", {
+      vault: "checkout",
+      key: "wallet-1",
+      ...args,
+    });
+    return { fixture, result };
+  }
+
+  test("discovery advertises payment-method actions and payment_request items", async () => {
+    const fixture = await connectVaultTest([]);
+    try {
+      const { tools } = await fixture.client.listTools();
+      const wallets = tools.find(({ name }) => name === "manage_vault_wallets");
+      const cards = tools.find(({ name }) => name === "manage_vault_cards");
+      expect(wallets?.inputSchema.properties?.action).toMatchObject({
+        enum: [
+          "create",
+          "payment_methods",
+          "add_payment_method",
+          "remove_payment_method",
+        ],
+      });
+      expect(wallets?.inputSchema.properties).toHaveProperty(
+        "payment_method_id",
+      );
+      for (const text of [
+        "may be connected with none",
+        "intended cardholder",
+        "explicit user confirmation",
+        "removal is not proof that a payment did not occur",
+        "403 insufficient_scope",
+      ])
+        expect(wallets?.description).toContain(text);
+      expect(cards?.inputSchema.properties?.item_type).toMatchObject({
+        enum: ["card", "payment_request"],
+      });
+      expect(cards?.description).toContain(
+        "agentcard purchases stay card items",
+      );
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("an empty connected wallet advertises adding a card", async () => {
+    const { fixture, result } = await callWallet([Response.json(connected)], {
+      action: "create",
+      provider: "kernel",
+      spec: {},
+    });
+    try {
+      const body = toolResultJSON(result);
+      expect(body.item.state.status).toBe("connected");
+      expect(body.item).not.toHaveProperty("action");
+      expect(body.hints.invocation).toEqual([
+        expect.objectContaining({
+          arguments: expect.objectContaining({
+            operation: "add_payment_method",
+          }),
+          requires_user_approval: true,
+        }),
+        expect.objectContaining({
+          arguments: expect.objectContaining({
+            operation: "remove_payment_method",
+          }),
+          required_inputs: ["payment_method_id"],
+        }),
+      ]);
+      expect(body.guidance.join(" ")).toContain(
+        "a connected KERNEL wallet may hold no cards",
+      );
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("add_payment_method returns the enrollment url without the capture token", async () => {
+    const { fixture, result } = await callWallet(
+      [
+        Response.json(connected),
+        Response.json({ type: "add_payment_method", payment_method: pending }),
+      ],
+      { action: "add_payment_method" },
+    );
+    try {
+      expect(result.isError).toBeUndefined();
+      expect(JSON.stringify(result)).not.toContain(captureToken);
+      const body = toolResultJSON(result);
+      expect(body.result).toEqual({
+        type: "add_payment_method",
+        payment_method: {
+          ...pending,
+          action: { name: "card_enrollment", url: actionURL },
+        },
+      });
+      expect(body.hints.observation).toEqual([
+        {
+          tool: "manage_vault_wallets",
+          arguments: {
+            project: "proj_test",
+            vault: "checkout",
+            key: "wallet-1",
+            action: "payment_methods",
+          },
+        },
+      ]);
+      expect(body.guidance).toContain("only to the intended cardholder");
+      expect(fixture.requests.map(({ method }) => method)).toEqual([
+        "GET",
+        "POST",
+      ]);
+      expect(fixture.requests[1]).toMatchObject({
+        path: "/vaults/checkout/items/wallet-1/operations",
+        body: { type: "add_payment_method" },
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("remove_payment_method forwards the selected id", async () => {
+    const removed = {
+      type: "remove_payment_method",
+      payment_method_id: "pm_2",
+      status: "removed",
+    };
+    const { fixture, result } = await callWallet(
+      [Response.json(connected), Response.json(removed)],
+      { action: "remove_payment_method", payment_method_id: "pm_2" },
+    );
+    try {
+      const body = toolResultJSON(result);
+      expect(body.result).toEqual(removed);
+      expect(body.guidance).toContain(
+        "removal is not proof that a payment did not occur",
+      );
+      expect(fixture.requests[1].body).toEqual({
+        type: "remove_payment_method",
+        payment_method_id: "pm_2",
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    { action: "remove_payment_method" },
+    { action: "add_payment_method", payment_method_id: "pm_2" },
+    { action: "payment_methods", payment_method_id: "pm_2" },
+  ])("requires payment_method_id only for removal: $action", async (args) => {
+    const { fixture, result } = await callWallet([], args);
+    try {
+      expect(result.isError).toBe(true);
+      expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    {
+      name: "unadvertised",
+      current: { ...connected, available_operations: [] },
+      expected: "vaults:write",
+    },
+    {
+      name: "link wallet",
+      current: { ...connected, spec: { provider: "link" } },
+      expected: "only for KERNEL wallets",
+    },
+  ])("does not submit for an $name item", async ({ current, expected }) => {
+    const { fixture, result } = await callWallet([Response.json(current)], {
+      action: "add_payment_method",
+    });
+    try {
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain(expected);
+      expect(fixture.requests).toHaveLength(1);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    { status: 403, code: "insufficient_scope" },
+    { status: 409, code: "purchase_unresolved" },
+    { status: 409, code: "provider_revocation_pending" },
+  ])("passes $status $code through from removal", async ({ status, code }) => {
+    const { fixture, result } = await callWallet(
+      [
+        Response.json(connected),
+        Response.json({ message: "refused", code }, { status }),
+      ],
+      { action: "remove_payment_method", payment_method_id: "pm_2" },
+    );
+    try {
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain(
+        `http status: ${status}. api code: ${code}. refused`,
+      );
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("lists payment-method lifecycle fields without capture tokens", async () => {
+    const expanded = {
+      ...connected,
+      expanded: {
+        payment_methods: [
+          {
+            ...pending,
+            id: "pm_1",
+            status: "recovery_required",
+            status_reason: "enrollment outcome unknown",
+            action: undefined,
+            expires_at: undefined,
+          },
+          pending,
+        ],
+      },
+    };
+    const { fixture, result } = await callWallet([Response.json(expanded)], {
+      action: "payment_methods",
+    });
+    try {
+      expect(JSON.stringify(result)).not.toContain(captureToken);
+      const [recovery, enrolling] =
+        toolResultJSON(result).item.expanded.payment_methods;
+      expect(recovery).toMatchObject({
+        status: "recovery_required",
+        status_reason: "enrollment outcome unknown",
+      });
+      expect(enrolling).toMatchObject({
+        status: "pending_enrollment",
+        expires_at: pending.expires_at,
+        action: { name: "card_enrollment", url: actionURL },
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+});
+
+describe("kernel payment requests", () => {
+  const paymentRequest = {
+    ...card,
+    type: "payment_request",
+    spec: { ...card.spec, payment_method_id: "pm_1" },
+    state: {
+      provider: "kernel",
+      status: "requested",
+      payment_method_id: "pm_1",
+      funding_status: "available",
+    },
+    action: undefined,
+  };
+
+  async function callCards(replies: Response[], args: Record<string, unknown>) {
+    const fixture = await connectVaultTest(replies);
+    const result = await fixture.call("manage_vault_cards", {
+      vault: "checkout",
+      key: "order-1",
+      ...args,
+    });
+    return { fixture, result };
+  }
+
+  test("a Kernel card forwards an explicitly selected payment method", async () => {
+    const spec = { ...card.spec, payment_method_id: "pm_1" };
+    const { fixture, result } = await callCard(
+      [Response.json({ ...card, spec })],
+      "create",
+      spec,
+    );
+    try {
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[0].body).toEqual({
+        type: "card",
+        spec: { ...spec, provider: "kernel" },
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("creates a Kernel payment_request with its payment method", async () => {
+    const { fixture, result } = await callCards(
+      [Response.json(paymentRequest)],
+      {
+        action: "create",
+        provider: "kernel",
+        item_type: "payment_request",
+        spec: paymentRequest.spec,
+      },
+    );
+    try {
+      const body = toolResultJSON(result);
+      expect(body.item.type).toBe("payment_request");
+      expect(body.item.state).toMatchObject({
+        payment_method_id: "pm_1",
+        funding_status: "available",
+      });
+      expect(body.guidance.join(" ")).toContain(
+        "funding_status unavailable means",
+      );
+      expect(fixture.requests[0]).toMatchObject({
+        method: "PUT",
+        body: { type: "payment_request", spec: paymentRequest.spec },
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    {
+      name: "a Kernel payment_request without a payment method",
+      args: { provider: "kernel", spec: card.spec },
+    },
+    {
+      name: "an AgentCard payment_request",
+      args: {
+        provider: "agentcard",
+        spec: {
+          wallet: "wallet-1",
+          merchant: "Shop",
+          amount: 1,
+          currency: "usd",
+        },
+      },
+    },
+  ])("rejects $name without sending a request", async ({ args }) => {
+    const { fixture, result } = await callCards([], {
+      action: "create",
+      item_type: "payment_request",
+      ...args,
+    });
+    try {
+      expect(result.isError).toBe(true);
+      expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("updates a Link payment_request with its item type", async () => {
+    const { fixture, result } = await callCards(
+      [Response.json({ ...item, type: "payment_request" })],
+      {
+        action: "update",
+        provider: "link",
+        item_type: "payment_request",
+        spec: linkSpec,
+      },
+    );
+    try {
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[0]).toMatchObject({
+        method: "PATCH",
+        body: {
+          type: "payment_request",
+          spec: { ...linkSpec, provider: "link" },
+        },
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("authorizes an advertised Kernel payment_request", async () => {
+    const { fixture, result } = await callCards(
+      [Response.json(paymentRequest), Response.json(card)],
+      { action: "authorize" },
+    );
+    try {
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[1].body).toEqual({ type: "authorize" });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("checks confirm_transaction against the payment_request purchase", async () => {
+    const fixture = await connectVaultTest([
+      Response.json({
+        ...paymentRequest,
+        state: { ...paymentRequest.state, status: "consumed" },
+        available_operations: [
+          { type: "confirm_transaction", description: "Report outcome." },
+        ],
+      }),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "invoke",
+        vault: "checkout",
+        key: "order-1",
+        operation: "confirm_transaction",
+        inputs: {
+          status: "APPROVED",
+          transaction_type: "PURCHASE",
+          amount: paymentRequest.spec.amount + 1,
+          currency: "USD",
+          occurred_at: "2026-10-28T12:00:00Z",
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(fixture.requests).toHaveLength(1);
     } finally {
       await fixture.close();
     }

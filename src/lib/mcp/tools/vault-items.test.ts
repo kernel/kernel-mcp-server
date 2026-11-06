@@ -1273,3 +1273,91 @@ describe("Link checkout authorize and fill", () => {
     }
   });
 });
+
+describe("KERNEL wallet payment-method operations", () => {
+  const wallet = {
+    ...item,
+    key: "wallet-1",
+    type: "wallet",
+    spec: { provider: "kernel" },
+    state: { provider: "kernel", status: "connected" },
+    available_operations: [
+      { type: "add_payment_method", description: "Enroll a card." },
+      { type: "remove_payment_method", description: "Remove a card." },
+    ],
+  };
+
+  test.each([
+    {
+      operation: "add_payment_method",
+      inputs: undefined,
+      response: {
+        type: "add_payment_method",
+        payment_method: {
+          id: "pm_2",
+          provider: "kernel",
+          type: "card",
+          is_default: false,
+          status: "pending_enrollment",
+          display: {},
+          capabilities: {},
+          action: {
+            name: "card_enrollment",
+            url: "https://vault.example/enroll",
+            capture_token: "private-capture-token",
+          },
+          expires_at: "2026-10-28T12:30:00Z",
+        },
+      },
+      guidance: "only to the intended cardholder",
+    },
+    {
+      operation: "remove_payment_method",
+      inputs: { payment_method_id: "pm_2" },
+      response: {
+        type: "remove_payment_method",
+        payment_method_id: "pm_2",
+        status: "removed",
+      },
+      guidance: "removal is not proof that a payment did not occur",
+    },
+  ])(
+    "invoke renders the $operation result",
+    async ({ operation, inputs, response, guidance }) => {
+      const fixture = await connectVaultTest([
+        Response.json(wallet),
+        Response.json(response),
+      ]);
+      try {
+        const result = await fixture.call("manage_vault_items", {
+          action: "invoke",
+          vault: "checkout",
+          key: "wallet-1",
+          operation,
+          ...(inputs && { inputs }),
+        });
+        expect(result.isError).toBeUndefined();
+        expect(JSON.stringify(result)).not.toContain("private-capture-token");
+        const body = toolResultJSON(result);
+        expect(body.result.type).toBe(operation);
+        if (operation === "add_payment_method")
+          expect(body.result.payment_method).toMatchObject({
+            id: "pm_2",
+            status: "pending_enrollment",
+            action: {
+              name: "card_enrollment",
+              url: "https://vault.example/enroll",
+            },
+          });
+        else expect(body.result).toEqual(response);
+        expect(body.guidance).toContain(guidance);
+        expect(fixture.requests[1].body).toEqual({
+          type: operation,
+          ...inputs,
+        });
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+});
