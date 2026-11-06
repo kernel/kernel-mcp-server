@@ -620,7 +620,7 @@ describe("manage_browsers proxy routes", () => {
 
   test.each([
     { memory: "16GiB" },
-    { video_memory: "4GiB" },
+    { video_memory: "6GiB" },
     { region: "us-west" },
   ])("rejects creation-only %p on update", async (extra) => {
     let updates = 0;
@@ -990,7 +990,7 @@ describe("manage_browsers location, memory, and conditional allowlists", () => {
         arguments: {
           action: "create",
           gpu: true,
-          video_memory: "4GiB",
+          video_memory: "6GiB",
         },
       });
       await client.callTool({
@@ -1019,7 +1019,7 @@ describe("manage_browsers location, memory, and conditional allowlists", () => {
             locale: "en-US",
           },
         },
-        { gpu: true, video_memory: "4GiB" },
+        { gpu: true, video_memory: "6GiB" },
       ]);
       expect(updates).toEqual([
         [
@@ -1034,6 +1034,53 @@ describe("manage_browsers location, memory, and conditional allowlists", () => {
             },
           },
         ],
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("upgrades deprecated video_memory values with a warning", async () => {
+    const creates: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (params: unknown) => {
+            creates.push(params);
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+
+    try {
+      const tool = (await client.listTools()).tools.find(
+        ({ name }) => name === "manage_browsers",
+      );
+      expect(tool?.inputSchema.properties?.video_memory).toMatchObject({
+        enum: ["3GiB", "6GiB"],
+      });
+
+      const warnings = [];
+      for (const video_memory of ["2GiB", "4GiB", "6GiB"]) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "create", gpu: true, video_memory },
+        });
+        expect(result.isError).toBeFalsy();
+        warnings.push(toolResultJSON(result).warning);
+      }
+
+      expect(creates).toEqual([
+        { gpu: true, video_memory: "3GiB" },
+        { gpu: true, video_memory: "6GiB" },
+        { gpu: true, video_memory: "6GiB" },
+      ]);
+      expect(warnings).toEqual([
+        'video_memory "2GiB" is deprecated and was created as "3GiB"; use "3GiB" instead.',
+        'video_memory "4GiB" is deprecated and was created as "6GiB"; use "6GiB" instead.',
+        undefined,
       ]);
     } finally {
       await close();

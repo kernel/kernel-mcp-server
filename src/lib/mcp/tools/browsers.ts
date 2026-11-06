@@ -54,6 +54,16 @@ type TelemetryEventsQuery = NonNullable<
   Parameters<KernelClient["browsers"]["telemetry"]["events"]>[1]
 >;
 
+// Deprecated API aliases. Still accepted from clients holding the previous
+// schema, but not advertised; create upgrades them and returns a warning.
+const VIDEO_MEMORY_FROM_LEGACY = { "2GiB": "3GiB", "4GiB": "6GiB" } as const;
+
+function isLegacyVideoMemory(
+  value: string,
+): value is keyof typeof VIDEO_MEMORY_FROM_LEGACY {
+  return Object.prototype.hasOwnProperty.call(VIDEO_MEMORY_FROM_LEGACY, value);
+}
+
 type TelemetryParams = {
   telemetry?: BrowserCreateParams["telemetry"];
   telemetry_enabled?: boolean;
@@ -575,9 +585,10 @@ export function registerBrowserCapabilities(
             )
             .optional(),
           video_memory: z
-            .enum(["2GiB", "4GiB"])
+            .enum(["3GiB", "6GiB", "2GiB", "4GiB"])
+            .meta({ enum: ["3GiB", "6GiB"] })
             .describe(
-              "(create) gpu video memory. requires gpu=true. 2 gib is the default; 4 gib uses the larger gpu shape and may be unavailable at capacity.",
+              "(create) gpu video memory. requires gpu=true. 3 gib (default) comes with 4 vcpu and 6 gib memory; 6 gib comes with 8 vcpu and 12 gib memory and may be unavailable at capacity.",
             )
             .optional(),
           memory: z
@@ -929,8 +940,16 @@ export function registerBrowserCapabilities(
             if (params.headless !== undefined)
               createParams.headless = params.headless;
             if (params.gpu !== undefined) createParams.gpu = params.gpu;
-            if (params.video_memory !== undefined)
-              createParams.video_memory = params.video_memory;
+            let videoMemoryWarning: string | undefined;
+            if (params.video_memory !== undefined) {
+              if (isLegacyVideoMemory(params.video_memory)) {
+                const current = VIDEO_MEMORY_FROM_LEGACY[params.video_memory];
+                createParams.video_memory = current;
+                videoMemoryWarning = `video_memory "${params.video_memory}" is deprecated and was created as "${current}"; use "${current}" instead.`;
+              } else {
+                createParams.video_memory = params.video_memory;
+              }
+            }
             if (params.memory !== undefined)
               createParams.memory = params.memory;
             if (params.stealth !== undefined)
@@ -1025,6 +1044,7 @@ export function registerBrowserCapabilities(
             );
             return jsonResponse({
               browser,
+              ...(videoMemoryWarning && { warning: videoMemoryWarning }),
               next_actions: browserSessionNextActions(browser.session_id),
               ...(sshPortForwarding && {
                 ssh_port_forwarding: sshPortForwarding,
