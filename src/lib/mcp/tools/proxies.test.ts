@@ -99,6 +99,41 @@ describe("manage_proxies", () => {
     }
   });
 
+  test("rejects a non-ipv4 ip_address in the schema", async () => {
+    const creates: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerProxyTools,
+      proxyClient(creates),
+    );
+    try {
+      const cases: Array<[Record<string, unknown>, string]> = [
+        [
+          { action: "move", id_or_name: "prx_1", ip_address: "2001:db8::1" },
+          "ip_address",
+        ],
+        [
+          {
+            action: "create",
+            type: "isp",
+            config: { ip_address: "not-an-ip" },
+          },
+          "config.ip_address",
+        ],
+      ];
+      for (const [args, field] of cases) {
+        const result = await client.callTool({
+          name: "manage_proxies",
+          arguments: args,
+        });
+        expect(result.isError).toBe(true);
+        expect(toolResultText(result)).toContain(field);
+      }
+      expect(creates).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
   test("names id_or_name when a proxy selector is missing", async () => {
     const { client, close } = await connectTestMcp(
       registerProxyTools,
@@ -395,7 +430,12 @@ describe("manage_proxies", () => {
     try {
       await client.callTool({
         name: "manage_proxies",
-        arguments: { action: "list_reserved_ips", status: "active", limit: 5 },
+        arguments: {
+          action: "list_reserved_ips",
+          ip_country: "GB",
+          status: "active",
+          limit: 5,
+        },
       });
       const got = await client.callTool({
         name: "manage_proxies",
@@ -415,7 +455,7 @@ describe("manage_proxies", () => {
         "error: ip_address is required for get_reserved_ip.",
       );
       expect(calls).toEqual([
-        ["list", { status: "active", limit: 5 }],
+        ["list", { country: "GB", status: "active", limit: 5 }],
         ["get", "203.0.113.10"],
       ]);
     } finally {

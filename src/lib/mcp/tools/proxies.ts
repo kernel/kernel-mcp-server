@@ -54,8 +54,7 @@ const proxyCreateConfigSchema = z.object({
     .describe("(residential) autonomous system number.")
     .optional(),
   ip_address: z
-    .string()
-    .min(1)
+    .ipv4()
     .describe(
       "(isp) reserved exit ip to pin the proxy to. only for organizations with reserved isp ips; country defaults to the ip's own.",
     )
@@ -166,16 +165,22 @@ export function registerProxyTools(
           )
           .optional(),
         ip_address: z
-          .string()
-          .min(1)
+          .ipv4()
           .describe(
-            "(list) isp proxies whose primary exit ip is this address. (move) reserved exit ip to move the isp proxy to; it must be active and in the proxy's country, and the proxy keeps its id. (get_reserved_ip) the reserved ip to look up. for create, use config.ip_address.",
+            "(list) isp proxies whose primary exit ip is this address. (move) reserved exit ip to move the isp proxy to; it must be active and in the proxy's country, and the proxy keeps its id. (get_reserved_ip) the reserved ip to look up; proxy_count spans the organization, while proxies lists only the current project's. for create, use config.ip_address.",
           )
           .optional(),
         status: z
           .enum(["active", "excluded"])
           .describe(
             "(list_reserved_ips) filter by whether the ip can currently be assigned. excluded ips cannot be pinned or moved to.",
+          )
+          .optional(),
+        ip_country: z
+          .string()
+          .min(1)
+          .describe(
+            '(list_reserved_ips) iso 3166 country code (e.g., "GB"). move only accepts an ip in the proxy\'s country.',
           )
           .optional(),
         config: proxyCreateConfigSchema
@@ -311,6 +316,7 @@ export function registerProxyTools(
           }
           case "list_reserved_ips": {
             const page = await client.proxyIPs.list({
+              ...(params.ip_country && { country: params.ip_country }),
               ...(params.status && { status: params.status }),
               ...(params.limit !== undefined && { limit: params.limit }),
               ...(params.offset !== undefined && { offset: params.offset }),
