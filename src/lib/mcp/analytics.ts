@@ -14,6 +14,7 @@ import {
   CLIENT_CAPABILITIES_META_KEY,
   CLIENT_INFO_META_KEY,
   type McpServer,
+  type ResourceTemplate,
 } from "@modelcontextprotocol/server";
 import { PostHog } from "posthog-node";
 import type {
@@ -402,6 +403,41 @@ function sanitizeIntent(intent: string) {
 }
 
 const ANALYTICS_CONTEXT_PROPERTY = "__mcp_connection_analytics_context";
+const RESOURCE_CATEGORY_PROPERTY = "__mcp_resource_category";
+
+export const UNREGISTERED_RESOURCE_NAME = "unregistered";
+
+type ResourceRegistry = {
+  _registeredResources?: Record<string, { name: string }>;
+  _registeredResourceTemplates?: Record<
+    string,
+    { resourceTemplate: ResourceTemplate }
+  >;
+};
+
+/**
+ * Names the registered resource a resources/read URI resolves to, matched the way
+ * McpServer's read handler matches it. The SDK reports the requested URI, which carries
+ * whatever the client put in it; the registered name is server-defined.
+ */
+function resourceReadCategory(server: McpServer, uri: unknown) {
+  if (typeof uri !== "string") return UNREGISTERED_RESOURCE_NAME;
+  let normalized: string;
+  try {
+    normalized = new URL(uri).toString();
+  } catch {
+    return UNREGISTERED_RESOURCE_NAME;
+  }
+  const registry = server as unknown as ResourceRegistry;
+  const resource = registry._registeredResources?.[normalized];
+  if (resource) return resource.name;
+  for (const [name, template] of Object.entries(
+    registry._registeredResourceTemplates ?? {},
+  )) {
+    if (template.resourceTemplate.uriTemplate.match(normalized)) return name;
+  }
+  return UNREGISTERED_RESOURCE_NAME;
+}
 
 // PostHog reads the `context` argument only for tools whose schema leaves it to the SDK.
 // Declaring `context` on a tool (the analytics-backed tools, manage_browsers) stops that
@@ -438,6 +474,14 @@ export const sanitizeMcpAnalyticsEvent: BeforeSendFn = (event) => {
       errorMessage.includes("Input validation error")
     ) {
       properties[PostHogMCPAnalyticsProperty.ErrorType] = "validation";
+    }
+  }
+  if (event.event === PostHogMCPAnalyticsEvent.ResourceRead) {
+    const category = properties[RESOURCE_CATEGORY_PROPERTY];
+    if (typeof category === "string") {
+      properties[PostHogMCPAnalyticsProperty.ResourceName] = category;
+    } else {
+      delete properties[PostHogMCPAnalyticsProperty.ResourceName];
     }
   }
 
@@ -1022,6 +1066,12 @@ export function instrumentMcpAnalytics(
       }
       const sessionKey = analyticsSessionKey(extra);
       if (sessionKey) properties[SESSION_KEY_PROPERTY] = sessionKey;
+      if (request.method === "resources/read") {
+        properties[RESOURCE_CATEGORY_PROPERTY] = resourceReadCategory(
+          server,
+          request.params?.uri,
+        );
+      }
       if (request.method === "tools/call") {
         const model = clientMetadataModel(request);
         if (model) {

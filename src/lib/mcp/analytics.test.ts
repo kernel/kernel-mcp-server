@@ -33,8 +33,10 @@ import {
   MCP_REMOVED_PARAMS_PROPERTY,
   OAUTH_TOKEN_EXCHANGE_EVENT,
   sanitizeMcpAnalyticsEvent,
+  UNREGISTERED_RESOURCE_NAME,
 } from "@/lib/mcp/analytics";
 import { connectTestMcp, toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
+import { MANAGED_AUTH_RESOURCE_URI } from "@/lib/mcp/tools/auth-login-app";
 import { KERNEL_FEEDBACK_TOOL_NAME } from "@/lib/mcp/tools/feedback";
 import { registerMcpCapabilities } from "@/lib/mcp/register";
 import { z } from "zod";
@@ -1935,5 +1937,162 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     expect(toolsList.properties.$groups).toBeUndefined();
     expect(toolsList.properties.$process_person_profile).toBe(false);
     expect(toolsList.distinctId).toStartWith("ses_");
+  });
+});
+
+describe("instrumentMcpAnalytics resource reads", () => {
+  const SESSION_ID = "ses_synthetic9f2c";
+  const PROFILE_NAME = "profile-synthetic-4d1e";
+  const APP_NAME = "app-synthetic-8b7a";
+  const MISSING_SESSION_ID = "ses_missing0c3d";
+  const TOKEN = "sk_synthetic_Zq8vN3pL5tR7wX2y";
+  const BASE = "kernel://orgs/org_test/projects/proj_test";
+
+  type CapturedEvent = {
+    event?: string;
+    properties: Record<string, unknown>;
+  };
+
+  async function connectInstrumented() {
+    const captured: CapturedEvent[] = [];
+    const kernelClient = {
+      browsers: {
+        retrieve: async (id: string) =>
+          id === SESSION_ID ? { session_id: id } : null,
+        list: async function* () {
+          yield { session_id: SESSION_ID };
+        },
+      },
+      profiles: {
+        retrieve: async (name: string) => ({ name }),
+      },
+      apps: {
+        list: async () => ({
+          getPaginatedItems: () => [{ app_name: APP_NAME }],
+        }),
+      },
+    };
+    const mcp = await connectTestMcp((server, dependencies) => {
+      instrumentMcpAnalytics(server, {
+        capture: (event: CapturedEvent) => captured.push(event),
+      } as unknown as PostHog);
+      registerMcpCapabilities(server, { mcpApps: true, dependencies });
+    }, kernelClient);
+    return { ...mcp, captured };
+  }
+
+  async function capturedEvents(captured: CapturedEvent[], name: string) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return captured.filter(({ event }) => event === name);
+  }
+
+  test("reports the registered resource name instead of the URI", async () => {
+    const { client, close, captured } = await connectInstrumented();
+    try {
+      for (const uri of [
+        `${BASE}/browsers/${SESSION_ID}`,
+        `${BASE}/browsers`,
+        `${BASE}/profiles/${PROFILE_NAME}`,
+        `${BASE}/apps/${APP_NAME}`,
+        MANAGED_AUTH_RESOURCE_URI,
+      ]) {
+        await client.readResource({ uri });
+      }
+
+      const reads = await capturedEvents(
+        captured,
+        PostHogMCPAnalyticsEvent.ResourceRead,
+      );
+      expect(
+        reads.map(
+          ({ properties }) =>
+            properties[PostHogMCPAnalyticsProperty.ResourceName],
+        ),
+      ).toEqual([
+        "browser",
+        "browsers",
+        "profile",
+        "app",
+        "kernel-managed-auth-login",
+      ]);
+      for (const { properties } of reads) {
+        expect(properties[PostHogMCPAnalyticsProperty.IsError]).toBe(false);
+        expect(typeof properties[PostHogMCPAnalyticsProperty.DurationMs]).toBe(
+          "number",
+        );
+      }
+      const serialized = JSON.stringify(reads);
+      for (const value of [
+        "kernel://",
+        "ui://",
+        "proj_test",
+        SESSION_ID,
+        PROFILE_NAME,
+        APP_NAME,
+      ]) {
+        expect(serialized).not.toContain(value);
+      }
+    } finally {
+      await close();
+    }
+  });
+
+  test("reports failed reads without the URI", async () => {
+    const { client, close, captured } = await connectInstrumented();
+    try {
+      for (const uri of [
+        `${BASE}/browsers/${MISSING_SESSION_ID}`,
+        `${BASE}/secrets/${TOKEN}`,
+        `https://${TOKEN}@files.example.test/${TOKEN}?key=${TOKEN}`,
+      ]) {
+        await expect(client.readResource({ uri })).rejects.toThrow();
+      }
+
+      const reads = await capturedEvents(
+        captured,
+        PostHogMCPAnalyticsEvent.ResourceRead,
+      );
+      expect(
+        reads.map(({ properties }) => [
+          properties[PostHogMCPAnalyticsProperty.ResourceName],
+          properties[PostHogMCPAnalyticsProperty.IsError],
+        ]),
+      ).toEqual([
+        ["browser", true],
+        [UNREGISTERED_RESOURCE_NAME, true],
+        [UNREGISTERED_RESOURCE_NAME, true],
+      ]);
+      const serialized = JSON.stringify(captured);
+      for (const value of ["kernel://", MISSING_SESSION_ID, TOKEN]) {
+        expect(serialized).not.toContain(value);
+      }
+    } finally {
+      await close();
+    }
+  });
+
+  test("leaves tool call names unchanged", async () => {
+    const { client, close, captured } = await connectInstrumented();
+    try {
+      await client.callTool({
+        name: "get_connection_context",
+        arguments: { context: "Checking tool analytics next to resources." },
+      });
+
+      const [toolCall] = await capturedEvents(
+        captured,
+        PostHogMCPAnalyticsEvent.ToolCall,
+      );
+      expect(toolCall.properties).toMatchObject({
+        [PostHogMCPAnalyticsProperty.ToolName]: "get_connection_context",
+        [PostHogMCPAnalyticsProperty.ResourceName]: "get_connection_context",
+        [PostHogMCPAnalyticsProperty.IsError]: false,
+      });
+      expect(
+        typeof toolCall.properties[PostHogMCPAnalyticsProperty.DurationMs],
+      ).toBe("number");
+    } finally {
+      await close();
+    }
   });
 });
