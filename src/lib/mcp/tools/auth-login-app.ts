@@ -22,6 +22,7 @@ import { errorResponse } from "@/lib/mcp/responses";
 import {
   DEPRECATED_TOOL_PARAMS,
   deprecatedParamConflict,
+  objectRejectingRemovedParams,
 } from "@/lib/mcp/deprecated-params";
 import { proxyConfigSchema } from "@/lib/mcp/proxy-config";
 import {
@@ -57,8 +58,10 @@ export function managedAuthResourceMeta() {
   };
 }
 
-const authLoginInputSchema = () =>
-  z.object({
+const authLoginInputSchema = (
+  toolName: "open_auth_login" | "begin_auth_login",
+) =>
+  objectRejectingRemovedParams(toolName)({
     ...projectSelectionInputSchema(),
     mode: z.enum(["new_login", "reauth"]),
     connection_id: z.string().min(1).optional(),
@@ -95,7 +98,7 @@ const authLoginInputSchema = () =>
           .optional(),
       })
       .describe(
-        "browser settings for this managed-auth flow. they become the connection defaults for a new login or override them for this reauth. cannot be combined with browser_telemetry, region, proxy_id, or proxy_name.",
+        "browser settings for this managed-auth flow. they become the connection defaults for a new login or override them for this reauth. cannot be combined with browser_telemetry or region.",
       )
       .optional(),
     browser_telemetry: managedAuthBrowserTelemetrySchema
@@ -108,16 +111,6 @@ const authLoginInputSchema = () =>
       .describe(
         "deprecated: use `browser.region` instead. region for the managed-auth browser session. sets the connection default for a new login or overrides it for this reauth.",
       )
-      .optional(),
-    proxy_id: z
-      .string()
-      .min(1)
-      .describe("deprecated: use `browser.proxy.id` instead.")
-      .optional(),
-    proxy_name: z
-      .string()
-      .min(1)
-      .describe("deprecated: use `browser.proxy.name` instead.")
       .optional(),
   });
 
@@ -154,14 +147,7 @@ function inputFromParams(params: AuthLoginParams): AuthLoginInput {
   const telemetry = browser ? browser.telemetry : params.browser_telemetry;
   const region = browser ? browser.region : params.region;
   const stealth = browser?.stealth;
-  const proxy = browser
-    ? browser.proxy
-    : params.proxy_id || params.proxy_name
-      ? {
-          ...(params.proxy_id && { id: params.proxy_id }),
-          ...(params.proxy_name && { name: params.proxy_name }),
-        }
-      : undefined;
+  const proxy = browser?.proxy;
   return {
     mode: params.mode,
     ...(params.connection_id && { connection_id: params.connection_id }),
@@ -209,7 +195,7 @@ export function registerAuthLoginApp(server: McpServer) {
       title: "open secure managed-auth login",
       description:
         'open KERNEL\'s secure interactive login panel so the user can enter credentials and mfa without exposing them to the conversation. use this when a user directly asks to log in/sign in, or after a protected browser task discovers authentication is needed and the user consents. a direct request to log in is already consent; do not ask again. first list manage_auth_connections for the exact domain across all pages. reuse an authenticated connection, ask the user to choose only when multiple relevant accounts exist, or call this tool with mode="reauth" and connection_id for an existing connection that needs authentication. if none exists, call with mode="new_login", domain, and a concise stable profile_name derived from the service (for example "hacker-news") unless the user supplied one; do not ask solely for a profile name. replay recording and default operational browser telemetry are enabled unless explicitly disabled with record_session=false or browser_telemetry={enabled:false}. this launcher never creates or starts a flow—the app does that only after the user clicks continue. immediately follow the returned next_action, repeat its read-only wait while pending, then resume the original task using the authenticated profile_name. never ask for passwords, credentials, otps, or mfa values in chat.',
-      inputSchema: authLoginInputSchema(),
+      inputSchema: authLoginInputSchema("open_auth_login"),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -298,7 +284,7 @@ export function registerAuthLoginApp(server: McpServer) {
       title: "begin secure managed authentication (app-only)",
       description:
         "start or resume the secure managed-auth flow after the app user clicks continue.",
-      inputSchema: authLoginInputSchema(),
+      inputSchema: authLoginInputSchema("begin_auth_login"),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,

@@ -1,6 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { NotFoundError, type Kernel } from "@onkernel/sdk";
-import type { BrowserNetworkConfig } from "@onkernel/sdk/resources/browsers/browsers";
 import { z } from "zod";
 import {
   browserExtensionsSchema,
@@ -27,7 +26,11 @@ import {
 import { paginationParams } from "@/lib/mcp/schemas";
 import { MCP_INTENT_ARGUMENT_DESCRIPTION } from "@/lib/mcp/analytics-context";
 import { browserVaultsSchema } from "@/lib/mcp/vault-schemas";
-import { deprecatedParamConflict } from "@/lib/mcp/deprecated-params";
+import {
+  DEPRECATED_TOOL_PARAMS,
+  deprecatedParamConflict,
+  removedParamMessage,
+} from "@/lib/mcp/deprecated-params";
 import {
   allowedHostsDescription,
   allowedHostsSchema,
@@ -449,7 +452,8 @@ function unknownBrowserKeyMessage(issue: z.core.$ZodRawIssue) {
     .map((key) =>
       key === "vault"
         ? 'unknown key "vault": did you mean "vaults" (array of { id } or { name })?'
-        : `unknown key ${JSON.stringify(key)} in manage_browsers arguments`,
+        : (removedParamMessage("manage_browsers", key) ??
+          `unknown key ${JSON.stringify(key)} in manage_browsers arguments`),
     )
     .join("; ");
 }
@@ -638,7 +642,7 @@ export function registerBrowserCapabilities(
             .optional(),
           proxy: proxyConfigSchema()
             .describe(
-              "(create, update) proxy egress, set with exactly one of id, name, or mode. id or name selects that proxy. mode direct forces direct egress; mode default restores the browser's default egress. on create, omit for the browser default; on update, omit to leave unchanged. cannot be combined with proxy_id, clear_proxy, or disable_default_proxy.",
+              "(create, update) proxy egress, set with exactly one of id, name, or mode. id or name selects that proxy. mode direct forces direct egress; mode default restores the browser's default egress. on create, omit for the browser default; on update, omit to leave unchanged. cannot be combined with proxy_id or disable_default_proxy.",
             )
             .optional(),
           proxy_id: z
@@ -678,26 +682,7 @@ export function registerBrowserCapabilities(
                 .optional(),
             })
             .describe(
-              "(create, update) network settings for the browser session. update can only change allowed_hosts. cannot be combined with proxy_routes.",
-            )
-            .optional(),
-          proxy_routes: z
-            .array(
-              z.object({
-                hosts: z.array(z.string().min(1)).min(1).max(50),
-                proxy_id: z.string().min(1).optional(),
-                proxy_name: z.string().min(1).optional(),
-              }),
-            )
-            .max(10)
-            .describe(
-              "deprecated: use `network.proxy_routes` instead. (create only) the same routes, with each proxy selected by exactly one of proxy_id or proxy_name.",
-            )
-            .optional(),
-          clear_proxy: z
-            .boolean()
-            .describe(
-              "deprecated: use `proxy.mode` default instead. (update) remove the current proxy from the browser session.",
+              "(create, update) network settings for the browser session. update can only change allowed_hosts.",
             )
             .optional(),
           disable_default_proxy: z
@@ -895,8 +880,7 @@ export function registerBrowserCapabilities(
         }
         if (
           params.action !== "create" &&
-          (params.proxy_routes !== undefined ||
-            params.network?.proxy_routes !== undefined ||
+          (params.network?.proxy_routes !== undefined ||
             params.network?.private_hosts !== undefined)
         ) {
           return errorResponse(
@@ -906,17 +890,15 @@ export function registerBrowserCapabilities(
         if (params.proxy !== undefined) {
           const error =
             proxyConfigError("proxy", params.proxy) ??
-            deprecatedParamConflict("proxy", params, [
-              "proxy_id",
-              "clear_proxy",
-              "disable_default_proxy",
-            ]);
+            deprecatedParamConflict(
+              "proxy",
+              params,
+              DEPRECATED_TOOL_PARAMS.manage_browsers,
+            );
           if (error) return errorResponse(`error: ${error}`);
         }
         if (params.network !== undefined) {
-          const error =
-            deprecatedParamConflict("network", params, ["proxy_routes"]) ??
-            proxyRoutesError(params.network.proxy_routes);
+          const error = proxyRoutesError(params.network.proxy_routes);
           if (error) return errorResponse(`error: ${error}`);
           const hasRevision =
             params.network.expected_allowlist_revision !== undefined;
@@ -997,28 +979,6 @@ export function registerBrowserCapabilities(
                   ? network
                   : { ...network, allowed_hosts };
             }
-            if (params.proxy_routes !== undefined) {
-              const proxyRoutes: Array<BrowserNetworkConfig.ProxyRoute> = [];
-              for (const {
-                hosts,
-                proxy_id,
-                proxy_name,
-              } of params.proxy_routes) {
-                if (Boolean(proxy_id) === Boolean(proxy_name)) {
-                  return errorResponse(
-                    "error: each proxy route requires exactly one of proxy_id or proxy_name.",
-                  );
-                }
-                proxyRoutes.push({
-                  hosts,
-                  proxy: proxy_id ? { id: proxy_id } : { name: proxy_name },
-                });
-              }
-              createParams.network = {
-                ...createParams.network,
-                proxy_routes: proxyRoutes,
-              };
-            }
             if (params.name !== undefined) createParams.name = params.name;
             if (params.tags !== undefined) createParams.tags = params.tags;
             const browserConfig = buildBrowserCreateConfig(params);
@@ -1065,20 +1025,12 @@ export function registerBrowserCapabilities(
                 "error: memory, video_memory, and region are creation-only.",
               );
             }
-            if (params.proxy_id && params.clear_proxy) {
-              return errorResponse(
-                "error: cannot specify both proxy_id and clear_proxy.",
-              );
-            }
-
             const updateParams: BrowserUpdateParams = {};
             if (params.proxy !== undefined) updateParams.proxy = params.proxy;
             if (params.disable_default_proxy !== undefined) {
               updateParams.disable_default_proxy = params.disable_default_proxy;
             }
-            if (params.clear_proxy) {
-              updateParams.proxy_id = "";
-            } else if (params.proxy_id !== undefined) {
+            if (params.proxy_id !== undefined) {
               updateParams.proxy_id = params.proxy_id;
             }
             if (

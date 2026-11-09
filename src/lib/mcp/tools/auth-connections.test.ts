@@ -45,8 +45,8 @@ describe("manage_auth_connections programmatic surface", () => {
     expect(schema?.record_session).toBeDefined();
     expect(schema?.skill_mode.safeParse("disabled").success).toBe(true);
     expect(schema?.flow_checkpoint).toBeDefined();
-    expect(schema?.proxy_id.safeParse("").success).toBe(false);
-    expect(schema?.proxy_name.safeParse("").success).toBe(false);
+    expect(schema?.proxy_id).toBeUndefined();
+    expect(schema?.proxy_name).toBeUndefined();
     expect(schema?.proxy_mode.safeParse("direct").success).toBe(true);
     expect(schema?.browser_telemetry.safeParse({ enabled: true }).success).toBe(
       true,
@@ -303,9 +303,9 @@ describe("manage_auth_connections programmatic surface", () => {
           action: "login",
           id: "conn_1",
           browser: { region: "eu-west" },
-          proxy_name: "residential",
+          proxy_mode: "direct",
         },
-        "browser cannot be combined with proxy_name",
+        "browser cannot be combined with proxy_mode",
       ],
       [
         {
@@ -758,15 +758,6 @@ describe("manage_auth_connections programmatic surface", () => {
       [{ action: "login" }, "id is required for login"],
       [{ action: "timeline" }, "id is required for timeline"],
       [{ action: "submit", id: "conn_1" }, "submit requires at least one of"],
-      [
-        {
-          action: "login",
-          id: "conn_1",
-          proxy_id: "proxy_1",
-          proxy_mode: "direct",
-        },
-        "exactly one of proxy_id, proxy_name, or proxy_mode",
-      ],
     ];
     for (const [params, message] of cases) {
       const result = await handler(params, extra);

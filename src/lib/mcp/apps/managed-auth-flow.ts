@@ -149,8 +149,6 @@ export function sanitizeBeginArguments(input: JsonObject): JsonObject {
     "browser",
     "browser_telemetry",
     "region",
-    "proxy_id",
-    "proxy_name",
   ];
   return Object.fromEntries(
     allowed
