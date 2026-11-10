@@ -404,6 +404,7 @@ function sanitizeIntent(intent: string) {
 
 const ANALYTICS_CONTEXT_PROPERTY = "__mcp_connection_analytics_context";
 const RESOURCE_CATEGORY_PROPERTY = "__mcp_resource_category";
+const UNREGISTERED_TOOL_PROPERTY = "__mcp_unregistered_tool";
 
 export const UNREGISTERED_RESOURCE_NAME = "unregistered";
 
@@ -459,6 +460,13 @@ export const sanitizeMcpAnalyticsEvent: BeforeSendFn = (event) => {
 
   const properties = event.properties;
   if (!properties) return event;
+  // The SDK names a call to an unregistered tool after whatever the client sent.
+  if (
+    event.event === PostHogMCPAnalyticsEvent.ToolCall &&
+    properties[UNREGISTERED_TOOL_PROPERTY] === true
+  ) {
+    return null;
+  }
   enrichMcpAnalyticsEvent(event);
   applyDerivedSession(event);
   if (event.event === PostHogMCPAnalyticsEvent.ToolCall) {
@@ -1073,6 +1081,17 @@ export function instrumentMcpAnalytics(
         );
       }
       if (request.method === "tools/call") {
+        const { _registeredTools: registeredTools } = server as unknown as {
+          _registeredTools: Record<string, unknown>;
+        };
+        if (
+          !Object.prototype.hasOwnProperty.call(
+            registeredTools,
+            String(request.params?.name),
+          )
+        ) {
+          properties[UNREGISTERED_TOOL_PROPERTY] = true;
+        }
         const model = clientMetadataModel(request);
         if (model) {
           properties[PostHogMCPAnalyticsProperty.LlmModel] = model;

@@ -1940,7 +1940,7 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
   });
 });
 
-describe("instrumentMcpAnalytics resource reads", () => {
+describe("instrumentMcpAnalytics client-named targets", () => {
   const SESSION_ID = "ses_synthetic9f2c";
   const PROFILE_NAME = "profile-synthetic-4d1e";
   const APP_NAME = "app-synthetic-8b7a";
@@ -2066,6 +2066,27 @@ describe("instrumentMcpAnalytics resource reads", () => {
       for (const value of ["kernel://", MISSING_SESSION_ID, TOKEN]) {
         expect(serialized).not.toContain(value);
       }
+    } finally {
+      await close();
+    }
+  });
+
+  test("drops calls to unregistered tools", async () => {
+    const { client, close, captured } = await connectInstrumented();
+    try {
+      for (const name of [TOKEN, "constructor"]) {
+        await client
+          .callTool({ name, arguments: { context: "Calling a tool." } })
+          .catch(() => undefined);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(
+        captured.filter(
+          ({ event }) => event === PostHogMCPAnalyticsEvent.ToolCall,
+        ),
+      ).toEqual([]);
+      expect(JSON.stringify(captured)).not.toContain(TOKEN);
     } finally {
       await close();
     }
