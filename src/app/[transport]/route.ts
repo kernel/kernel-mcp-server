@@ -1,8 +1,9 @@
 import { MCP_SESSION_HEADER } from "@posthog/mcp";
 import {
   createMcpHandler,
-  experimental_withMcpAuth as withMcpAuth,
-} from "mcp-handler";
+  isLegacyRequest,
+  McpServer,
+} from "@modelcontextprotocol/server";
 import { verifyToken } from "@clerk/nextjs/server";
 import { after, NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
@@ -15,10 +16,7 @@ import {
   NativeCredentialRejected,
   NativeScopeRejected,
 } from "@/lib/native-oauth";
-import {
-  OAUTH_RESOURCE_METADATA_PATH,
-  oauthResourceMetadataUrl,
-} from "@/lib/oauth-discovery";
+import { oauthResourceMetadataUrl } from "@/lib/oauth-discovery";
 import {
   captureMcpConnectionScopeFailure,
   flushMcpAnalytics,
@@ -36,8 +34,12 @@ import {
   createMcpTransportSession,
   verifyMcpTransportSession,
 } from "@/lib/mcp-transport-session";
-import { registerMcpCapabilities } from "@/lib/mcp/register";
-import { resolveMcpVaultAccess } from "@/lib/mcp/entitlements";
+import { MCP_SERVER_INSTRUCTIONS } from "@/lib/mcp/instructions";
+import {
+  mcpToolsetEnabledByConfig,
+  registerMcpCapabilities,
+} from "@/lib/mcp/register";
+import { resolveMcpEntitlements } from "@/lib/mcp/entitlements";
 import { name, version } from "../../../server.json";
 
 export async function OPTIONS(_req: NextRequest): Promise<Response> {
@@ -46,11 +48,21 @@ export async function OPTIONS(_req: NextRequest): Promise<Response> {
     headers: {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": `Content-Type, Authorization, ${MCP_SESSION_HEADER}`,
-      "Access-Control-Expose-Headers": MCP_SESSION_HEADER,
+      "Access-Control-Allow-Headers": `Content-Type, Authorization, Accept, MCP-Protocol-Version, Mcp-Method, Mcp-Name, ${MCP_SESSION_HEADER}`,
+      "Access-Control-Expose-Headers": `${MCP_SESSION_HEADER}, WWW-Authenticate`,
     },
   });
 }
+
+const ENTITLEMENT_GATED_TOOLS = new Set([
+  "web_search",
+  "manage_vaults",
+  "manage_vault_wallets",
+  "manage_vault_cards",
+  "manage_vault_credentials",
+  "manage_vault_items",
+  "manage_vault_provider_configs",
+]);
 
 const CORS_HEADERS = {
   "Content-Type": "application/json",
@@ -58,6 +70,50 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
 };
+
+async function requestRequiresMcpEntitlements(req: Request): Promise<boolean> {
+  if (req.method !== "POST") return false;
+  const payload = (await req
+    .clone()
+    .json()
+    .catch(() => null)) as {
+    method?: unknown;
+    params?: { name?: unknown };
+  } | null;
+  if (payload?.method === "tools/list") return true;
+  return (
+    payload?.method === "tools/call" &&
+    typeof payload.params?.name === "string" &&
+    ENTITLEMENT_GATED_TOOLS.has(payload.params.name)
+  );
+}
+
+// Transport route credentials must arrive in the Authorization header. Query
+// strings are recorded verbatim in platform request logs, so a credential sent
+// as ?api_key= or ?token= lands in log drains in cleartext. Reject these
+// requests before authentication so clients migrate to the header.
+const CREDENTIAL_QUERY_PARAMS = new Set([
+  "api_key",
+  "apikey",
+  "api-key",
+  "token",
+  "access_token",
+]);
+
+function credentialInQueryString(req: Request): string | null {
+  for (const name of new URL(req.url).searchParams.keys()) {
+    if (CREDENTIAL_QUERY_PARAMS.has(name.toLowerCase())) return name;
+  }
+  return null;
+}
+
+function credentialQueryErrorResponse(name: string): Response {
+  return errorResponse(
+    400,
+    "credentials_in_query_string",
+    `Found "${name}" in the URL query string. Query strings are recorded in request logs, so credentials must be sent in the Authorization header (Authorization: Bearer <token>) instead. The query parameter was rejected and never used.`,
+  );
+}
 
 function errorResponse(
   status: number,
@@ -119,23 +175,19 @@ export function connectionScopeFailureResponse(
   );
 }
 
-// Handler variants keep per-connection capabilities out of tools/list unless
-// the authenticated connection can use them.
-const serverInfo = { serverInfo: { name, version } };
-function createHandler({
-  mcpApps = false,
-  vaults = false,
-}: { mcpApps?: boolean; vaults?: boolean } = {}) {
-  return createMcpHandler((server) => {
-    instrumentMcpAnalytics(server);
-    registerMcpCapabilities(server, { mcpApps, vaults });
-  }, serverInfo);
-}
-
-const handler = createHandler();
-const mcpAppsHandler = createHandler({ mcpApps: true });
-const vaultsHandler = createHandler({ vaults: true });
-const vaultsMcpAppsHandler = createHandler({ mcpApps: true, vaults: true });
+const handler = createMcpHandler(({ authInfo }) => {
+  const server = new McpServer(
+    { name, version },
+    { instructions: MCP_SERVER_INSTRUCTIONS },
+  );
+  instrumentMcpAnalytics(server);
+  registerMcpCapabilities(server, {
+    mcpApps: authInfo?.extra?.mcpApps === true,
+    vaults: authInfo?.extra?.vaults === true,
+    search: authInfo?.extra?.search === true,
+  });
+  return server;
+});
 
 type AuthInfoExtra = {
   userId: string | null;
@@ -187,33 +239,41 @@ async function handleMcpRequestWithIdentity({
     }
     return connectionScopeFailureResponse(req, connection);
   }
-  // Recheck with the current credential on every request, including tools/call.
-  const vaults = await resolveMcpVaultAccess({ token, signal: req.signal });
+  // Resolve entitlements only for tool discovery and gated tool calls.
+  const entitlements = (await requestRequiresMcpEntitlements(req))
+    ? await resolveMcpEntitlements({
+        token,
+        signal: req.signal,
+        cacheIdentity: [
+          authSubject,
+          connection.context.authContext.organization.id,
+          transportSessionId ?? "stateless",
+          token,
+        ].join("\0"),
+      })
+    : { vaults: false, search: false };
+  const { vaults } = entitlements;
+  const search = mcpToolsetEnabledByConfig("search") && entitlements.search;
   const connectionContext = connection.context;
   const connectionAnalytics =
     observeConnection && isMcpAnalyticsEnabled()
       ? connectionAnalyticsFromContext(connectionContext)
       : null;
-  const baseHandler = vaults ? vaultsHandler : handler;
-  const appsHandler = vaults ? vaultsMcpAppsHandler : mcpAppsHandler;
-  const authHandler = withMcpAuth(
-    mcpApps ? appsHandler : baseHandler,
-    async () => ({
+  return handler.fetch(req, {
+    authInfo: {
       token,
       scopes,
       clientId: "mcp-server",
       extra: {
         ...authInfoExtra,
+        mcpApps,
+        vaults,
+        search,
         connectionContext,
         connectionAnalytics,
       },
-    }),
-    {
-      required: true,
-      resourceMetadataPath: OAUTH_RESOURCE_METADATA_PATH,
     },
-  );
-  return await authHandler(req);
+  });
 }
 
 async function handleAuthenticatedRequest(
@@ -358,13 +418,37 @@ async function handleAuthenticatedRequest(
   });
 }
 
+function withCors(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set("Access-Control-Allow-Origin", "*");
+  headers.set(
+    "Access-Control-Expose-Headers",
+    `${MCP_SESSION_HEADER}, WWW-Authenticate`,
+  );
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 export async function GET(req: NextRequest): Promise<Response> {
   after(flushMcpAnalytics);
-  return await handleAuthenticatedRequest(req);
+  const credentialParam = credentialInQueryString(req);
+  if (credentialParam) return credentialQueryErrorResponse(credentialParam);
+  return withCors(await handleAuthenticatedRequest(req));
 }
 
 export async function POST(req: NextRequest): Promise<Response> {
   after(flushMcpAnalytics);
+
+  const credentialParam = credentialInQueryString(req);
+  if (credentialParam) return credentialQueryErrorResponse(credentialParam);
+
+  // Modern requests carry capabilities per call and must never acquire a session.
+  if (!(await isLegacyRequest(req))) {
+    return withCors(await handleAuthenticatedRequest(req));
+  }
 
   const body = await req.text();
   type InitializeRequest = {
@@ -411,15 +495,16 @@ export async function POST(req: NextRequest): Promise<Response> {
     isInitialize,
   );
 
-  if (!session) return response;
+  if (!session) return withCors(response);
   const headers = new Headers(response.headers);
   if (isStreamableInitialize || headers.has(MCP_SESSION_HEADER)) {
     headers.set(MCP_SESSION_HEADER, session.token);
   }
-  headers.set("Access-Control-Expose-Headers", MCP_SESSION_HEADER);
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  });
+  return withCors(
+    new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    }),
+  );
 }

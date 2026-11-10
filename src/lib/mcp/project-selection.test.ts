@@ -1,4 +1,4 @@
-import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
+import type { AuthInfo } from "@modelcontextprotocol/server";
 import { describe, expect, test } from "bun:test";
 import type {
   ConnectionScope,
@@ -148,7 +148,7 @@ describe("projectIDForOperation", () => {
       scopes: [],
     };
     expect(() => connectionContextFromAuthInfo(info)).toThrow(
-      "Kernel connection scope is unavailable",
+      "KERNEL connection scope is unavailable",
     );
   });
 });

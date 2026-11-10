@@ -11,6 +11,7 @@ import * as nativeOAuth from "@/lib/native-oauth";
 import { Kernel } from "@onkernel/sdk";
 import type { McpConnectionScopeFailureAnalytics } from "@/lib/mcp/analytics";
 import { defaultMcpDependencies } from "@/lib/mcp/dependencies";
+import { clearMcpEntitlementsCacheForTests } from "@/lib/mcp/entitlements";
 import { oauthResourceMetadata } from "@/lib/oauth-discovery";
 
 process.env.CLERK_SECRET_KEY ??= "test-clerk-secret";
@@ -76,6 +77,7 @@ function failingAuthContext(error: unknown) {
 
 beforeEach(() => {
   captured.length = 0;
+  clearMcpEntitlementsCacheForTests();
 });
 
 afterEach(() => {
@@ -217,11 +219,42 @@ describe("unauthenticated discovery", () => {
         expect(metadataUrl).toBe(
           `${publicOrigin}/.well-known/oauth-protected-resource/mcp`,
         );
-        const metadata = oauthResourceMetadata(new Request(metadataUrl!), {});
+        const metadata = oauthResourceMetadata(new Request(metadataUrl!));
         expect(metadata.resource).toBe(`${publicOrigin}/mcp`);
       },
     );
   }
+});
+
+describe("credentials in the query string", () => {
+  for (const method of ["GET", "POST"]) {
+    for (const param of ["api_key", "token"]) {
+      test(`${method} rejects a credential passed as ?${param}=`, async () => {
+        const req = new nextServer.NextRequest(
+          `https://mcp.example.test/mcp?${param}=sk_leaked_key`,
+          { method, headers: { Authorization: "Bearer sk_leaked_key" } },
+        );
+        const response = await (method === "GET" ? GET : POST)(req);
+        expect(response.status).toBe(400);
+        const body = (await response.json()) as {
+          error: string;
+          error_description: string;
+        };
+        expect(body.error).toBe("credentials_in_query_string");
+        expect(body.error_description).toContain("Authorization header");
+        expect(body.error_description).not.toContain("sk_leaked_key");
+      });
+    }
+  }
+
+  test("ignores non-credential query params", async () => {
+    const req = new nextServer.NextRequest(
+      "https://mcp.example.test/mcp?foo=bar",
+      { method: "GET" },
+    );
+    const response = await GET(req);
+    expect(response.status).toBe(401);
+  });
 });
 
 describe("connection scope failures through the handler", () => {
@@ -290,7 +323,7 @@ describe("connection scope failures through the handler", () => {
   });
 });
 
-describe("vault entitlement routing", () => {
+describe("capability routing", () => {
   function installKernelResponses(entitlements: (token: string) => Response) {
     const paths: string[] = [];
     defaultMcpDependencies.createKernelClient = (token) =>
@@ -316,6 +349,11 @@ describe("vault entitlement routing", () => {
               },
             });
           if (path === "/org/entitlements") return entitlements(token);
+          if (path === "/search/providers") return Response.json([]);
+          if (path === "/vaults")
+            return Response.json([], {
+              headers: { "x-has-more": "false", "x-next-offset": "0" },
+            });
           throw new Error(`Unexpected API request: ${path}`);
         },
       });
@@ -340,13 +378,23 @@ describe("vault entitlement routing", () => {
     return JSON.parse(event ? event.slice(6) : text);
   }
 
-  test("selects tools per credential and rechecks access after revocation", async () => {
+  test("caches entitlement-gated tools per credential and MCP connection", async () => {
     let enabled = true;
     const paths = installKernelResponses((token) =>
       Response.json({
-        features: { vaults: { enabled: token === "sk_allowed" && enabled } },
+        features: {
+          vaults: { enabled: token === "sk_allowed" && enabled },
+          search: { enabled: false },
+        },
       }),
     );
+    const unrelated = await call("tools/call", "sk_allowed", {
+      name: "get_connection_context",
+      arguments: {},
+    });
+    expect(unrelated.result.isError).not.toBe(true);
+    expect(paths).toEqual(["/auth/context"]);
+
     const allowed = await call("tools/list");
     expect(
       allowed.result.tools.map((tool: { name: string }) => tool.name),
@@ -361,25 +409,91 @@ describe("vault entitlement routing", () => {
       denied.result.tools.map((tool: { name: string }) => tool.name),
     ).toContain("manage_browsers");
     enabled = false;
-    const revoked = await call("tools/call", "sk_allowed", {
+    const stillExposed = await call("tools/call", "sk_allowed", {
       name: "manage_vaults",
       arguments: { action: "list" },
     });
-    expect(JSON.stringify(revoked)).toContain("not found");
+    expect(stillExposed.result.isError).not.toBe(true);
     expect(paths).toEqual([
       "/auth/context",
-      "/org/entitlements",
       "/auth/context",
       "/org/entitlements",
       "/auth/context",
       "/org/entitlements",
+      "/auth/context",
+      "/vaults",
     ]);
   });
+
+  test("gates Search per connection and keeps other callers isolated", async () => {
+    let enabled = true;
+    const paths = installKernelResponses((token) =>
+      Response.json({
+        features: {
+          vaults: { enabled: true },
+          search: { enabled: token === "sk_allowed" && enabled },
+        },
+      }),
+    );
+    const allowed = await call("tools/list");
+    expect(
+      allowed.result.tools.map((tool: { name: string }) => tool.name),
+    ).toContain("web_search");
+    const permittedCall = await call("tools/call", "sk_allowed", {
+      name: "web_search",
+      arguments: { action: "providers" },
+    });
+    expect(permittedCall.result.isError).not.toBe(true);
+    expect(JSON.parse(permittedCall.result.content[0].text)).toEqual([]);
+    const denied = await call("tools/list", "sk_denied");
+    expect(
+      denied.result.tools.map((tool: { name: string }) => tool.name),
+    ).not.toContain("web_search");
+    expect(
+      denied.result.tools.map((tool: { name: string }) => tool.name),
+    ).toContain("manage_vaults");
+    const deniedCall = await call("tools/call", "sk_denied", {
+      name: "web_search",
+      arguments: { action: "create", request: { query: "test" } },
+    });
+    expect(JSON.stringify(deniedCall)).toContain("not found");
+    enabled = false;
+    const sameConnection = await call("tools/list", "sk_allowed");
+    expect(
+      sameConnection.result.tools.map((tool: { name: string }) => tool.name),
+    ).toContain("web_search");
+    expect(paths.filter((path) => path === "/org/entitlements")).toHaveLength(
+      2,
+    );
+    expect(paths.filter((path) => path === "/search/providers")).toHaveLength(
+      1,
+    );
+    expect(paths).not.toContain("/search");
+  });
+
+  test.each([200, 401, 403, 404, 429, 500, 503])(
+    "search fails closed without hiding unrelated tools (HTTP %s)",
+    async (status) => {
+      installKernelResponses(() =>
+        status === 200
+          ? Response.json({ features: {} })
+          : Response.json({}, { status }),
+      );
+      const result = await call("tools/list");
+      const names = result.result.tools.map(
+        (tool: { name: string }) => tool.name,
+      );
+      expect(names).not.toContain("web_search");
+      expect(names).toContain("manage_browsers");
+    },
+  );
 
   test.each([200, 404, 503])(
     "keeps other tools available when entitlements are absent or fail (HTTP %s)",
     async (status) => {
-      installKernelResponses(() => Response.json({ features: {} }, { status }));
+      installKernelResponses(() =>
+        Response.json({ features: { search: { enabled: true } } }, { status }),
+      );
       const result = await call("tools/list");
       expect(
         result.result.tools.filter((tool: { name: string }) =>

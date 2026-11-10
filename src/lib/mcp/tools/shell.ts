@@ -1,11 +1,15 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
   defaultMcpDependencies,
   type McpDependencies,
 } from "@/lib/mcp/dependencies";
 import { longOperationOptions } from "@/lib/mcp/request-options";
-import { throwToolError } from "@/lib/mcp/responses";
+import {
+  errorResponse,
+  jsonResponse,
+  throwToolError,
+} from "@/lib/mcp/responses";
 import {
   projectForOperation,
   projectSelectionInputSchema,
@@ -25,37 +29,56 @@ export function registerShellTool(
   },
 ) {
   // exec_command -- Execute shell commands inside a browser VM
-  server.tool(
+  server.registerTool(
     "exec_command",
-    'Execute a command synchronously inside a browser VM. Returns stdout, stderr, and exit code. The command field is the executable; use args for its arguments. Common uses: read files (command: "cat", args: ["/var/log/supervisord.log"]), list dirs (command: "ls", args: ["/var/log"]), check DNS (command: "cat", args: ["/etc/resolv.conf"]), test connectivity (command: "curl", args: ["-I", "https://example.com"]).',
     {
-      ...projectSelectionInputSchema(),
-      session_id: z.string().describe("Browser session ID or name."),
-      command: z
-        .string()
-        .describe("Executable to run (e.g., 'cat', 'ls', 'curl')."),
-      args: z
-        .array(z.string())
-        .describe("Arguments to pass to the command.")
-        .optional(),
-      cwd: z.string().describe("Working directory (absolute path).").optional(),
-      timeout_sec: z
-        .number()
-        .int()
-        .min(1)
-        .max(MAX_TIMEOUT_SEC)
-        .describe(
-          `Max execution time in seconds (1-${MAX_TIMEOUT_SEC}). The command is killed at the deadline. Defaults to ${DEFAULT_TIMEOUT_SEC}.`,
-        )
-        .default(DEFAULT_TIMEOUT_SEC),
-      as_root: z.boolean().describe("Run with root privileges.").optional(),
-    },
-    {
-      title: "Run shell command in browser VM",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: true,
+      description:
+        'execute a command synchronously inside a browser vm. returns stdout, stderr, and exit code. the command field is the executable; use args for its arguments. common uses: read files (command: "cat", args: ["/var/log/supervisord.log"]), list dirs (command: "ls", args: ["/var/log"]), check dns (command: "cat", args: ["/etc/resolv.conf"]), test connectivity (command: "curl", args: ["-I", "https://example.com"]).',
+      inputSchema: z.object({
+        ...projectSelectionInputSchema(),
+        session_id: z.string().describe("browser session id or name."),
+        command: z
+          .string()
+          .describe("executable to run (e.g., 'cat', 'ls', 'curl')."),
+        args: z
+          .array(z.string())
+          .describe("arguments to pass to the command.")
+          .optional(),
+        cwd: z
+          .string()
+          .describe("working directory (absolute path).")
+          .optional(),
+        env: z
+          .record(z.string(), z.string())
+          .describe(
+            "non-secret environment variables to set for the command. tool arguments may be logged; do not put passwords, tokens, or private keys here.",
+          )
+          .optional(),
+        as_user: z
+          .string()
+          .min(1)
+          .describe(
+            "run as this vm user. cannot be combined with as_root=true.",
+          )
+          .optional(),
+        timeout_sec: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_TIMEOUT_SEC)
+          .describe(
+            `max execution time in seconds (1-${MAX_TIMEOUT_SEC}). the command is killed at the deadline. defaults to ${DEFAULT_TIMEOUT_SEC}.`,
+          )
+          .default(DEFAULT_TIMEOUT_SEC),
+        as_root: z.boolean().describe("run with root privileges.").optional(),
+      }),
+      annotations: {
+        title: "run shell command in browser vm",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
     async (
       {
@@ -63,26 +86,35 @@ export function registerShellTool(
         command,
         args,
         cwd,
+        env,
+        as_user,
         timeout_sec,
         as_root,
         project,
         project_id,
       },
-      extra,
+      ctx,
     ) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
       const client = options.createKernelClient(
-        extra.authInfo.token,
-        projectForOperation(extra.authInfo, { project, project_id }),
+        ctx.http.authInfo.token,
+        projectForOperation(ctx.http.authInfo, { project, project_id }),
       );
 
       try {
+        if (as_root === true && as_user !== undefined) {
+          return errorResponse(
+            "error: as_root=true cannot be combined with as_user.",
+          );
+        }
         const result = await client.browsers.process.exec(
           session_id,
           {
             command,
             ...(args && { args }),
             ...(cwd && { cwd }),
+            ...(env !== undefined && { env }),
+            ...(as_user !== undefined && { as_user }),
             timeout_sec,
             ...(as_root !== undefined && { as_root }),
           },
@@ -96,23 +128,12 @@ export function registerShellTool(
           ? Buffer.from(result.stderr_b64, "base64").toString("utf-8")
           : "";
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  exit_code: result.exit_code,
-                  duration_ms: result.duration_ms,
-                  stdout,
-                  stderr,
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
+        return jsonResponse({
+          exit_code: result.exit_code,
+          duration_ms: result.duration_ms,
+          stdout,
+          stderr,
+        });
       } catch (error) {
         throwToolError("exec_command", "exec", error);
       }

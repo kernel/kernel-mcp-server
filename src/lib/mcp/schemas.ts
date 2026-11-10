@@ -7,13 +7,13 @@ export const paginationParams = {
     .min(1)
     .max(100)
     .describe(
-      "(list) Max results per page. Must be 1-100; API default varies by endpoint.",
+      "(list) max results per page. must be 1-100; api default varies by endpoint.",
     )
     .optional(),
   offset: z
     .number()
     .int()
     .min(0)
-    .describe("(list) Pagination offset. Must be 0 or greater.")
+    .describe("(list) pagination offset. must be 0 or greater.")
     .optional(),
 };

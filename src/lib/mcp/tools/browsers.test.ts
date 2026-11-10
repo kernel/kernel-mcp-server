@@ -1,8 +1,11 @@
 /// <reference types="bun-types" />
 
-import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { describe, expect, test } from "bun:test";
-import { connectTestMcp, toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
+import {
+  connectTestMcp,
+  toolResultJSON,
+  toolResultText,
+} from "@/lib/mcp/mcp-test-fixtures";
 import { registerBrowserCapabilities } from "@/lib/mcp/tools/browsers";
 
 const event = {
@@ -37,11 +40,6 @@ function telemetryClient(queries: unknown[], items: unknown[] = [event]) {
       },
     },
   };
-}
-
-function toolResultText(result: Awaited<ReturnType<Client["callTool"]>>) {
-  const content = result.content as Array<{ type: string; text: string }>;
-  return content[0].text;
 }
 
 type TextResourceResult = {
@@ -168,6 +166,57 @@ describe("manage_browsers telemetry", () => {
         until: "5m",
         compact: false,
       });
+    } finally {
+      await close();
+    }
+  });
+
+  test("forwards event-type filters and preserves new captcha metadata", async () => {
+    const queries: unknown[] = [];
+    const captchaEvent = {
+      seq: 43,
+      event: {
+        ts: 1_700_000_000_000_001,
+        category: "captcha",
+        type: "captcha_solve_result",
+        source: { service: "captcha" },
+        data: { captcha_provider: "binance", media: "video" },
+      },
+    };
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      telemetryClient(queries, [captchaEvent]),
+    );
+
+    try {
+      const result = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action: "get_telemetry",
+            session_id: "brr_123",
+            categories: ["captcha", "platform"],
+            event_types: ["captcha_solve_result"],
+            limit: 1,
+          },
+        }),
+      );
+
+      expect(queries).toEqual([
+        {
+          limit: 1,
+          category: ["captcha", "platform"],
+          type: ["captcha_solve_result"],
+          since: "1970-01-01T00:00:00Z",
+        },
+      ]);
+      expect(result.items[0].data).toEqual({
+        captcha_provider: "binance",
+        media: "video",
+      });
+      expect(result.raw_replay_best_effort.event_types).toEqual([
+        "captcha_solve_result",
+      ]);
     } finally {
       await close();
     }
@@ -305,7 +354,7 @@ describe("manage_browsers telemetry", () => {
 
       expect(result.isError).toBeTrue();
       expect(toolResultText(result)).toContain(
-        "Raw screenshot PNGs are not available",
+        "raw screenshot pngs are not available",
       );
       expect(queries).toHaveLength(1);
     } finally {
@@ -335,7 +384,781 @@ describe("manage_browsers telemetry", () => {
         "late events or retention may change results",
       );
       expect(compact?.description).toContain("limit<=5");
-      expect(compact?.description).toContain("1 MiB");
+      expect(compact?.description).toContain("1 mib");
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe("manage_browsers proxy routes", () => {
+  test("advertises create-only route selection and host matching", async () => {
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {},
+    );
+    try {
+      const { tools } = await client.listTools();
+      const browser = tools.find(({ name }) => name === "manage_browsers");
+      const network = browser?.inputSchema.properties?.network as
+        | { properties?: Record<string, unknown> }
+        | undefined;
+      const routes = network?.properties?.proxy_routes as
+        | {
+            description?: string;
+            maxItems?: number;
+            items?: {
+              properties?: { hosts?: { minItems?: number; maxItems?: number } };
+            };
+          }
+        | undefined;
+      expect(routes?.maxItems).toBe(10);
+      expect(routes?.items?.properties?.hosts).toMatchObject({
+        minItems: 1,
+        maxItems: 50,
+      });
+      expect(routes?.description).toContain("subdomains only, not the apex");
+      expect(routes?.description).toContain("including to start_url");
+      expect(routes?.description).toContain("fail closed");
+    } finally {
+      await close();
+    }
+  });
+
+  test("passes routes and the top-level proxy through SDK create and returns the SDK network on create/get", async () => {
+    const requests: unknown[] = [];
+    const network = {
+      proxy_routes: [
+        { hosts: ["example.com", "*.example.org"], proxy: { id: "prx_route" } },
+      ],
+    };
+    const browser = { session_id: "brr_123", network };
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (params: unknown) => {
+            requests.push(params);
+            return browser;
+          },
+          retrieve: async () => browser,
+        },
+      },
+    );
+
+    try {
+      const proxy_routes = [
+        { hosts: ["example.com", "*.example.org"], proxy: { id: "prx_route" } },
+        { hosts: ["other.example.com"], proxy: { name: "backup" } },
+      ];
+      const created = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action: "create",
+            proxy: { id: "prx_default" },
+            network: { proxy_routes },
+          },
+        }),
+      );
+      expect(requests).toEqual([
+        { proxy: { id: "prx_default" }, network: { proxy_routes } },
+      ]);
+      expect(created.browser.network).toEqual(network);
+      const retrieved = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "get", session_id: "brr_123" },
+        }),
+      );
+      expect(retrieved.network).toEqual(network);
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects invalid route selectors and bounded arrays before SDK create", async () => {
+    let creates = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async () => {
+            creates++;
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+    try {
+      const invalid = [
+        [{ hosts: ["example.com"] }],
+        [{ hosts: ["example.com"], proxy: { id: "one", name: "two" } }],
+        [{ hosts: [], proxy: { id: "one" } }],
+        [{ hosts: Array(51).fill("example.com"), proxy: { id: "one" } }],
+        Array.from({ length: 11 }, () => ({
+          hosts: ["example.com"],
+          proxy: { id: "one" },
+        })),
+      ];
+      for (const proxy_routes of invalid) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "create", network: { proxy_routes } },
+        });
+        expect(result.isError).toBe(true);
+      }
+      expect(creates).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+
+  test("passes network.proxy_routes through SDK create unchanged", async () => {
+    const requests: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (params: unknown) => {
+            requests.push(params);
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+    try {
+      const network = {
+        private_hosts: ["*.preview.example.ts.net", "100.64.0.0/10"],
+        proxy_routes: [
+          { hosts: ["example.com"], proxy: { id: "prx_route" } },
+          { hosts: ["*.example.org"], proxy: { name: "backup" } },
+        ],
+      };
+      for (const args of [
+        { proxy: { name: "default" }, network },
+        { network: { private_hosts: [] } },
+      ]) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "create", ...args },
+        });
+        expect(result.isError).toBeFalsy();
+      }
+      expect(requests).toEqual([
+        { proxy: { name: "default" }, network },
+        { network: { private_hosts: [] } },
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects invalid network routes before SDK create", async () => {
+    let creates = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async () => {
+            creates++;
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+    try {
+      const cases: Array<[Record<string, unknown>, string]> = [
+        [
+          {
+            network: { proxy_routes: [{ hosts: ["example.com"], proxy: {} }] },
+          },
+          "network.proxy_routes[0].proxy requires exactly one of id or name",
+        ],
+        [
+          {
+            network: {
+              proxy_routes: [
+                {
+                  hosts: ["example.com"],
+                  proxy: { id: "prx_route", name: "backup" },
+                },
+              ],
+            },
+          },
+          "network.proxy_routes[0].proxy requires exactly one of id or name",
+        ],
+        [
+          {
+            proxy_routes: [{ hosts: ["example.com"], proxy_id: "prx_route" }],
+          },
+          "proxy_routes was removed; use `network.proxy_routes` instead.",
+        ],
+      ];
+      for (const [args, message] of cases) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "create", ...args },
+        });
+        expect(result.isError).toBe(true);
+        expect(toolResultText(result)).toContain(message);
+      }
+      expect(creates).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+
+  test.each([
+    { memory: "16GiB" },
+    { video_memory: "6GiB" },
+    { region: "us-west" },
+  ])("rejects creation-only %p on update", async (extra) => {
+    let updates = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          update: async () => {
+            updates++;
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+    try {
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: { action: "update", session_id: "brr_123", ...extra },
+      });
+      expect(result.isError).toBe(true);
+      expect(toolResultText(result)).toBe(
+        "error: memory, video_memory, and region are creation-only.",
+      );
+      expect(updates).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects a removed flat proxy input with its replacement", async () => {
+    let updates = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          update: async () => {
+            updates++;
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+    try {
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "update",
+          session_id: "brr_123",
+          name: "renamed",
+          clear_proxy: true,
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(toolResultText(result)).toContain(
+        'clear_proxy was removed; use `proxy: { mode: "default" }` instead.',
+      );
+      expect(updates).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe("manage_browsers egress allowlist", () => {
+  test("advertises a bounded allowlist that update can clear with null", async () => {
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {},
+    );
+    try {
+      const { tools } = await client.listTools();
+      const browser = tools.find(({ name }) => name === "manage_browsers");
+      const network = browser?.inputSchema.properties?.network as
+        | { properties?: Record<string, unknown> }
+        | undefined;
+      const allowedHosts = network?.properties?.allowed_hosts as
+        | { anyOf?: unknown[]; description?: string }
+        | undefined;
+      expect(allowedHosts?.anyOf).toContainEqual(
+        expect.objectContaining({ type: "array", minItems: 1, maxItems: 100 }),
+      );
+      expect(allowedHosts?.anyOf).toContainEqual({ type: "null" });
+      expect(allowedHosts?.description).toContain("network_policy_denied");
+      expect(allowedHosts?.description).toContain("null removes it");
+    } finally {
+      await close();
+    }
+  });
+
+  test("passes network.allowed_hosts through SDK create", async () => {
+    const requests: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (params: unknown) => {
+            requests.push(params);
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+    try {
+      const network = {
+        private_hosts: ["*.preview.example.ts.net"],
+        allowed_hosts: ["example.com", "*.example.com", "8.8.8.8"],
+      };
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "create",
+          start_url: "https://example.com",
+          network,
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(requests).toEqual([{ network, start_url: "https://example.com" }]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("replaces or removes the allowlist through SDK update", async () => {
+    const updates: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          update: async (sessionId: string, params: unknown) => {
+            updates.push([sessionId, params]);
+            return { session_id: sessionId };
+          },
+        },
+      },
+    );
+    try {
+      for (const allowed_hosts of [["example.com"], null]) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action: "update",
+            session_id: "brr_123",
+            network: { allowed_hosts },
+          },
+        });
+        expect(result.isError).toBeFalsy();
+      }
+      expect(updates).toEqual([
+        ["brr_123", { network: { allowed_hosts: ["example.com"] } }],
+        ["brr_123", { network: { allowed_hosts: null } }],
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects invalid allowlist requests without calling the SDK", async () => {
+    let calls = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+          update: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+    try {
+      const cases: Array<[Record<string, unknown>, string?]> = [
+        [{ action: "create", network: { allowed_hosts: null } }, "update-only"],
+        [{ action: "create", network: { allowed_hosts: [] } }],
+        [
+          {
+            action: "create",
+            network: { allowed_hosts: Array(101).fill("example.com") },
+          },
+        ],
+        [
+          {
+            action: "update",
+            session_id: "brr_123",
+            network: { allowed_hosts: ["example.com"], private_hosts: [] },
+          },
+          "creation-only",
+        ],
+        [
+          {
+            action: "update",
+            session_id: "brr_123",
+            network: { proxy_routes: [] },
+          },
+          "creation-only",
+        ],
+        [
+          { action: "update", session_id: "brr_123", network: {} },
+          "at least one update field is required",
+        ],
+      ];
+      for (const [args, message] of cases) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: args,
+        });
+        expect(result.isError).toBe(true);
+        if (message) expect(toolResultText(result)).toContain(message);
+      }
+      expect(calls).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe("manage_browsers proxy", () => {
+  test("passes the proxy config through SDK create and update", async () => {
+    const creates: unknown[] = [];
+    const updates: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (params: unknown) => {
+            creates.push(params);
+            return { session_id: "brr_123" };
+          },
+          update: async (sessionId: string, params: unknown) => {
+            updates.push([sessionId, params]);
+            return { session_id: sessionId };
+          },
+        },
+      },
+    );
+    try {
+      for (const proxy of [{ name: "residential" }, { id: "prx_123" }]) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "create", proxy },
+        });
+        expect(result.isError).toBeFalsy();
+      }
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "update",
+          session_id: "brr_123",
+          proxy: { mode: "direct" },
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(creates).toEqual([
+        { proxy: { name: "residential" } },
+        { proxy: { id: "prx_123" } },
+      ]);
+      expect(updates).toEqual([["brr_123", { proxy: { mode: "direct" } }]]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects ambiguous proxy selection without calling the SDK", async () => {
+    let calls = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+          update: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+    try {
+      const invalid = [
+        { action: "create", proxy: {} },
+        { action: "create", proxy: { id: "prx_123", name: "residential" } },
+        {
+          action: "create",
+          proxy: { name: "residential" },
+          proxy_id: "prx_123",
+        },
+        {
+          action: "update",
+          session_id: "brr_123",
+          proxy: { name: "residential" },
+          proxy_id: "prx_123",
+        },
+        {
+          action: "update",
+          session_id: "brr_123",
+          proxy: { mode: "default" },
+          disable_default_proxy: false,
+        },
+      ];
+      for (const args of invalid) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: args,
+        });
+        expect(result.isError).toBe(true);
+      }
+      expect(calls).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe("manage_browsers location, memory, and conditional allowlists", () => {
+  test("forwards create and update fields including false and null", async () => {
+    const creates: unknown[] = [];
+    const updates: unknown[] = [];
+    const revision = "a".repeat(64);
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (params: unknown) => {
+            creates.push(params);
+            return { session_id: "brr_123" };
+          },
+          update: async (sessionId: string, params: unknown) => {
+            updates.push([sessionId, params]);
+            return { session_id: sessionId };
+          },
+        },
+      },
+    );
+
+    try {
+      const telemetry = {
+        enabled: true,
+        browser: {
+          control: { enabled: false },
+          screenshot: { enabled: true },
+        },
+        export: {
+          otlp: { destination: { id: "otel_1" } },
+        },
+        storage: { enabled: false },
+      };
+      const extensions = [{ id: "ext_1" }, { name: "second-extension" }];
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "create",
+          headless: false,
+          memory: "8GiB",
+          extensions,
+          telemetry,
+          location: {
+            timezone: "America/Los_Angeles",
+            locale: "en-US",
+          },
+        },
+      });
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "create",
+          gpu: true,
+          video_memory: "6GiB",
+        },
+      });
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "update",
+          session_id: "brr_123",
+          location: { timezone: null, locale: "fr-FR" },
+          telemetry: { enabled: false },
+          network: {
+            allowed_hosts: null,
+            expected_allowlist_revision: revision,
+            mutation_id: "allowlist_retry_0",
+          },
+        },
+      });
+
+      expect(creates).toEqual([
+        {
+          headless: false,
+          memory: "8GiB",
+          extensions,
+          telemetry,
+          location: {
+            timezone: "America/Los_Angeles",
+            locale: "en-US",
+          },
+        },
+        { gpu: true, video_memory: "6GiB" },
+      ]);
+      expect(updates).toEqual([
+        [
+          "brr_123",
+          {
+            location: { timezone: null, locale: "fr-FR" },
+            telemetry: { enabled: false },
+            network: {
+              allowed_hosts: null,
+              expected_allowlist_revision: revision,
+              mutation_id: "allowlist_retry_0",
+            },
+          },
+        ],
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("upgrades deprecated video_memory values with a warning", async () => {
+    const creates: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (params: unknown) => {
+            creates.push(params);
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+
+    try {
+      const tool = (await client.listTools()).tools.find(
+        ({ name }) => name === "manage_browsers",
+      );
+      expect(tool?.inputSchema.properties?.video_memory).toMatchObject({
+        enum: ["3GiB", "6GiB"],
+      });
+
+      const warnings = [];
+      for (const video_memory of ["2GiB", "4GiB", "6GiB"]) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "create", gpu: true, video_memory },
+        });
+        expect(result.isError).toBeFalsy();
+        warnings.push(toolResultJSON(result).warning);
+      }
+
+      expect(creates).toEqual([
+        { gpu: true, video_memory: "3GiB" },
+        { gpu: true, video_memory: "6GiB" },
+        { gpu: true, video_memory: "6GiB" },
+      ]);
+      expect(warnings).toEqual([
+        'video_memory "2GiB" is deprecated and was created as "3GiB"; use "3GiB" instead.',
+        'video_memory "4GiB" is deprecated and was created as "6GiB"; use "6GiB" instead.',
+        undefined,
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("requires the conditional allowlist pair and keeps null out of create", async () => {
+    let calls = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+          update: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+
+    try {
+      for (const arguments_ of [
+        {
+          action: "create",
+          location: { timezone: null },
+        },
+        {
+          action: "update",
+          session_id: "brr_123",
+          network: {
+            allowed_hosts: ["example.com"],
+            expected_allowlist_revision: "a".repeat(64),
+          },
+        },
+        {
+          action: "create",
+          telemetry: { enabled: true },
+          telemetry_network: false,
+        },
+        {
+          action: "create",
+          extensions: [{ id: "ext_1" }],
+          extension_name: "legacy-extension",
+        },
+      ]) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: arguments_,
+        });
+        expect(result.isError).toBe(true);
+      }
+      expect(calls).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+
+  test("forwards include_deleted=false on get", async () => {
+    const calls: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          retrieve: async (...args: unknown[]) => {
+            calls.push(args);
+            return { session_id: "brr_deleted" };
+          },
+        },
+      },
+    );
+
+    try {
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "get",
+          session_id: "brr_deleted",
+          include_deleted: false,
+        },
+      });
+      expect(calls).toEqual([["brr_deleted", { include_deleted: false }]]);
     } finally {
       await close();
     }
@@ -525,6 +1348,37 @@ describe("manage_browsers id or name", () => {
         arguments: { action: "delete", session_id: "checkout-flow" },
       });
       expect(seen).toEqual(["get:checkout-flow", "delete:checkout-flow"]);
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe("manage_browsers next actions", () => {
+  test("leads the post-create hint with the preference order", async () => {
+    const kernelClient = {
+      browsers: {
+        create: async () => ({ session_id: "brr_123" }),
+      },
+    };
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      kernelClient,
+    );
+
+    try {
+      const created = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "create" },
+        }),
+      );
+      const hint: string = created.next_actions[0];
+      expect(hint).toContain("brr_123");
+      expect(hint).toContain("webmcp");
+      expect(hint.indexOf("webmcp")).toBeLessThan(
+        hint.indexOf("computer_action"),
+      );
     } finally {
       await close();
     }

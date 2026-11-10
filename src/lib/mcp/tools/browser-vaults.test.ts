@@ -119,6 +119,90 @@ describe("browser vault attachment", () => {
     }
   });
 
+  test.each([
+    {
+      arguments: { action: "create", vault: "checkout" },
+      message:
+        'unknown key "vault": did you mean "vaults" (array of { id } or { name })?',
+    },
+    {
+      arguments: { action: "create", vaults: [{ name: "checkout" }], vualt: 1 },
+      message: 'unknown key "vualt" in manage_browsers arguments',
+    },
+    {
+      arguments: { action: "update", session_id: "brr_123", profile: "p" },
+      message: 'unknown key "profile" in manage_browsers arguments',
+    },
+  ])(
+    "rejects unknown keys instead of dropping them ($message)",
+    async ({ arguments: args, message }) => {
+      let calls = 0;
+      const fixture = await connectTestMcp(registerBrowserCapabilities, {
+        browsers: {
+          create: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+          update: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+        },
+      });
+      try {
+        const result = await fixture.client.callTool({
+          name: "manage_browsers",
+          arguments: args,
+        });
+        expect(result.isError).toBe(true);
+        expect((result.content as Array<{ text: string }>)[0].text).toContain(
+          message,
+        );
+        expect(calls).toBe(0);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test.each([
+    { action: "create", arguments: { vaults: [{ name: "checkout" }] } },
+    { action: "update", arguments: { session_id: "brr_123", name: "renamed" } },
+  ])(
+    "accepts the analytics context argument without forwarding it ($action)",
+    async ({ action, arguments: args }) => {
+      const bodies: unknown[] = [];
+      const fixture = await connectTestMcp(registerBrowserCapabilities, {
+        browsers: {
+          create: async (body: unknown) => {
+            bodies.push(body);
+            return { session_id: "brr_123" };
+          },
+          update: async (_id: string, body: unknown) => {
+            bodies.push(body);
+            return { session_id: "brr_123" };
+          },
+        },
+      });
+      try {
+        const result = await fixture.client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action,
+            ...args,
+            context:
+              "creating a browser to automate a checkout flow for the user",
+          },
+        });
+        expect(result.isError).toBeUndefined();
+        expect(bodies).toHaveLength(1);
+        expect(bodies[0]).not.toHaveProperty("context");
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
   test("does not retry a failed vault-bound browser creation", async () => {
     let calls = 0;
     const sdk = new Kernel({

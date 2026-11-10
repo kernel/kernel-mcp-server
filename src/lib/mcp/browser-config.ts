@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { KernelClient } from "@/lib/mcp/kernel-client";
 
 type BrowserCreateParams = NonNullable<
@@ -17,7 +18,20 @@ export type BrowserProfileParams = {
   save_profile_changes?: boolean;
 };
 
+export const browserExtensionSchema = z
+  .object({
+    id: z.string().min(1).optional(),
+    name: z.string().min(1).optional(),
+  })
+  .strict()
+  .refine((extension) => Boolean(extension.id) !== Boolean(extension.name), {
+    message: "each extension requires exactly one of id or name.",
+  });
+
+export const browserExtensionsSchema = z.array(browserExtensionSchema);
+
 export type BrowserExtensionParams = {
+  extensions?: z.infer<typeof browserExtensionsSchema>;
   extension_id?: string;
   extension_name?: string;
 };
@@ -92,7 +106,7 @@ function configValue<T>(value: T): BrowserConfigResult<T> {
 }
 
 function configError<T>(message: string): BrowserConfigResult<T> {
-  return { ok: false, error: `Error: ${message}` };
+  return { ok: false, error: `error: ${message}` };
 }
 
 function buildBrowserStartUrl(
@@ -103,7 +117,7 @@ function buildBrowserStartUrl(
   try {
     new URL(startUrl);
   } catch {
-    return configError("start_url must be a valid URL.");
+    return configError("start_url must be a valid url.");
   }
 
   return configValue(startUrl);
@@ -113,7 +127,7 @@ function buildBrowserProfile(
   params: BrowserProfileParams,
 ): BrowserConfigResult<BrowserProfileConfig | undefined> {
   if (params.profile_name && params.profile_id) {
-    return configError("Cannot specify both profile_name and profile_id.");
+    return configError("cannot specify both profile_name and profile_id.");
   }
   if (
     params.save_profile_changes !== undefined &&
@@ -137,9 +151,18 @@ function buildBrowserProfile(
 function buildBrowserExtensions(
   params: BrowserExtensionParams,
 ): BrowserConfigResult<BrowserExtensionConfig | undefined> {
-  if (params.extension_id && params.extension_name) {
-    return configError("Cannot specify both extension_id and extension_name.");
+  if (
+    params.extensions !== undefined &&
+    (params.extension_id || params.extension_name)
+  ) {
+    return configError(
+      "extensions cannot be combined with extension_id or extension_name.",
+    );
   }
+  if (params.extension_id && params.extension_name) {
+    return configError("cannot specify both extension_id and extension_name.");
+  }
+  if (params.extensions !== undefined) return configValue(params.extensions);
   if (!params.extension_id && !params.extension_name)
     return configValue(undefined);
   return configValue([

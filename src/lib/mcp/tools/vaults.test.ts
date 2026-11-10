@@ -40,13 +40,45 @@ describe("vault SDK request contracts", () => {
       }
       const cards = tools.find((tool) => tool.name === "manage_vault_cards");
       expect(cards?.description).toContain(
-        "Mode is determined by the wallet credentials",
+        "mode is determined by the wallet credentials",
       );
       expect(cards?.description).toContain(
-        "Pending issuance updates preserve omitted optional fields",
+        "pending issuance updates preserve omitted optional fields",
       );
       expect(cards?.description).toContain("recovery_required");
+      expect(JSON.stringify(cards?.inputSchema)).toContain("checkout_origin");
+      expect(cards?.description).toContain(
+        "KERNEL does not compare it with the browser page",
+      );
+      expect(cards?.description).toContain(
+        "prepared checkout uses preparation.merchant_origin",
+      );
       expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("forwards AgentCard checkout_origin in the card specification", async () => {
+    const spec = {
+      ...agentcardSpec,
+      checkout_origin: "https://shop.example",
+    };
+    const fixture = await connectVaultTest([Response.json(item)]);
+    try {
+      const result = await fixture.call("manage_vault_cards", {
+        action: "create",
+        vault: "checkout",
+        key: "order-1",
+        provider: "agentcard",
+        spec,
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[0].body).toMatchObject({
+        type: "card",
+        spec: { ...spec, provider: "agentcard" },
+      });
     } finally {
       await fixture.close();
     }
@@ -167,7 +199,6 @@ describe("vault SDK request contracts", () => {
               ...linkSpec,
               provider,
               metadata: { order: "001" },
-              expires_at: Number.MAX_SAFE_INTEGER,
               line_items: [
                 {
                   name: "Supplies",
@@ -284,6 +315,98 @@ describe("vault SDK request contracts", () => {
         expect(url.searchParams.getAll("expand")).toEqual(["payment_methods"]);
         expect(request.method).toBe("GET");
       }
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("requests and projects Link user and shipping expansions with false, zero, and null", async () => {
+    const expanded = {
+      ...item,
+      type: "wallet",
+      spec: { provider: "link" },
+      state: { provider: "link", status: "connected" },
+      available_operations: [],
+      available_expansions: [
+        { type: "link_user_info", description: "Read user info" },
+        {
+          type: "link_shipping_addresses",
+          description: "Read shipping addresses",
+        },
+      ],
+      expanded: {
+        link_user_info: {
+          id: "usr_link",
+          email: "jane@example.com",
+          first_name: "Jane",
+          last_name: "Doe",
+          name: "Jane Doe",
+          phone: null,
+          eligible_for_balance: false,
+          default_spend_request_currency: "usd",
+          agent_wallet_spend_limits: {
+            per_transaction: { limit: 0 },
+            daily: { limit: null, used: 0, remaining: null },
+            thirty_day: { limit: 50000, used: 0, remaining: 50000 },
+          },
+          agent_wallet_step_up: {
+            status: "not_required",
+            action_url: null,
+          },
+          hidden: "provider-secret",
+        },
+        link_shipping_addresses: [
+          {
+            id: "sa_1",
+            is_default: false,
+            nickname: null,
+            address: {
+              name: "Jane Doe",
+              line_1: "510 Townsend St",
+              line_2: null,
+              locality: "San Francisco",
+              dependent_locality: null,
+              administrative_area: "CA",
+              postal_code: "94103",
+              sorting_code: null,
+              country_code: "US",
+            },
+            hidden: "provider-secret",
+          },
+        ],
+      },
+    };
+    const fixture = await connectVaultTest([Response.json(expanded)]);
+    try {
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_items", {
+          action: "get",
+          vault: "checkout",
+          key: "wallet-1",
+          expand: ["link_user_info", "link_shipping_addresses"],
+        }),
+      );
+      expect(result.item.expanded.link_user_info).toMatchObject({
+        eligible_for_balance: false,
+        phone: null,
+        agent_wallet_spend_limits: {
+          per_transaction: { limit: 0 },
+          daily: { limit: null, used: 0, remaining: null },
+        },
+        agent_wallet_step_up: {
+          status: "not_required",
+          action_url: null,
+        },
+      });
+      expect(result.item.expanded.link_shipping_addresses[0]).toMatchObject({
+        is_default: false,
+        nickname: null,
+      });
+      expect(JSON.stringify(result)).not.toContain("provider-secret");
+      const url = new URL(fixture.requests[0].path, "https://api.example");
+      expect(url.searchParams.getAll("expand")).toEqual([
+        "link_user_info,link_shipping_addresses",
+      ]);
     } finally {
       await fixture.close();
     }
@@ -449,8 +572,8 @@ describe("vault scopes and input validation", () => {
   test.each([
     { ...linkSpec, provider: "agentcard" },
     { ...linkSpec, amount: 1.1 },
-    { ...linkSpec, amount: 500001 },
-    { ...linkSpec, expires_at: Number.MAX_SAFE_INTEGER + 1 },
+    { ...linkSpec, amount: 50001 },
+    { ...linkSpec, expires_at: 4102444800 },
     {
       ...linkSpec,
       line_items: [
@@ -478,6 +601,324 @@ describe("vault scopes and input validation", () => {
         ).isError,
       ).toBe(true);
       expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+});
+
+describe("Link checkout through manage_vault_cards", () => {
+  const target = { vault: "checkout", key: "order-1" };
+  const checkout = {
+    browser_id: "browser-session-id",
+    page_url: "https://shop.example/checkout",
+  };
+  const pending = {
+    ...item,
+    state: { provider: "link", status: "pending_authorization" },
+    action: { name: "spend_approval", url: "https://link.example/approve" },
+    available_operations: [
+      { type: "authorize", description: "Approval has been requested." },
+    ],
+  };
+
+  test("tool descriptions name the checkout flow in order without internal terms", async () => {
+    const fixture = await connectVaultTest([]);
+    try {
+      const { tools } = await fixture.client.listTools();
+      const description = (name: string) =>
+        tools.find((tool) => tool.name === name)?.description ?? "";
+      const cards = description("manage_vault_cards");
+      const order = [
+        "reach the final checkout page",
+        '"create" the card',
+        '"authorize" with browser_id (browser session id) and page_url',
+        "share the approval url",
+        "until fill is advertised",
+        "submit the checkout yourself",
+      ].map((text) => cards.indexOf(text));
+      expect(order).not.toContain(-1);
+      expect(order).toEqual([...order].sort((a, b) => a - b));
+      expect(cards).toContain(
+        '"update" can change a link card until it is authorized at a checkout; after that it returns 409: delete the card and create a new one.',
+      );
+      expect(cards).toContain("available_operations descriptions");
+      expect(description("manage_vault_wallets")).toContain(
+        "a connected link wallet returns item.description with the checkout flow",
+      );
+      expect(description("manage_vaults")).toContain(
+        "create the card, authorize it with browser_id and page_url, share the approval url, wait until fill is advertised, fill, then submit the checkout yourself",
+      );
+      const schema = tools.find(
+        (tool) => tool.name === "manage_vault_cards",
+      )?.inputSchema;
+      expect(schema?.properties).toHaveProperty("browser_id");
+      expect(schema?.properties).toHaveProperty("page_url");
+      for (const tool of tools) {
+        const text = JSON.stringify(tool);
+        for (const term of [
+          "execution method",
+          "execution mode",
+          "credential type",
+          "merchant_account_id",
+        ])
+          expect(text).not.toContain(term);
+      }
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("forwards recurring Link terms and the 50000 amount boundary", async () => {
+    const recurringSpec = {
+      ...linkSpec,
+      amount: 50000,
+      recurring: { interval: "week", interval_count: 2 },
+    };
+    const fixture = await connectVaultTest([
+      Response.json({
+        ...item,
+        spec: { ...recurringSpec, provider: "link" },
+      }),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_cards", {
+        ...target,
+        action: "create",
+        provider: "link",
+        spec: recurringSpec,
+      });
+      expect(result.isError).toBeUndefined();
+      expect(toolResultJSON(result).item.spec.recurring).toEqual(
+        recurringSpec.recurring,
+      );
+      expect(fixture.requests[0].body).toEqual({
+        type: "card",
+        spec: { ...recurringSpec, provider: "link" },
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("authorizes a requested Link card with checkout context", async () => {
+    const fixture = await connectVaultTest([
+      Response.json(item),
+      Response.json(pending),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_cards", {
+        ...target,
+        action: "authorize",
+        provider: "link",
+        ...checkout,
+      });
+      expect(result.isError).toBeUndefined();
+      expect(toolResultJSON(result).item.action).toEqual(pending.action);
+      expect(
+        fixture.requests.map(({ method, path, body }) => ({
+          method,
+          path,
+          body,
+        })),
+      ).toEqual([
+        {
+          method: "GET",
+          path: "/vaults/checkout/items/order-1",
+          body: undefined,
+        },
+        {
+          method: "POST",
+          path: "/vaults/checkout/items/order-1/operations",
+          body: { type: "authorize", ...checkout },
+        },
+      ]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("re-checks a pending Link card without checkout context", async () => {
+    const fixture = await connectVaultTest([
+      Response.json(pending),
+      Response.json(pending),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_cards", {
+        ...target,
+        action: "authorize",
+      });
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[1].body).toEqual({ type: "authorize" });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each<{ args: Record<string, unknown> }>([
+    { args: { action: "authorize", browser_id: checkout.browser_id } },
+    { args: { action: "authorize", page_url: checkout.page_url } },
+    {
+      args: {
+        action: "authorize",
+        ...checkout,
+        page_url: "http://shop.example/checkout",
+      },
+    },
+    { args: { action: "authorize", provider: "agentcard" } },
+    {
+      args: {
+        action: "create",
+        provider: "link",
+        spec: linkSpec,
+        ...checkout,
+      },
+    },
+  ])("rejects $args before any request", async ({ args }) => {
+    const fixture = await connectVaultTest([]);
+    try {
+      const result = await fixture.call("manage_vault_cards", {
+        ...target,
+        ...args,
+      });
+      expect(result.isError).toBe(true);
+      expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("does not send checkout context for a KERNEL card", async () => {
+    const fixture = await connectVaultTest([
+      Response.json({
+        ...item,
+        spec: { provider: "kernel", wallet: "wallet-1" },
+        state: { provider: "kernel", status: "requested" },
+      }),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_cards", {
+        ...target,
+        action: "authorize",
+        ...checkout,
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain(
+        "kernel cards do not accept browser_id or page_url",
+      );
+      expect(fixture.requests.map(({ method }) => method)).toEqual(["GET"]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("passes through a checkout inspection error with its recovery step", async () => {
+    const fixture = await connectVaultTest([
+      Response.json(item),
+      Response.json(
+        {
+          code: "ambiguous_page",
+          message:
+            "more than one tab is at page_url; close the extra tabs and authorize again",
+        },
+        { status: 400 },
+      ),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_cards", {
+        ...target,
+        action: "authorize",
+        ...checkout,
+      });
+      expect(result.isError).toBe(true);
+      expect((result.content as Array<{ text: string }>)[0].text).toBe(
+        "error in manage_vault_cards (authorize): 400 more than one tab is at page_url; close the extra tabs and authorize again [code: ambiguous_page] no payment request was made. make sure the checkout is open in exactly one tab at page_url, then authorize again. if checkout inspection keeps failing, authorize without browser_id and page_url to issue a virtual card for the merchant_url origin.",
+      );
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    {
+      stage: "after the POST was sent",
+      replies: () => [Response.json(item), new Error("socket hang up")],
+      submitted: true,
+      requests: 2,
+    },
+    {
+      stage: "before the POST",
+      replies: () => [new Error("socket hang up")],
+      submitted: false,
+      requests: 1,
+    },
+  ])(
+    "reports a lost Link authorize response $stage",
+    async ({ replies, submitted, requests }) => {
+      const fixture = await connectVaultTest(replies());
+      try {
+        const result = await fixture.call("manage_vault_cards", {
+          ...target,
+          action: "authorize",
+          provider: "link",
+          ...checkout,
+        });
+        const text = (result.content as Array<{ text: string }>)[0].text;
+        expect(result.isError).toBe(true);
+        const note =
+          "no response was received from the api after the operation was submitted.";
+        if (submitted) expect(text).toEndWith(note);
+        else expect(text).not.toContain(note);
+        expect(fixture.requests).toHaveLength(requests);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
+
+  test("passes through the 409 for updating a card authorized at a checkout", async () => {
+    const message =
+      "this card was authorized at a checkout and cannot be changed; delete this card and create a new one with the updated details";
+    const fixture = await connectVaultTest([
+      Response.json({ code: "conflict", message }, { status: 409 }),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_cards", {
+        ...target,
+        action: "update",
+        provider: "link",
+        spec: linkSpec,
+      });
+      expect(result.isError).toBe(true);
+      expect((result.content as Array<{ text: string }>)[0].text).toBe(
+        `error in manage_vault_cards (update): 409 ${message} [code: conflict]`,
+      );
+      expect(fixture.requests.map(({ method }) => method)).toEqual(["PATCH"]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("returns a connected Link wallet's description", async () => {
+    const wallet = {
+      ...item,
+      key: "wallet-1",
+      type: "wallet",
+      description: "Use this wallet to pay at checkout.",
+      spec: { provider: "link" },
+      state: { provider: "link", status: "connected" },
+      available_operations: [],
+    };
+    const fixture = await connectVaultTest([Response.json(wallet)]);
+    try {
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_items", {
+          vault: "checkout",
+          key: "wallet-1",
+          action: "get",
+        }),
+      );
+      expect(result.item.description).toBe(wallet.description);
     } finally {
       await fixture.close();
     }

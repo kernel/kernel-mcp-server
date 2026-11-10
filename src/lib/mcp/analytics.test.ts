@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { describe, expect, setSystemTime, test } from "bun:test";
+import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import type { PostHog } from "posthog-node";
 import {
   encodeSessionId,
@@ -16,6 +16,7 @@ import {
   clientCapabilityAnalyticsFromInitialize,
   enrichMcpAnalyticsEvent,
   instrumentMcpAnalytics,
+  intentFromContextArgument,
   MCP_CAPABILITY_REQUESTED_EVENT,
   MCP_CLIENT_ELICITATION_MODE_PROPERTY,
   MCP_CLIENT_SUPPORTS_APPS_PROPERTY,
@@ -28,11 +29,17 @@ import {
   MCP_FEEDBACK_SUBMITTED_EVENT,
   MCP_USED_PROJECT_ID_PROPERTY,
   MCP_USED_PROJECT_PROPERTY,
+  MCP_DEPRECATED_PARAMS_PROPERTY,
+  MCP_REMOVED_PARAMS_PROPERTY,
   OAUTH_TOKEN_EXCHANGE_EVENT,
   sanitizeMcpAnalyticsEvent,
+  UNREGISTERED_RESOURCE_NAME,
 } from "@/lib/mcp/analytics";
 import { connectTestMcp, toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
+import { MANAGED_AUTH_RESOURCE_URI } from "@/lib/mcp/tools/auth-login-app";
 import { KERNEL_FEEDBACK_TOOL_NAME } from "@/lib/mcp/tools/feedback";
+import { registerMcpCapabilities } from "@/lib/mcp/register";
+import { z } from "zod";
 
 const privateContextProperty = "__mcp_connection_analytics_context";
 
@@ -310,6 +317,41 @@ function toolCallEvent(properties: Record<string, unknown> = {}): CaptureEvent {
   };
 }
 
+describe("intentFromContextArgument", () => {
+  test("returns the trimmed context argument", () => {
+    expect(
+      intentFromContextArgument({
+        params: {
+          name: "manage_browsers",
+          arguments: { action: "list", context: "  Listing live browsers.  " },
+        },
+      }),
+    ).toBe("Listing live browsers.");
+  });
+
+  test("returns undefined when context is missing, blank, or not a string", () => {
+    expect(intentFromContextArgument({})).toBeUndefined();
+    expect(intentFromContextArgument({ params: {} })).toBeUndefined();
+    expect(
+      intentFromContextArgument({ params: { arguments: { action: "list" } } }),
+    ).toBeUndefined();
+    expect(
+      intentFromContextArgument({ params: { arguments: { context: "" } } }),
+    ).toBeUndefined();
+    expect(
+      intentFromContextArgument({ params: { arguments: { context: "  \n" } } }),
+    ).toBeUndefined();
+    expect(
+      intentFromContextArgument({ params: { arguments: { context: 42 } } }),
+    ).toBeUndefined();
+    expect(
+      intentFromContextArgument({
+        params: { arguments: { context: { summary: "object" } } },
+      }),
+    ).toBeUndefined();
+  });
+});
+
 describe("sanitizeMcpAnalyticsEvent", () => {
   test("keeps $groups so every event carries org attribution", async () => {
     const event = toolCallEvent({ $groups: { organization: "org_123" } });
@@ -511,6 +553,89 @@ describe("sanitizeMcpAnalyticsEvent", () => {
     expect(result?.properties[MCP_USED_PROJECT_PROPERTY]).toBe(true);
   });
 
+  test("lists deprecated parameter names a tool call used, without values", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.ToolName]: "manage_browsers",
+      [PostHogMCPAnalyticsProperty.Parameters]: {
+        request: {
+          params: {
+            arguments: {
+              action: "update",
+              session_id: "brr_123",
+              proxy_id: "prx_secret",
+              disable_default_proxy: false,
+              clear_proxy: false,
+            },
+          },
+        },
+      },
+    });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    expect(result?.properties[MCP_DEPRECATED_PARAMS_PROPERTY]).toEqual([
+      "proxy_id",
+      "disable_default_proxy",
+    ]);
+    expect(result?.properties[MCP_REMOVED_PARAMS_PROPERTY]).toEqual([
+      "clear_proxy",
+    ]);
+    expect(JSON.stringify(result)).not.toContain("prx_secret");
+  });
+
+  test("records empty deprecated and removed parameter lists for current inputs only", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.ToolName]: "manage_browsers",
+      [PostHogMCPAnalyticsProperty.Parameters]: {
+        request: {
+          params: {
+            arguments: { action: "create", proxy: { name: "residential" } },
+          },
+        },
+      },
+    });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    expect(result?.properties[MCP_DEPRECATED_PARAMS_PROPERTY]).toEqual([]);
+    expect(result?.properties[MCP_REMOVED_PARAMS_PROPERTY]).toEqual([]);
+  });
+
+  test("records removed parameter names for a tool with no deprecated inputs left", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.ToolName]: "manage_proxies",
+      [PostHogMCPAnalyticsProperty.Parameters]: {
+        request: {
+          params: {
+            arguments: { action: "create", type: "isp", country: "US" },
+          },
+        },
+      },
+    });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    expect(result?.properties).not.toHaveProperty(
+      MCP_DEPRECATED_PARAMS_PROPERTY,
+    );
+    expect(result?.properties[MCP_REMOVED_PARAMS_PROPERTY]).toEqual([
+      "country",
+    ]);
+  });
+
+  test("omits the deprecated parameter list for tools without deprecated inputs", async () => {
+    const event = toolCallEvent({
+      [PostHogMCPAnalyticsProperty.ToolName]: "computer_action",
+    });
+
+    const result = await sanitizeMcpAnalyticsEvent(event);
+
+    expect(result?.properties).not.toHaveProperty(
+      MCP_DEPRECATED_PARAMS_PROPERTY,
+    );
+    expect(result?.properties).not.toHaveProperty(MCP_REMOVED_PARAMS_PROPERTY);
+  });
+
   test("records false/false when a tool call omits both project selectors", async () => {
     const result = await sanitizeMcpAnalyticsEvent(toolCallEvent());
 
@@ -559,6 +684,37 @@ describe("captureOAuthTokenExchange", () => {
     expect(JSON.stringify(captured)).not.toContain("access_token");
     expect(JSON.stringify(captured)).not.toContain("refresh_token_hash");
     expect(JSON.stringify(captured)).not.toContain("code_verifier");
+  });
+
+  test("maps client and provider failure fields onto their PostHog keys", () => {
+    const captured: unknown[] = [];
+    const fakePosthog = {
+      capture: (event: unknown) => captured.push(event),
+    } as unknown as PostHog;
+
+    captureOAuthTokenExchange(
+      {
+        grantType: "authorization_code",
+        clientType: "registered_client",
+        clientId: "client_1",
+        accessScope: "organization",
+        stage: "provider_exchange",
+        outcome: "error",
+        errorCode: "invalid_grant",
+        providerStatusCode: 400,
+        providerErrorCode: "invalid_grant",
+        statusCode: 400,
+        durationMs: 17,
+      },
+      fakePosthog,
+    );
+
+    const properties = (captured[0] as { properties: Record<string, unknown> })
+      .properties;
+
+    expect(properties.oauth_client_id).toBe("client_1");
+    expect(properties.oauth_provider_status_code).toBe(400);
+    expect(properties.oauth_provider_error_code).toBe("invalid_grant");
   });
 });
 
@@ -623,10 +779,12 @@ describe("captureMissingCapabilityReport", () => {
         tools_checked: ["manage_browsers"],
       },
       {
-        authInfo: {
-          extra: {
-            connectionContext: {
-              scope: { organizationId: "org_analytics" },
+        http: {
+          authInfo: {
+            extra: {
+              connectionContext: {
+                scope: { organizationId: "org_analytics" },
+              },
             },
           },
         },
@@ -678,10 +836,12 @@ describe("captureMcpFeedback", () => {
           "The error linked to https://example.com/support for user@example.com.",
       },
       {
-        authInfo: {
-          extra: {
-            connectionContext: {
-              scope: { organizationId: "org_analytics" },
+        http: {
+          authInfo: {
+            extra: {
+              connectionContext: {
+                scope: { organizationId: "org_analytics" },
+              },
             },
           },
         },
@@ -743,7 +903,7 @@ describe("captureMcpFeedback", () => {
     );
   });
 
-  test("routes structured bot-detection feedback to config registry prioritization", async () => {
+  test("routes structured site-compatibility feedback to config registry prioritization", async () => {
     const captured: unknown[] = [];
     const analytics = {
       capture: async (event: unknown) => {
@@ -754,16 +914,16 @@ describe("captureMcpFeedback", () => {
     await captureMcpFeedback(
       {
         summary: "Stealth sessions were consistently blocked",
-        feedback_type: "bot_detection",
+        feedback_type: "site_compatibility",
         sentiment: "negative",
         task_completed: false,
         tools_used: ["manage_browsers", "execute_playwright_code"],
-        bot_detection: {
+        site_compatibility: {
           registrable_domain: "example.com",
           observed_outcome: "blocked",
-          suspected_vendor: "Akamai Bot Manager",
-          challenge_type: "access_denied",
-          stealth: "enabled",
+          access_provider: "Akamai Bot Manager",
+          challenge_type: "verification_prompt",
+          compatibility_mode: "enabled",
           proxy_type: "isp",
           region: "us-east",
           browser_version: "152.0.7977.42",
@@ -773,10 +933,12 @@ describe("captureMcpFeedback", () => {
         },
       },
       {
-        authInfo: {
-          extra: {
-            connectionContext: {
-              scope: { organizationId: "org_analytics" },
+        http: {
+          authInfo: {
+            extra: {
+              connectionContext: {
+                scope: { organizationId: "org_analytics" },
+              },
             },
           },
         },
@@ -794,7 +956,7 @@ describe("captureMcpFeedback", () => {
           feedback_bot_detection_registrable_domain: "example.com",
           feedback_bot_detection_observed_outcome: "blocked",
           feedback_bot_detection_suspected_vendor: "Akamai Bot Manager",
-          feedback_bot_detection_challenge_type: "access_denied",
+          feedback_bot_detection_challenge_type: "captcha",
           feedback_bot_detection_stealth: "enabled",
           feedback_bot_detection_proxy_type: "isp",
           feedback_bot_detection_region: "us-east",
@@ -819,7 +981,7 @@ describe("captureMcpFeedback", () => {
       feedback_type: "config_registry" as const,
       sentiment: "mixed" as const,
       task_completed: false,
-      bot_detection: {
+      site_compatibility: {
         registrable_domain: "example.com",
         observed_outcome: "blocked" as const,
         reproducibility: "consistent" as const,
@@ -848,8 +1010,8 @@ describe("captureMcpFeedback", () => {
     await captureMcpFeedback(
       {
         ...base,
-        bot_detection: {
-          ...base.bot_detection,
+        site_compatibility: {
+          ...base.site_compatibility,
           observed_outcome: "passed",
         },
       },
@@ -859,8 +1021,8 @@ describe("captureMcpFeedback", () => {
     await captureMcpFeedback(
       {
         ...base,
-        bot_detection: {
-          ...base.bot_detection,
+        site_compatibility: {
+          ...base.site_compatibility,
           observed_outcome: "passed",
         },
         config_registry: {
@@ -895,7 +1057,7 @@ describe("captureMcpFeedback", () => {
         feedback_type: "config_registry",
         sentiment: "negative",
         task_completed: false,
-        bot_detection: {
+        site_compatibility: {
           registrable_domain: "example.com",
           observed_outcome: "blocked",
           challenge_type: "access_denied",
@@ -926,10 +1088,12 @@ describe("captureMcpFeedback", () => {
         },
       },
       {
-        authInfo: {
-          extra: {
-            connectionContext: {
-              scope: { organizationId: "org_analytics" },
+        http: {
+          authInfo: {
+            extra: {
+              connectionContext: {
+                scope: { organizationId: "org_analytics" },
+              },
             },
           },
         },
@@ -976,17 +1140,16 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
   const ORG = "org_integration";
 
   test("keeps analytics tool contracts stable", async () => {
-    const disabled = await connectTestMcp(
-      (server) => instrumentMcpAnalytics(server, null),
-      {},
-    );
-    const enabled = await connectTestMcp(
-      (server) =>
-        instrumentMcpAnalytics(server, {
-          capture: () => undefined,
-        } as unknown as PostHog),
-      {},
-    );
+    const disabled = await connectTestMcp((server) => {
+      instrumentMcpAnalytics(server, null);
+      registerMcpCapabilities(server, { mcpApps: true, vaults: true });
+    }, {});
+    const enabled = await connectTestMcp((server) => {
+      instrumentMcpAnalytics(server, {
+        capture: () => undefined,
+      } as unknown as PostHog);
+      registerMcpCapabilities(server, { mcpApps: true, vaults: true });
+    }, {});
 
     try {
       const disabledTool = (await disabled.client.listTools()).tools.find(
@@ -998,6 +1161,35 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       expect(disabledTool).toBeDefined();
       expect(disabledTool?.inputSchema).toEqual(enabledTool?.inputSchema);
       expect(disabledTool?.inputSchema.required).toContain("context");
+      const vaultTool = (await enabled.client.listTools()).tools.find(
+        ({ name }) => name === "manage_vault_credentials",
+      );
+      expect(vaultTool?.inputSchema.properties).toHaveProperty("spec");
+      const rejectedVaultInput = await enabled.client.callTool({
+        name: "manage_vault_credentials",
+        arguments: {
+          action: "create",
+          vault: "test",
+          key: "test",
+          spec: {
+            fields: [
+              {
+                name: "password",
+                type: "password",
+                value: { private_key: "never-echo-this" },
+              },
+            ],
+          },
+        },
+      });
+      expect(rejectedVaultInput.isError).toBe(true);
+      expect(JSON.stringify(rejectedVaultInput)).toContain(
+        "invalid vault tool input",
+      );
+      expect(JSON.stringify(rejectedVaultInput)).not.toContain(
+        "never-echo-this",
+      );
+      expect(JSON.stringify(rejectedVaultInput)).not.toContain("private_key");
 
       const missingCapabilityTool = (
         await enabled.client.listTools()
@@ -1007,11 +1199,12 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       expect(missingCapabilityTool?.description).toContain(
         "after checking the tool list",
       );
+      expect(missingCapabilityTool?.description).toContain("site_tool_missing");
       expect(missingCapabilityTool?.description).toContain(
-        "transient or capacity failure",
+        "transient capacity failure",
       );
       expect(missingCapabilityTool?.description).toContain(
-        "client-side permission restriction",
+        "client permission restriction",
       );
       expect(missingCapabilityTool?.inputSchema.required).toEqual([
         "context",
@@ -1082,7 +1275,7 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     }
   });
 
-  // mcp-handler builds a fresh McpServer per HTTP request, so each simulated request
+  // createMcpHandler builds a fresh McpServer per HTTP request, so each simulated request
   // gets its own instrumented server and the SDK's per-session identity cache starts
   // cold — this is exactly the deployed topology.
   function makeServer(captured: { event?: string }[]) {
@@ -1091,9 +1284,15 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
       capture: (event: unknown) => captured.push(event as { event?: string }),
     } as unknown as PostHog;
     instrumentMcpAnalytics(server, fakePosthog);
-    server.tool("ping", {}, async () => ({
+    server.registerTool("ping", { inputSchema: z.object({}) }, async () => ({
       content: [{ type: "text" as const, text: "pong" }],
     }));
+    // Declares context itself, like manage_browsers, so the SDK does not own the argument.
+    server.registerTool(
+      "ping_with_context",
+      { inputSchema: z.object({ context: z.string().optional() }) },
+      async () => ({ content: [{ type: "text" as const, text: "pong" }] }),
+    );
     return server;
   }
 
@@ -1104,23 +1303,30 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
   ) {
     const server = makeServer(captured);
     const request = { jsonrpc: "2.0", id: 1, method, params };
+
     const extra = {
-      authInfo: {
-        token: "sk_test",
-        clientId: "mcp-server",
-        scopes: ["apikey"],
-        extra: { connectionContext: { scope: { organizationId: ORG } } },
-      },
-      signal: new AbortController().signal,
-      requestInfo: {
-        headers: {
-          [MCP_SESSION_HEADER]: encodeSessionId({
-            sessionId: "ses_integration",
-            clientName: "test-client",
-            clientVersion: "0.0.0",
-            protocolVersion: "2025-03-26",
-          }),
+      http: {
+        authInfo: {
+          token: "sk_test",
+          clientId: "mcp-server",
+          scopes: ["apikey"],
+          extra: { connectionContext: { scope: { organizationId: ORG } } },
         },
+        req: new Request("https://mcp.example.test/mcp", {
+          headers: {
+            [MCP_SESSION_HEADER]: encodeSessionId({
+              sessionId: "ses_integration",
+              clientName: "test-client",
+              clientVersion: "0.0.0",
+              protocolVersion: "2025-03-26",
+            }),
+          },
+        }),
+      },
+      mcpReq: {
+        signal: new AbortController().signal,
+        envelope: {},
+        requestState: () => undefined,
       },
     };
     const handlers = (
@@ -1196,6 +1402,31 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
 
     // identify stays unwired, so no $identify event is ever published.
     expect(byEvent.has("$identify")).toBe(false);
+
+    // A carried transport session is kept rather than derived.
+    expect(toolCall.properties.$session_id).toBe("ses_integration");
+  });
+
+  test("records intent for a tool that declares its own context argument", async () => {
+    const captured: { event?: string }[] = [];
+
+    const result = (await simulateRequest(captured, "tools/call", {
+      name: "ping_with_context",
+      arguments: {
+        context: "Checking intent capture on a tool-owned context.",
+      },
+    })) as { isError?: boolean };
+
+    expect(result.isError).not.toBe(true);
+    const toolCall = captured.find(
+      ({ event }) => event === PostHogMCPAnalyticsEvent.ToolCall,
+    ) as { properties: Record<string, unknown> };
+    expect(toolCall.properties).toMatchObject({
+      [PostHogMCPAnalyticsProperty.ToolName]: "ping_with_context",
+      [PostHogMCPAnalyticsProperty.Intent]:
+        "Checking intent capture on a tool-owned context.",
+      [PostHogMCPAnalyticsProperty.IntentSource]: "inferred",
+    });
   });
 
   test("classifies rejected capability input through instrumentation", async () => {
@@ -1276,6 +1507,45 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     });
   });
 
+  test("routes site tool demand with only a public domain and distinct dedupe keys", async () => {
+    const captured: { event?: string }[] = [];
+    const request = {
+      name: "get_more_tools",
+      arguments: {
+        context:
+          "The page lacks a reusable structured search action, so the agent is continuing with browser interaction instead.",
+        gap_reason: "site_tool_missing",
+        capability_area: "webmcp",
+        capability: "search available products",
+        requested_action: "search",
+        task_outcome: "completed_with_workaround",
+        tools_checked: ["webmcp"],
+        site_domain: "example.com",
+      },
+    };
+
+    await simulateRequest(captured, "tools/call", request);
+    await simulateRequest(captured, "tools/call", {
+      ...request,
+      arguments: { ...request.arguments, site_domain: "example.org" },
+    });
+
+    const requests = captured.filter(
+      ({ event }) => event === MCP_CAPABILITY_REQUESTED_EVENT,
+    ) as { properties: Record<string, unknown> }[];
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.properties).toMatchObject({
+      missing_capability_gap_reason: "site_tool_missing",
+      missing_capability_destination: "webmcp_catalog_demand",
+      missing_capability_area: "webmcp",
+      missing_capability_name: "search available products",
+      missing_capability_site_domain: "example.com",
+    });
+    expect(requests[0]?.properties.missing_capability_dedupe_key).not.toBe(
+      requests[1]?.properties.missing_capability_dedupe_key,
+    );
+  });
+
   test("captures feedback with the surrounding MCP session metadata", async () => {
     const captured: { event?: string }[] = [];
 
@@ -1285,13 +1555,13 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
         context:
           "Reporting a repeatable site block so the affected domain can be prioritized for a working browser configuration.",
         summary: "Stealth sessions were consistently blocked",
-        feedback_type: "bot_detection",
+        feedback_type: "site_compatibility",
         sentiment: "negative",
         task_completed: false,
-        bot_detection: {
+        site_compatibility: {
           registrable_domain: "example.com",
           observed_outcome: "blocked",
-          suspected_vendor: "Akamai Bot Manager",
+          access_provider: "Akamai Bot Manager",
           reproducibility: "consistent",
         },
       },
@@ -1332,17 +1602,318 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     );
   });
 
+  test("upgrades previous site outcome names before capture and keeps legacy analytics values", async () => {
+    const captured: { event?: string }[] = [];
+
+    await simulateRequest(captured, "tools/call", {
+      name: KERNEL_FEEDBACK_TOOL_NAME,
+      arguments: {
+        context:
+          "Reporting a site result from a client that still holds the previous feedback schema.",
+        summary: "The site showed a verification step",
+        feedback_type: "bot_detection",
+        sentiment: "mixed",
+        task_completed: true,
+        bot_detection: {
+          registrable_domain: "example.com",
+          observed_outcome: "challenged",
+          challenge_type: "captcha",
+          stealth: "enabled",
+          reproducibility: "single_observation",
+        },
+      },
+    });
+
+    const feedback = captured.find(
+      ({ event }) => event === MCP_FEEDBACK_SUBMITTED_EVENT,
+    ) as { properties: Record<string, unknown> };
+    expect(feedback.properties).toMatchObject({
+      feedback_type: "bot_detection",
+      feedback_destination: "config_registry_prioritization",
+      feedback_bot_detection_challenge_type: "captcha",
+      feedback_bot_detection_stealth: "enabled",
+    });
+  });
+
+  test("attributes modern requests without a session and preserves the privacy allowlist", async () => {
+    const captured: { event?: string; properties?: Record<string, unknown> }[] =
+      [];
+    const handler = createMcpHandler(() => makeServer(captured));
+    try {
+      const response = await handler.fetch(
+        new Request("https://mcp.example.test/mcp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "MCP-Protocol-Version": "2026-07-28",
+            "Mcp-Method": "tools/call",
+            "Mcp-Name": "ping",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: {
+              name: "ping",
+              arguments: {
+                context:
+                  "Checking https://private.example.com with a secret payload",
+              },
+              _meta: {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {
+                  name: "modern-client",
+                  version: "1",
+                },
+                "io.modelcontextprotocol/clientCapabilities": {
+                  extensions: { "io.modelcontextprotocol/ui": {} },
+                },
+              },
+            },
+          }),
+        }),
+        {
+          authInfo: {
+            token: "test-token",
+            clientId: "test-client",
+            scopes: [],
+            extra: { connectionContext: { scope: { organizationId: ORG } } },
+          },
+        },
+      );
+      expect(response.status).toBe(200);
+      expect((await response.json()).result.resultType).toBe("complete");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const event = captured.find(
+        (event) => event.event === PostHogMCPAnalyticsEvent.ToolCall,
+      );
+      expect(event?.properties).toMatchObject({
+        $groups: { organization: ORG },
+        [MCP_CLIENT_SUPPORTS_APPS_PROPERTY]: true,
+        [PostHogMCPAnalyticsProperty.ProtocolVersion]: "2026-07-28",
+      });
+      expect(event?.properties).not.toHaveProperty(
+        PostHogMCPAnalyticsProperty.Parameters,
+      );
+      expect(event?.properties).not.toHaveProperty(
+        PostHogMCPAnalyticsProperty.Response,
+      );
+      expect(JSON.stringify(event)).not.toContain("private.example.com");
+      expect(JSON.stringify(event)).not.toContain("test-token");
+    } finally {
+      await handler.close();
+    }
+  });
+
+  async function modernRequest({
+    token,
+    clientName,
+    meta = {},
+    name = "ping",
+    args = { context: "Checking derived session analytics." },
+  }: {
+    token: string;
+    clientName: string;
+    meta?: Record<string, unknown>;
+    name?: string;
+    args?: Record<string, unknown>;
+  }) {
+    const captured: {
+      event?: string;
+      distinctId?: string;
+      properties?: Record<string, unknown>;
+    }[] = [];
+    const handler = createMcpHandler(() => makeServer(captured));
+    try {
+      const response = await handler.fetch(
+        new Request("https://mcp.example.test/mcp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "MCP-Protocol-Version": "2026-07-28",
+            "Mcp-Method": "tools/call",
+            "Mcp-Name": name,
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: {
+              name,
+              arguments: args,
+              _meta: {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {
+                  name: clientName,
+                  version: "1",
+                },
+                "io.modelcontextprotocol/clientCapabilities": {},
+                ...meta,
+              },
+            },
+          }),
+        }),
+        {
+          authInfo: {
+            token,
+            clientId: "test-client",
+            scopes: [],
+            extra: { connectionContext: { scope: { organizationId: ORG } } },
+          },
+        },
+      );
+      expect(response.status).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } finally {
+      await handler.close();
+    }
+    return captured;
+  }
+
+  async function modernToolCall(options: Parameters<typeof modernRequest>[0]) {
+    const event = (await modernRequest(options)).find(
+      (event) => event.event === PostHogMCPAnalyticsEvent.ToolCall,
+    );
+    expect(event).toBeDefined();
+    return event!;
+  }
+
+  test("groups session-less calls by caller, client, and window", async () => {
+    setSystemTime(new Date("2026-01-01T00:10:00Z"));
+    try {
+      const first = await modernToolCall({
+        token: "token-a",
+        clientName: "client-a",
+      });
+      const second = await modernToolCall({
+        token: "token-a",
+        clientName: "client-a",
+      });
+      const otherCaller = await modernToolCall({
+        token: "token-b",
+        clientName: "client-a",
+      });
+      const otherClient = await modernToolCall({
+        token: "token-a",
+        clientName: "client-b",
+      });
+      setSystemTime(new Date("2026-01-01T00:40:00Z"));
+      const nextWindow = await modernToolCall({
+        token: "token-a",
+        clientName: "client-a",
+      });
+
+      const sessionId = first.properties?.$session_id;
+      expect(sessionId).toStartWith("ses_");
+      expect(first.distinctId).toBe(sessionId as string);
+      expect(second.properties?.$session_id).toBe(sessionId);
+      expect(second.distinctId).toBe(sessionId as string);
+      expect(otherCaller.properties?.$session_id).not.toBe(sessionId);
+      expect(otherClient.properties?.$session_id).not.toBe(sessionId);
+      expect(nextWindow.properties?.$session_id).not.toBe(sessionId);
+      expect(JSON.stringify(first)).not.toContain("token-a");
+      expect(first.properties).not.toHaveProperty(
+        "__mcp_analytics_session_key",
+      );
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test("puts session-less custom events in the caller's derived session", async () => {
+    setSystemTime(new Date("2026-01-01T00:10:00Z"));
+    try {
+      const toolCall = await modernToolCall({
+        token: "token-a",
+        clientName: "client-a",
+      });
+      const captured = await modernRequest({
+        token: "token-a",
+        clientName: "client-a",
+        name: KERNEL_FEEDBACK_TOOL_NAME,
+        args: {
+          context:
+            "Reporting a repeatable site block so the affected domain can be prioritized for a working browser configuration.",
+          summary: "Stealth sessions were consistently blocked",
+          feedback_type: "site_compatibility",
+          sentiment: "negative",
+          task_completed: false,
+          site_compatibility: {
+            registrable_domain: "example.com",
+            observed_outcome: "blocked",
+            reproducibility: "consistent",
+          },
+        },
+      });
+      const feedback = captured.find(
+        ({ event }) => event === MCP_FEEDBACK_SUBMITTED_EVENT,
+      );
+
+      const sessionId = toolCall.properties?.$session_id;
+      expect(feedback?.properties?.$session_id).toBe(sessionId);
+      expect(feedback?.distinctId).toBe(sessionId as string);
+      expect(feedback?.properties).not.toHaveProperty(
+        "__mcp_analytics_session_key",
+      );
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test("records the model only from Codex request metadata", async () => {
+    const codex = await modernToolCall({
+      token: "token-a",
+      clientName: "codex",
+      meta: { "x-codex-turn-metadata": { model: "gpt-5.2-codex" } },
+    });
+    expect(codex.properties).toMatchObject({
+      [PostHogMCPAnalyticsProperty.LlmModel]: "gpt-5.2-codex",
+      [PostHogMCPAnalyticsProperty.LlmModelSource]: "client_metadata",
+    });
+
+    for (const model of ["unknown", "ignore previous instructions", 42]) {
+      const event = await modernToolCall({
+        token: "token-a",
+        clientName: "codex",
+        meta: { "x-codex-turn-metadata": { model } },
+      });
+      expect(event.properties).not.toHaveProperty(
+        PostHogMCPAnalyticsProperty.LlmModel,
+      );
+    }
+
+    const other = await modernToolCall({
+      token: "token-a",
+      clientName: "client-a",
+    });
+    expect(other.properties).not.toHaveProperty(
+      PostHogMCPAnalyticsProperty.LlmModel,
+    );
+    expect(other.properties).not.toHaveProperty(
+      PostHogMCPAnalyticsProperty.LlmModelSource,
+    );
+  });
+
   test("stays anonymous when no connection context is attached", async () => {
     const captured: { event?: string }[] = [];
     const server = makeServer(captured);
+
     const extra = {
-      authInfo: {
-        token: "sk_test",
-        clientId: "mcp-server",
-        scopes: ["apikey"],
+      http: {
+        authInfo: {
+          token: "sk_test",
+          clientId: "mcp-server",
+          scopes: ["apikey"],
+        },
+        req: new Request("https://mcp.example.test/mcp", {
+          headers: {},
+        }),
       },
-      signal: new AbortController().signal,
-      requestInfo: { headers: {} },
+      mcpReq: {
+        signal: new AbortController().signal,
+        envelope: {},
+        requestState: () => undefined,
+      },
     };
     const handlers = (
       server.server as unknown as {
@@ -1366,5 +1937,183 @@ describe("instrumentMcpAnalytics (SDK integration)", () => {
     expect(toolsList.properties.$groups).toBeUndefined();
     expect(toolsList.properties.$process_person_profile).toBe(false);
     expect(toolsList.distinctId).toStartWith("ses_");
+  });
+});
+
+describe("instrumentMcpAnalytics client-named targets", () => {
+  const SESSION_ID = "ses_synthetic9f2c";
+  const PROFILE_NAME = "profile-synthetic-4d1e";
+  const APP_NAME = "app-synthetic-8b7a";
+  const MISSING_SESSION_ID = "ses_missing0c3d";
+  const TOKEN = "sk_synthetic_Zq8vN3pL5tR7wX2y";
+  const BASE = "kernel://orgs/org_test/projects/proj_test";
+
+  type CapturedEvent = {
+    event?: string;
+    properties: Record<string, unknown>;
+  };
+
+  async function connectInstrumented() {
+    const captured: CapturedEvent[] = [];
+    const kernelClient = {
+      browsers: {
+        retrieve: async (id: string) =>
+          id === SESSION_ID ? { session_id: id } : null,
+        list: async function* () {
+          yield { session_id: SESSION_ID };
+        },
+      },
+      profiles: {
+        retrieve: async (name: string) => ({ name }),
+      },
+      apps: {
+        list: async () => ({
+          getPaginatedItems: () => [{ app_name: APP_NAME }],
+        }),
+      },
+    };
+    const mcp = await connectTestMcp((server, dependencies) => {
+      instrumentMcpAnalytics(server, {
+        capture: (event: CapturedEvent) => captured.push(event),
+      } as unknown as PostHog);
+      registerMcpCapabilities(server, { mcpApps: true, dependencies });
+    }, kernelClient);
+    return { ...mcp, captured };
+  }
+
+  async function capturedEvents(captured: CapturedEvent[], name: string) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return captured.filter(({ event }) => event === name);
+  }
+
+  test("reports the registered resource name instead of the URI", async () => {
+    const { client, close, captured } = await connectInstrumented();
+    try {
+      for (const uri of [
+        `${BASE}/browsers/${SESSION_ID}`,
+        `${BASE}/browsers`,
+        `${BASE}/profiles/${PROFILE_NAME}`,
+        `${BASE}/apps/${APP_NAME}`,
+        MANAGED_AUTH_RESOURCE_URI,
+      ]) {
+        await client.readResource({ uri });
+      }
+
+      const reads = await capturedEvents(
+        captured,
+        PostHogMCPAnalyticsEvent.ResourceRead,
+      );
+      expect(
+        reads.map(
+          ({ properties }) =>
+            properties[PostHogMCPAnalyticsProperty.ResourceName],
+        ),
+      ).toEqual([
+        "browser",
+        "browsers",
+        "profile",
+        "app",
+        "kernel-managed-auth-login",
+      ]);
+      for (const { properties } of reads) {
+        expect(properties[PostHogMCPAnalyticsProperty.IsError]).toBe(false);
+        expect(typeof properties[PostHogMCPAnalyticsProperty.DurationMs]).toBe(
+          "number",
+        );
+      }
+      const serialized = JSON.stringify(reads);
+      for (const value of [
+        "kernel://",
+        "ui://",
+        "proj_test",
+        SESSION_ID,
+        PROFILE_NAME,
+        APP_NAME,
+      ]) {
+        expect(serialized).not.toContain(value);
+      }
+    } finally {
+      await close();
+    }
+  });
+
+  test("reports failed reads without the URI", async () => {
+    const { client, close, captured } = await connectInstrumented();
+    try {
+      for (const uri of [
+        `${BASE}/browsers/${MISSING_SESSION_ID}`,
+        `${BASE}/secrets/${TOKEN}`,
+        `https://${TOKEN}@files.example.test/${TOKEN}?key=${TOKEN}`,
+      ]) {
+        await expect(client.readResource({ uri })).rejects.toThrow();
+      }
+
+      const reads = await capturedEvents(
+        captured,
+        PostHogMCPAnalyticsEvent.ResourceRead,
+      );
+      expect(
+        reads.map(({ properties }) => [
+          properties[PostHogMCPAnalyticsProperty.ResourceName],
+          properties[PostHogMCPAnalyticsProperty.IsError],
+        ]),
+      ).toEqual([
+        ["browser", true],
+        [UNREGISTERED_RESOURCE_NAME, true],
+        [UNREGISTERED_RESOURCE_NAME, true],
+      ]);
+      const serialized = JSON.stringify(captured);
+      for (const value of ["kernel://", MISSING_SESSION_ID, TOKEN]) {
+        expect(serialized).not.toContain(value);
+      }
+    } finally {
+      await close();
+    }
+  });
+
+  test("drops calls to unregistered tools", async () => {
+    const { client, close, captured } = await connectInstrumented();
+    try {
+      for (const name of [TOKEN, "constructor"]) {
+        await client
+          .callTool({ name, arguments: { context: "Calling a tool." } })
+          .catch(() => undefined);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(
+        captured.filter(
+          ({ event }) => event === PostHogMCPAnalyticsEvent.ToolCall,
+        ),
+      ).toEqual([]);
+      expect(JSON.stringify(captured)).not.toContain(TOKEN);
+    } finally {
+      await close();
+    }
+  });
+
+  test("leaves tool call names unchanged", async () => {
+    const { client, close, captured } = await connectInstrumented();
+    try {
+      await client.callTool({
+        name: "get_connection_context",
+        arguments: { context: "Checking tool analytics next to resources." },
+      });
+
+      const [toolCall] = await capturedEvents(
+        captured,
+        PostHogMCPAnalyticsEvent.ToolCall,
+      );
+      expect(toolCall.properties).toMatchObject({
+        [PostHogMCPAnalyticsProperty.ToolName]: "get_connection_context",
+        [PostHogMCPAnalyticsProperty.ResourceName]: "get_connection_context",
+        [PostHogMCPAnalyticsProperty.IsError]: false,
+      });
+      expect(
+        typeof toolCall.properties[PostHogMCPAnalyticsProperty.DurationMs],
+      ).toBe("number");
+    } finally {
+      await close();
+    }
   });
 });

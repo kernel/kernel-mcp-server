@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { APIError } from "@onkernel/sdk";
 import type {
   VaultProviderConfigCreateParams,
@@ -26,46 +26,50 @@ export function registerVaultProviderConfigTools(
   server: McpServer,
   dependencies: McpDependencies,
 ) {
-  server.tool(
+  server.registerTool(
     "manage_vault_provider_configs",
-    'Manage organization-owned Link and AgentCard application credentials, not user OAuth grants. "create" requires name, provider, and credentials (client_id/client_secret); duplicate names conflict without replacing secrets. "list" and "get" return public configuration metadata only. "update" renames or rotates client_secret across all bound wallets; omitted fields stay unchanged. Provider, client_id, mode, and wallet bindings are immutable. "delete" requires user confirmation and fails while any non-deleted item references the config; it does not revoke unrelated grants. Writes require an organization-scoped connection. Supply write-only secrets through a trusted client, never chat. No automatic retries.',
-    vaultToolInput({
-      action: z.enum(["create", "list", "get", "update", "delete"]),
-      config: vaultSelectorSchema()
-        .describe(
-          "(get, update, delete) Configuration ID or name within the organization.",
-        )
-        .optional(),
-      name: vaultSelectorSchema()
-        .describe("(create, update) Unique organization-wide name.")
-        .optional(),
-      provider: vaultProviderSchema
-        .describe("(create only) Immutable provider.")
-        .optional(),
-      credentials: providerCredentialsSchema
-        .describe(
-          "(create) client_id and client_secret. (update) client_secret only. Never user access/refresh tokens.",
-        )
-        .optional(),
-      ...paginationParams,
-    }),
     {
-      title: "Manage Kernel vault provider configurations",
-      readOnlyHint: false,
-      destructiveHint: true,
-      idempotentHint: false,
-      openWorldHint: true,
+      description:
+        'manage organization-owned link and agentcard application credentials, not user oauth grants. "create" requires name, provider, and credentials (client_id/client_secret, plus publishable_key for link); duplicate names conflict without replacing secrets. "list" and "get" return public configuration metadata only. "update" renames, rotates client_secret, or sets the link publishable_key across all bound wallets; omitted fields stay unchanged. provider, client_id, mode, and wallet bindings are immutable. "delete" requires user confirmation and fails while any non-deleted item references the config; it does not revoke unrelated grants. writes require an organization-scoped connection. supply write-only secrets through a trusted client, never chat. no automatic retries.',
+      inputSchema: vaultToolInput({
+        action: z.enum(["create", "list", "get", "update", "delete"]),
+        config: vaultSelectorSchema()
+          .describe(
+            "(get, update, delete) configuration id or name within the organization.",
+          )
+          .optional(),
+        name: vaultSelectorSchema()
+          .describe("(create, update) unique organization-wide name.")
+          .optional(),
+        provider: vaultProviderSchema
+          .exclude(["kernel"])
+          .describe("(create only) immutable provider.")
+          .optional(),
+        credentials: providerCredentialsSchema
+          .describe(
+            "(create) client_id, client_secret, and for link publishable_key. (update) client_secret and/or publishable_key. never user access/refresh tokens.",
+          )
+          .optional(),
+        ...paginationParams,
+      }),
+      annotations: {
+        title: "manage KERNEL vault provider configurations",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
       const write = ["create", "update", "delete"].includes(params.action);
       if (
         write &&
-        connectionContextFromAuthInfo(extra.authInfo).scope.kind !==
+        connectionContextFromAuthInfo(ctx.http.authInfo).scope.kind !==
           "organization"
       ) {
         return errorResponse(
-          "Provider configuration writes require an organization-scoped connection.",
+          "provider configuration writes require an organization-scoped connection.",
         );
       }
       if (
@@ -76,14 +80,21 @@ export function registerVaultProviderConfigTools(
           "client_id is immutable; create a new configuration to change clients.",
         );
       }
+      if (
+        params.action === "create" &&
+        params.provider !== "link" &&
+        params.credentials?.publishable_key !== undefined
+      ) {
+        return errorResponse("publishable_key is only supported for link.");
+      }
       const client = dependencies
-        .createKernelClient(extra.authInfo.token)
+        .createKernelClient(ctx.http.authInfo.token)
         .withOptions({
           project: null,
           projectID: null,
           logLevel: "off",
         });
-      const options = { maxRetries: 0, signal: extra.signal };
+      const options = { maxRetries: 0, signal: ctx.mcpReq.signal };
       const project = (value: unknown) =>
         projectVaultOutput(value, vaultProviderConfigFields);
       const respond = (value: unknown) =>
@@ -94,20 +105,31 @@ export function registerVaultProviderConfigTools(
             if (
               !params.name ||
               !params.provider ||
-              !params.credentials?.client_id
+              !params.credentials?.client_id ||
+              !params.credentials.client_secret
             ) {
               return errorResponse(
                 "name, provider, and credentials with client_id and client_secret are required for create.",
               );
             }
-            const body: VaultProviderConfigCreateParams = {
-              name: params.name,
-              provider: params.provider,
-              credentials: {
-                client_id: params.credentials.client_id,
-                client_secret: params.credentials.client_secret,
-              },
-            };
+            const { client_id, client_secret, publishable_key } =
+              params.credentials;
+            const body: VaultProviderConfigCreateParams =
+              params.provider === "link"
+                ? {
+                    name: params.name,
+                    provider: "link",
+                    credentials: {
+                      client_id,
+                      client_secret,
+                      ...(publishable_key !== undefined && { publishable_key }),
+                    },
+                  }
+                : {
+                    name: params.name,
+                    provider: params.provider,
+                    credentials: { client_id, client_secret },
+                  };
             return respond(
               project(await client.vaultProviderConfigs.create(body, options)),
             );
@@ -126,7 +148,7 @@ export function registerVaultProviderConfigTools(
               has_more: page.has_more,
               next_offset: page.next_offset,
               ...(items.length === 0 && {
-                note: "No provider configurations found in the organization.",
+                note: "no provider configurations found in the organization.",
               }),
             });
           }
@@ -144,15 +166,22 @@ export function registerVaultProviderConfigTools(
           case "update": {
             if (!params.config)
               return errorResponse("config is required for update.");
-            if (params.name === undefined && params.credentials === undefined)
+            const { client_secret, publishable_key } = params.credentials ?? {};
+            if (
+              params.name === undefined &&
+              client_secret === undefined &&
+              publishable_key === undefined
+            )
               return errorResponse(
-                "name or credentials is required for update.",
+                "name, credentials.client_secret, or credentials.publishable_key is required for update.",
               );
             const body: VaultProviderConfigUpdateParams = {
               ...(params.name !== undefined && { name: params.name }),
-              ...(params.credentials !== undefined && {
+              ...((client_secret !== undefined ||
+                publishable_key !== undefined) && {
                 credentials: {
-                  client_secret: params.credentials.client_secret,
+                  ...(client_secret !== undefined && { client_secret }),
+                  ...(publishable_key !== undefined && { publishable_key }),
                 },
               }),
             };

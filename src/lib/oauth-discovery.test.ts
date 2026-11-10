@@ -8,6 +8,11 @@ describe("OAuth protected-resource discovery", () => {
   it.each([
     ["https://mcp.onkernel.com", undefined, "https://mcp.onkernel.com"],
     ["http://localhost:3002", "mcp.onkernel.com", "https://mcp.onkernel.com"],
+    [
+      "http://localhost:3002",
+      "mcp.dev.onkernel.com",
+      "https://mcp.dev.onkernel.com",
+    ],
     ["http://localhost:3002", undefined, "http://localhost:3002"],
     [
       "https://localhost:3000",
@@ -31,9 +36,7 @@ describe("OAuth protected-resource discovery", () => {
         `${requestOrigin}${expectedMetadataUrl.pathname}`,
         { headers },
       );
-      const metadata = oauthResourceMetadata(metadataRequest, {
-        resource: publicOrigin,
-      });
+      const metadata = oauthResourceMetadata(metadataRequest);
       expect(metadata.resource).toBe(resource.href);
       expect(metadata.resource).not.toBe(resource.origin);
     },
@@ -45,14 +48,6 @@ describe("OAuth protected-resource discovery", () => {
         new Request(
           "https://mcp.onkernel.com/.well-known/oauth-protected-resource/mcp",
         ),
-        {
-          resource: "https://clerk.example",
-          authorization_servers: ["https://clerk.example"],
-          jwks_uri: "https://clerk.example/.well-known/jwks.json",
-          token_types_supported: [
-            "urn:ietf:params:oauth:token-type:access_token",
-          ],
-        },
       ),
     ).toEqual({
       resource: "https://mcp.onkernel.com/mcp",
@@ -61,31 +56,46 @@ describe("OAuth protected-resource discovery", () => {
       token_endpoint: "https://auth.onkernel.com/token",
       registration_endpoint: "https://auth.onkernel.com/register",
       scopes_supported: ["openid"],
-      jwks_uri: "https://clerk.example/.well-known/jwks.json",
-      token_types_supported: ["urn:ietf:params:oauth:token-type:access_token"],
     });
   });
 
-  it("pins resource and issuer when Next uses an internal request origin", () => {
+  it.each([
+    ["mcp.onkernel.com", "auth.onkernel.com"],
+    ["mcp.dev.onkernel.com", "auth.dev.onkernel.com"],
+  ])("pins %s discovery to %s behind Next", (resourceHost, issuerHost) => {
     const metadata = oauthResourceMetadata(
       new Request(
         "https://localhost:3002/.well-known/oauth-protected-resource/mcp",
         {
           headers: {
-            Host: "mcp.onkernel.com",
+            Host: resourceHost,
             "X-Forwarded-Host": "evil.example",
           },
         },
       ),
-      {},
     );
-    expect(metadata.resource).toBe("https://mcp.onkernel.com/mcp");
+    expect(metadata).toMatchObject({
+      resource: `https://${resourceHost}/mcp`,
+      authorization_servers: [`https://${issuerHost}`],
+      authorization_endpoint: `https://${issuerHost}/authorize`,
+      token_endpoint: `https://${issuerHost}/token`,
+      registration_endpoint: `https://${issuerHost}/register`,
+    });
+  });
+
+  it("advertises the dev OAuth server on direct dev requests", () => {
+    const metadata = oauthResourceMetadata(
+      new Request(
+        "https://mcp.dev.onkernel.com/.well-known/oauth-protected-resource/mcp",
+      ),
+    );
+    expect(metadata.resource).toBe("https://mcp.dev.onkernel.com/mcp");
     expect(metadata.authorization_servers).toEqual([
-      "https://auth.onkernel.com",
+      "https://auth.dev.onkernel.com",
     ]);
   });
 
-  it("uses the public Host for non-production discovery behind Next", () => {
+  it("uses the public Host for other non-production discovery behind Next", () => {
     for (const host of [
       "mcp-staging.onkernel.com",
       "preview.example",
@@ -98,7 +108,6 @@ describe("OAuth protected-resource discovery", () => {
             headers: { Host: host, "X-Forwarded-Host": "mcp.onkernel.com" },
           },
         ),
-        {},
       );
       expect(metadata.resource).toBe(`https://${host}/mcp`);
       expect(metadata.authorization_servers).toEqual([`https://${host}`]);
@@ -114,10 +123,10 @@ describe("OAuth protected-resource discovery", () => {
       "https://mcp-staging.onkernel.com",
       "https://preview.example",
       "https://mcp.onkernel.com.evil.example",
+      "https://mcp.dev.onkernel.com.evil.example",
     ]) {
       const metadata = oauthResourceMetadata(
         new Request(`${origin}/.well-known/oauth-protected-resource/mcp`),
-        {},
       );
       expect(metadata.resource).toBe(`${origin}/mcp`);
       expect(metadata.authorization_servers).toEqual([origin]);

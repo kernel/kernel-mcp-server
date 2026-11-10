@@ -81,7 +81,7 @@ test("a playwright transport failure is reported through the shared tool-error p
 
     expect(result.isError).toBe(true);
     const text = (result.content as Array<{ text: string }>)[0].text;
-    expect(text).toStartWith("Error in execute_playwright_code (execute):");
+    expect(text).toStartWith("error in execute_playwright_code (execute):");
   } finally {
     await close();
   }
@@ -101,6 +101,9 @@ test("exec_command waits out the deadline it was given and is never replayed", a
         session_id: "ses_1",
         command: "sleep",
         args: ["120"],
+        env: { TRACE: "0" },
+        as_user: "kernel",
+        as_root: false,
         timeout_sec: 120,
       },
     });
@@ -108,7 +111,12 @@ test("exec_command waits out the deadline it was given and is never replayed", a
     await close();
   }
 
-  expect(calls[0].body.timeout_sec).toBe(120);
+  expect(calls[0].body).toMatchObject({
+    timeout_sec: 120,
+    env: { TRACE: "0" },
+    as_user: "kernel",
+    as_root: false,
+  });
   expect(calls[0].options.maxRetries).toBe(0);
   expect(calls[0].options.timeout).toBe(120_000 + TRANSPORT_HEADROOM_MS);
 });

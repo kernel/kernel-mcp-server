@@ -1,14 +1,6 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import { OAuthProtectedResourceMetadataSchema } from "@modelcontextprotocol/core";
 import { NextRequest } from "next/server";
-
-const clerkMetadata = {
-  resource: "https://clerk.example.test",
-  authorization_servers: ["https://clerk.example.test"],
-  jwks_uri: "https://clerk.example.test/.well-known/jwks.json",
-};
-mock.module("@clerk/mcp-tools/next", () => ({
-  protectedResourceHandlerClerk: () => async () => Response.json(clerkMetadata),
-}));
 
 const { GET, OPTIONS } = await import(
   "@/app/.well-known/oauth-protected-resource/mcp/route"
@@ -17,6 +9,7 @@ const { GET, OPTIONS } = await import(
 describe("/.well-known/oauth-protected-resource/mcp", () => {
   test.each([
     ["https://mcp.onkernel.com", "https://auth.onkernel.com"],
+    ["https://mcp.dev.onkernel.com", "https://auth.dev.onkernel.com"],
     ["http://localhost:3002", "http://localhost:3002"],
     ["https://mcp-staging.onkernel.com", "https://mcp-staging.onkernel.com"],
   ])("serves uncached metadata bound to %s/mcp", async (origin, issuer) => {
@@ -28,14 +21,17 @@ describe("/.well-known/oauth-protected-resource/mcp", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
-    expect(await response.json()).toEqual({
+    const metadata = await response.json();
+    expect(
+      OAuthProtectedResourceMetadataSchema.safeParse(metadata).success,
+    ).toBe(true);
+    expect(metadata).toEqual({
       resource: resource.href,
       authorization_servers: [issuer],
       authorization_endpoint: `${issuer}/authorize`,
       token_endpoint: `${issuer}/token`,
       registration_endpoint: `${issuer}/register`,
       scopes_supported: ["openid"],
-      jwks_uri: clerkMetadata.jwks_uri,
     });
   });
 

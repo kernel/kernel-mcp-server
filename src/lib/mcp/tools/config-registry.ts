@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { APIError } from "@onkernel/sdk";
 import { z } from "zod";
 import {
@@ -30,92 +30,95 @@ const httpUrlSchema = z
         return false;
       }
     },
-    { message: "URL must use http or https." },
+    { message: "url must use http or https." },
   );
 
 export function registerConfigRegistryTools(
   server: McpServer,
   dependencies: McpDependencies = defaultMcpDependencies,
 ) {
-  server.tool(
+  server.registerTool(
     "manage_config_registry",
-    'Find browser and proxy configurations for bot-protected sites. Use "lookup" for a side-effect-free read of current knowledge, "resolve" to start or retry a background analysis, "get_analysis" to poll one analysis, "cancel_analysis" to request cancellation, "list_configs" to list targets and their latest recommendations, or "list_analyses" to list analysis history.',
     {
-      ...projectSelectionInputSchema(),
-      action: z
-        .enum([
-          "lookup",
-          "resolve",
-          "get_analysis",
-          "cancel_analysis",
-          "list_configs",
-          "list_analyses",
-        ])
-        .describe("Operation to perform."),
-      url: httpUrlSchema
-        .describe("(lookup, resolve) Public HTTP(S) target URL.")
-        .optional(),
-      allowed_proxy_countries: z
-        .array(z.string().length(2))
-        .describe(
-          "(lookup, resolve) ISO 3166 country codes Kernel may use for proxy configurations.",
-        )
-        .optional(),
-      intent: z
-        .string()
-        .min(1)
-        .describe(
-          "(resolve) Plain-language workload to exercise during analysis. HTTPS targets only.",
-        )
-        .optional(),
-      analysis_id: z
-        .string()
-        .min(1)
-        .describe(
-          "(get_analysis, cancel_analysis) Analysis ID returned by resolve or list actions.",
-        )
-        .optional(),
-      search: z
-        .string()
-        .describe(
-          "(list_configs, list_analyses) Case-insensitive target URL search.",
-        )
-        .optional(),
-      sort_by: z
-        .enum([
-          "target",
-          "analysis_status",
-          "recommended_config",
-          "last_requested_at",
-          "success_rate",
-        ])
-        .describe("(list_configs) Field used to sort results.")
-        .optional(),
-      sort_order: z
-        .enum(["asc", "desc"])
-        .describe("(list_configs) Sort direction.")
-        .optional(),
-      ...paginationParams,
+      description:
+        'look up recommended browser and proxy settings for a site the user is authorized to automate. use "lookup" for a side-effect-free read of current knowledge, "resolve" to start or retry a background analysis, "get_analysis" to poll one analysis, "cancel_analysis" to request cancellation, "list_configs" to list targets and their latest recommendations, or "list_analyses" to list analysis history.',
+      inputSchema: z.object({
+        ...projectSelectionInputSchema(),
+        action: z
+          .enum([
+            "lookup",
+            "resolve",
+            "get_analysis",
+            "cancel_analysis",
+            "list_configs",
+            "list_analyses",
+          ])
+          .describe("operation to perform."),
+        url: httpUrlSchema
+          .describe("(lookup, resolve) public http(s) target url.")
+          .optional(),
+        allowed_proxy_countries: z
+          .array(z.string().length(2))
+          .describe(
+            "(lookup, resolve) iso 3166 country codes KERNEL may use for proxy configurations.",
+          )
+          .optional(),
+        intent: z
+          .string()
+          .min(1)
+          .describe(
+            "(resolve) plain-language workload to exercise during analysis. https targets only.",
+          )
+          .optional(),
+        analysis_id: z
+          .string()
+          .min(1)
+          .describe(
+            "(get_analysis, cancel_analysis) analysis id returned by resolve or list actions.",
+          )
+          .optional(),
+        search: z
+          .string()
+          .describe(
+            "(list_configs, list_analyses) case-insensitive target url search.",
+          )
+          .optional(),
+        sort_by: z
+          .enum([
+            "target",
+            "analysis_status",
+            "recommended_config",
+            "last_requested_at",
+            "success_rate",
+          ])
+          .describe("(list_configs) field used to sort results.")
+          .optional(),
+        sort_order: z
+          .enum(["asc", "desc"])
+          .describe("(list_configs) sort direction.")
+          .optional(),
+        ...paginationParams,
+      }),
+      annotations: {
+        title: "manage KERNEL config registry",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      },
     },
-    {
-      title: "Manage Kernel config registry",
-      readOnlyHint: false,
-      destructiveHint: false,
-      idempotentHint: false,
-      openWorldHint: true,
-    },
-    async (params, extra) => {
-      if (!extra.authInfo) throw new Error("Authentication required");
+    async (params, ctx) => {
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
       const client = dependencies.createKernelClient(
-        extra.authInfo.token,
-        projectForOperation(extra.authInfo, params),
+        ctx.http.authInfo.token,
+        projectForOperation(ctx.http.authInfo, params),
       );
 
       try {
         switch (params.action) {
           case "lookup": {
             if (!params.url) {
-              return errorResponse("Error: url is required for lookup.");
+              return errorResponse("error: url is required for lookup.");
             }
             const result = await client.configRegistry.lookup({
               url: params.url,
@@ -127,7 +130,7 @@ export function registerConfigRegistryTools(
           }
           case "resolve": {
             if (!params.url) {
-              return errorResponse("Error: url is required for resolve.");
+              return errorResponse("error: url is required for resolve.");
             }
             const result = await client.configRegistry.resolve(
               {
@@ -137,14 +140,14 @@ export function registerConfigRegistryTools(
                 }),
                 ...(params.intent !== undefined && { intent: params.intent }),
               },
-              { maxRetries: 0, signal: extra.signal },
+              { maxRetries: 0, signal: ctx.mcpReq.signal },
             );
             return jsonResponse(result);
           }
           case "get_analysis": {
             if (!params.analysis_id) {
               return errorResponse(
-                "Error: analysis_id is required for get_analysis.",
+                "error: analysis_id is required for get_analysis.",
               );
             }
             return jsonResponse(
@@ -154,7 +157,7 @@ export function registerConfigRegistryTools(
           case "cancel_analysis": {
             if (!params.analysis_id) {
               return errorResponse(
-                "Error: analysis_id is required for cancel_analysis.",
+                "error: analysis_id is required for cancel_analysis.",
               );
             }
             return jsonResponse(

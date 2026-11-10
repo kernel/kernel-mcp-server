@@ -56,7 +56,7 @@ const telemetryControlSchema = z.object({
     .optional(),
 });
 
-const telemetryCategoriesSchema = z.object({
+export const browserTelemetryCategoriesSchema = z.object({
   captcha: telemetryCategorySchema().optional(),
   connection: telemetryCategorySchema().optional(),
   console: telemetryCategorySchema().optional(),
@@ -83,35 +83,62 @@ const telemetryDestinationSchema = z
     }
   });
 
-export const managedAuthBrowserTelemetrySchema = z
+const telemetryExportSchema = z
   .object({
-    enabled: z.boolean().optional(),
-    browser: telemetryCategoriesSchema.optional(),
-    export: z
+    otlp: z
       .object({
-        otlp: z
-          .object({
-            enabled: z.boolean().optional(),
-            destination: telemetryDestinationSchema.optional(),
-          })
-          .optional(),
+        enabled: z.boolean().optional(),
+        destination: telemetryDestinationSchema.optional(),
+      })
+      .superRefine((otlp, context) => {
+        if (otlp.enabled === false && otlp.destination) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message:
+              "telemetry export enabled=false cannot be combined with a destination.",
+          });
+        }
       })
       .optional(),
   })
-  .superRefine((telemetry, context) => {
-    if (
-      telemetry.enabled === false &&
-      telemetry.browser &&
-      Object.keys(telemetry.browser).length > 0
-    ) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "browser_telemetry.enabled=false cannot be combined with browser category settings.",
-      });
-    }
-  });
+  .optional();
 
+function rejectDisabledTelemetryWithCategories(
+  telemetry: {
+    enabled?: boolean;
+    browser?: z.infer<typeof browserTelemetryCategoriesSchema>;
+  },
+  context: z.RefinementCtx,
+) {
+  if (
+    telemetry.enabled === false &&
+    telemetry.browser &&
+    Object.keys(telemetry.browser).length > 0
+  ) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        "browser telemetry enabled=false cannot be combined with browser category settings.",
+    });
+  }
+}
+
+export const browserTelemetrySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    browser: browserTelemetryCategoriesSchema.optional(),
+    export: telemetryExportSchema,
+    storage: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .optional(),
+  })
+  .superRefine(rejectDisabledTelemetryWithCategories);
+
+export const managedAuthBrowserTelemetrySchema = browserTelemetrySchema;
+
+export type BrowserTelemetry = z.infer<typeof browserTelemetrySchema>;
 export type ManagedAuthBrowserTelemetry = z.infer<
   typeof managedAuthBrowserTelemetrySchema
 >;
