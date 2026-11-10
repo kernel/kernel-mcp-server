@@ -1,43 +1,73 @@
 import {
-  decodeProtectedHeader,
-  decodeJwt,
   createLocalJWKSet,
+  decodeProtectedHeader,
   jwtVerify,
   type JSONWebKeySet,
 } from "jose";
 import { z } from "zod";
 
-const claimsSchema = z.object({
-  active: z.literal(true),
+// Mirrors the Kernel API issuer profile (packages/api/lib/oauthnative):
+// MaxTokenBytes, AccessTokenLifetime, ExchangeTokenLifetime and the
+// signature leeway.
+const MAX_TOKEN_BYTES = 4096;
+const ACCESS_TOKEN_LIFETIME_SECONDS = 600;
+const EXCHANGE_TOKEN_LIFETIME_SECONDS = 300;
+const CLOCK_TOLERANCE_SECONDS = 30;
+const ACCESS_TOKEN_TYPES = ["at+jwt", "application/at+jwt"];
+const ACCESS_TOKEN_URN = "urn:ietf:params:oauth:token-type:access_token";
+
+// A native request or stream is authorized for at most one minute, however
+// long the exchanged token lives; continuing requires a fresh exchange.
+export const NATIVE_STREAM_LEASE_MS = 60_000;
+
+const accessClaimsSchema = z.object({
   iss: z.string(),
-  aud: z.array(z.string()).length(1),
   sub: z.string().min(1),
+  aud: z.array(z.string()).length(1),
   jti: z.string().min(1),
+  iat: z.number().int(),
+  exp: z.number().int(),
   client_id: z.string().min(1),
-  issuer_epoch: z.number().int().positive(),
+  grant_id: z.string().min(1),
+  org_id: z.string().min(1),
+  project_id: z.string().optional(),
   scope: z.string().min(1),
-  exp: z.number(),
+  authorization_version: z.literal(1),
+  issuer_epoch: z.number().int(),
+  act: z.object({ sub: z.string() }).optional(),
+  parent_jti: z.string().optional(),
 });
+type AccessClaims = z.infer<typeof accessClaimsSchema>;
+
 const exchangeSchema = z.object({
-  access_token: z.string().min(1).max(4096),
+  access_token: z.string().min(1).max(MAX_TOKEN_BYTES),
   token_type: z.literal("Bearer"),
-  issued_token_type: z.literal("urn:ietf:params:oauth:token-type:access_token"),
-  expires_in: z.number().positive().max(60),
-  scope: z.string(),
+  issued_token_type: z.literal(ACCESS_TOKEN_URN),
+  expires_in: z.number().int().nonnegative(),
+  scope: z.string().min(1),
 });
 
+const jwksSchema = z.object({
+  keys: z
+    .array(
+      z.object({
+        kty: z.literal("RSA"),
+        kid: z.string().min(1),
+        n: z.string().min(1),
+        e: z.string().min(1),
+        d: z.undefined(),
+      }),
+    )
+    .min(1),
+});
+
+// Matches the API's own selector: a compact JWT whose header typ is at+jwt.
+// Clerk session tokens carry typ JWT and keep their existing path.
 export function isNativeOAuthCredential(token: string): boolean {
-  if (token.startsWith("krn_")) return true;
-  if (token.length > 16384) return false;
+  if (token.split(".").length !== 3) return false;
   try {
-    const header = decodeProtectedHeader(token);
-    const claims = decodeJwt(token);
-    return (
-      header.typ === "at+jwt" ||
-      header.typ === "application/at+jwt" ||
-      "issuer_epoch" in claims ||
-      "authorization_version" in claims
-    );
+    const typ = decodeProtectedHeader(token).typ?.toLowerCase();
+    return typ !== undefined && ACCESS_TOKEN_TYPES.includes(typ);
   } catch {
     return false;
   }
@@ -51,7 +81,7 @@ export class NativeCredentialRejected extends Error {
 
 export class NativeScopeRejected extends Error {
   constructor() {
-    super("native scope or resource rejected");
+    super("native scope rejected");
   }
 }
 
@@ -65,28 +95,70 @@ export type NativeOAuthConfig = {
   keys: JSONWebKeySet;
 };
 
+function httpsOrigin(name: string): string {
+  const value = process.env[name];
+  if (!value || new URL(value).protocol !== "https:")
+    throw new Error(`${name} must be an HTTPS origin`);
+  if (new URL(value).origin !== value)
+    throw new Error(`${name} must be an origin without a trailing slash`);
+  return value;
+}
+
+// Returns null unless explicitly enabled. Every trust input is required and
+// has no default, so an enabled deployment cannot silently trust another
+// environment's issuer.
 export function nativeOAuthConfig(): NativeOAuthConfig | null {
   if (process.env.OAUTH_NATIVE_ENABLED !== "true") return null;
-  const issuer = process.env.OAUTH_NATIVE_ISSUER ?? "https://auth.onkernel.com";
-  const parsed = new URL(issuer);
-  if (parsed.protocol !== "https:" || parsed.origin !== issuer)
-    throw new Error("invalid native OAuth issuer");
+  const issuer = httpsOrigin("OAUTH_NATIVE_ISSUER");
+  const audience = httpsOrigin("OAUTH_NATIVE_MCP_AUDIENCE");
+  const apiAudience = httpsOrigin("OAUTH_NATIVE_API_AUDIENCE");
+  if (audience === apiAudience)
+    throw new Error("native OAuth MCP and API audiences must differ");
+  const epoch = Number(process.env.OAUTH_NATIVE_ISSUER_EPOCH);
   const clientId = process.env.OAUTH_NATIVE_EXCHANGE_CLIENT;
   const clientSecret = process.env.OAUTH_NATIVE_EXCHANGE_SECRET;
-  const epoch = Number(process.env.OAUTH_NATIVE_ISSUER_EPOCH);
   if (!clientId || !clientSecret || !Number.isSafeInteger(epoch) || epoch < 1)
     throw new Error("incomplete native OAuth configuration");
   return {
     issuer,
-    audience:
-      process.env.OAUTH_NATIVE_MCP_AUDIENCE ?? "https://mcp.onkernel.com",
-    apiAudience:
-      process.env.OAUTH_NATIVE_API_AUDIENCE ?? "https://api.onkernel.com/",
+    audience,
+    apiAudience,
     epoch,
     clientId,
     clientSecret,
-    keys: JSON.parse(process.env.OAUTH_NATIVE_VERIFICATION_JWKS ?? "{}"),
+    keys: jwksSchema.parse(
+      JSON.parse(process.env.OAUTH_NATIVE_VERIFICATION_JWKS ?? ""),
+    ),
   };
+}
+
+async function verifyAccessToken(
+  token: string,
+  audience: string,
+  maxLifetimeSeconds: number,
+  config: NativeOAuthConfig,
+): Promise<AccessClaims> {
+  const { payload, protectedHeader } = await jwtVerify(
+    token,
+    createLocalJWKSet(config.keys),
+    {
+      issuer: config.issuer,
+      audience,
+      algorithms: ["RS256"],
+      clockTolerance: CLOCK_TOLERANCE_SECONDS,
+      requiredClaims: ["iat", "exp"],
+    },
+  );
+  const claims = accessClaimsSchema.parse(payload);
+  if (
+    !protectedHeader.kid ||
+    !ACCESS_TOKEN_TYPES.includes(protectedHeader.typ?.toLowerCase() ?? "") ||
+    claims.issuer_epoch !== config.epoch ||
+    claims.exp - claims.iat <= 0 ||
+    claims.exp - claims.iat > maxLifetimeSeconds
+  )
+    throw new Error("invalid native access token");
+  return claims;
 }
 
 // All HTTP destinations and verification keys come from server configuration, never JWT claims.
@@ -96,159 +168,88 @@ export async function exchangeNativeOAuth(
   config: NativeOAuthConfig,
   request: (url: string, init: RequestInit) => Promise<Response> = fetch,
 ) {
-  if (token.length > 4096) throw new NativeCredentialRejected();
-  const verified = await jwtVerify(token, createLocalJWKSet(config.keys), {
-    issuer: config.issuer,
-    audience: config.audience,
-    algorithms: ["RS256"],
-    clockTolerance: 30,
-    requiredClaims: [
-      "sub",
-      "jti",
-      "iat",
-      "exp",
-      "client_id",
-      "issuer_epoch",
-      "scope",
-    ],
-  }).catch(() => {
+  if (token.length > MAX_TOKEN_BYTES) throw new NativeCredentialRejected();
+  const parent = await verifyAccessToken(
+    token,
+    config.audience,
+    ACCESS_TOKEN_LIFETIME_SECONDS,
+    config,
+  ).catch(() => {
     throw new NativeCredentialRejected();
   });
-  if (
-    !["at+jwt", "application/at+jwt"].includes(
-      verified.protectedHeader.typ ?? "",
-    ) ||
-    verified.payload.issuer_epoch !== config.epoch ||
-    !Array.isArray(verified.payload.aud) ||
-    verified.payload.aud.length !== 1 ||
-    typeof verified.payload.iat !== "number" ||
-    typeof verified.payload.exp !== "number" ||
-    verified.payload.exp - verified.payload.iat > 600 ||
-    verified.payload.act
-  )
-    throw new NativeCredentialRejected();
-  const authorization = `Basic ${Buffer.from(`${encodeURIComponent(config.clientId)}:${encodeURIComponent(config.clientSecret)}`).toString("base64")}`;
-  const post = async (path: string, form: URLSearchParams) => {
-    const response = await request(`${config.issuer}${path}`, {
-      method: "POST",
-      headers: {
-        Authorization: authorization,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: form,
-      cache: "no-store",
-      redirect: "error",
-      signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
-    });
-    if (response.status >= 500)
-      throw new Error("native OAuth authority unavailable");
-    const text = await response.text();
-    if (text.length > 16384) throw new Error("invalid native OAuth response");
-    const body: unknown = JSON.parse(text);
-    if (!response.ok) {
-      const failure = z.object({ error: z.string() }).safeParse(body);
-      if (
-        response.status === 400 &&
-        failure.success &&
-        failure.data.error === "invalid_grant"
-      )
-        throw new NativeCredentialRejected();
-      if (
-        response.status === 400 &&
-        failure.success &&
-        ["invalid_scope", "invalid_target"].includes(failure.data.error)
-      )
-        throw new NativeScopeRejected();
-      throw new Error("native OAuth authority request failed");
-    }
-    return body;
-  };
-  const introspection = await post(
-    "/oauth/native/introspect",
-    new URLSearchParams({ token }),
-  );
-  if (z.object({ active: z.literal(false) }).safeParse(introspection).success)
-    throw new NativeCredentialRejected();
-  const status = claimsSchema.parse(introspection);
-  if (
-    status.iss !== config.issuer ||
-    status.aud[0] !== config.audience ||
-    status.issuer_epoch !== config.epoch ||
-    status.sub !== verified.payload.sub ||
-    status.jti !== verified.payload.jti ||
-    status.client_id !== verified.payload.client_id ||
-    status.scope !== verified.payload.scope ||
-    status.exp !== verified.payload.exp ||
-    status.exp * 1000 + 30000 <= Date.now()
-  )
-    throw new NativeCredentialRejected();
-  const exchangeStartedAt = Date.now();
-  const exchanged = exchangeSchema.parse(
-    await post(
-      "/token",
-      new URLSearchParams({
-        grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
-        subject_token: token,
-        subject_token_type: "urn:ietf:params:oauth:token-type:access_token",
-        requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
-        resource: config.apiAudience,
-        scope: status.scope,
-      }),
-    ),
-  );
-  const derived = await jwtVerify(
-    exchanged.access_token,
-    createLocalJWKSet(config.keys),
-    {
-      issuer: config.issuer,
-      audience: config.apiAudience,
-      algorithms: ["RS256"],
-      clockTolerance: 30,
-      requiredClaims: [
-        "iat",
-        "exp",
-        "sub",
-        "client_id",
-        "scope",
-        "issuer_epoch",
-      ],
+  // Exchanged tokens cannot be exchanged again, and only the issuer's
+  // authoritative status check (performed by the exchange) admits a parent.
+  if (parent.act || parent.parent_jti) throw new NativeCredentialRejected();
+
+  const startedAt = Date.now();
+  const response = await request(`${config.issuer}/token`, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${encodeURIComponent(config.clientId)}:${encodeURIComponent(config.clientSecret)}`).toString("base64")}`,
+      "Content-Type": "application/x-www-form-urlencoded",
     },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+      subject_token: token,
+      subject_token_type: ACCESS_TOKEN_URN,
+      requested_token_type: ACCESS_TOKEN_URN,
+      scope: parent.scope,
+    }),
+    cache: "no-store",
+    redirect: "error",
+    signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
+  });
+  if (response.status >= 500)
+    throw new Error("native OAuth authority unavailable");
+  const text = await response.text();
+  if (text.length > 16384) throw new Error("invalid native OAuth response");
+  const body: unknown = JSON.parse(text);
+  if (!response.ok) {
+    const failure = z.object({ error: z.string() }).safeParse(body);
+    if (response.status === 400 && failure.data?.error === "invalid_grant")
+      throw new NativeCredentialRejected();
+    if (response.status === 400 && failure.data?.error === "invalid_scope")
+      throw new NativeScopeRejected();
+    throw new Error("native OAuth exchange failed");
+  }
+
+  const exchanged = exchangeSchema.parse(body);
+  const derived = await verifyAccessToken(
+    exchanged.access_token,
+    config.apiAudience,
+    EXCHANGE_TOKEN_LIFETIME_SECONDS,
+    config,
   );
+  const parentScopes = parent.scope.split(" ");
   if (
-    derived.payload.sub !== status.sub ||
-    derived.payload.client_id !== config.clientId ||
-    derived.payload.issuer_epoch !== config.epoch ||
-    derived.payload.scope !== exchanged.scope ||
-    !["at+jwt", "application/at+jwt"].includes(
-      derived.protectedHeader.typ ?? "",
-    ) ||
-    !Array.isArray(derived.payload.aud) ||
-    derived.payload.aud.length !== 1 ||
-    typeof derived.payload.exp !== "number" ||
-    derived.payload.exp > status.exp ||
-    typeof derived.payload.iat !== "number" ||
-    derived.payload.exp - derived.payload.iat > 60 ||
-    derived.payload.exp <= derived.payload.iat ||
-    exchanged.scope
-      .split(" ")
-      .some((scope) => !status.scope.split(" ").includes(scope))
+    derived.sub !== parent.sub ||
+    derived.grant_id !== parent.grant_id ||
+    derived.org_id !== parent.org_id ||
+    (derived.project_id ?? "") !== (parent.project_id ?? "") ||
+    derived.client_id !== config.clientId ||
+    derived.act?.sub !== `oauth_client:${config.clientId}` ||
+    derived.parent_jti !== parent.jti ||
+    derived.exp > parent.exp ||
+    derived.scope !== exchanged.scope ||
+    exchanged.scope.split(" ").some((scope) => !parentScopes.includes(scope))
   )
     throw new Error("invalid native exchange");
+
+  // expires_in and exp - iat are relative, so issuer clock skew cannot
+  // extend the lease past the token's real remaining lifetime.
+  const lifetimeMs =
+    Math.min(exchanged.expires_in, derived.exp - derived.iat) * 1000;
+  if (lifetimeMs <= 0) throw new NativeCredentialRejected();
   return {
     token: exchanged.access_token,
-    subject: status.sub,
+    subject: parent.sub,
     scopes: exchanged.scope.split(" "),
-    deadline:
-      exchangeStartedAt +
-      Math.min(
-        exchanged.expires_in,
-        derived.payload.exp - derived.payload.iat,
-      ) *
-        1000,
+    deadline: startedAt + Math.min(lifetimeMs, NATIVE_STREAM_LEASE_MS),
   };
 }
 
-// Native streams have a one-minute maximum lease; reconnect requires fresh authorization.
+// Ends a native response when its authorization lease expires; reconnecting
+// requires a fresh exchange.
 export function leaseNativeResponse(
   response: Response,
   deadline: number,

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { clerkClient } from "@clerk/nextjs/server";
 import { expandLocalhostUris } from "@/lib/auth-utils";
-import { recordOAuthCompatibility } from "@/lib/oauth-compatibility";
 
 // Custom registration endpoint needed because Clerk doesn't support custom scopes
 // We only want "openid" scope instead of Clerk's default email/profile scopes
@@ -188,11 +187,5 @@ export async function registerRequest(
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const response = await registerRequest(request);
-  recordOAuthCompatibility({
-    surface: "register",
-    provider: "clerk",
-    outcome: response.ok ? "success" : "error",
-  });
-  return response;
+  return registerRequest(request);
 }

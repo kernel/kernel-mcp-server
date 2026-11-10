@@ -7,7 +7,6 @@ import {
 import { verifyToken } from "@clerk/nextjs/server";
 import { after, NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
-import { recordOAuthCompatibility } from "@/lib/oauth-compatibility";
 import {
   isNativeOAuthCredential,
   nativeOAuthConfig,
@@ -300,22 +299,14 @@ async function handleAuthenticatedRequest(
       if (!config) throw new NativeCredentialRejected();
       native = await exchangeNativeOAuth(token, req.signal, config);
     } catch (error) {
-      const insufficient = error instanceof NativeScopeRejected;
-      const rejected =
-        insufficient || error instanceof NativeCredentialRejected;
-      recordOAuthCompatibility({
-        surface: "verification",
-        provider: "kernel",
-        outcome: rejected ? "rejected" : "unavailable",
-      });
-      if (insufficient)
+      if (error instanceof NativeScopeRejected)
         return errorResponse(
           403,
           "insufficient_scope",
           "This credential cannot access the requested resource",
           { "WWW-Authenticate": 'Bearer error="insufficient_scope"' },
         );
-      return rejected
+      return error instanceof NativeCredentialRejected
         ? createAuthErrorResponse(req)
         : errorResponse(
             503,
@@ -324,11 +315,6 @@ async function handleAuthenticatedRequest(
             { "Retry-After": "1" },
           );
     }
-    recordOAuthCompatibility({
-      surface: "verification",
-      provider: "kernel",
-      outcome: "verified",
-    });
     const abort = new AbortController();
     const signal = AbortSignal.any([
       req.signal,
@@ -382,17 +368,7 @@ async function handleAuthenticatedRequest(
       );
     }
     userId = payload.sub;
-    recordOAuthCompatibility({
-      surface: "verification",
-      provider: "clerk",
-      outcome: "verified",
-    });
   } catch (authError) {
-    recordOAuthCompatibility({
-      surface: "verification",
-      provider: "clerk",
-      outcome: "rejected",
-    });
     return createAuthErrorResponse(
       req,
       "invalid_token",
