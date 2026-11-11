@@ -13,6 +13,8 @@ import { Kernel } from "@onkernel/sdk";
 import type { McpConnectionScopeFailureAnalytics } from "@/lib/mcp/analytics";
 import { defaultMcpDependencies } from "@/lib/mcp/dependencies";
 import { clearMcpEntitlementsCacheForTests } from "@/lib/mcp/entitlements";
+import { MCP_SESSION_HEADER } from "@posthog/mcp";
+import { mcpAppsMarkerKey } from "@/lib/mcp-apps-marker";
 import { oauthResourceMetadata } from "@/lib/oauth-discovery";
 
 process.env.CLERK_SECRET_KEY ??= "test-clerk-secret";
@@ -29,14 +31,44 @@ const captured: McpConnectionScopeFailureAnalytics[] = [];
 const analytics = await import("@/lib/mcp/analytics");
 const captureMcpConnectionScopeFailure =
   analytics.captureMcpConnectionScopeFailure;
+const instrumentMcpAnalytics = analytics.instrumentMcpAnalytics;
+let analyticsClient: unknown = null;
 mock.module("@/lib/mcp/analytics", () => ({
   ...analytics,
+  instrumentMcpAnalytics: (
+    ...[server, client]: Parameters<typeof instrumentMcpAnalytics>
+  ) =>
+    instrumentMcpAnalytics(server, (analyticsClient as typeof client) ?? client),
   captureMcpConnectionScopeFailure: (
     ...args: Parameters<typeof analytics.captureMcpConnectionScopeFailure>
   ) => {
     captured.push(args[0]);
     return captureMcpConnectionScopeFailure(...args);
   },
+}));
+
+// An in-memory MCP Apps marker store, keyed exactly as Redis keys it.
+let appMarkers: Set<string> | null = null;
+const redis = await import("@/lib/redis");
+const { markMcpAppsClient, clearMcpAppsClient, hasMcpAppsClient } = redis;
+const markerKey = (marker: {
+  authSubject: string;
+  transportSessionId: string;
+}) => mcpAppsMarkerKey(marker.authSubject, marker.transportSessionId);
+mock.module("@/lib/redis", () => ({
+  ...redis,
+  markMcpAppsClient: async (marker: Parameters<typeof markMcpAppsClient>[0]) =>
+    appMarkers
+      ? void appMarkers.add(markerKey(marker))
+      : markMcpAppsClient(marker),
+  clearMcpAppsClient: async (
+    marker: Parameters<typeof clearMcpAppsClient>[0],
+  ) =>
+    appMarkers
+      ? void appMarkers.delete(markerKey(marker))
+      : clearMcpAppsClient(marker),
+  hasMcpAppsClient: async (marker: Parameters<typeof hasMcpAppsClient>[0]) =>
+    appMarkers ? appMarkers.has(markerKey(marker)) : hasMcpAppsClient(marker),
 }));
 
 const originalCreateKernelClient = defaultMcpDependencies.createKernelClient;
@@ -91,11 +123,13 @@ describe("native OAuth credentials", () => {
   );
   let issuer: Awaited<ReturnType<typeof nativeIssuer>>;
   let kernelTokens: string[];
+  let kernelPaths: string[];
   let fetchSpy: ReturnType<typeof spyOn<typeof globalThis, "fetch">>;
 
   beforeEach(async () => {
     issuer = await nativeIssuer();
     kernelTokens = [];
+    kernelPaths = [];
     defaultMcpDependencies.createKernelClient = (token) => {
       kernelTokens.push(token);
       return new Kernel({
@@ -104,6 +138,9 @@ describe("native OAuth credentials", () => {
         maxRetries: 0,
         fetch: async (input) => {
           const path = new URL(String(input)).pathname;
+          kernelPaths.push(path);
+          if (path === "/org/entitlements")
+            return Response.json({ features: { vaults: { enabled: true } } });
           if (path !== "/auth/context")
             throw new Error(`Unexpected API request: ${path}`);
           // GET /auth/context as the API answers an exchanged user token.
@@ -130,6 +167,8 @@ describe("native OAuth credentials", () => {
   });
 
   afterEach(() => {
+    appMarkers = null;
+    analyticsClient = null;
     fetchSpy.mockRestore();
     for (const key of Object.keys(process.env))
       if (key.startsWith("OAUTH_NATIVE_") && !nativeEnv.includes(key))
@@ -149,17 +188,90 @@ describe("native OAuth credentials", () => {
     });
   }
 
-  function mcpRequest(token: string, method = "tools/list") {
+  function mcpRequest(
+    token: string,
+    method = "tools/list",
+    params?: object,
+    headers: Record<string, string> = {},
+  ) {
     return new nextServer.NextRequest("https://mcp.example.test/mcp", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
         Accept: "application/json, text/event-stream",
+        ...headers,
       },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method }),
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
     });
   }
+
+  // A refreshed MCP token carries a new jti, so every derived token differs.
+  const refreshed = () => issuer.parent({ jti: crypto.randomUUID() });
+
+  test("keep MCP Apps capability from initialize across rotated tokens", async () => {
+    enable();
+    appMarkers = new Set();
+    const initialized = await POST(
+      mcpRequest(await refreshed(), "initialize", {
+        protocolVersion: "2025-06-18",
+        capabilities: { extensions: { "io.modelcontextprotocol/ui": {} } },
+        clientInfo: { name: "apps-host", version: "1" },
+      }),
+    );
+    expect(initialized.status).toBe(200);
+    const session = initialized.headers.get(MCP_SESSION_HEADER)!;
+    expect(session).toBeTruthy();
+    await initialized.text();
+
+    const call = await POST(
+      mcpRequest(
+        await refreshed(),
+        "tools/call",
+        {
+          name: "begin_auth_login",
+          arguments: { mode: "reauth", connection_id: "conn_1" },
+        },
+        { [MCP_SESSION_HEADER]: session },
+      ),
+    );
+    expect(call.status).toBe(200);
+    const text = await call.text();
+    expect(text).toContain('"result"');
+    expect(text).not.toContain("only available to the secure KERNEL login app");
+  });
+
+  test("reuse the entitlements snapshot across rotated tokens", async () => {
+    enable();
+    for (let n = 0; n < 2; n++) {
+      const response = await POST(mcpRequest(await refreshed()));
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("manage_vaults");
+    }
+    expect(new Set(kernelTokens).size).toBe(2);
+    expect(kernelPaths.filter((path) => path === "/org/entitlements")).toEqual(
+      ["/org/entitlements"],
+    );
+  });
+
+  test("keep one analytics session across rotated tokens", async () => {
+    enable();
+    const events: { properties: Record<string, unknown> }[] = [];
+    analyticsClient = {
+      capture: (event: { properties: Record<string, unknown> }) =>
+        events.push(event),
+    };
+    for (let n = 0; n < 2; n++) {
+      const response = await POST(mcpRequest(await refreshed()));
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(events.length).toBeGreaterThanOrEqual(2);
+    expect(
+      new Set(events.map((event) => event.properties.$session_id)).size,
+    ).toBe(1);
+  });
 
   test("are rejected without contacting the issuer or API while disabled", async () => {
     delete process.env.OAUTH_NATIVE_ENABLED;

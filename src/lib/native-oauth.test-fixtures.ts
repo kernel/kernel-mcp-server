@@ -100,7 +100,7 @@ export async function nativeIssuer() {
       aud: [config.apiAudience],
       iat: now,
       exp: now + lifetime,
-      jti: "jti_derived",
+      jti: crypto.randomUUID(),
       client_id: config.clientId,
       scope,
       act: { sub: `oauth_client:${config.clientId}` },
