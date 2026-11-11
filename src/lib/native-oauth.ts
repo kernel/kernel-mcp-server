@@ -343,10 +343,12 @@ async function exchange(
       `exchanged token lineage mismatch: ${failed.join(",")}`,
     );
 
-  // expires_in and exp - iat are relative, so issuer clock skew cannot
-  // stretch the local lifetime past the token's real one.
-  const expiresAt =
-    startedAt + Math.min(expires_in, derived.exp - derived.iat) * 1000;
+  // The relative lifetime covers an issuer clock running ahead, the signed
+  // exp one running behind; lineage already bounds exp by the parent's.
+  const expiresAt = Math.min(
+    startedAt + Math.min(expires_in, derived.exp - derived.iat) * 1000,
+    derived.exp * 1000,
+  );
   if (expiresAt <= Date.now())
     throw rejected("native exchange issued an expired token");
   return {
@@ -355,8 +357,7 @@ async function exchange(
     grantId: parent.grant_id,
     scopes: scope.split(" "),
     expiresAt,
-    reuseUntil:
-      Math.min(expiresAt, parent.exp * 1000) - DERIVED_TOKEN_MIN_REMAINING_MS,
+    reuseUntil: expiresAt - DERIVED_TOKEN_MIN_REMAINING_MS,
   };
 }
 

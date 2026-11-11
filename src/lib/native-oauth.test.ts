@@ -179,6 +179,14 @@ describe("native token exchange", () => {
     );
   });
 
+  test("caps the lifetime at the signed expiry when the issuer clock is behind", async () => {
+    const behind = Math.floor(Date.now() / 1000) - 20;
+    issuer.deriveWith({ iat: behind, exp: behind + 300 });
+    const result = await authenticate(await issuer.parent());
+    if (result.status !== "ok") throw new Error(result.status);
+    expect(result.credential.expiresAt).toBe((behind + 300) * 1000);
+  });
+
   test("rejects tokens outside the issuer profile before any exchange", async () => {
     const now = Math.floor(Date.now() / 1000);
     const other = await generateKeyPair("RS256");

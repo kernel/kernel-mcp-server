@@ -384,18 +384,24 @@ describe("native OAuth credentials", () => {
   });
 
   describe("end with the exchanged token", () => {
-    const shortLived = () =>
-      issuer.parent({ exp: Math.floor(Date.now() / 1000) + 2 });
+    let signedExpiry: number;
+    const shortLived = () => {
+      const exp = Math.floor(Date.now() / 1000) + 2;
+      signedExpiry = exp * 1000;
+      return issuer.parent({ exp });
+    };
 
+    // The stream stays open until, and not past, the exchanged token's
+    // signed expiry (bounded by the incoming token's exp).
     async function closesAt(response: Response, started: number) {
       expect(response.status).toBe(200);
       expect(response.headers.get("Content-Type")).toContain(
         "text/event-stream",
       );
       await response.text();
-      const elapsed = Date.now() - started;
-      expect(elapsed).toBeGreaterThanOrEqual(1_000);
-      expect(elapsed).toBeLessThan(2_500);
+      expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+      expect(Date.now()).toBeGreaterThanOrEqual(signedExpiry - 100);
+      expect(Date.now()).toBeLessThanOrEqual(signedExpiry + 250);
     }
 
     test("a legacy response stream", async () => {
