@@ -62,7 +62,7 @@
     "zod": "4.3.6"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "1.26.0",
+    "@modelcontextprotocol/sdk": "1.32.0",
     "@tailwindcss/postcss": "^4.1.11",
     "@types/jszip": "^3.4.1",
     "@types/node": "^20",
