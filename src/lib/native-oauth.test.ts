@@ -10,12 +10,17 @@ import {
 import { decodeJwt, generateKeyPair, SignJWT } from "jose";
 import {
   authenticateNativeOAuth,
-  clearNativeOAuthCachesForTests,
   isNativeOAuthCredential,
+  nativeOAuthConfig,
+  resetNativeOAuthForTests,
 } from "./native-oauth";
-import { nativeIssuer } from "./native-oauth.test-fixtures";
+import {
+  memoryExchangeStore,
+  nativeIssuer,
+} from "./native-oauth.test-fixtures";
 
 const ENV_KEYS = [
+  "MANAGED_AUTH_APP_ORIGIN",
   "API_BASE_URL",
   "NATIVE_OAUTH_ISSUER",
   "NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_ID",
@@ -26,22 +31,27 @@ const savedEnv = Object.fromEntries(
 );
 
 let issuer: Awaited<ReturnType<typeof nativeIssuer>>;
+let cache: ReturnType<typeof memoryExchangeStore>;
 let fetchSpy: ReturnType<typeof spyOn<typeof globalThis, "fetch">>;
 
-function useIssuer(next: typeof issuer) {
-  issuer = next;
-  for (const key of ENV_KEYS) delete process.env[key];
-  Object.assign(process.env, issuer.env());
+// A fresh server instance: configuration, keys and in-flight exchanges are
+// per instance, while the exchanged-token cache is shared.
+function newInstance() {
+  resetNativeOAuthForTests(cache.store);
 }
 
-const mcpRequest = (origin = issuer.config.origin) =>
-  new Request(`${origin}/mcp`, { method: "POST" });
-const authenticate = async (token: string, request = mcpRequest()) =>
-  authenticateNativeOAuth(token, request);
+function useEnv(env: Record<string, string>) {
+  for (const key of ENV_KEYS) delete process.env[key];
+  Object.assign(process.env, env);
+  newInstance();
+}
+
+const authenticate = (token: string) => authenticateNativeOAuth(token);
 
 beforeEach(async () => {
-  clearNativeOAuthCachesForTests();
-  useIssuer(await nativeIssuer());
+  cache = memoryExchangeStore();
+  issuer = await nativeIssuer();
+  useEnv(issuer.env());
   fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (
     input: string | URL | Request,
     init?: RequestInit,
@@ -54,6 +64,7 @@ afterEach(() => {
   for (const key of ENV_KEYS)
     if (savedEnv[key] === undefined) delete process.env[key];
     else process.env[key] = savedEnv[key];
+  resetNativeOAuthForTests();
 });
 
 describe("native credential detection", () => {
@@ -111,22 +122,23 @@ describe("native token exchange", () => {
     });
   });
 
-  test("reuses one exchange per incoming token until a minute before expiry", async () => {
+  test("reuses an exchange across instances until a minute before expiry", async () => {
     const now = Date.now();
     setSystemTime(now);
     const parent = await issuer.parent();
     const first = await authenticate(parent);
-    const second = await authenticate(parent);
     expect(first.status).toBe("ok");
-    expect(second).toEqual(first);
+    newInstance();
+    expect(await authenticate(parent)).toEqual(first);
     expect(issuer.requests).toHaveLength(1);
 
-    // A different incoming token is a different cache entry.
+    // A refreshed incoming token is a different cache entry.
     await authenticate(await issuer.parent());
     expect(issuer.requests).toHaveLength(2);
 
     // The 300s exchanged token is reused for 240s, then replaced.
     setSystemTime(now + 239_000);
+    newInstance();
     expect(await authenticate(parent)).toEqual(first);
     setSystemTime(now + 241_000);
     const renewed = await authenticate(parent);
@@ -134,11 +146,62 @@ describe("native token exchange", () => {
       throw new Error("not ok");
     expect(renewed.credential.token).not.toBe(first.credential.token);
     expect(issuer.requests).toHaveLength(3);
-    // Local verification still runs on every request; the JWKS is cached.
-    expect(issuer.jwksRequests).toHaveLength(1);
   });
 
-  test("coalesces concurrent exchanges of the same token", async () => {
+  test("stores only ciphertext that the incoming token alone can open", async () => {
+    const parent = await issuer.parent();
+    const result = await authenticate(parent);
+    if (result.status !== "ok") throw new Error(result.status);
+    const [[identity, { value }]] = [...cache.entries];
+    expect(value).not.toContain(result.credential.token);
+    expect(value).not.toContain(result.credential.token.split(".")[1]);
+    expect(value).not.toContain(parent.split(".")[2]);
+
+    // Another token's identity cannot reuse this ciphertext, and a corrupted
+    // entry is discarded: both fall back to a fresh exchange.
+    const other = await issuer.parent();
+    const otherIdentity = identity!.replace(parent, other);
+    cache.entries.set(otherIdentity, { value, expiresAt: Date.now() + 60_000 });
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const fresh = await authenticate(other);
+      if (fresh.status !== "ok") throw new Error(fresh.status);
+      expect(fresh.credential.token).not.toBe(result.credential.token);
+      const corrupted = `${value.slice(0, -4)}AAAA`;
+      cache.entries.set(identity!, {
+        value: corrupted,
+        expiresAt: Date.now() + 60_000,
+      });
+      newInstance();
+      expect((await authenticate(parent)).status).toBe("ok");
+      expect(issuer.requests).toHaveLength(3);
+      expect(String(warn.mock.calls.at(-1)?.[0])).toContain("discarded");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("falls back to a fresh exchange when the cache fails or stalls", async () => {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const parent = await issuer.parent();
+      cache.state.fail = true;
+      expect((await authenticate(parent)).status).toBe("ok");
+      expect((await authenticate(parent)).status).toBe("ok");
+      expect(issuer.requests).toHaveLength(2);
+
+      cache.state.fail = false;
+      cache.store.get = () => new Promise<string | null>(() => {});
+      const started = Date.now();
+      expect((await authenticate(parent)).status).toBe("ok");
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(issuer.requests).toHaveLength(3);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("coalesces concurrent exchanges of the same token on one instance", async () => {
     const parent = await issuer.parent();
     const results = await Promise.all(
       Array.from({ length: 5 }, () => authenticate(parent)),
@@ -158,6 +221,7 @@ describe("native token exchange", () => {
     if (first.status !== "ok") throw new Error(first.status);
     expect(first.credential.expiresAt).toBeGreaterThanOrEqual(started + 19_000);
     expect(first.credential.expiresAt).toBeLessThanOrEqual(Date.now() + 20_000);
+    expect(cache.entries.size).toBe(0);
     await authenticate(parent);
     expect(issuer.requests).toHaveLength(2);
   });
@@ -249,16 +313,16 @@ describe("native token exchange", () => {
       ],
       [
         async () => Response.json({ error: "invalid_target" }, { status: 400 }),
-        { status: "misconfigured" },
+        { status: "unavailable" },
       ],
       [
         async () =>
           Response.json({ error: "unauthorized_client" }, { status: 400 }),
-        { status: "misconfigured" },
+        { status: "unavailable" },
       ],
       [
         async () => Response.json({ error: "invalid_client" }, { status: 401 }),
-        { status: "misconfigured" },
+        { status: "unavailable" },
       ],
       [
         async () =>
@@ -299,9 +363,9 @@ describe("native token exchange", () => {
   });
 
   test("an API audience the issuer does not serve is invalid_target", async () => {
-    process.env.API_BASE_URL = "https://api.other.test";
+    useEnv({ ...issuer.env(), API_BASE_URL: "https://api.other.test" });
     expect(await authenticate(await issuer.parent())).toEqual({
-      status: "misconfigured",
+      status: "unavailable",
     });
     expect(
       new URLSearchParams(String(issuer.requests[0]!.init.body)).get(
@@ -347,7 +411,7 @@ describe("native token exchange", () => {
         issuer.respondWith(response);
         errors.mockClear();
         expect(await authenticate(await issuer.parent())).toEqual({
-          status: "misconfigured",
+          status: "unavailable",
         });
         expect(String(errors.mock.calls[0]?.[0])).toContain(check);
       }
@@ -358,36 +422,44 @@ describe("native token exchange", () => {
 });
 
 describe("native configuration", () => {
-  test("derives issuer, audiences and API from the public MCP origin", async () => {
-    useIssuer(
-      await nativeIssuer({
-        issuer: "https://auth.dev.onkernel.com",
-        origin: "https://mcp.dev.onkernel.com",
-        apiAudience: "https://api.dev.onkernel.com",
-      }),
-    );
-    // The override applies only outside the known deployments.
-    process.env.NATIVE_OAUTH_ISSUER = "https://auth.example.test";
-    const result = await authenticate(
-      await issuer.parent(),
-      new Request("http://localhost:3002/mcp", {
-        headers: { Host: "mcp.dev.onkernel.com" },
-      }),
-    );
-    expect(result.status).toBe("ok");
+  const dev = {
+    MANAGED_AUTH_APP_ORIGIN: "https://mcp.dev.onkernel.com",
+    API_BASE_URL: "https://api.dev.onkernel.com",
+    NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_ID: "kcl_mcp",
+    NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET: "secret+/=",
+  };
+
+  test("derives issuer, audiences and API from this server's public origin", async () => {
+    issuer = await nativeIssuer({
+      issuer: "https://auth.dev.onkernel.com",
+      origin: "https://mcp.dev.onkernel.com",
+      apiAudience: "https://api.dev.onkernel.com",
+    });
+    useEnv(dev);
+    expect(nativeOAuthConfig()).toEqual({
+      issuer: "https://auth.dev.onkernel.com",
+      audience: "https://mcp.dev.onkernel.com/mcp",
+      apiAudience: "https://api.dev.onkernel.com",
+      clientId: "kcl_mcp",
+      clientSecret: "secret+/=",
+    });
+    expect((await authenticate(await issuer.parent())).status).toBe("ok");
     expect(issuer.jwksRequests).toEqual([
       "https://auth.dev.onkernel.com/.well-known/jwks.json",
     ]);
     expect(issuer.requests[0]!.url).toBe("https://auth.dev.onkernel.com/token");
   });
 
-  test("trusts no native issuer on other origins without an override", async () => {
-    delete process.env.NATIVE_OAUTH_ISSUER;
-    expect(await authenticate(await issuer.parent())).toEqual({
-      status: "rejected",
-      statusCode: 401,
+  test("treats an unset public origin as production, like the managed-auth app", () => {
+    useEnv({
+      API_BASE_URL: "https://api.onkernel.com",
+      NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_ID: "kcl_mcp",
+      NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET: "secret",
     });
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(nativeOAuthConfig()).toMatchObject({
+      issuer: "https://auth.onkernel.com",
+      audience: "https://mcp.onkernel.com/mcp",
+    });
   });
 
   test.each([
@@ -395,25 +467,74 @@ describe("native configuration", () => {
     ["NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET", undefined],
     ["NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET", ""],
     ["API_BASE_URL", undefined],
-    ["NATIVE_OAUTH_ISSUER", "http://auth.example.test"],
-    ["NATIVE_OAUTH_ISSUER", "https://auth.example.test/"],
-  ])("fails closed without network when %s=%s", async (key, value) => {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
+    ["API_BASE_URL", "https://api.onkernel.com"],
+    ["NATIVE_OAUTH_ISSUER", "https://auth.dev.onkernel.com"],
+  ])("a Kernel deployment refuses to start with %s=%s", (key, value) => {
+    const env: Record<string, string> = { ...dev };
+    if (value === undefined) delete env[key];
+    else env[key] = value;
+    useEnv(env);
+    expect(() => nativeOAuthConfig()).toThrow();
+  });
+
+  test("other origins without native settings reject native tokens like any untrusted token", async () => {
+    useEnv({
+      MANAGED_AUTH_APP_ORIGIN: "http://localhost:3002",
+      API_BASE_URL: "https://api.dev.onkernel.com",
+    });
+    expect(nativeOAuthConfig()).toBeNull();
     expect(await authenticate(await issuer.parent())).toEqual({
-      status: "misconfigured",
+      status: "rejected",
+      statusCode: 401,
     });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  test("refuses to send a known deployment's tokens to another API", async () => {
-    process.env.API_BASE_URL = "https://api.onkernel.com";
-    expect(
-      await authenticate(
-        await issuer.parent(),
-        new Request("https://mcp.dev.onkernel.com/mcp"),
-      ),
-    ).toEqual({ status: "misconfigured" });
-    expect(fetchSpy).not.toHaveBeenCalled();
+  test("accepts a loopback issuer for local development", () => {
+    useEnv({
+      ...issuer.env(),
+      MANAGED_AUTH_APP_ORIGIN: "http://localhost:3002",
+      NATIVE_OAUTH_ISSUER: "http://localhost:3001",
+      API_BASE_URL: "http://localhost:3001",
+    });
+    expect(nativeOAuthConfig()).toMatchObject({
+      issuer: "http://localhost:3001",
+      audience: "http://localhost:3002/mcp",
+      apiAudience: "http://localhost:3001",
+    });
+  });
+
+  test.each([
+    ["NATIVE_OAUTH_ISSUER", undefined],
+    ["NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_ID", undefined],
+    ["NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET", undefined],
+    ["API_BASE_URL", undefined],
+    ["NATIVE_OAUTH_ISSUER", "http://auth.example.test"],
+    ["NATIVE_OAUTH_ISSUER", "https://auth.example.test/"],
+  ])("other origins refuse partial settings: %s=%s", (key, value) => {
+    const env: Record<string, string> = issuer.env();
+    if (value === undefined) delete env[key];
+    else env[key] = value;
+    useEnv(env);
+    expect(() => nativeOAuthConfig()).toThrow();
+  });
+
+  test("startup fails on invalid settings and reports the native state", async () => {
+    const { register } = await import("@/instrumentation");
+    const info = spyOn(console, "info").mockImplementation(() => {});
+    process.env.NEXT_RUNTIME = "nodejs";
+    try {
+      await register();
+      expect(String(info.mock.calls[0]?.[0])).toContain(
+        "native OAuth enabled: issuer https://auth.example.test",
+      );
+      useEnv({ ...dev, NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET: "" });
+      await expect(register()).rejects.toThrow(
+        "NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET",
+      );
+    } finally {
+      delete process.env.NEXT_RUNTIME;
+      info.mockRestore();
+    }
   });
 });

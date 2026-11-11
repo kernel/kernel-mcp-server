@@ -32,8 +32,8 @@ describe("/.well-known/oauth-protected-resource/mcp", () => {
       token_endpoint: `${issuer}/token`,
       registration_endpoint: `${issuer}/register`,
       scopes_supported: ["openid"],
-      resource_name: "Kernel",
-      resource_documentation: "https://www.kernel.sh/docs/reference/mcp-server",
+      resource_name: "KERNEL",
+      resource_documentation: "https://www.kernel.sh/docs",
     });
   });
 

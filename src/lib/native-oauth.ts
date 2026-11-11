@@ -1,4 +1,9 @@
-import { createHash } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  hkdfSync,
+  randomBytes,
+} from "node:crypto";
 import {
   createRemoteJWKSet,
   decodeProtectedHeader,
@@ -7,7 +12,8 @@ import {
   type JWTVerifyGetKey,
 } from "jose";
 import { z } from "zod";
-import { kernelDeployment, oauthRequestOrigin } from "@/lib/oauth-discovery";
+import { kernelDeployment, mcpServerOrigin } from "@/lib/oauth-discovery";
+import { getNativeExchange, setNativeExchange } from "@/lib/redis";
 
 // The Kernel issuer's access-token profile: at most 4 KiB, MCP-audience
 // tokens live ten minutes, exchanged API-audience tokens five.
@@ -19,11 +25,12 @@ const ACCESS_TOKEN_TYPE = "at+jwt";
 const ACCESS_TOKEN_URN = "urn:ietf:params:oauth:token-type:access_token";
 const JWKS_PATH = "/.well-known/jwks.json";
 const EXCHANGE_TIMEOUT_MS = 5_000;
+const CACHE_READ_TIMEOUT_MS = 500;
+const CACHE_KEY_INFO = "kernel-mcp native exchange cache v1";
 
-// A derived token is reused only while at least this much of its lifetime
+// An exchanged token is reused only while at least this much of its lifetime
 // remains, so every request gets a usable window and clock skew is covered.
 const DERIVED_TOKEN_MIN_REMAINING_MS = 60_000;
-const MAX_DERIVED_TOKENS = 1_000;
 
 const accessClaimsSchema = z.object({
   sub: z.string().min(1),
@@ -50,6 +57,11 @@ const exchangeSchema = z.object({
   scope: z.string().min(1),
 });
 
+const cachedExchangeSchema = z.object({
+  token: z.string().min(1).max(MAX_TOKEN_BYTES),
+  expiresAt: z.number(),
+});
+
 export type NativeCredential = {
   // The exchanged API-audience token; the only token sent to the Kernel API.
   token: string;
@@ -63,8 +75,7 @@ export type NativeCredential = {
 export type NativeOAuthResult =
   | { status: "ok"; credential: NativeCredential }
   | { status: "rejected"; statusCode: 401 | 403 }
-  | { status: "unavailable" }
-  | { status: "misconfigured" };
+  | { status: "unavailable" };
 
 type NativeOAuthFailure = Exclude<NativeOAuthResult, { status: "ok" }>;
 
@@ -72,6 +83,8 @@ class NativeOAuthError extends Error {
   constructor(
     readonly failure: NativeOAuthFailure,
     message: string,
+    // A fault on this server's or the issuer's side rather than the caller's.
+    readonly serverFault = false,
   ) {
     super(message);
   }
@@ -81,8 +94,11 @@ const rejected = (message: string) =>
   new NativeOAuthError({ status: "rejected", statusCode: 401 }, message);
 const unavailable = (message: string) =>
   new NativeOAuthError({ status: "unavailable" }, message);
-const misconfigured = (message: string) =>
-  new NativeOAuthError({ status: "misconfigured" }, message);
+const serverFault = (message: string) =>
+  new NativeOAuthError({ status: "unavailable" }, message, true);
+
+const reason = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
 
 // Matches the Kernel API's own selector: a compact JWT whose header typ is
 // at+jwt. Clerk session tokens carry typ JWT and keep their existing path.
@@ -98,14 +114,78 @@ export function isNativeOAuthCredential(token: string): boolean {
   }
 }
 
-type NativeOAuthConfig = {
+export type NativeOAuthConfig = {
   issuer: string;
   audience: string;
   apiAudience: string;
   clientId: string;
   clientSecret: string;
-  keys: JWTVerifyGetKey;
 };
+
+function issuerOrigin(value: string): string {
+  const url = URL.canParse(value) ? new URL(value) : null;
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(
+    url?.hostname ?? "",
+  );
+  if (
+    !url ||
+    url.origin !== value ||
+    (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
+  )
+    throw new Error("NATIVE_OAUTH_ISSUER must be an HTTPS or loopback origin");
+  return value;
+}
+
+// The public MCP origin selects the deployment. The two Kernel deployments
+// always accept native tokens and need their exchange client and matching
+// API; any other origin is either fully configured or has native OAuth off.
+// Throws on partial or inconsistent settings.
+function resolveNativeOAuthConfig(): NativeOAuthConfig | null {
+  const origin = mcpServerOrigin();
+  const deployment = kernelDeployment(origin);
+  const {
+    NATIVE_OAUTH_ISSUER: issuerOverride,
+    NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_ID: clientId,
+    NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET: clientSecret,
+    API_BASE_URL: apiBaseUrl,
+  } = process.env;
+  if (deployment && issuerOverride)
+    throw new Error(
+      `NATIVE_OAUTH_ISSUER must not be set for ${origin}, whose issuer is ${deployment.authorizationServer}`,
+    );
+  if (!deployment && !issuerOverride && !clientId && !clientSecret) return null;
+
+  const issuer =
+    deployment?.authorizationServer ?? issuerOrigin(issuerOverride!);
+  if (!clientId || !clientSecret)
+    throw new Error(
+      `Native OAuth for ${origin} requires NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_ID and NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET`,
+    );
+  // Exchanged tokens are only valid at the API they were issued for.
+  const apiOrigin =
+    apiBaseUrl && URL.canParse(apiBaseUrl) ? new URL(apiBaseUrl).origin : null;
+  const apiAudience = deployment?.api ?? apiOrigin;
+  if (!apiAudience || apiOrigin !== apiAudience)
+    throw new Error(
+      `Native OAuth for ${origin} requires API_BASE_URL to be ${apiAudience ?? "an API origin"}`,
+    );
+  return {
+    issuer,
+    audience: `${origin}/mcp`,
+    apiAudience,
+    clientId,
+    clientSecret,
+  };
+}
+
+let resolvedConfig: { value: NativeOAuthConfig | null } | undefined;
+
+// Resolved once. Instrumentation calls this at startup, so an invalid
+// configuration stops the server before it serves a request.
+export function nativeOAuthConfig(): NativeOAuthConfig | null {
+  resolvedConfig ??= { value: resolveNativeOAuthConfig() };
+  return resolvedConfig.value;
+}
 
 const keySets = new Map<string, JWTVerifyGetKey>();
 
@@ -123,59 +203,6 @@ function issuerKeys(issuer: string): JWTVerifyGetKey {
     keySets.set(issuer, keys);
   }
   return keys;
-}
-
-function configuredOrigin(name: string, value: string): string {
-  const url = URL.canParse(value) ? new URL(value) : null;
-  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(
-    url?.hostname ?? "",
-  );
-  if (
-    !url ||
-    url.origin !== value ||
-    (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
-  )
-    throw misconfigured(`${name} must be an HTTPS or loopback origin`);
-  return value;
-}
-
-// Trust is derived from the public MCP origin, the same mapping discovery
-// advertises. NATIVE_OAUTH_ISSUER exists only for origins outside that
-// mapping, such as local development. Returns null when this origin trusts
-// no native issuer.
-function nativeOAuthConfig(request: Request): NativeOAuthConfig | null {
-  const origin = oauthRequestOrigin(request);
-  const deployment = kernelDeployment(origin);
-  const issuerOverride = process.env.NATIVE_OAUTH_ISSUER;
-  if (!deployment && !issuerOverride) return null;
-  const issuer =
-    deployment?.authorizationServer ??
-    configuredOrigin("NATIVE_OAUTH_ISSUER", issuerOverride!);
-
-  // Exchanged tokens are only valid at the API they were issued for, so the
-  // API this server calls must be that audience.
-  const apiBaseUrl = process.env.API_BASE_URL;
-  const apiOrigin =
-    apiBaseUrl && URL.canParse(apiBaseUrl) ? new URL(apiBaseUrl).origin : null;
-  const apiAudience = deployment?.api ?? apiOrigin;
-  if (!apiAudience || apiOrigin !== apiAudience)
-    throw misconfigured(`API_BASE_URL must be ${apiAudience ?? "set"}`);
-
-  const clientId = process.env.NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_ID;
-  const clientSecret = process.env.NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET;
-  if (!clientId || !clientSecret)
-    throw misconfigured(
-      "NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_ID and NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET are required",
-    );
-
-  return {
-    issuer,
-    audience: `${origin}/mcp`,
-    apiAudience,
-    clientId,
-    clientSecret,
-    keys: issuerKeys(issuer),
-  };
 }
 
 const REJECTED_TOKEN_ERRORS = [
@@ -200,7 +227,7 @@ async function verifyAccessToken(
 ): Promise<AccessClaims> {
   let payload: unknown;
   try {
-    ({ payload } = await jwtVerify(token, config.keys, {
+    ({ payload } = await jwtVerify(token, issuerKeys(config.issuer), {
       issuer: config.issuer,
       audience,
       algorithms: ["RS256"],
@@ -210,12 +237,8 @@ async function verifyAccessToken(
     }));
   } catch (error) {
     if (REJECTED_TOKEN_ERRORS.some((type) => error instanceof type))
-      throw rejected(
-        `native access token rejected: ${(error as Error).message}`,
-      );
-    throw unavailable(
-      `native issuer keys unavailable: ${error instanceof Error ? error.message : error}`,
-    );
+      throw rejected(`native access token rejected: ${reason(error)}`);
+    throw unavailable(`native issuer keys unavailable: ${reason(error)}`);
   }
   const claims = accessClaimsSchema.safeParse(payload);
   if (!claims.success)
@@ -226,14 +249,57 @@ async function verifyAccessToken(
   return claims.data;
 }
 
+// Verifies an exchanged token and its lineage to the incoming token. A
+// failure means the issuer and this server disagree, not a bad caller.
+async function verifyExchangedToken(
+  token: string,
+  parent: AccessClaims,
+  config: NativeOAuthConfig,
+): Promise<AccessClaims> {
+  let derived: AccessClaims;
+  try {
+    derived = await verifyAccessToken(
+      token,
+      config.apiAudience,
+      EXCHANGE_TOKEN_LIFETIME_SECONDS,
+      config,
+    );
+  } catch (error) {
+    if (
+      error instanceof NativeOAuthError &&
+      error.failure.status === "unavailable"
+    )
+      throw error;
+    throw serverFault(`exchanged token rejected: ${reason(error)}`);
+  }
+  const parentScopes = parent.scope.split(" ");
+  const lineage = {
+    sub: derived.sub === parent.sub,
+    grant_id: derived.grant_id === parent.grant_id,
+    org_id: derived.org_id === parent.org_id,
+    project_id: (derived.project_id ?? "") === (parent.project_id ?? ""),
+    client_id: derived.client_id === config.clientId,
+    act: derived.act?.sub === `oauth_client:${config.clientId}`,
+    parent_jti: derived.parent_jti === parent.jti,
+    exp: derived.exp <= parent.exp,
+    scope: derived.scope
+      .split(" ")
+      .every((item) => parentScopes.includes(item)),
+  };
+  const failed = Object.entries(lineage)
+    .filter(([, ok]) => !ok)
+    .map(([check]) => check);
+  if (failed.length > 0)
+    throw serverFault(`exchanged token lineage mismatch: ${failed.join(",")}`);
+  return derived;
+}
+
 async function readExchangeResponse(response: Response): Promise<unknown> {
   let text: string;
   try {
     text = await response.text();
   } catch (error) {
-    throw unavailable(
-      `native exchange failed: ${error instanceof Error ? error.message : error}`,
-    );
+    throw unavailable(`native exchange failed: ${reason(error)}`);
   }
   if (text.length > 16_384)
     throw unavailable("native exchange response too large");
@@ -244,9 +310,9 @@ async function readExchangeResponse(response: Response): Promise<unknown> {
   }
 }
 
-// RFC 8693 errors from the issuer: an inactive grant rejects the credential,
-// a scope it no longer covers is forbidden, and anything that names this
-// server's request or client is a deployment fault no retry will fix.
+// RFC 8693 errors from the issuer: an inactive grant rejects the credential
+// and a scope it no longer covers is forbidden. Anything naming this
+// server's request or client is a server fault, logged as an error.
 function exchangeFailure(status: number, body: unknown): NativeOAuthError {
   const error = z.object({ error: z.string() }).safeParse(body).data?.error;
   if (error === "invalid_grant")
@@ -258,18 +324,16 @@ function exchangeFailure(status: number, body: unknown): NativeOAuthError {
     );
   if (status >= 500 || error === "temporarily_unavailable")
     return unavailable(`native exchange unavailable: HTTP ${status}`);
-  return misconfigured(
+  return serverFault(
     `native exchange refused this server: HTTP ${status} ${error ?? "without an OAuth error"}`,
   );
 }
-
-type CachedCredential = NativeCredential & { reuseUntil: number };
 
 async function exchange(
   token: string,
   parent: AccessClaims,
   config: NativeOAuthConfig,
-): Promise<CachedCredential> {
+): Promise<NativeCredential> {
   const startedAt = Date.now();
   let response: Response;
   try {
@@ -292,56 +356,18 @@ async function exchange(
       signal: AbortSignal.timeout(EXCHANGE_TIMEOUT_MS),
     });
   } catch (error) {
-    throw unavailable(
-      `native exchange failed: ${error instanceof Error ? error.message : error}`,
-    );
+    throw unavailable(`native exchange failed: ${reason(error)}`);
   }
   const body = await readExchangeResponse(response);
   if (!response.ok) throw exchangeFailure(response.status, body);
 
   const exchanged = exchangeSchema.safeParse(body);
   if (!exchanged.success)
-    throw misconfigured("native exchange response is not RFC 8693");
+    throw serverFault("native exchange response is not RFC 8693");
   const { access_token: derivedToken, expires_in, scope } = exchanged.data;
-  let derived: AccessClaims;
-  try {
-    derived = await verifyAccessToken(
-      derivedToken,
-      config.apiAudience,
-      EXCHANGE_TOKEN_LIFETIME_SECONDS,
-      config,
-    );
-  } catch (error) {
-    if (
-      error instanceof NativeOAuthError &&
-      error.failure.status === "unavailable"
-    )
-      throw error;
-    throw misconfigured(
-      `exchanged token rejected: ${error instanceof Error ? error.message : error}`,
-    );
-  }
-  const parentScopes = parent.scope.split(" ");
-  const lineage = {
-    sub: derived.sub === parent.sub,
-    grant_id: derived.grant_id === parent.grant_id,
-    org_id: derived.org_id === parent.org_id,
-    project_id: (derived.project_id ?? "") === (parent.project_id ?? ""),
-    client_id: derived.client_id === config.clientId,
-    act: derived.act?.sub === `oauth_client:${config.clientId}`,
-    parent_jti: derived.parent_jti === parent.jti,
-    exp: derived.exp <= parent.exp,
-    scope:
-      derived.scope === scope &&
-      scope.split(" ").every((item) => parentScopes.includes(item)),
-  };
-  const failed = Object.entries(lineage)
-    .filter(([, ok]) => !ok)
-    .map(([check]) => check);
-  if (failed.length > 0)
-    throw misconfigured(
-      `exchanged token lineage mismatch: ${failed.join(",")}`,
-    );
+  const derived = await verifyExchangedToken(derivedToken, parent, config);
+  if (derived.scope !== scope)
+    throw serverFault("exchanged token lineage mismatch: scope");
 
   // The relative lifetime covers an issuer clock running ahead, the signed
   // exp one running behind; lineage already bounds exp by the parent's.
@@ -357,65 +383,166 @@ async function exchange(
     grantId: parent.grant_id,
     scopes: scope.split(" "),
     expiresAt,
-    reuseUntil: expiresAt - DERIVED_TOKEN_MIN_REMAINING_MS,
   };
 }
 
-// Exchanged tokens keyed by a SHA-256 fingerprint of the incoming token, so
-// neither bearer ever becomes a key. Losing an entry only costs an exchange;
-// the API still checks the exchanged token's status on every request.
-const derivedTokens = new Map<string, CachedCredential>();
-const pendingExchanges = new Map<string, Promise<CachedCredential>>();
+// Exchanged tokens are cached in Redis so every instance can reuse them. The
+// key is an HMAC of the incoming token; the value is encrypted with a key
+// derived from the incoming token, so Redis contents alone are useless.
+export type NativeExchangeStore = {
+  get(cacheIdentity: string): Promise<string | null>;
+  set(cacheIdentity: string, value: string, ttlMs: number): Promise<void>;
+};
 
-function rememberDerivedToken(key: string, credential: CachedCredential) {
-  const now = Date.now();
-  if (credential.reuseUntil <= now) return;
-  for (const [entryKey, entry] of derivedTokens)
-    if (entry.reuseUntil <= now) derivedTokens.delete(entryKey);
-  if (derivedTokens.size >= MAX_DERIVED_TOKENS) {
-    const oldest = derivedTokens.keys().next().value;
-    if (oldest) derivedTokens.delete(oldest);
-  }
-  derivedTokens.set(key, credential);
+const redisExchangeStore: NativeExchangeStore = {
+  get: (cacheIdentity) => getNativeExchange(cacheIdentity),
+  set: (cacheIdentity, value, ttlMs) =>
+    setNativeExchange(cacheIdentity, value, ttlMs),
+};
+let exchangeStore = redisExchangeStore;
+
+function cacheKey(token: string): Buffer {
+  return Buffer.from(
+    hkdfSync("sha256", token, Buffer.alloc(0), CACHE_KEY_INFO, 32),
+  );
 }
 
-async function derivedCredential(
+function sealExchange(
+  token: string,
+  cacheIdentity: string,
+  credential: NativeCredential,
+): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", cacheKey(token), iv);
+  cipher.setAAD(Buffer.from(cacheIdentity));
+  const plaintext = JSON.stringify({
+    token: credential.token,
+    expiresAt: credential.expiresAt,
+  });
+  const sealed = Buffer.concat([
+    iv,
+    cipher.update(plaintext, "utf8"),
+    cipher.final(),
+    cipher.getAuthTag(),
+  ]);
+  return sealed.toString("base64url");
+}
+
+function openExchange(token: string, cacheIdentity: string, value: string) {
+  const sealed = Buffer.from(value, "base64url");
+  const decipher = createDecipheriv(
+    "aes-256-gcm",
+    cacheKey(token),
+    sealed.subarray(0, 12),
+  );
+  decipher.setAAD(Buffer.from(cacheIdentity));
+  decipher.setAuthTag(sealed.subarray(sealed.length - 16));
+  const plaintext = Buffer.concat([
+    decipher.update(sealed.subarray(12, sealed.length - 16)),
+    decipher.final(),
+  ]).toString("utf8");
+  return cachedExchangeSchema.parse(JSON.parse(plaintext));
+}
+
+// A cached exchange is used only if it decrypts, still has the minimum
+// remaining lifetime, and verifies again against the incoming token. Any
+// miss, store error or failed check means a fresh exchange.
+async function cachedExchange(
+  token: string,
+  cacheIdentity: string,
+  parent: AccessClaims,
+  config: NativeOAuthConfig,
+): Promise<NativeCredential | null> {
+  let value: string | null;
+  try {
+    value = await Promise.race([
+      exchangeStore.get(cacheIdentity),
+      new Promise<null>((resolve) =>
+        setTimeout(resolve, CACHE_READ_TIMEOUT_MS, null),
+      ),
+    ]);
+  } catch (error) {
+    console.warn(`native exchange cache unavailable: ${reason(error)}`);
+    return null;
+  }
+  if (!value) return null;
+  try {
+    const cached = openExchange(token, cacheIdentity, value);
+    if (cached.expiresAt - DERIVED_TOKEN_MIN_REMAINING_MS <= Date.now())
+      return null;
+    const derived = await verifyExchangedToken(cached.token, parent, config);
+    return {
+      token: cached.token,
+      subject: parent.sub,
+      grantId: parent.grant_id,
+      scopes: derived.scope.split(" "),
+      expiresAt: Math.min(cached.expiresAt, derived.exp * 1000),
+    };
+  } catch (error) {
+    if (
+      error instanceof NativeOAuthError &&
+      error.failure.status === "unavailable" &&
+      !error.serverFault
+    )
+      throw error;
+    console.warn(`native exchange cache entry discarded: ${reason(error)}`);
+    return null;
+  }
+}
+
+// Concurrent requests on one instance share an exchange for the same token.
+const pendingExchanges = new Map<string, Promise<NativeCredential>>();
+
+async function exchangedCredential(
   token: string,
   parent: AccessClaims,
   config: NativeOAuthConfig,
-): Promise<CachedCredential> {
-  const key = createHash("sha256")
-    .update([config.issuer, config.audience, token].join("\0"))
-    .digest("hex");
-  const cached = derivedTokens.get(key);
-  if (cached && cached.reuseUntil > Date.now()) return cached;
-  if (cached) derivedTokens.delete(key);
+): Promise<NativeCredential> {
+  const cacheIdentity = [config.issuer, config.audience, token].join("\0");
+  const cached = await cachedExchange(token, cacheIdentity, parent, config);
+  if (cached) return cached;
 
-  let pending = pendingExchanges.get(key);
+  let pending = pendingExchanges.get(cacheIdentity);
   if (!pending) {
-    pending = exchange(token, parent, config)
-      .then((credential) => {
-        rememberDerivedToken(key, credential);
-        return credential;
-      })
-      .finally(() => pendingExchanges.delete(key));
-    pendingExchanges.set(key, pending);
+    pending = exchange(token, parent, config).finally(() =>
+      pendingExchanges.delete(cacheIdentity),
+    );
+    pendingExchanges.set(cacheIdentity, pending);
+    void pending.then(
+      (credential) => {
+        const ttlMs =
+          credential.expiresAt - DERIVED_TOKEN_MIN_REMAINING_MS - Date.now();
+        if (ttlMs <= 0) return;
+        return exchangeStore
+          .set(
+            cacheIdentity,
+            sealExchange(token, cacheIdentity, credential),
+            ttlMs,
+          )
+          .catch((error) =>
+            console.warn(
+              `native exchange cache write failed: ${reason(error)}`,
+            ),
+          );
+      },
+      () => {},
+    );
   }
   return pending;
 }
 
 // Authenticates a native bearer on every request: the incoming token is
 // verified locally before any cached exchange is used, and its exchanged
-// API-audience token is what the request carries onward.
+// API-audience token is what the request carries onward. Without native
+// configuration every native token is rejected like any untrusted token.
 export async function authenticateNativeOAuth(
   token: string,
-  request: Request,
 ): Promise<NativeOAuthResult> {
   try {
+    const config = nativeOAuthConfig();
+    if (!config) throw rejected("native OAuth is not configured");
     if (token.length > MAX_TOKEN_BYTES)
       throw rejected("native access token too large");
-    const config = nativeOAuthConfig(request);
-    if (!config) throw rejected("no native issuer is trusted for this origin");
     const parent = await verifyAccessToken(
       token,
       config.audience,
@@ -427,18 +554,19 @@ export async function authenticateNativeOAuth(
       throw rejected("native access token is already exchanged");
     return {
       status: "ok",
-      credential: await derivedCredential(token, parent, config),
+      credential: await exchangedCredential(token, parent, config),
     };
   } catch (error) {
     if (!(error instanceof NativeOAuthError)) throw error;
-    if (error.failure.status === "misconfigured") console.error(error.message);
+    if (error.serverFault) console.error(error.message);
     else console.warn(error.message);
     return error.failure;
   }
 }
 
-export function clearNativeOAuthCachesForTests() {
+export function resetNativeOAuthForTests(store?: NativeExchangeStore) {
+  resolvedConfig = undefined;
   keySets.clear();
-  derivedTokens.clear();
   pendingExchanges.clear();
+  exchangeStore = store ?? redisExchangeStore;
 }

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { MANAGED_AUTH_APP_HTML } from "@/lib/mcp/apps/generated/managed-auth-app";
 import { mcpAppsAuthSubject } from "@/lib/mcp-apps-marker";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
+import { mcpServerOrigin } from "@/lib/oauth-discovery";
 import {
   initializeDeclaresMcpApps,
   mcpAppsGateError,
@@ -41,18 +42,12 @@ export const MANAGED_AUTH_RESOURCE_URI =
   "ui://kernel/managed-auth-login-v10.html";
 export const MANAGED_AUTH_MIME_TYPE = "text/html;profile=mcp-app";
 
-export function managedAuthAppOrigin(): string {
-  const configured =
-    process.env.MANAGED_AUTH_APP_ORIGIN ?? "https://mcp.onkernel.com";
-  return new URL(configured).origin;
-}
-
 export function managedAuthResourceMeta() {
   return {
     ui: {
       prefersBorder: true,
       csp: {
-        connectDomains: [managedAuthAppOrigin()],
+        connectDomains: [mcpServerOrigin()],
       },
     },
   };
@@ -325,7 +320,7 @@ export function registerAuthLoginApp(server: McpServer) {
             handoff_code: result.handoff_code,
           }),
           ...(result.hosted_url && { hosted_url: result.hosted_url }),
-          relay_base_url: `${managedAuthAppOrigin()}/managed-auth-proxy`,
+          relay_base_url: `${mcpServerOrigin()}/managed-auth-proxy`,
         };
         return {
           content: [

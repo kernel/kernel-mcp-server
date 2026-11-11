@@ -21,8 +21,9 @@ On every request the server:
    the trusted issuer's `/.well-known/jwks.json`, never from a location named
    in the token. The key set is cached for ten minutes and refetched at most
    every 30 s when an unknown key id appears.
-2. Exchanges it at `<issuer>/token` (RFC 8693, `client_secret_basic`) for an
-   API-audience token with `resource=<API origin>` and the same scope.
+2. Reuses a cached exchanged token for this incoming token, or exchanges it
+   at `<issuer>/token` (RFC 8693, `client_secret_basic`) for an API-audience
+   token with `resource=<API origin>` and the same scope.
 3. Verifies the exchanged token and its lineage: API audience, at most five
    minutes, same `sub`/`grant_id`/`org_id`/`project_id`, `client_id` and
    `act.sub` naming the exchange client, `parent_jti` equal to the incoming
@@ -30,25 +31,27 @@ On every request the server:
 4. Calls the Kernel API, starting with `GET /auth/context`, with only the
    exchanged token. The MCP-audience token never reaches the API.
 
-| Outcome                                                                                                                   | Response                      |
-| ------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| token fails local verification                                                                                            | 401 `invalid_token`           |
-| no native issuer trusted for this origin                                                                                  | 401 `invalid_token`           |
-| issuer answers `invalid_grant` (revoked, expired)                                                                         | 401 `invalid_token`           |
-| issuer answers `invalid_scope`                                                                                            | 403 `insufficient_scope`      |
-| issuer keys or exchange unreachable, 5xx                                                                                  | 503 `temporarily_unavailable` |
-| missing exchange credentials, `invalid_target`, `invalid_client`, other OAuth errors, exchanged token outside its lineage | 500 `server_error`, logged    |
+| Outcome                                                                                           | Response                      |
+| ------------------------------------------------------------------------------------------------- | ----------------------------- |
+| native OAuth not configured on this server                                                        | 401 `invalid_token`           |
+| token fails local verification                                                                    | 401 `invalid_token`           |
+| issuer answers `invalid_grant` (revoked, expired)                                                 | 401 `invalid_token`           |
+| issuer answers `invalid_scope`                                                                    | 403 `insufficient_scope`      |
+| issuer keys or token endpoint unreachable, 5xx, `temporarily_unavailable`                         | 503 `temporarily_unavailable` |
+| issuer refuses this server (`invalid_target`, `invalid_client`, …) or returns an unexpected token | 503, logged as an error       |
 
 ### Caching and freshness
 
-- **Exchanged tokens** are cached in memory, keyed by a SHA-256 fingerprint of
-  the incoming token (never the token itself), at most 1,000 entries. An entry
-  is reused only while at least a minute of its lifetime remains, bounded by
-  both tokens' expiry. Concurrent requests with the same token share one
-  exchange. The incoming token is verified before the cache is consulted, and
-  the API checks the exchanged token's status on every call, so revocation
-  still takes effect on the next request. Losing the cache costs only a new
-  exchange.
+- **Exchanged tokens** are cached in Redis so every instance can reuse them.
+  The key is an HMAC of the issuer, MCP audience and incoming token. The value
+  is encrypted with AES-256-GCM under a key derived (HKDF-SHA256) from the
+  incoming token, so the cache contents are useless without the incoming
+  bearer. An entry expires a minute before the exchanged token does, and a
+  cached token is used only after it decrypts and verifies again against the
+  incoming token. A miss, a Redis error or a read slower than 500 ms falls back
+  to a fresh exchange. Concurrent requests on one instance share an exchange.
+- **Revocation** is unaffected: the incoming token is verified on every
+  request, and the API checks the exchanged token's status on every call.
 - **`/auth/context`** is resolved on every native request; nothing derived
   from it is reused across requests.
 - **Identity** for MCP Apps markers, analytics sessions and the entitlements
@@ -61,71 +64,29 @@ On every request the server:
 
 ## Configuration
 
-Trust follows the public MCP origin, the same mapping discovery advertises:
+Native configuration is resolved once at startup from this server's public
+origin, `MANAGED_AUTH_APP_ORIGIN` (default `https://mcp.onkernel.com`).
 
 | MCP origin                     | Issuer                          | API                            |
 | ------------------------------ | ------------------------------- | ------------------------------ |
 | `https://mcp.onkernel.com`     | `https://auth.onkernel.com`     | `https://api.onkernel.com`     |
 | `https://mcp.dev.onkernel.com` | `https://auth.dev.onkernel.com` | `https://api.dev.onkernel.com` |
 
-| Variable                                  | Required               | Purpose                                                                                          |
-| ----------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------ |
-| `NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_ID`     | yes                    | the token-exchange client configured on the authorization server                                 |
-| `NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET` | yes (secret)           | its secret                                                                                       |
-| `API_BASE_URL`                            | yes                    | must be the API origin for this MCP origin; exchanged tokens are valid only there                |
-| `NATIVE_OAUTH_ISSUER`                     | only for other origins | issuer for origins outside the table, such as `http://localhost:3002`; ignored for the two above |
+| Variable                                  | Purpose                                                                   |
+| ----------------------------------------- | ------------------------------------------------------------------------- |
+| `MANAGED_AUTH_APP_ORIGIN`                 | this server's public origin; selects the row above                        |
+| `NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_ID`     | the token-exchange client configured on the authorization server          |
+| `NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET` | its secret                                                                |
+| `API_BASE_URL`                            | the API origin; exchanged tokens are only valid at their own API          |
+| `NATIVE_OAUTH_ISSUER`                     | issuer for any other origin, such as local development; HTTPS or loopback |
 
-If the exchange credentials are missing or `API_BASE_URL` does not match,
-native tokens fail with a 500 and a log line naming the setting; Clerk tokens
-and API keys are unaffected. Configuration is read per request, so a build or
-an unrelated route never fails on it. On origins outside the table without
-`NATIVE_OAUTH_ISSUER`, native tokens are rejected with 401.
+- **The two origins above** always accept native tokens. Both exchange
+  variables are required, `API_BASE_URL` must be that row's API, and
+  `NATIVE_OAUTH_ISSUER` must not be set.
+- **Any other origin** sets all of `NATIVE_OAUTH_ISSUER` and both exchange
+  variables, or none of them. With none, native OAuth is off and native tokens
+  are rejected like any untrusted token. The API is `API_BASE_URL`.
 
-### Provisioning the exchange secret
-
-The MCP server's runtime configuration lives in its Vercel project's
-environment variables, one set per environment (staging serves
-`mcp.dev.onkernel.com`, production `mcp.onkernel.com`). For each environment:
-
-1. Take the exchange client ID and raw secret that the authorization server
-   for that environment is configured with. Never reuse a secret across
-   environments or commit it.
-2. Add `NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_ID` and
-   `NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET` (marked sensitive) to that
-   environment only, and confirm `API_BASE_URL` is the matching API origin.
-3. Redeploy that environment so the new variables take effect.
-
-## Activation prerequisites
-
-1. The authorization server accepts the path-bearing MCP resource
-   (`<mcp origin>/mcp`) as the MCP audience, validates the exchange `resource`
-   (`invalid_target` otherwise), and has the static exchange client configured.
-   That server change must be deployed before this one is exercised.
-2. The exchange client ID and secret are provisioned in the MCP environment as
-   above.
-3. In staging, route new OAuth flows natively on the authorization server
-   (`NATIVE_OAUTH_DEFAULT_NEW_FLOWS=true`) and run the acceptance checks
-   below. Production follows only after staging passes and is approved.
-
-Exchanged tokens reach only the API operations available to scoped OAuth
-tokens; other tools answer 403 until the API allows them.
-
-## Staging acceptance
-
-1. Fetch `https://mcp.dev.onkernel.com/.well-known/oauth-protected-resource/mcp`:
-   `resource` is `https://mcp.dev.onkernel.com/mcp`, `authorization_servers`
-   is `https://auth.dev.onkernel.com`, and `resource_name` /
-   `resource_documentation` are present.
-2. Connect an MCP client from scratch: dynamic registration, browser PKCE
-   login and consent. The access token has `typ: at+jwt` and
-   `aud: ["https://mcp.dev.onkernel.com/mcp"]`.
-3. `initialize`, `tools/list` and a project-scoped tool call (for example a
-   browser list) succeed; a different project's resource is denied.
-4. Repeated requests with the same access token perform one exchange, and a
-   refreshed token performs a new one.
-5. On an MCP Apps host, the managed-auth login app opens and its app-only
-   tools run after a token refresh.
-6. Hold a stream open: it closes when the exchanged token expires and the
-   client reconnects.
-7. Revoke the grant: the next request is 401 and the client re-authorizes.
-8. Clerk OAuth and API-key connections behave as before.
+Missing or inconsistent settings stop the server at startup: Next.js runs the
+check in `src/instrumentation.ts` before serving, and an instance whose check
+fails serves no requests. `next build` does not run the check.

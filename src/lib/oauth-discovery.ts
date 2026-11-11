@@ -1,5 +1,3 @@
-import { documentation_url } from "../../server.json";
-
 const MCP_ORIGIN = "https://mcp.onkernel.com";
 const DEV_MCP_ORIGIN = "https://mcp.dev.onkernel.com";
 
@@ -35,6 +33,12 @@ export function oauthRequestOrigin(request: Request): string {
   return url.origin;
 }
 
+// This server's own public origin, as deployed. MANAGED_AUTH_APP_ORIGIN
+// already names it for the managed-auth app.
+export function mcpServerOrigin(): string {
+  return new URL(process.env.MANAGED_AUTH_APP_ORIGIN ?? MCP_ORIGIN).origin;
+}
+
 export function kernelDeployment(
   origin: string,
 ): { authorizationServer: string; api: string } | undefined {
@@ -59,7 +63,7 @@ export function oauthResourceMetadata(
     token_endpoint: `${authorizationServer}/token`,
     registration_endpoint: `${authorizationServer}/register`,
     scopes_supported: ["openid"],
-    resource_name: "Kernel",
-    resource_documentation: documentation_url,
+    resource_name: "KERNEL",
+    resource_documentation: "https://www.kernel.sh/docs",
   };
 }

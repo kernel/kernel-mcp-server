@@ -187,6 +187,35 @@ export async function getAuthorizationContextForClientId({
 
 export { client as redisClient };
 
+// Exchanged native OAuth tokens. The key is an HMAC of the incoming token's
+// cache identity and the value is ciphertext only its bearer can open; see
+// native-oauth.ts.
+function nativeExchangeKey(cacheIdentity: string): string {
+  return `native-exchange:${hashOpaqueToken(cacheIdentity)}`;
+}
+
+export async function getNativeExchange(
+  cacheIdentity: string,
+): Promise<string | null> {
+  await ensureConnected();
+  return await withReconnect(() =>
+    client.get(nativeExchangeKey(cacheIdentity)),
+  );
+}
+
+export async function setNativeExchange(
+  cacheIdentity: string,
+  value: string,
+  ttlMs: number,
+): Promise<void> {
+  await ensureConnected();
+  await withReconnect(() =>
+    client.set(nativeExchangeKey(cacheIdentity), value, {
+      expiration: { type: "PX", value: Math.floor(ttlMs) },
+    }),
+  );
+}
+
 // MCP Apps capability markers. Streamable HTTP creates one McpServer per
 // request, so initialize capability must survive in Redis. The key combines
 // the authenticated subject with the server-signed MCP transport session;

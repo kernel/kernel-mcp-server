@@ -291,13 +291,7 @@ async function handleAuthenticatedRequest(
   }
 
   if (isNativeOAuthCredential(token)) {
-    const native = await authenticateNativeOAuth(token, req);
-    if (native.status === "misconfigured")
-      return errorResponse(
-        500,
-        "server_error",
-        "Kernel OAuth is not configured on this server",
-      );
+    const native = await authenticateNativeOAuth(token);
     if (native.status !== "ok")
       return connectionScopeFailureResponse(req, native);
     const { credential } = native;

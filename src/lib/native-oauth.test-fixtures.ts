@@ -147,6 +147,7 @@ export async function nativeIssuer({
     revoked,
     // Server configuration for an origin outside the known deployments.
     env: () => ({
+      MANAGED_AUTH_APP_ORIGIN: config.origin,
       NATIVE_OAUTH_ISSUER: config.issuer,
       API_BASE_URL: config.apiAudience,
       NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_ID: config.clientId,
@@ -159,4 +160,23 @@ export async function nativeIssuer({
       responseOverrides = overrides;
     },
   };
+}
+
+// The exchanged-token cache as Redis holds it: values with a PX expiry.
+// Several instances share one store; `fail` makes every call throw.
+export function memoryExchangeStore() {
+  const entries = new Map<string, { value: string; expiresAt: number }>();
+  const state = { fail: false };
+  const store = {
+    async get(cacheIdentity: string) {
+      if (state.fail) throw new Error("redis down");
+      const entry = entries.get(cacheIdentity);
+      return entry && entry.expiresAt > Date.now() ? entry.value : null;
+    },
+    async set(cacheIdentity: string, value: string, ttlMs: number) {
+      if (state.fail) throw new Error("redis down");
+      entries.set(cacheIdentity, { value, expiresAt: Date.now() + ttlMs });
+    },
+  };
+  return { store, entries, state };
 }

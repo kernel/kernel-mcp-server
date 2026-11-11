@@ -8,8 +8,11 @@ import {
   test,
 } from "bun:test";
 import { decodeJwt } from "jose";
-import { clearNativeOAuthCachesForTests } from "@/lib/native-oauth";
-import { nativeIssuer } from "@/lib/native-oauth.test-fixtures";
+import { resetNativeOAuthForTests } from "@/lib/native-oauth";
+import {
+  memoryExchangeStore,
+  nativeIssuer,
+} from "@/lib/native-oauth.test-fixtures";
 import { Kernel } from "@onkernel/sdk";
 import type { McpConnectionScopeFailureAnalytics } from "@/lib/mcp/analytics";
 import { defaultMcpDependencies } from "@/lib/mcp/dependencies";
@@ -144,9 +147,9 @@ describe("native OAuth credentials", () => {
   let fetchSpy: ReturnType<typeof spyOn<typeof globalThis, "fetch">>;
 
   beforeEach(async () => {
-    clearNativeOAuthCachesForTests();
     issuer = await nativeIssuer();
     Object.assign(process.env, issuer.env());
+    resetNativeOAuthForTests(memoryExchangeStore().store);
     kernelTokens = [];
     kernelPaths = [];
     browsersRequested = () => {};
@@ -198,6 +201,7 @@ describe("native OAuth credentials", () => {
     for (const key of envKeys)
       if (savedEnv[key] === undefined) delete process.env[key];
       else process.env[key] = savedEnv[key];
+    resetNativeOAuthForTests();
   });
 
   function mcpRequest(
@@ -296,10 +300,14 @@ describe("native OAuth credentials", () => {
     );
   });
 
-  test("are rejected without contacting the issuer or API on an untrusted origin", async () => {
-    delete process.env.NATIVE_OAUTH_ISSUER;
+  test("are rejected like any untrusted token when native OAuth is off", async () => {
+    for (const key of envKeys)
+      if (key !== "API_BASE_URL") delete process.env[key];
+    process.env.MANAGED_AUTH_APP_ORIGIN = "http://localhost:3002";
+    resetNativeOAuthForTests(memoryExchangeStore().store);
     const response = await POST(mcpRequest(await issuer.parent()));
     expect(response.status).toBe(401);
+    expect((await response.json()).error).toBe("invalid_token");
     expect(response.headers.get("WWW-Authenticate")).toContain(
       "resource_metadata=",
     );
@@ -357,23 +365,6 @@ describe("native OAuth credentials", () => {
     expect(response.status).toBe(503);
     expect(response.headers.get("Retry-After")).toBe("1");
     expect(kernelTokens).toEqual([]);
-  });
-
-  test("a missing exchange secret is a server error, never a Clerk fallback", async () => {
-    const errors = spyOn(console, "error").mockImplementation(() => {});
-    try {
-      delete process.env.NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET;
-      const response = await POST(mcpRequest(await issuer.parent()));
-      expect(response.status).toBe(500);
-      expect((await response.json()).error).toBe("server_error");
-      expect(String(errors.mock.calls[0]?.[0])).toContain(
-        "NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET",
-      );
-      expect(fetchSpy).not.toHaveBeenCalled();
-      expect(kernelTokens).toEqual([]);
-    } finally {
-      errors.mockRestore();
-    }
   });
 
   test("post-authentication bugs propagate as server errors", async () => {
