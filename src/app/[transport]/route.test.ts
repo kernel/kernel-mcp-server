@@ -8,6 +8,7 @@ import {
   test,
 } from "bun:test";
 import { decodeJwt } from "jose";
+import { clearNativeOAuthCachesForTests } from "@/lib/native-oauth";
 import { nativeIssuer } from "@/lib/native-oauth.test-fixtures";
 import { Kernel } from "@onkernel/sdk";
 import type { McpConnectionScopeFailureAnalytics } from "@/lib/mcp/analytics";
@@ -38,7 +39,10 @@ mock.module("@/lib/mcp/analytics", () => ({
   instrumentMcpAnalytics: (
     ...[server, client]: Parameters<typeof instrumentMcpAnalytics>
   ) =>
-    instrumentMcpAnalytics(server, (analyticsClient as typeof client) ?? client),
+    instrumentMcpAnalytics(
+      server,
+      (analyticsClient as typeof client) ?? client,
+    ),
   captureMcpConnectionScopeFailure: (
     ...args: Parameters<typeof analytics.captureMcpConnectionScopeFailure>
   ) => {
@@ -47,28 +51,37 @@ mock.module("@/lib/mcp/analytics", () => ({
   },
 }));
 
-// An in-memory MCP Apps marker store, keyed exactly as Redis keys it.
+// An in-memory MCP Apps marker store, keyed exactly as Redis keys it. The
+// route records markers through mcp-apps-request's store and the App gate
+// reads them through redis, so both are redirected while a test sets it.
 let appMarkers: Set<string> | null = null;
+type Marker = { authSubject: string; transportSessionId: string };
+const markerKey = (marker: Marker) =>
+  mcpAppsMarkerKey(marker.authSubject, marker.transportSessionId);
+const memoryMarkers = {
+  mark: async (marker: Marker) => void appMarkers!.add(markerKey(marker)),
+  clear: async (marker: Marker) => void appMarkers!.delete(markerKey(marker)),
+  has: async (marker: Marker) => appMarkers!.has(markerKey(marker)),
+};
 const redis = await import("@/lib/redis");
-const { markMcpAppsClient, clearMcpAppsClient, hasMcpAppsClient } = redis;
-const markerKey = (marker: {
-  authSubject: string;
-  transportSessionId: string;
-}) => mcpAppsMarkerKey(marker.authSubject, marker.transportSessionId);
+const { hasMcpAppsClient } = redis;
 mock.module("@/lib/redis", () => ({
   ...redis,
-  markMcpAppsClient: async (marker: Parameters<typeof markMcpAppsClient>[0]) =>
-    appMarkers
-      ? void appMarkers.add(markerKey(marker))
-      : markMcpAppsClient(marker),
-  clearMcpAppsClient: async (
-    marker: Parameters<typeof clearMcpAppsClient>[0],
+  hasMcpAppsClient: (marker: Parameters<typeof hasMcpAppsClient>[0]) =>
+    appMarkers ? memoryMarkers.has(marker) : hasMcpAppsClient(marker),
+}));
+const appsRequest = await import("@/lib/mcp-apps-request");
+const { requestUsesMcpApps } = appsRequest;
+mock.module("@/lib/mcp-apps-request", () => ({
+  ...appsRequest,
+  requestUsesMcpApps: (
+    ...[req, identity, store]: Parameters<typeof requestUsesMcpApps>
   ) =>
-    appMarkers
-      ? void appMarkers.delete(markerKey(marker))
-      : clearMcpAppsClient(marker),
-  hasMcpAppsClient: async (marker: Parameters<typeof hasMcpAppsClient>[0]) =>
-    appMarkers ? appMarkers.has(markerKey(marker)) : hasMcpAppsClient(marker),
+    requestUsesMcpApps(
+      req,
+      identity,
+      store ?? (appMarkers ? memoryMarkers : undefined),
+    ),
 }));
 
 const originalCreateKernelClient = defaultMcpDependencies.createKernelClient;
@@ -117,19 +130,26 @@ afterEach(() => {
   defaultMcpDependencies.createKernelClient = originalCreateKernelClient;
 });
 
+const nativeEnvKeys = Object.keys((await nativeIssuer()).env());
+
 describe("native OAuth credentials", () => {
-  const nativeEnv = Object.keys(process.env).filter((key) =>
-    key.startsWith("OAUTH_NATIVE_"),
+  const envKeys = nativeEnvKeys;
+  const savedEnv = Object.fromEntries(
+    envKeys.map((key) => [key, process.env[key]]),
   );
   let issuer: Awaited<ReturnType<typeof nativeIssuer>>;
   let kernelTokens: string[];
   let kernelPaths: string[];
+  let browsersRequested: () => void;
   let fetchSpy: ReturnType<typeof spyOn<typeof globalThis, "fetch">>;
 
   beforeEach(async () => {
+    clearNativeOAuthCachesForTests();
     issuer = await nativeIssuer();
+    Object.assign(process.env, issuer.env());
     kernelTokens = [];
     kernelPaths = [];
+    browsersRequested = () => {};
     defaultMcpDependencies.createKernelClient = (token) => {
       kernelTokens.push(token);
       return new Kernel({
@@ -141,6 +161,11 @@ describe("native OAuth credentials", () => {
           kernelPaths.push(path);
           if (path === "/org/entitlements")
             return Response.json({ features: { vaults: { enabled: true } } });
+          // A call that outlives the request it belongs to.
+          if (path === "/browsers") {
+            browsersRequested();
+            return new Promise<Response>(() => {});
+          }
           if (path !== "/auth/context")
             throw new Error(`Unexpected API request: ${path}`);
           // GET /auth/context as the API answers an exchanged user token.
@@ -170,23 +195,10 @@ describe("native OAuth credentials", () => {
     appMarkers = null;
     analyticsClient = null;
     fetchSpy.mockRestore();
-    for (const key of Object.keys(process.env))
-      if (key.startsWith("OAUTH_NATIVE_") && !nativeEnv.includes(key))
-        delete process.env[key];
+    for (const key of envKeys)
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
   });
-
-  function enable() {
-    Object.assign(process.env, {
-      OAUTH_NATIVE_ENABLED: "true",
-      OAUTH_NATIVE_ISSUER: issuer.config.issuer,
-      OAUTH_NATIVE_MCP_AUDIENCE: issuer.config.audience,
-      OAUTH_NATIVE_API_AUDIENCE: issuer.config.apiAudience,
-      OAUTH_NATIVE_ISSUER_EPOCH: String(issuer.config.epoch),
-      OAUTH_NATIVE_VERIFICATION_JWKS: JSON.stringify(issuer.config.keys),
-      OAUTH_NATIVE_EXCHANGE_CLIENT: issuer.config.clientId,
-      OAUTH_NATIVE_EXCHANGE_SECRET: issuer.config.clientSecret,
-    });
-  }
 
   function mcpRequest(
     token: string,
@@ -206,11 +218,10 @@ describe("native OAuth credentials", () => {
     });
   }
 
-  // A refreshed MCP token carries a new jti, so every derived token differs.
-  const refreshed = () => issuer.parent({ jti: crypto.randomUUID() });
+  // Each refresh yields a new MCP token, so every exchanged token differs.
+  const refreshed = () => issuer.parent();
 
   test("keep MCP Apps capability from initialize across rotated tokens", async () => {
-    enable();
     appMarkers = new Set();
     const initialized = await POST(
       mcpRequest(await refreshed(), "initialize", {
@@ -239,23 +250,22 @@ describe("native OAuth credentials", () => {
     const text = await call.text();
     expect(text).toContain('"result"');
     expect(text).not.toContain("only available to the secure KERNEL login app");
+    expect(issuer.requests).toHaveLength(2);
   });
 
   test("reuse the entitlements snapshot across rotated tokens", async () => {
-    enable();
     for (let n = 0; n < 2; n++) {
       const response = await POST(mcpRequest(await refreshed()));
       expect(response.status).toBe(200);
       expect(await response.text()).toContain("manage_vaults");
     }
     expect(new Set(kernelTokens).size).toBe(2);
-    expect(kernelPaths.filter((path) => path === "/org/entitlements")).toEqual(
-      ["/org/entitlements"],
-    );
+    expect(kernelPaths.filter((path) => path === "/org/entitlements")).toEqual([
+      "/org/entitlements",
+    ]);
   });
 
   test("keep one analytics session across rotated tokens", async () => {
-    enable();
     const events: { properties: Record<string, unknown> }[] = [];
     analyticsClient = {
       capture: (event: { properties: Record<string, unknown> }) =>
@@ -273,8 +283,21 @@ describe("native OAuth credentials", () => {
     ).toBe(1);
   });
 
-  test("are rejected without contacting the issuer or API while disabled", async () => {
-    delete process.env.OAUTH_NATIVE_ENABLED;
+  test("reuse one exchange per MCP token and re-resolve auth context each request", async () => {
+    const parent = await issuer.parent();
+    for (let n = 0; n < 3; n++) {
+      const response = await POST(mcpRequest(parent, "ping"));
+      expect(response.status).toBe(200);
+      await response.text();
+    }
+    expect(issuer.requests).toHaveLength(1);
+    expect(kernelPaths.filter((path) => path === "/auth/context")).toHaveLength(
+      3,
+    );
+  });
+
+  test("are rejected without contacting the issuer or API on an untrusted origin", async () => {
+    delete process.env.NATIVE_OAUTH_ISSUER;
     const response = await POST(mcpRequest(await issuer.parent()));
     expect(response.status).toBe(401);
     expect(response.headers.get("WWW-Authenticate")).toContain(
@@ -285,7 +308,6 @@ describe("native OAuth credentials", () => {
   });
 
   test("reach the API only as the exchanged API-audience token", async () => {
-    enable();
     const parent = await issuer.parent();
     const response = await POST(mcpRequest(parent));
     expect(response.status).toBe(200);
@@ -296,12 +318,11 @@ describe("native OAuth credentials", () => {
     for (const token of kernelTokens) {
       expect(token).not.toBe(parent);
       expect(decodeJwt(token).aud).toEqual([issuer.config.apiAudience]);
-      expect(decodeJwt(token).parent_jti).toBe("jti_parent");
+      expect(decodeJwt(token).parent_jti).toBe(decodeJwt(parent).jti);
     }
   });
 
-  test("leave API keys on their existing path when enabled", async () => {
-    enable();
+  test("leave API keys on their existing path", async () => {
     const response = await POST(mcpRequest("sk_opaque_key"));
     expect(response.status).toBe(200);
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -310,43 +331,125 @@ describe("native OAuth credentials", () => {
   });
 
   test("revocation is 401 and scope rejection 403, never a fallback", async () => {
-    enable();
-    issuer.revoked.add("jti_parent");
-    let response = await POST(mcpRequest(await issuer.parent()));
+    const revokedParent = await issuer.parent();
+    issuer.revoked.add(String(decodeJwt(revokedParent).jti));
+    let response = await POST(mcpRequest(revokedParent));
     expect(response.status).toBe(401);
     expect((await response.json()).error).toBe("invalid_token");
 
-    fetchSpy.mockImplementation((async () =>
-      Response.json({ error: "invalid_scope" }, { status: 400 })) as never);
+    fetchSpy.mockImplementation((async (input: string | URL | Request) =>
+      String(input).endsWith("/token")
+        ? Response.json({ error: "invalid_scope" }, { status: 400 })
+        : issuer.request(String(input), {})) as never);
     response = await POST(mcpRequest(await issuer.parent()));
     expect(response.status).toBe(403);
-    expect(response.headers.get("WWW-Authenticate")).toContain(
-      "insufficient_scope",
+    expect(response.headers.get("WWW-Authenticate")).toBe(
+      'Bearer realm="OAuth", error="insufficient_scope"',
     );
     expect(kernelTokens).toEqual([]);
   });
 
-  test("issuer outages and misconfiguration are retryable 503s", async () => {
-    enable();
+  test("issuer outages are retryable 503s", async () => {
     fetchSpy.mockImplementation(
       (async () => new Response(null, { status: 503 })) as never,
     );
-    let response = await POST(mcpRequest(await issuer.parent()));
+    const response = await POST(mcpRequest(await issuer.parent()));
     expect(response.status).toBe(503);
     expect(response.headers.get("Retry-After")).toBe("1");
-
-    process.env.OAUTH_NATIVE_API_AUDIENCE = `${issuer.config.apiAudience}/`;
-    response = await POST(mcpRequest(await issuer.parent()));
-    expect(response.status).toBe(503);
     expect(kernelTokens).toEqual([]);
   });
 
+  test("a missing exchange secret is a server error, never a Clerk fallback", async () => {
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      delete process.env.NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET;
+      const response = await POST(mcpRequest(await issuer.parent()));
+      expect(response.status).toBe(500);
+      expect((await response.json()).error).toBe("server_error");
+      expect(String(errors.mock.calls[0]?.[0])).toContain(
+        "NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET",
+      );
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(kernelTokens).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   test("post-authentication bugs propagate as server errors", async () => {
-    enable();
     failingAuthContext(new Error("unaccountable"));
     await expect(POST(mcpRequest(await issuer.parent()))).rejects.toThrow(
       "Unable to resolve Kernel connection scope",
     );
+  });
+
+  describe("end with the exchanged token", () => {
+    const shortLived = () =>
+      issuer.parent({ exp: Math.floor(Date.now() / 1000) + 2 });
+
+    async function closesAt(response: Response, started: number) {
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Type")).toContain(
+        "text/event-stream",
+      );
+      await response.text();
+      const elapsed = Date.now() - started;
+      expect(elapsed).toBeGreaterThanOrEqual(1_000);
+      expect(elapsed).toBeLessThan(2_500);
+    }
+
+    test("a legacy response stream", async () => {
+      const token = await shortLived();
+      const started = Date.now();
+      let requested = false;
+      browsersRequested = () => (requested = true);
+      await closesAt(
+        await POST(
+          mcpRequest(token, "tools/call", {
+            name: "manage_browsers",
+            arguments: { action: "list" },
+          }),
+        ),
+        started,
+      );
+      expect(requested).toBe(true);
+    });
+
+    test("a modern subscription stream", async () => {
+      const token = await shortLived();
+      const started = Date.now();
+      await closesAt(
+        await POST(
+          new nextServer.NextRequest("https://mcp.example.test/mcp", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+              Accept: "application/json, text/event-stream",
+              "MCP-Protocol-Version": "2026-07-28",
+              "Mcp-Method": "subscriptions/listen",
+            },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+              method: "subscriptions/listen",
+              params: {
+                notifications: { toolsListChanged: true },
+                _meta: {
+                  "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                  "io.modelcontextprotocol/clientInfo": {
+                    name: "modern-client",
+                    version: "1",
+                  },
+                  "io.modelcontextprotocol/clientCapabilities": {},
+                },
+              },
+            }),
+          }),
+        ),
+        started,
+      );
+    });
   });
 });
 

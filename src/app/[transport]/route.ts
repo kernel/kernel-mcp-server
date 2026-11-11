@@ -8,12 +8,8 @@ import { verifyToken } from "@clerk/nextjs/server";
 import { after, NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
 import {
+  authenticateNativeOAuth,
   isNativeOAuthCredential,
-  nativeOAuthConfig,
-  exchangeNativeOAuth,
-  leaseNativeResponse,
-  NativeCredentialRejected,
-  NativeScopeRejected,
 } from "@/lib/native-oauth";
 import { oauthResourceMetadataUrl } from "@/lib/oauth-discovery";
 import {
@@ -202,6 +198,7 @@ async function handleMcpRequestWithIdentity({
   credentialType,
   transportSessionId,
   connectionContextCacheIdentity,
+  entitlementsCacheCredential = token,
   observeConnection,
 }: {
   req: NextRequest;
@@ -212,6 +209,7 @@ async function handleMcpRequestWithIdentity({
   credentialType: "api_key" | "oauth";
   transportSessionId: string | null;
   connectionContextCacheIdentity?: string;
+  entitlementsCacheCredential?: string;
   observeConnection: boolean;
 }) {
   const [mcpApps, connection] = await Promise.all([
@@ -247,7 +245,7 @@ async function handleMcpRequestWithIdentity({
           authSubject,
           connection.context.authContext.organization.id,
           transportSessionId ?? "stateless",
-          token,
+          entitlementsCacheCredential,
         ].join("\0"),
       })
     : { vaults: false, search: false };
@@ -293,50 +291,37 @@ async function handleAuthenticatedRequest(
   }
 
   if (isNativeOAuthCredential(token)) {
-    let native: Awaited<ReturnType<typeof exchangeNativeOAuth>>;
-    try {
-      const config = nativeOAuthConfig();
-      if (!config) throw new NativeCredentialRejected();
-      native = await exchangeNativeOAuth(token, req.signal, config);
-    } catch (error) {
-      if (error instanceof NativeScopeRejected)
-        return errorResponse(
-          403,
-          "insufficient_scope",
-          "This credential cannot access the requested resource",
-          { "WWW-Authenticate": 'Bearer error="insufficient_scope"' },
-        );
-      return error instanceof NativeCredentialRejected
-        ? createAuthErrorResponse(req)
-        : errorResponse(
-            503,
-            "temporarily_unavailable",
-            "Native authorization is unavailable",
-            { "Retry-After": "1" },
-          );
-    }
-    const abort = new AbortController();
-    const signal = AbortSignal.any([
-      req.signal,
-      abort.signal,
-      AbortSignal.timeout(Math.max(1, native.deadline - Date.now())),
-    ]);
-    try {
-      const response = await handleMcpRequestWithIdentity({
-        req: new NextRequest(req, { signal }),
-        token: native.token,
-        authSubject: `native:${native.subject}`,
-        scopes: native.scopes,
-        authInfoExtra: { userId: null, clerkToken: null },
-        credentialType: "oauth",
-        transportSessionId,
-        observeConnection,
-      });
-      return leaseNativeResponse(response, native.deadline, abort);
-    } catch (error) {
-      abort.abort();
-      throw error;
-    }
+    const native = await authenticateNativeOAuth(token, req);
+    if (native.status === "misconfigured")
+      return errorResponse(
+        500,
+        "server_error",
+        "Kernel OAuth is not configured on this server",
+      );
+    if (native.status !== "ok")
+      return connectionScopeFailureResponse(req, native);
+    const { credential } = native;
+    // The exchanged token rotates; identity is the verified subject, and the
+    // request ends when the exchanged token does, streams included.
+    return await handleMcpRequestWithIdentity({
+      req: new NextRequest(req, {
+        signal: AbortSignal.any([
+          req.signal,
+          AbortSignal.timeout(Math.max(1, credential.expiresAt - Date.now())),
+        ]),
+      }),
+      token: credential.token,
+      authSubject: mcpAppsAuthSubject({
+        token: credential.token,
+        userId: credential.subject,
+      }),
+      scopes: credential.scopes,
+      authInfoExtra: { userId: credential.subject, clerkToken: null },
+      credentialType: "oauth",
+      transportSessionId,
+      entitlementsCacheCredential: credential.grantId,
+      observeConnection,
+    });
   }
 
   if (!isValidJwtFormat(token)) {

@@ -1,21 +1,63 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { exportJWK, generateKeyPair } from "jose";
 import {
-  exchangeNativeOAuth,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  setSystemTime,
+  spyOn,
+  test,
+} from "bun:test";
+import { decodeJwt, generateKeyPair, SignJWT } from "jose";
+import {
+  authenticateNativeOAuth,
+  clearNativeOAuthCachesForTests,
   isNativeOAuthCredential,
-  leaseNativeResponse,
-  NATIVE_STREAM_LEASE_MS,
-  nativeOAuthConfig,
-  NativeCredentialRejected,
-  NativeScopeRejected,
 } from "./native-oauth";
 import { nativeIssuer } from "./native-oauth.test-fixtures";
 
-const signal = () => new AbortController().signal;
+const ENV_KEYS = [
+  "API_BASE_URL",
+  "NATIVE_OAUTH_ISSUER",
+  "NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_ID",
+  "NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET",
+];
+const savedEnv = Object.fromEntries(
+  ENV_KEYS.map((key) => [key, process.env[key]]),
+);
+
+let issuer: Awaited<ReturnType<typeof nativeIssuer>>;
+let fetchSpy: ReturnType<typeof spyOn<typeof globalThis, "fetch">>;
+
+function useIssuer(next: typeof issuer) {
+  issuer = next;
+  for (const key of ENV_KEYS) delete process.env[key];
+  Object.assign(process.env, issuer.env());
+}
+
+const mcpRequest = (origin = issuer.config.origin) =>
+  new Request(`${origin}/mcp`, { method: "POST" });
+const authenticate = async (token: string, request = mcpRequest()) =>
+  authenticateNativeOAuth(token, request);
+
+beforeEach(async () => {
+  clearNativeOAuthCachesForTests();
+  useIssuer(await nativeIssuer());
+  fetchSpy = spyOn(globalThis, "fetch").mockImplementation((async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ) => issuer.request(String(input), init ?? {})) as typeof fetch);
+});
+
+afterEach(() => {
+  setSystemTime();
+  fetchSpy.mockRestore();
+  for (const key of ENV_KEYS)
+    if (savedEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = savedEnv[key];
+});
 
 describe("native credential detection", () => {
   test("selects only at+jwt tokens, as the Kernel API does", async () => {
-    const issuer = await nativeIssuer();
     expect(isNativeOAuthCredential(await issuer.parent())).toBe(true);
     expect(
       isNativeOAuthCredential(
@@ -37,92 +79,115 @@ describe("native credential detection", () => {
 });
 
 describe("native token exchange", () => {
-  test("exchanges every request with the issuer's RFC 8693 contract", async () => {
-    const issuer = await nativeIssuer();
+  test("exchanges for the API audience with the RFC 8693 contract", async () => {
     const parent = await issuer.parent();
-    for (let n = 0; n < 2; n++) {
-      const result = await exchangeNativeOAuth(
-        parent,
-        signal(),
-        issuer.config,
-        issuer.request,
-      );
-      expect(result.token).not.toBe(parent);
-      expect(result.subject).toBe("user_123");
-      expect(result.scopes).toEqual(["openid", "email"]);
-    }
-    expect(issuer.requests).toHaveLength(2);
+    const result = await authenticate(parent);
+    if (result.status !== "ok") throw new Error(result.status);
+    expect(result.credential.subject).toBe("user_123");
+    expect(result.credential.grantId).toBe("grant_123");
+    expect(result.credential.scopes).toEqual(["openid", "email"]);
+    const derived = decodeJwt(result.credential.token);
+    expect(derived.aud).toEqual([issuer.config.apiAudience]);
+    expect(derived.parent_jti).toBe(decodeJwt(parent).jti);
+
+    expect(issuer.jwksRequests).toEqual([
+      "https://auth.example.test/.well-known/jwks.json",
+    ]);
+    expect(issuer.requests).toHaveLength(1);
     const { url, init } = issuer.requests[0]!;
     expect(url).toBe("https://auth.example.test/token");
     expect(init.redirect).toBe("error");
     expect(init.cache).toBe("no-store");
+    expect(new Headers(init.headers).get("Authorization")).toBe(
+      `Basic ${Buffer.from("kcl_mcp:secret%2B%2F%3D").toString("base64")}`,
+    );
     expect(Object.fromEntries(new URLSearchParams(String(init.body)))).toEqual({
       grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
       subject_token: parent,
       subject_token_type: "urn:ietf:params:oauth:token-type:access_token",
       requested_token_type: "urn:ietf:params:oauth:token-type:access_token",
+      resource: "https://api.example.test",
       scope: "openid email",
     });
   });
 
-  test("accepts five-minute exchanged tokens but leases one minute", async () => {
-    const issuer = await nativeIssuer();
-    const started = Date.now();
-    const result = await exchangeNativeOAuth(
-      await issuer.parent(),
-      signal(),
-      issuer.config,
-      issuer.request,
-    );
-    expect(result.deadline).toBeGreaterThanOrEqual(
-      started + NATIVE_STREAM_LEASE_MS,
-    );
-    expect(result.deadline).toBeLessThanOrEqual(
-      Date.now() + NATIVE_STREAM_LEASE_MS,
-    );
+  test("reuses one exchange per incoming token until a minute before expiry", async () => {
+    const now = Date.now();
+    setSystemTime(now);
+    const parent = await issuer.parent();
+    const first = await authenticate(parent);
+    const second = await authenticate(parent);
+    expect(first.status).toBe("ok");
+    expect(second).toEqual(first);
+    expect(issuer.requests).toHaveLength(1);
+
+    // A different incoming token is a different cache entry.
+    await authenticate(await issuer.parent());
+    expect(issuer.requests).toHaveLength(2);
+
+    // The 300s exchanged token is reused for 240s, then replaced.
+    setSystemTime(now + 239_000);
+    expect(await authenticate(parent)).toEqual(first);
+    setSystemTime(now + 241_000);
+    const renewed = await authenticate(parent);
+    if (renewed.status !== "ok" || first.status !== "ok")
+      throw new Error("not ok");
+    expect(renewed.credential.token).not.toBe(first.credential.token);
+    expect(issuer.requests).toHaveLength(3);
+    // Local verification still runs on every request; the JWKS is cached.
+    expect(issuer.jwksRequests).toHaveLength(1);
   });
 
-  test("bounds the lease by a shorter remaining parent lifetime despite issuer skew", async () => {
-    const issuer = await nativeIssuer();
-    const skew = 20;
-    const now = Math.floor(Date.now() / 1000) + skew;
-    // The issuer derives the remaining lifetime from its own clock; only the
-    // relative lifetime bounds the local lease.
-    issuer.deriveWith({ iat: now, exp: now + 15 });
+  test("coalesces concurrent exchanges of the same token", async () => {
+    const parent = await issuer.parent();
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => authenticate(parent)),
+    );
+    expect(new Set(results.map((result) => JSON.stringify(result))).size).toBe(
+      1,
+    );
+    expect(issuer.requests).toHaveLength(1);
+  });
+
+  test("does not cache a token with under a minute left, and bounds its lifetime", async () => {
+    const parent = await issuer.parent({
+      exp: Math.floor(Date.now() / 1000) + 20,
+    });
+    const started = Date.now();
+    const first = await authenticate(parent);
+    if (first.status !== "ok") throw new Error(first.status);
+    expect(first.credential.expiresAt).toBeGreaterThanOrEqual(started + 19_000);
+    expect(first.credential.expiresAt).toBeLessThanOrEqual(Date.now() + 20_000);
+    await authenticate(parent);
+    expect(issuer.requests).toHaveLength(2);
+  });
+
+  test("bounds the lifetime by the issuer's relative expiry despite clock skew", async () => {
+    const skewed = Math.floor(Date.now() / 1000) + 20;
+    issuer.deriveWith({ iat: skewed, exp: skewed + 15 });
     issuer.respondWith({ expires_in: 15 });
     const started = Date.now();
-    const result = await exchangeNativeOAuth(
-      await issuer.parent({ exp: now + 15 }),
-      signal(),
-      issuer.config,
-      issuer.request,
+    const result = await authenticate(
+      await issuer.parent({ exp: skewed + 15 }),
     );
-    expect(result.deadline).toBeGreaterThanOrEqual(started + 15000);
-    expect(result.deadline).toBeLessThanOrEqual(Date.now() + 15000);
+    if (result.status !== "ok") throw new Error(result.status);
+    expect(result.credential.expiresAt).toBeGreaterThanOrEqual(
+      started + 15_000,
+    );
+    expect(result.credential.expiresAt).toBeLessThanOrEqual(
+      Date.now() + 15_000,
+    );
   });
 
-  test("a parent at the end of its life is rejected for refresh", async () => {
-    const issuer = await nativeIssuer();
-    issuer.respondWith({ expires_in: 0 });
-    await expect(
-      exchangeNativeOAuth(
-        await issuer.parent(),
-        signal(),
-        issuer.config,
-        issuer.request,
-      ),
-    ).rejects.toBeInstanceOf(NativeCredentialRejected);
-  });
-
-  test("rejects parents outside the issuer profile before any network call", async () => {
-    const issuer = await nativeIssuer();
+  test("rejects tokens outside the issuer profile before any exchange", async () => {
     const now = Math.floor(Date.now() / 1000);
     const other = await generateKeyPair("RS256");
     const rejected = [
       await issuer.parent({ aud: [issuer.config.apiAudience] }),
+      // The resource is the path-bearing MCP endpoint, not the bare origin.
+      await issuer.parent({ aud: [issuer.config.origin] }),
       await issuer.parent({ aud: [issuer.config.audience, "https://x.test"] }),
       await issuer.parent({ iss: "https://other.example.test" }),
-      await issuer.parent({ issuer_epoch: 2 }),
       await issuer.parent({ authorization_version: 2 }),
       await issuer.parent({ iat: now - 700, exp: now + 1 }),
       await issuer.parent({ iat: now - 120, exp: now - 60 }),
@@ -132,235 +197,215 @@ describe("native token exchange", () => {
         parent_jti: "jti_root",
       }),
       await issuer.sign(issuer.parentClaims(), { typ: "JWT" }),
-      await issuer.sign(issuer.parentClaims(), { kid: "unknown" }),
-      await issuer.sign(issuer.parentClaims(), { kid: undefined }),
+      await new SignJWT(issuer.parentClaims())
+        .setProtectedHeader({ alg: "RS256", typ: "at+jwt", kid: "kid-test" })
+        .sign(other.privateKey),
       await issuer.parent({ pad: "x".repeat(4096) }),
     ];
     for (const token of rejected)
-      await expect(
-        exchangeNativeOAuth(token, signal(), issuer.config, issuer.request),
-      ).rejects.toBeInstanceOf(NativeCredentialRejected);
-    await expect(
-      exchangeNativeOAuth(
-        await issuer.parent(),
-        signal(),
-        {
-          ...issuer.config,
-          keys: {
-            keys: [{ ...(await exportJWK(other.publicKey)), kid: "kid-test" }],
-          },
-        },
-        issuer.request,
-      ),
-    ).rejects.toBeInstanceOf(NativeCredentialRejected);
+      expect(await authenticate(token)).toEqual({
+        status: "rejected",
+        statusCode: 401,
+      });
     expect(issuer.requests).toEqual([]);
   });
 
-  test("revocation is a credential rejection, never a fallback", async () => {
-    const issuer = await nativeIssuer();
-    issuer.revoked.add("jti_parent");
-    await expect(
-      exchangeNativeOAuth(
-        await issuer.parent(),
-        signal(),
-        issuer.config,
-        issuer.request,
-      ),
-    ).rejects.toBeInstanceOf(NativeCredentialRejected);
+  test("never fetches keys from a location named by the token", async () => {
+    const token = await issuer.sign(issuer.parentClaims(), {
+      jku: "https://evil.example.test/jwks.json",
+    });
+    expect((await authenticate(token)).status).toBe("ok");
+    expect(fetchSpy.mock.calls.map(([url]) => String(url))).not.toContain(
+      "https://evil.example.test/jwks.json",
+    );
+  });
+
+  test("an unreachable JWKS is unavailable, not a rejected credential", async () => {
+    fetchSpy.mockImplementation((async () => {
+      throw new TypeError("fetch failed");
+    }) as never);
+    expect(await authenticate(await issuer.parent())).toEqual({
+      status: "unavailable",
+    });
+  });
+
+  test("maps the issuer's OAuth errors", async () => {
+    const cases: [() => Promise<Response>, unknown][] = [
+      [
+        async () => Response.json({ error: "invalid_grant" }, { status: 400 }),
+        { status: "rejected", statusCode: 401 },
+      ],
+      [
+        async () => Response.json({ error: "invalid_scope" }, { status: 400 }),
+        { status: "rejected", statusCode: 403 },
+      ],
+      [
+        async () => Response.json({ error: "invalid_target" }, { status: 400 }),
+        { status: "misconfigured" },
+      ],
+      [
+        async () =>
+          Response.json({ error: "unauthorized_client" }, { status: 400 }),
+        { status: "misconfigured" },
+      ],
+      [
+        async () => Response.json({ error: "invalid_client" }, { status: 401 }),
+        { status: "misconfigured" },
+      ],
+      [
+        async () =>
+          Response.json({ error: "temporarily_unavailable" }, { status: 503 }),
+        { status: "unavailable" },
+      ],
+      [
+        async () => new Response("<html>", { status: 502 }),
+        { status: "unavailable" },
+      ],
+      [
+        async () => {
+          throw new TypeError("fetch failed");
+        },
+        { status: "unavailable" },
+      ],
+    ];
+    // Prime the JWKS so only the exchange fails.
+    await authenticate(await issuer.parent());
+    for (const [respond, expected] of cases) {
+      const parent = await issuer.parent();
+      fetchSpy.mockImplementation((async (input: string | URL | Request) =>
+        String(input).endsWith("/token")
+          ? respond()
+          : issuer.request(String(input), {})) as never);
+      expect(await authenticate(parent)).toEqual(expected as never);
+    }
+  });
+
+  test("a revoked grant is rejected and never retried elsewhere", async () => {
+    const parent = await issuer.parent();
+    issuer.revoked.add(String(decodeJwt(parent).jti));
+    expect(await authenticate(parent)).toEqual({
+      status: "rejected",
+      statusCode: 401,
+    });
     expect(issuer.requests).toHaveLength(1);
   });
 
-  test("scope rejection is permanent; other issuer failures are retryable", async () => {
-    const issuer = await nativeIssuer();
-    const parent = await issuer.parent();
-    const cases: [Response, unknown][] = [
-      [
-        Response.json({ error: "invalid_scope" }, { status: 400 }),
-        NativeScopeRejected,
-      ],
-      [
-        Response.json({ error: "invalid_grant" }, { status: 400 }),
-        NativeCredentialRejected,
-      ],
-      [Response.json({ error: "unauthorized_client" }, { status: 400 }), Error],
-      [Response.json({ error: "invalid_client" }, { status: 401 }), Error],
-      [
-        Response.json({ error: "temporarily_unavailable" }, { status: 503 }),
-        Error,
-      ],
-      [new Response("<html>", { status: 400 }), Error],
-    ];
-    for (const [response, kind] of cases) {
-      const failure = await exchangeNativeOAuth(
-        parent,
-        signal(),
-        issuer.config,
-        async () => response,
-      ).catch((error: unknown) => error);
-      expect(failure).toBeInstanceOf(kind as typeof Error);
-      if (kind === Error) {
-        expect(failure).not.toBeInstanceOf(NativeCredentialRejected);
-        expect(failure).not.toBeInstanceOf(NativeScopeRejected);
-      }
-    }
-  });
-
-  test("a derived token outside the exchange lineage fails closed", async () => {
-    const issuer = await nativeIssuer();
-    const parent = await issuer.parent();
-    const now = Math.floor(Date.now() / 1000);
-    const broken: [Record<string, unknown>, Record<string, unknown>][] = [
-      [{ aud: [issuer.config.audience] }, {}],
-      [{ iat: now, exp: now + 301 }, {}],
-      [{ exp: now + 601, iat: now + 400 }, {}],
-      [{ sub: "user_other" }, {}],
-      [{ grant_id: "grant_other" }, {}],
-      [{ org_id: "org_other" }, {}],
-      [{ project_id: undefined }, {}],
-      [{ client_id: "kcl_other" }, {}],
-      [{ act: { sub: "oauth_client:kcl_other" } }, {}],
-      [{ act: undefined }, {}],
-      [{ parent_jti: "jti_other" }, {}],
-      [{ issuer_epoch: 2 }, {}],
-      [{ scope: "openid email admin" }, { scope: "openid email admin" }],
-      [{}, { scope: "openid" }],
-      [{}, { issued_token_type: "urn:ietf:params:oauth:token-type:jwt" }],
-    ];
-    for (const [derived, response] of broken) {
-      issuer.deriveWith(derived);
-      issuer.respondWith(response);
-      const failure = await exchangeNativeOAuth(
-        parent,
-        signal(),
-        issuer.config,
-        issuer.request,
-      ).catch((error: unknown) => error);
-      expect(failure).toBeInstanceOf(Error);
-      expect(failure).not.toBeInstanceOf(NativeCredentialRejected);
-    }
-  });
-
-  test("the exchange request ends with the client request", async () => {
-    const issuer = await nativeIssuer();
-    const abort = new AbortController();
-    abort.abort();
-    let seen: AbortSignal | undefined;
-    await expect(
-      exchangeNativeOAuth(
-        await issuer.parent(),
-        abort.signal,
-        issuer.config,
-        async (_url, init) => {
-          seen = init.signal ?? undefined;
-          throw new Error("aborted");
-        },
+  test("an API audience the issuer does not serve is invalid_target", async () => {
+    process.env.API_BASE_URL = "https://api.other.test";
+    expect(await authenticate(await issuer.parent())).toEqual({
+      status: "misconfigured",
+    });
+    expect(
+      new URLSearchParams(String(issuer.requests[0]!.init.body)).get(
+        "resource",
       ),
-    ).rejects.toThrow("aborted");
-    expect(seen?.aborted).toBe(true);
+    ).toBe("https://api.other.test");
+  });
+
+  test("an exchanged token outside the lineage fails closed and names the check", async () => {
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const broken: [
+        Record<string, unknown>,
+        Record<string, unknown>,
+        string,
+      ][] = [
+        [{ aud: [issuer.config.audience] }, {}, "aud"],
+        [{ iat: now, exp: now + 301 }, {}, "lifetime"],
+        [{ sub: "user_other" }, {}, "sub"],
+        [{ grant_id: "grant_other" }, {}, "grant_id"],
+        [{ org_id: "org_other" }, {}, "org_id"],
+        [{ project_id: undefined }, {}, "project_id"],
+        [{ client_id: "kcl_other" }, {}, "client_id"],
+        [{ act: { sub: "oauth_client:kcl_other" } }, {}, "act"],
+        [{ act: undefined }, {}, "act"],
+        [{ parent_jti: "jti_other" }, {}, "parent_jti"],
+        [{ exp: now + 601, iat: now + 400 }, {}, "exp"],
+        [
+          { scope: "openid email admin" },
+          { scope: "openid email admin" },
+          "scope",
+        ],
+        [{}, { scope: "openid" }, "scope"],
+        [
+          {},
+          { issued_token_type: "urn:ietf:params:oauth:token-type:jwt" },
+          "RFC 8693",
+        ],
+      ];
+      for (const [derived, response, check] of broken) {
+        issuer.deriveWith(derived);
+        issuer.respondWith(response);
+        errors.mockClear();
+        expect(await authenticate(await issuer.parent())).toEqual({
+          status: "misconfigured",
+        });
+        expect(String(errors.mock.calls[0]?.[0])).toContain(check);
+      }
+    } finally {
+      errors.mockRestore();
+    }
   });
 });
 
 describe("native configuration", () => {
-  const saved = { ...process.env };
-  afterEach(() => {
-    for (const key of Object.keys(process.env))
-      if (key.startsWith("OAUTH_NATIVE_")) delete process.env[key];
-    Object.assign(process.env, saved);
-  });
-
-  async function enable(overrides: Record<string, string | undefined> = {}) {
-    const { publicKey } = await generateKeyPair("RS256");
-    Object.assign(process.env, {
-      OAUTH_NATIVE_ENABLED: "true",
-      OAUTH_NATIVE_ISSUER: "https://auth.dev.example.test",
-      OAUTH_NATIVE_MCP_AUDIENCE: "https://mcp.dev.example.test",
-      OAUTH_NATIVE_API_AUDIENCE: "https://api.dev.example.test",
-      OAUTH_NATIVE_ISSUER_EPOCH: "1",
-      OAUTH_NATIVE_VERIFICATION_JWKS: JSON.stringify({
-        keys: [
-          {
-            ...(await exportJWK(publicKey)),
-            kid: "k1",
-            alg: "RS256",
-            use: "sig",
-          },
-        ],
+  test("derives issuer, audiences and API from the public MCP origin", async () => {
+    useIssuer(
+      await nativeIssuer({
+        issuer: "https://auth.dev.onkernel.com",
+        origin: "https://mcp.dev.onkernel.com",
+        apiAudience: "https://api.dev.onkernel.com",
       }),
-      OAUTH_NATIVE_EXCHANGE_CLIENT: "kcl_mcp",
-      OAUTH_NATIVE_EXCHANGE_SECRET: "secret",
-    });
-    for (const [key, value] of Object.entries(overrides))
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-  }
-
-  test("is off without any native settings", () => {
-    delete process.env.OAUTH_NATIVE_ENABLED;
-    expect(nativeOAuthConfig()).toBeNull();
-    process.env.OAUTH_NATIVE_ENABLED = "false";
-    expect(nativeOAuthConfig()).toBeNull();
+    );
+    // The override applies only outside the known deployments.
+    process.env.NATIVE_OAUTH_ISSUER = "https://auth.example.test";
+    const result = await authenticate(
+      await issuer.parent(),
+      new Request("http://localhost:3002/mcp", {
+        headers: { Host: "mcp.dev.onkernel.com" },
+      }),
+    );
+    expect(result.status).toBe("ok");
+    expect(issuer.jwksRequests).toEqual([
+      "https://auth.dev.onkernel.com/.well-known/jwks.json",
+    ]);
+    expect(issuer.requests[0]!.url).toBe("https://auth.dev.onkernel.com/token");
   });
 
-  test("pins every trust input when enabled", async () => {
-    await enable();
-    const config = nativeOAuthConfig()!;
-    expect(config.issuer).toBe("https://auth.dev.example.test");
-    expect(config.audience).toBe("https://mcp.dev.example.test");
-    expect(config.apiAudience).toBe("https://api.dev.example.test");
-    expect(Object.keys(config.keys.keys[0]!).sort()).toEqual([
-      "e",
-      "kid",
-      "kty",
-      "n",
-    ]);
+  test("trusts no native issuer on other origins without an override", async () => {
+    delete process.env.NATIVE_OAUTH_ISSUER;
+    expect(await authenticate(await issuer.parent())).toEqual({
+      status: "rejected",
+      statusCode: 401,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   test.each([
-    ["OAUTH_NATIVE_ISSUER", undefined],
-    ["OAUTH_NATIVE_ISSUER", "http://auth.dev.example.test"],
-    ["OAUTH_NATIVE_MCP_AUDIENCE", "https://mcp.dev.example.test/mcp"],
-    ["OAUTH_NATIVE_API_AUDIENCE", "https://api.dev.example.test/"],
-    ["OAUTH_NATIVE_API_AUDIENCE", "https://mcp.dev.example.test"],
-    ["OAUTH_NATIVE_ISSUER_EPOCH", "0"],
-    ["OAUTH_NATIVE_VERIFICATION_JWKS", undefined],
-    ["OAUTH_NATIVE_VERIFICATION_JWKS", '{"keys":[]}'],
-    ["OAUTH_NATIVE_EXCHANGE_SECRET", undefined],
-  ])("rejects %s=%s", async (key, value) => {
-    await enable({ [key]: value });
-    expect(() => nativeOAuthConfig()).toThrow();
+    ["NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_ID", undefined],
+    ["NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET", undefined],
+    ["NATIVE_OAUTH_MCP_EXCHANGE_CLIENT_SECRET", ""],
+    ["API_BASE_URL", undefined],
+    ["NATIVE_OAUTH_ISSUER", "http://auth.example.test"],
+    ["NATIVE_OAUTH_ISSUER", "https://auth.example.test/"],
+  ])("fails closed without network when %s=%s", async (key, value) => {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+    expect(await authenticate(await issuer.parent())).toEqual({
+      status: "misconfigured",
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  test("refuses private key material in the verification set", async () => {
-    const { privateKey } = await generateKeyPair("RS256", {
-      extractable: true,
-    });
-    await enable({
-      OAUTH_NATIVE_VERIFICATION_JWKS: JSON.stringify({
-        keys: [{ ...(await exportJWK(privateKey)), kid: "k1" }],
-      }),
-    });
-    expect(() => nativeOAuthConfig()).toThrow();
-  });
-});
-
-describe("native stream lease", () => {
-  test("closes a stream when its authorization lease ends", async () => {
-    let cancelled = false;
-    const abort = new AbortController();
-    const response = leaseNativeResponse(
-      new Response(
-        new ReadableStream({
-          cancel() {
-            cancelled = true;
-          },
-        }),
+  test("refuses to send a known deployment's tokens to another API", async () => {
+    process.env.API_BASE_URL = "https://api.onkernel.com";
+    expect(
+      await authenticate(
+        await issuer.parent(),
+        new Request("https://mcp.dev.onkernel.com/mcp"),
       ),
-      Date.now() + 20,
-      abort,
-    );
-    const result = await response.body!.getReader().read();
-    expect(result.done).toBe(true);
-    expect(abort.signal.aborted).toBe(true);
-    expect(cancelled).toBe(true);
+    ).toEqual({ status: "misconfigured" });
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
