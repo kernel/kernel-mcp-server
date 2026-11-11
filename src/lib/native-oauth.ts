@@ -294,6 +294,8 @@ async function verifyExchangedToken(
   return derived;
 }
 
+// A body that is not the issuer's JSON is an outage when the issuer says so
+// (5xx), and otherwise an issuer fault.
 async function readExchangeResponse(response: Response): Promise<unknown> {
   let text: string;
   try {
@@ -301,12 +303,17 @@ async function readExchangeResponse(response: Response): Promise<unknown> {
   } catch (error) {
     throw unavailable(`native exchange failed: ${reason(error)}`);
   }
+  const malformed = response.status >= 500 ? unavailable : serverFault;
   if (text.length > 16_384)
-    throw unavailable("native exchange response too large");
+    throw malformed(
+      `native exchange response too large: HTTP ${response.status}`,
+    );
   try {
     return JSON.parse(text);
   } catch {
-    throw unavailable(`native exchange returned HTTP ${response.status}`);
+    throw malformed(
+      `native exchange returned HTTP ${response.status} without JSON`,
+    );
   }
 }
 
@@ -479,12 +486,6 @@ async function cachedExchange(
       expiresAt: Math.min(cached.expiresAt, derived.exp * 1000),
     };
   } catch (error) {
-    if (
-      error instanceof NativeOAuthError &&
-      error.failure.status === "unavailable" &&
-      !error.serverFault
-    )
-      throw error;
     console.warn(`native exchange cache entry discarded: ${reason(error)}`);
     return null;
   }

@@ -352,6 +352,34 @@ describe("native token exchange", () => {
     }
   });
 
+  test("logs a malformed issuer answer as an error and an outage as a warning", async () => {
+    const error = spyOn(console, "error").mockImplementation(() => {});
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await authenticate(await issuer.parent());
+      for (const [status, body, logged] of [
+        [200, "<html>", error],
+        [400, "x".repeat(20_000), error],
+        [502, "<html>", warn],
+      ] as const) {
+        error.mockClear();
+        warn.mockClear();
+        fetchSpy.mockImplementation((async (input: string | URL | Request) =>
+          String(input).endsWith("/token")
+            ? new Response(body, { status })
+            : issuer.request(String(input), {})) as never);
+        expect(await authenticate(await issuer.parent())).toEqual({
+          status: "unavailable",
+        });
+        expect(logged).toHaveBeenCalledTimes(1);
+        expect(logged === error ? warn : error).not.toHaveBeenCalled();
+      }
+    } finally {
+      error.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
   test("a revoked grant is rejected and never retried elsewhere", async () => {
     const parent = await issuer.parent();
     issuer.revoked.add(String(decodeJwt(parent).jti));
@@ -400,6 +428,7 @@ describe("native token exchange", () => {
           "scope",
         ],
         [{}, { scope: "openid" }, "scope"],
+        [{}, { token_type: undefined }, "RFC 8693"],
         [
           {},
           { issued_token_type: "urn:ietf:params:oauth:token-type:jwt" },
