@@ -461,16 +461,19 @@ async function cachedExchange(
   config: NativeOAuthConfig,
 ): Promise<NativeCredential | null> {
   let value: string | null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     value = await Promise.race([
       exchangeStore.get(cacheIdentity),
-      new Promise<null>((resolve) =>
-        setTimeout(resolve, CACHE_READ_TIMEOUT_MS, null),
-      ),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(resolve, CACHE_READ_TIMEOUT_MS, null);
+      }),
     ]);
   } catch (error) {
     console.warn(`native exchange cache unavailable: ${reason(error)}`);
     return null;
+  } finally {
+    clearTimeout(timer);
   }
   if (!value) return null;
   try {
