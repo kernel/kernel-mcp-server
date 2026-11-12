@@ -97,7 +97,7 @@ describe("resolveMcpConnectionContext", () => {
       projectId: null,
       source: "credential",
     });
-    const analytics = connectionAnalyticsFromContext(context);
+    const analytics = connectionAnalyticsFromContext(context, "api_key");
     expect(analytics).toEqual({
       authMethod: "api_key",
       credentialScope: "organization",
@@ -128,9 +128,9 @@ describe("resolveMcpConnectionContext", () => {
       projectId: "project_123",
       source: "credential",
     });
-    expect(connectionAnalyticsFromContext(context)?.credentialScope).toBe(
-      "project",
-    );
+    expect(
+      connectionAnalyticsFromContext(context, "api_key")?.credentialScope,
+    ).toBe("project");
   });
 
   test("uses the canonical OAuth user principal for analytics", async () => {
@@ -148,8 +148,13 @@ describe("resolveMcpConnectionContext", () => {
       }),
     );
 
-    expect(connectionAnalyticsFromContext(context)?.authMethod).toBe("oauth");
-    expect(connectionAnalyticsFromContext(context)?.userId).toBe(
+    expect(connectionAnalyticsFromContext(context, "oauth")?.authMethod).toBe(
+      "oauth",
+    );
+    expect(
+      connectionAnalyticsFromContext(context, "native_oauth")?.authMethod,
+    ).toBe("native_oauth");
+    expect(connectionAnalyticsFromContext(context, "oauth")?.userId).toBe(
       "user_kernel_123",
     );
   });

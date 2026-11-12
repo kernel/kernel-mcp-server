@@ -36,7 +36,9 @@ const analytics = await import("@/lib/mcp/analytics");
 const captureMcpConnectionScopeFailure =
   analytics.captureMcpConnectionScopeFailure;
 const instrumentMcpAnalytics = analytics.instrumentMcpAnalytics;
+const isMcpAnalyticsEnabled = analytics.isMcpAnalyticsEnabled;
 let analyticsClient: unknown = null;
+let observeConnections = false;
 mock.module("@/lib/mcp/analytics", () => ({
   ...analytics,
   instrumentMcpAnalytics: (
@@ -46,6 +48,7 @@ mock.module("@/lib/mcp/analytics", () => ({
       server,
       (analyticsClient as typeof client) ?? client,
     ),
+  isMcpAnalyticsEnabled: () => observeConnections || isMcpAnalyticsEnabled(),
   captureMcpConnectionScopeFailure: (
     ...args: Parameters<typeof analytics.captureMcpConnectionScopeFailure>
   ) => {
@@ -197,6 +200,7 @@ describe("native OAuth credentials", () => {
   afterEach(() => {
     appMarkers = null;
     analyticsClient = null;
+    observeConnections = false;
     fetchSpy.mockRestore();
     for (const key of envKeys)
       if (savedEnv[key] === undefined) delete process.env[key];
@@ -287,6 +291,31 @@ describe("native OAuth credentials", () => {
     ).toBe(1);
   });
 
+  test("report connections as native OAuth in analytics", async () => {
+    observeConnections = true;
+    const events: { event: string; properties: Record<string, unknown> }[] = [];
+    analyticsClient = {
+      capture: (event: {
+        event: string;
+        properties: Record<string, unknown>;
+      }) => events.push(event),
+    };
+    const response = await POST(
+      mcpRequest(await issuer.parent(), "initialize", {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "test-client", version: "1.0.0" },
+      }),
+    );
+    expect(response.status).toBe(200);
+    await response.text();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const initialize = events.find(
+      (event) => event.event === "$mcp_initialize",
+    );
+    expect(initialize?.properties.$mcp_auth_method).toBe("native_oauth");
+  });
+
   test("reuse one exchange per MCP token and re-resolve auth context each request", async () => {
     const parent = await issuer.parent();
     for (let n = 0; n < 3; n++) {
@@ -347,6 +376,13 @@ describe("native OAuth credentials", () => {
       error: "invalid_token",
       error_description: "Invalid or expired access token",
     });
+    expect(captured).toEqual([
+      {
+        outcome: "rejected",
+        credentialType: "native_oauth",
+        upstreamStatusCode: 401,
+      },
+    ]);
 
     fetchSpy.mockImplementation((async (input: string | URL | Request) =>
       String(input).endsWith("/token")
@@ -371,6 +407,13 @@ describe("native OAuth credentials", () => {
     expect(response.status).toBe(503);
     expect(response.headers.get("Retry-After")).toBe("1");
     expect(kernelTokens).toEqual([]);
+    expect(captured).toEqual([
+      {
+        outcome: "unavailable",
+        credentialType: "native_oauth",
+        upstreamStatusCode: undefined,
+      },
+    ]);
   });
 
   test("post-authentication bugs propagate as server errors", async () => {

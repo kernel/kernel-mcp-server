@@ -20,6 +20,7 @@ import { PostHog } from "posthog-node";
 import type {
   McpConnectionAnalyticsContext,
   McpConnectionContext,
+  McpCredentialType,
 } from "@/lib/mcp/auth-context";
 import { MCP_INTENT_ARGUMENT_DESCRIPTION } from "@/lib/mcp/analytics-context";
 import {
@@ -88,7 +89,7 @@ export const OAUTH_TOKEN_EXCHANGE_EVENT = "oauth_token_exchange";
 // record of it.
 export type McpConnectionScopeFailureAnalytics = {
   outcome: "rejected" | "unavailable" | "invalid";
-  credentialType: "api_key" | "oauth";
+  credentialType: McpCredentialType;
   upstreamStatusCode?: number;
 };
 

@@ -45,8 +45,12 @@ export type McpConnectionContext = {
   scope: ConnectionScope;
 };
 
+// Which credential path authenticated the connection. "oauth" is a Clerk-issued
+// token; "native_oauth" one issued by the Kernel authorization server.
+export type McpCredentialType = "api_key" | "oauth" | "native_oauth";
+
 export type McpConnectionAnalyticsContext = {
-  authMethod: "api_key" | "oauth";
+  authMethod: McpCredentialType;
   credentialScope: "organization" | "project";
   connectionScope: "organization" | "project";
   scopeSource: "credential" | "server_pin";
@@ -263,10 +267,10 @@ export function expireMcpConnectionContextCacheForTests() {
   for (const entry of connectionContextCache.values()) entry.expiresAt = 0;
 }
 
-export function connectionAnalyticsFromContext({
-  authContext,
-  scope,
-}: McpConnectionContext): McpConnectionAnalyticsContext | null {
+export function connectionAnalyticsFromContext(
+  { authContext, scope }: McpConnectionContext,
+  credentialType: McpCredentialType,
+): McpConnectionAnalyticsContext | null {
   const isApiKey =
     authContext.authentication.method === "api_key" &&
     authContext.authentication.source === "api_key" &&
@@ -278,7 +282,7 @@ export function connectionAnalyticsFromContext({
   if (!isApiKey && !isOAuth) return null;
 
   return {
-    authMethod: isApiKey ? "api_key" : "oauth",
+    authMethod: isApiKey ? "api_key" : credentialType,
     credentialScope: authContext.authorization.credential_scope.project_id
       ? "project"
       : "organization",

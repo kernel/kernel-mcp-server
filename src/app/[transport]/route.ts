@@ -22,6 +22,7 @@ import {
   connectionAnalyticsFromContext,
   resolveMcpConnectionContext,
   type McpConnectionContextFailure,
+  type McpCredentialType,
 } from "@/lib/mcp/auth-context";
 import { mcpAppsAuthSubject } from "@/lib/mcp-apps-marker";
 import { requestUsesMcpApps } from "@/lib/mcp-apps-request";
@@ -207,7 +208,7 @@ async function handleMcpRequestWithIdentity({
   authSubject: string;
   scopes: string[];
   authInfoExtra: AuthInfoExtra;
-  credentialType: "api_key" | "oauth";
+  credentialType: McpCredentialType;
   transportSessionId: string | null;
   connectionContextCacheIdentity?: string;
   entitlementsCacheCredential?: string;
@@ -255,7 +256,7 @@ async function handleMcpRequestWithIdentity({
   const connectionContext = connection.context;
   const connectionAnalytics =
     observeConnection && isMcpAnalyticsEnabled()
-      ? connectionAnalyticsFromContext(connectionContext)
+      ? connectionAnalyticsFromContext(connectionContext, credentialType)
       : null;
   return handler.fetch(req, {
     authInfo: {
@@ -293,8 +294,15 @@ async function handleAuthenticatedRequest(
 
   if (isNativeOAuthCredential(token)) {
     const native = await authenticateNativeOAuth(token);
-    if (native.status !== "ok")
+    if (native.status !== "ok") {
+      captureMcpConnectionScopeFailure({
+        outcome: native.status,
+        credentialType: "native_oauth",
+        upstreamStatusCode:
+          native.status === "rejected" ? native.statusCode : undefined,
+      });
       return connectionScopeFailureResponse(req, native);
+    }
     const { credential } = native;
     // The exchanged token rotates; identity is the verified subject, and the
     // request ends when the exchanged token does, streams included.
@@ -312,7 +320,7 @@ async function handleAuthenticatedRequest(
       }),
       scopes: credential.scopes,
       authInfoExtra: { userId: credential.subject, clerkToken: null },
-      credentialType: "oauth",
+      credentialType: "native_oauth",
       transportSessionId,
       entitlementsCacheCredential: credential.grantId,
       observeConnection,
