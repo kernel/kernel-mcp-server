@@ -1176,6 +1176,9 @@ export function registerBrowserCapabilities(
                   ttl_seconds: params.live_view_ttl_seconds,
                 }),
               },
+              // each call mints a url that cannot be revoked, so a retry after a
+              // lost response would leave an extra live url behind.
+              { maxRetries: 0 },
             );
             return jsonResponse({
               ...liveView,
