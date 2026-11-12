@@ -3,7 +3,10 @@ import {
   organizationWideAuthInfo,
   projectScopedAuthInfo,
 } from "@/lib/mcp/auth-context.test-fixtures";
-import { toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
+import {
+  toolResultJSON,
+  toolResultText,
+} from "@/lib/mcp/mcp-test-fixtures";
 import { connectVaultTest, item, linkSpec } from "./vaults.test-fixtures";
 
 const tool = "manage_vault_provider_configs";
@@ -52,6 +55,88 @@ function expectSecretFree(result: unknown) {
 }
 
 describe("vault provider config SDK routing", () => {
+  test("documents and enforces the model-facing VGS safety boundary", async () => {
+    const fixture = await connectVaultTest([]);
+    try {
+      const { tools } = await fixture.client.listTools();
+      for (const name of [
+        "manage_vault_provider_configs",
+        "manage_vault_wallets",
+        "manage_vault_cards",
+      ]) {
+        expect(tools.find((candidate) => candidate.name === name)?.description)
+          .toContain("vgs");
+      }
+
+      const results = [
+        await fixture.call(tool, {
+          action: "create",
+          name: "unsafe-vgs",
+          provider: "vgs",
+          credentials: { client_id: "example", client_secret: "example" },
+        }),
+        await fixture.call("manage_vault_wallets", {
+          action: "create",
+          vault: "checkout",
+          key: "unsafe-vgs-wallet",
+          provider: "vgs",
+          spec: { provider_config: { name: "unsafe-vgs" } },
+        }),
+        await fixture.call("manage_vault_cards", {
+          action: "create",
+          vault: "checkout",
+          key: "unsafe-vgs-card",
+          provider: "vgs",
+          spec: {
+            wallet: "unsafe-vgs-wallet",
+            card: { cvc_alias: "must-not-enter-mcp" },
+          },
+        }),
+      ];
+      for (const result of results) expect(result.isError).toBe(true);
+      expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("projects safe metadata for an existing VGS config without enabling VGS writes", async () => {
+    const vgs = {
+      id: "vpc_vgs",
+      name: "issuer-vault",
+      provider: "vgs",
+      client_id: "service-account-id",
+      environment: "live",
+      vault_id: "vgs-vault-id",
+      client_secret: secret,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    };
+    const fixture = await connectVaultTest(
+      [Response.json(vgs)],
+      organizationWideAuthInfo(),
+    );
+    try {
+      const result = await fixture.call(tool, {
+        action: "get",
+        config: vgs.id,
+      });
+      expect(toolResultJSON(result)).toEqual({
+        id: vgs.id,
+        name: vgs.name,
+        provider: "vgs",
+        client_id: vgs.client_id,
+        environment: "live",
+        vault_id: vgs.vault_id,
+        created_at: vgs.created_at,
+        updated_at: vgs.updated_at,
+      });
+      expectSecretFree(result);
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test.each(["link", "agentcard"])(
     "creates %s configs and projects only public metadata",
     async (provider) => {
@@ -758,6 +843,124 @@ describe("configured wallets and recovery", () => {
       }
     },
   );
+
+  test("safely reads existing VGS wallets provisioned by a trusted backend", async () => {
+    const wallet = {
+      id: "vi_vgs_wallet",
+      key: "vgs-wallet",
+      type: "wallet",
+      spec: {
+        provider: "vgs",
+        provider_config: { id: "vpc_vgs", name: "issuer-vault" },
+      },
+      state: { provider: "vgs", status: "connected" },
+      available_operations: [],
+      available_expansions: [],
+    };
+    const fixture = await connectVaultTest([Response.json(wallet)]);
+    try {
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_items", {
+          action: "get",
+          vault: "checkout",
+          key: wallet.key,
+        }),
+      );
+      expect(result.item).toMatchObject({
+        type: "wallet",
+        spec: {
+          provider: "vgs",
+          provider_config: { id: "vpc_vgs", name: "issuer-vault" },
+        },
+        state: { provider: "vgs", status: "connected" },
+      });
+      expect(result.guidance.join(" ")).toContain(
+        "wallets connect a payment provider",
+      );
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("authorizes and guides an existing VGS card without exposing aliases", async () => {
+    const aliases = {
+      pan_alias: "private-pan-alias",
+      cvc_alias: "private-cvc-alias",
+    };
+    const requested = {
+      id: "vi_vgs_card",
+      key: "vgs-card",
+      type: "card",
+      spec: {
+        provider: "vgs",
+        wallet: "vgs-wallet",
+        card_mode: "cvc_only",
+        card: aliases,
+        amount: 1234,
+        currency: "usd",
+        merchant_name: "Example Shop",
+        merchant_url: "https://shop.example/checkout",
+      },
+      state: { provider: "vgs", status: "requested" },
+      available_operations: [
+        { type: "authorize", description: "Reveal aliases for this purchase." },
+      ],
+      available_expansions: [],
+    };
+    const ready = {
+      ...requested,
+      state: { provider: "vgs", status: "ready" },
+      available_operations: [
+        { type: "fill", description: "Fill the CVC at checkout." },
+      ],
+    };
+    const fixture = await connectVaultTest([
+      Response.json(requested),
+      Response.json(ready),
+      Response.json(requested),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_cards", {
+        action: "authorize",
+        vault: "checkout",
+        key: requested.key,
+      });
+      expect(result.isError).not.toBe(true);
+      expect(fixture.requests).toHaveLength(2);
+      expect(fixture.requests[1]).toMatchObject({
+        method: "POST",
+        body: { type: "authorize" },
+      });
+      const json = toolResultJSON(result);
+      expect(json.item).toMatchObject({
+        spec: { provider: "vgs", card_mode: "cvc_only" },
+        state: { provider: "vgs", status: "ready" },
+      });
+      expect(JSON.stringify(json)).not.toContain(aliases.pan_alias);
+      expect(JSON.stringify(json)).not.toContain(aliases.cvc_alias);
+      const guidance = json.guidance.join(" ");
+      expect(guidance).toContain("trusted backend");
+      expect(guidance).toContain("all browser egress");
+      expect(guidance).toContain("cvc_only fills only cvc");
+
+      const wrongInputs = await fixture.call("manage_vault_items", {
+        action: "invoke",
+        vault: "checkout",
+        key: requested.key,
+        operation: "authorize",
+        inputs: {
+          browser_id: "brr_123",
+          page_url: "https://shop.example/checkout",
+        },
+      });
+      expect(toolResultText(wrongInputs)).toBe(
+        "vgs cards do not accept browser_id or page_url; authorize without them.",
+      );
+      expect(fixture.requests).toHaveLength(3);
+    } finally {
+      await fixture.close();
+    }
+  });
 
   test("preserves omitted vs explicit empty pending-card fields", async () => {
     const fixture = await connectVaultTest([

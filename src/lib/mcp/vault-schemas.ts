@@ -172,8 +172,17 @@ export const passkeyInputsSchema = z
   .strict();
 export type PasskeyInputs = z.infer<typeof passkeyInputsSchema>;
 
-export const addPaymentMethodInputsShape = "{}";
-export const addPaymentMethodInputsSchema = z.object({}).strict();
+export const addPaymentMethodInputsShape = '{ enrollment?: "hosted" | "server" }';
+export const addPaymentMethodInputsSchema = z
+  .object({
+    enrollment: z
+      .enum(["hosted", "server"])
+      .describe(
+        "hosted (default) returns a card_enrollment link for the cardholder. server returns a short-lived card_ingest url for the card issuer's backend.",
+      )
+      .optional(),
+  })
+  .strict();
 export type AddPaymentMethodInputs = z.infer<
   typeof addPaymentMethodInputsSchema
 >;
@@ -234,6 +243,32 @@ export function addPaymentMethodInputsIssueMessage(error: z.ZodError) {
   return operationInputsIssueMessage(
     "add_payment_method",
     addPaymentMethodInputsShape,
+    error,
+  );
+}
+
+export const onePasswordStatusInputsShape = "{ timeout_seconds? }";
+export const onePasswordStatusInputsSchema = z
+  .object({
+    timeout_seconds: z
+      .number()
+      .int()
+      .min(0)
+      .max(120)
+      .describe(
+        "seconds to keep checking on 1password's paced schedule. the call still waits for its first scheduled check, at most 20 seconds, when that comes later. defaults to 10.",
+      )
+      .optional(),
+  })
+  .strict();
+export type OnePasswordStatusInputs = z.infer<
+  typeof onePasswordStatusInputsSchema
+>;
+
+export function onePasswordStatusInputsIssueMessage(error: z.ZodError) {
+  return operationInputsIssueMessage(
+    "1pw_access_request_status",
+    onePasswordStatusInputsShape,
     error,
   );
 }

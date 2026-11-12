@@ -38,6 +38,7 @@ const unsafeItem = {
   state: {
     provider: "agentcard",
     status: "ready",
+    credential_type: "link_pay_token",
     aliases: { ...aliases, secret: "hidden-alias" },
     masks: { brand: "visa", last4: "4242", pan: "hidden-pan" },
     authorization: {
@@ -60,6 +61,8 @@ const unsafeItem = {
         is_default: false,
         display: { brand: "visa", last4: "4242", number: "hidden-number" },
         capabilities: { single_use_card: { eligible: false, reasons: [] } },
+        issuer_reference: "issuer-card-42",
+        valid_until: "2026-10-01T13:00:00Z",
         raw: "hidden-method",
       },
     ],
@@ -73,6 +76,7 @@ describe("vault public responses", () => {
     expect(projected).toMatchObject({
       state: {
         aliases,
+        credential_type: "link_pay_token",
         authorization: {
           amount_verified: false,
           replay_delivered: false,
@@ -90,6 +94,8 @@ describe("vault public responses", () => {
             id: "pm_1",
             is_default: false,
             capabilities: { single_use_card: { eligible: false, reasons: [] } },
+            issuer_reference: "issuer-card-42",
+            valid_until: "2026-10-01T13:00:00Z",
           },
         ],
       },

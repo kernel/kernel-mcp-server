@@ -160,6 +160,22 @@ export function registerAuthConnectionTools(server: McpServer) {
           .optional(),
         browser: z
           .object({
+            location: z
+              .object({
+                locale: z
+                  .string()
+                  .min(1)
+                  .nullable()
+                  .describe(
+                    "canonical bcp 47 locale for login, reauthentication, and health-check browsers. omit on create to use the region default, omit on update to preserve it, or use null on update to clear it.",
+                  )
+                  .optional(),
+              })
+              .strict()
+              .describe(
+                "(create, update only) browser locale for future managed-auth sessions. not supported as a per-login override.",
+              )
+              .optional(),
             proxy: proxyConfigSchema()
               .describe(
                 "proxy egress, set with exactly one of id, name, or mode. id or name selects that proxy; mode direct forces direct egress; mode default restores the default egress. omitted on create derives the default; omitted on update or login preserves or inherits the connection setting.",
@@ -184,7 +200,7 @@ export function registerAuthConnectionTools(server: McpServer) {
               .optional(),
           })
           .describe(
-            "(create, update) set the connection defaults for future managed-auth browser sessions. (login) override them for this login only. cannot be combined with the deprecated browser_* or proxy_mode fields.",
+            "set managed-auth browser settings. create/update set connection defaults; login can override proxy, region, site-compatibility, and telemetry for that login only, but not location. cannot be combined with the deprecated browser_* or proxy_mode fields.",
           )
           .optional(),
         browser_telemetry: managedAuthBrowserTelemetrySchema
@@ -391,6 +407,21 @@ export function registerAuthConnectionTools(server: McpServer) {
         }
         if (params.skill_mode !== undefined && params.action !== "login") {
           return errorResponse("error: skill_mode is login-only.");
+        }
+        if (params.browser?.location !== undefined) {
+          if (params.action === "login") {
+            return errorResponse(
+              "error: browser.location is not supported for login; set it on the connection with create or update.",
+            );
+          }
+          if (
+            params.action === "create" &&
+            params.browser.location.locale === null
+          ) {
+            return errorResponse(
+              "error: browser.location.locale=null is update-only; omit it on create to use the region default.",
+            );
+          }
         }
 
         switch (params.action) {

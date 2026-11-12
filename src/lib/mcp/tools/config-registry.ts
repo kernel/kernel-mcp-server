@@ -41,7 +41,7 @@ export function registerConfigRegistryTools(
     "manage_config_registry",
     {
       description:
-        'look up recommended browser and proxy settings for a site the user is authorized to automate. use "lookup" for a side-effect-free read of current knowledge, "resolve" to start or retry a background analysis, "get_analysis" to poll one analysis, "cancel_analysis" to request cancellation, "list_configs" to list targets and their latest recommendations, or "list_analyses" to list analysis history.',
+        'look up recommended browser and proxy settings for a site the user is authorized to automate. recommended isp proxy config may include config.ip_address when the organization should pin a reserved exit ip; pass it to manage_proxies create rather than flattening it. use "lookup" for a side-effect-free read of current knowledge, "resolve" to start or retry a background analysis, "get_analysis" to poll one analysis, "cancel_analysis" to request cancellation, "list_configs" to list targets and their latest recommendations, or "list_analyses" to list analysis history.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z

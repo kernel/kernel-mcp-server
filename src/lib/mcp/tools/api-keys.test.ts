@@ -37,6 +37,12 @@ describe("manage_api_keys SDK parity", () => {
           "keys missing that value sort last in either direction",
         ),
       });
+      expect(tool?.description).toContain(
+        "delete asynchronously ends browser sessions",
+      );
+      expect(tool?.description).toContain(
+        "grace-period or natural expiry does not end existing browsers",
+      );
     } finally {
       await close();
     }

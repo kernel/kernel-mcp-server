@@ -63,6 +63,7 @@ const pendingCredential = {
   action: {
     name: "1password_access_approval",
     url: approvalLink,
+    access_request_reference: reference,
     instructions: approvalInstructions,
   },
   available_operations: [
@@ -513,6 +514,9 @@ describe("1Password vault credentials", () => {
       expect(guidance).toContain('operation: "1pw_access_request_status"');
       expect(guidance).toContain("needs no user approval");
       expect(guidance).toContain("it needs no browser");
+      expect(guidance).toContain("every 2 seconds");
+      expect(guidance).toContain("after 3 minutes");
+      expect(guidance).toContain("mcp intentionally omits access_request_reference");
       expect(guidance).toContain(
         "create a browser with this vault attached (KERNEL loads the 1password extension into it on demand)",
       );
@@ -527,6 +531,42 @@ describe("1Password vault credentials", () => {
       ]);
     } finally {
       await fixture.close();
+    }
+  });
+
+  test("validates and forwards paced status timeout including zero", async () => {
+    const fixture = await connectVaultTest([
+      Response.json(pendingCredential),
+      Response.json(pendingCredential),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        ...target,
+        action: "invoke",
+        operation: "1pw_access_request_status",
+        inputs: { timeout_seconds: 0 },
+      });
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[1].body).toEqual({
+        type: "1pw_access_request_status",
+        timeout_seconds: 0,
+      });
+    } finally {
+      await fixture.close();
+    }
+
+    const invalid = await connectVaultTest([]);
+    try {
+      const result = await invalid.call("manage_vault_items", {
+        ...target,
+        action: "invoke",
+        operation: "1pw_access_request_status",
+        inputs: { timeout_seconds: 121 },
+      });
+      expect(result.isError).toBe(true);
+      expect(invalid.requests).toHaveLength(0);
+    } finally {
+      await invalid.close();
     }
   });
 

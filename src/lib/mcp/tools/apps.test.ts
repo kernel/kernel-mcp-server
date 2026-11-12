@@ -56,6 +56,7 @@ describe("manage_apps invocation contract", () => {
       const appTool = tools.tools.find((tool) => tool.name === "manage_apps");
       expect(appTool).toBeDefined();
       expect(appTool?.description).toContain("leased_at");
+      expect(appTool?.description).toContain("replay metadata");
 
       const result = await client.callTool({
         name: "manage_apps",
@@ -122,6 +123,12 @@ describe("manage_apps invocation contract", () => {
                   locale: "en-US",
                   locale_source: "override",
                 },
+                replay: {
+                  replay_id: "rpl_123",
+                  replay_view_url: "https://replay.example/view/rpl_123",
+                  started_at: "2026-08-08T00:00:01Z",
+                  finished_at: null,
+                },
               },
             ],
           };
@@ -156,6 +163,12 @@ describe("manage_apps invocation contract", () => {
               timezone_source: "default",
               locale: "en-US",
               locale_source: "override",
+            },
+            replay: {
+              replay_id: "rpl_123",
+              replay_view_url: "https://replay.example/view/rpl_123",
+              started_at: "2026-08-08T00:00:01Z",
+              finished_at: null,
             },
           },
         ],

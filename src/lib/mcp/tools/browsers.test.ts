@@ -1021,6 +1021,7 @@ describe("manage_browsers location, memory, and conditional allowlists", () => {
           action: "create",
           headless: false,
           memory: "8GiB",
+          start_replay: false,
           extensions,
           telemetry,
           location: {
@@ -1056,6 +1057,7 @@ describe("manage_browsers location, memory, and conditional allowlists", () => {
         {
           headless: false,
           memory: "8GiB",
+          start_replay: false,
           extensions,
           telemetry,
           location: {
@@ -1378,6 +1380,133 @@ describe("manage_browsers region", () => {
           leased_at: "2026-08-08T00:05:00Z",
         },
       ]);
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe("manage_browsers replay creation and live view", () => {
+  test("forwards start_replay=false and returns replay metadata", async () => {
+    const calls: unknown[] = [];
+    const replay = {
+      replay_id: "rpl_123",
+      started_at: "2026-09-01T12:00:00Z",
+      replay_view_url: "https://replays.example/rpl_123",
+    };
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (...args: unknown[]) => {
+            calls.push(args);
+            return { session_id: "brr_123", replay };
+          },
+        },
+      },
+    );
+    try {
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: { action: "create", start_replay: false },
+      });
+      expect(calls).toEqual([[{ start_replay: false }, undefined]]);
+      expect(toolResultJSON(result).browser.replay).toEqual(replay);
+    } finally {
+      await close();
+    }
+  });
+
+  test("creates scoped live-view URLs once without SDK retries", async () => {
+    const calls: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          liveView: {
+            create: async (...args: unknown[]) => {
+              calls.push(args);
+              return {
+                url: "https://live.example/view?token=secret",
+                scope: "control",
+                expires_at: "2026-09-01T12:10:00Z",
+              };
+            },
+          },
+        },
+      },
+    );
+    try {
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "create_live_view",
+          session_id: "named-browser",
+          live_view_scope: "control",
+          live_view_ttl_seconds: 600,
+        },
+      });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toEqual([
+        "named-browser",
+        { scope: "control", ttl_seconds: 600 },
+        expect.objectContaining({
+          maxRetries: 0,
+          signal: expect.any(AbortSignal),
+        }),
+      ]);
+      expect(toolResultJSON(result)).toMatchObject({
+        scope: "control",
+        expires_at: "2026-09-01T12:10:00Z",
+        note: expect.stringContaining("cannot be revoked"),
+      });
+    } finally {
+      await close();
+    }
+  });
+
+  test("omits live-view defaults and validates action-only fields", async () => {
+    const calls: unknown[][] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          liveView: {
+            create: async (...args: unknown[]) => {
+              calls.push(args);
+              return { url: "https://live.example/view", scope: "read" };
+            },
+          },
+          retrieve: async () => ({ session_id: "brr_123" }),
+        },
+      },
+    );
+    try {
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: { action: "create_live_view", session_id: "brr_123" },
+      });
+      expect(calls[0]?.[1]).toEqual({});
+
+      const missing = await client.callTool({
+        name: "manage_browsers",
+        arguments: { action: "create_live_view" },
+      });
+      expect(toolResultText(missing)).toContain(
+        "session_id is required for create_live_view",
+      );
+
+      const wrongAction = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "get",
+          session_id: "brr_123",
+          live_view_scope: "read",
+        },
+      });
+      expect(toolResultText(wrongAction)).toContain(
+        "apply only to the create_live_view action",
+      );
     } finally {
       await close();
     }

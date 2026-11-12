@@ -499,7 +499,7 @@ export function registerBrowserCapabilities(
     "manage_browsers",
     {
       description:
-        'manage the browser sessions that every web task runs in, and their archived telemetry. once a session exists, drive it with webmcp, browser_repl, execute_playwright_code, or computer_action, preferring the first that can carry the current step. use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, "save_profile" to snapshot a running session to an existing or new profile without ending it, and "delete" when finished. live sessions can be addressed by id or by the name given at creation or set on update; deleted sessions only by id. browser records include leased_at only for leased pooled sessions; it is the time the session was last leased. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed. save_profile accepts exactly one destination: profile_id must identify an existing profile, while profile_name overwrites the matching profile in the browser project or creates it. saving restarts the browser: active cdp, playwright, and webdriver connections close and must reconnect, webdriver clients need a new session, restored tabs reload, and in-memory page state is lost, so call save_profile at a stable point, such as right after a login completes, not in the middle of a page action. the browser is stopped only while its user data is copied, and the action returns after the restarted browser accepts cdp connections and the profile upload completes. caches, service worker storage, and google drive indexeddb data are omitted from the saved profile but remain in the running browser. saving neither attaches the destination profile nor changes save_profile_changes. active browsers already using that profile keep their in-memory state; pools with refresh_on_profile_update enabled replace idle sessions from the new snapshot, while other browsers use it when they next load the profile. among overlapping save_profile calls to the same profile, the most recently started wins even if an earlier call finishes later; an automatic session-end save with save_profile_changes is ordered against them by finish time. a successful save restarts timeout_seconds, while a failed save leaves it unchanged. a browser_busy conflict is temporary; retry the call. browser_lease_changed (a pooled browser was released or reacquired after the call began) and browser_not_active (the browser is no longer running) are not retryable against that browser. save_profile waits up to 190 seconds and is not retried automatically; after a timeout the save may still finish, so check the profile before calling again.',
+        'manage the browser sessions that every web task runs in, and their archived telemetry. once a session exists, drive it with webmcp, browser_repl, execute_playwright_code, or computer_action, preferring the first that can carry the current step. use "list" to choose an existing session, "create" before browser control (optionally with start_replay), "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, "create_live_view" to mint an unrevokable read-only or control-only live-view bearer url for a headful browser, "save_profile" to snapshot a running session to an existing or new profile without ending it, and "delete" when finished. live sessions can be addressed by id or by the name given at creation or set on update; deleted sessions only by id. browser records include leased_at only for leased pooled sessions; it is the time the session was last leased. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed. save_profile accepts exactly one destination: profile_id must identify an existing profile, while profile_name overwrites the matching profile in the browser project or creates it. saving restarts the browser: active cdp, playwright, and webdriver connections close and must reconnect, webdriver clients need a new session, restored tabs reload, and in-memory page state is lost, so call save_profile at a stable point, such as right after a login completes, not in the middle of a page action. the browser is stopped only while its user data is copied, and the action returns after the restarted browser accepts cdp connections and the profile upload completes. caches, service worker storage, and google drive indexeddb data are omitted from the saved profile but remain in the running browser. saving neither attaches the destination profile nor changes save_profile_changes. active browsers already using that profile keep their in-memory state; pools with refresh_on_profile_update enabled replace idle sessions from the new snapshot, while other browsers use it when they next load the profile. among overlapping save_profile calls to the same profile, the most recently started wins even if an earlier call finishes later; an automatic session-end save with save_profile_changes is ordered against them by finish time. a successful save restarts timeout_seconds, while a failed save leaves it unchanged. a browser_busy conflict is temporary; retry the call. browser_lease_changed (a pooled browser was released or reacquired after the call began) and browser_not_active (the browser is no longer running) are not retryable against that browser. save_profile waits up to 190 seconds and is not retried automatically; after a timeout the save may still finish, so check the profile before calling again.',
       inputSchema: z.strictObject(
         {
           ...projectSelectionInputSchema(),
@@ -510,6 +510,7 @@ export function registerBrowserCapabilities(
               "list",
               "get",
               "get_telemetry",
+              "create_live_view",
               "save_profile",
               "delete",
             ])
@@ -521,7 +522,7 @@ export function registerBrowserCapabilities(
           session_id: z
             .string()
             .describe(
-              "browser session id or name. required for update, get, get_telemetry, save_profile, and delete actions. a name resolves only a live session; for a deleted session (get_telemetry) pass its id.",
+              "browser session id or name. required for update, get, get_telemetry, create_live_view, save_profile, and delete actions. a name resolves only a live session; for a deleted session (get_telemetry) pass its id.",
             )
             .optional(),
           name: z
@@ -635,6 +636,12 @@ export function registerBrowserCapabilities(
               "(create) inactivity timeout in seconds (max 259200 = 72h). default 60.",
             )
             .optional(),
+          start_replay: z
+            .boolean()
+            .describe(
+              "(create) start replay recording as part of browser creation. the response includes replay metadata when recording starts; use manage_replays to inspect or stop it.",
+            )
+            .optional(),
           profile_name: z
             .string()
             .min(1)
@@ -717,7 +724,7 @@ export function registerBrowserCapabilities(
             .int()
             .min(1)
             .describe(
-              "(create, update) window width in pixels. must pair with viewport_height.",
+              "(create, update) window width in pixels. any positive integer is accepted, but headful browsers require at least 64. must pair with viewport_height.",
             )
             .optional(),
           viewport_height: z
@@ -725,7 +732,7 @@ export function registerBrowserCapabilities(
             .int()
             .min(1)
             .describe(
-              "(create, update) window height in pixels. must pair with viewport_width.",
+              "(create, update) window height in pixels. any positive integer is accepted, but headful browsers require at least 64. must pair with viewport_width.",
             )
             .optional(),
           viewport_refresh_rate: z
@@ -861,6 +868,21 @@ export function registerBrowserCapabilities(
               "(create, update) enable or disable user interaction telemetry (clicks, keys, scrolls). off by default; enable for debugging.",
             )
             .optional(),
+          live_view_scope: z
+            .enum(["read", "control"])
+            .describe(
+              "(create_live_view) read shows the browser without accepting input; control also lets the viewer drive it. defaults to read.",
+            )
+            .optional(),
+          live_view_ttl_seconds: z
+            .number()
+            .int()
+            .min(1)
+            .max(31_536_000)
+            .describe(
+              "(create_live_view) seconds until the url expires. omit to keep it valid until the browser is deleted or, for a pooled browser, released.",
+            )
+            .optional(),
         },
         { error: unknownBrowserKeyMessage },
       ),
@@ -888,6 +910,20 @@ export function registerBrowserCapabilities(
         if (params.action !== "create" && params.fingerprint !== undefined) {
           return errorResponse(
             "fingerprint overrides are creation-only; use a new browser to change them.",
+          );
+        }
+        if (params.action !== "create" && params.start_replay !== undefined) {
+          return errorResponse(
+            "error: start_replay is creation-only; use manage_replays on an existing browser.",
+          );
+        }
+        if (
+          params.action !== "create_live_view" &&
+          (params.live_view_scope !== undefined ||
+            params.live_view_ttl_seconds !== undefined)
+        ) {
+          return errorResponse(
+            "error: live_view_scope and live_view_ttl_seconds apply only to the create_live_view action.",
           );
         }
         if (
@@ -975,6 +1011,8 @@ export function registerBrowserCapabilities(
               createParams.region = params.region;
             if (params.timeout_seconds !== undefined)
               createParams.timeout_seconds = params.timeout_seconds;
+            if (params.start_replay !== undefined)
+              createParams.start_replay = params.start_replay;
             if (params.kiosk_mode !== undefined)
               createParams.kiosk_mode = params.kiosk_mode;
             if (
@@ -1169,6 +1207,31 @@ export function registerBrowserCapabilities(
               until: params.until,
               order: params.order,
               compact: params.compact,
+            });
+          }
+          case "create_live_view": {
+            if (!params.session_id) {
+              return errorResponse(
+                "error: session_id is required for create_live_view action.",
+              );
+            }
+            const liveView = await client.browsers.liveView.create(
+              params.session_id,
+              {
+                ...(params.live_view_scope !== undefined && {
+                  scope: params.live_view_scope,
+                }),
+                ...(params.live_view_ttl_seconds !== undefined && {
+                  ttl_seconds: params.live_view_ttl_seconds,
+                }),
+              },
+              // Each call mints a capability URL that cannot be revoked. Never
+              // retry a request whose response may have been lost.
+              { maxRetries: 0, signal: ctx.mcpReq.signal },
+            );
+            return jsonResponse({
+              ...liveView,
+              note: "this bearer url opens only the live view, not cdp, webdriver, or other browser endpoints. it cannot be revoked before expiry; share it only with the intended viewer.",
             });
           }
           case "save_profile": {

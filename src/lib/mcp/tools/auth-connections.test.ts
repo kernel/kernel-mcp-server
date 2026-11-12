@@ -41,6 +41,12 @@ describe("manage_auth_connections programmatic surface", () => {
     expect(schema?.browser_region.safeParse("us-west").success).toBe(true);
     expect(schema?.browser_region.safeParse("emea").success).toBe(false);
     expect(schema?.browser_stealth).toBeDefined();
+    expect(
+      schema?.browser.safeParse({ location: { locale: "sv-SE" } }).success,
+    ).toBe(true);
+    expect(
+      schema?.browser.safeParse({ location: { locale: null } }).success,
+    ).toBe(true);
     expect(schema?.query).toBeDefined();
     expect(schema?.timeline_type).toBeDefined();
     expect(schema?.record_session).toBeDefined();
@@ -298,6 +304,81 @@ describe("manage_auth_connections programmatic surface", () => {
         { browser: { proxy: { mode: "direct" } } },
         { browser: { proxy: { id: "proxy_1" } } },
       ]);
+    } finally {
+      kernelClientMock.factory = () => unusedKernelClient;
+    }
+  });
+
+  test("forwards managed-auth locale on create/update and rejects login overrides", async () => {
+    const { handler } = captureHandler();
+    const bodies: unknown[] = [];
+    kernelClientMock.factory = () => ({
+      auth: {
+        connections: {
+          create: async (body: unknown) => {
+            bodies.push(body);
+            return connection();
+          },
+          update: async (_id: string, body: unknown) => {
+            bodies.push(body);
+            return connection();
+          },
+          login: async () => ({ id: "conn_1" }),
+        },
+      },
+    });
+    try {
+      const extra = { authInfo: { token: "test-token" } };
+      await handler(
+        {
+          action: "create",
+          domain: "example.com",
+          profile_name: "work",
+          browser: { location: { locale: "sv-SE" } },
+        },
+        extra,
+      );
+      await handler(
+        {
+          action: "update",
+          id: "conn_1",
+          browser: { location: { locale: null } },
+        },
+        extra,
+      );
+      expect(bodies).toEqual([
+        {
+          domain: "example.com",
+          profile_name: "work",
+          browser: { location: { locale: "sv-SE" } },
+        },
+        { browser: { location: { locale: null } } },
+      ]);
+
+      const login = await handler(
+        {
+          action: "login",
+          id: "conn_1",
+          browser: { location: { locale: "fr-FR" } },
+        },
+        extra,
+      );
+      expect(login.isError).toBe(true);
+      expect(login.content[0].text).toContain(
+        "browser.location is not supported for login",
+      );
+
+      const createNull = await handler(
+        {
+          action: "create",
+          domain: "example.com",
+          profile_name: "other",
+          browser: { location: { locale: null } },
+        },
+        extra,
+      );
+      expect(createNull.isError).toBe(true);
+      expect(createNull.content[0].text).toContain("update-only");
     } finally {
       kernelClientMock.factory = () => unusedKernelClient;
     }

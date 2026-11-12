@@ -5,6 +5,8 @@ import { connectVaultTest, item } from "@/lib/mcp/tools/vaults.test-fixtures";
 const target = { vault: "checkout", key: "wallet-1" };
 const enrollmentURL =
   "https://vault.kernel.example/card#capability=private-enrollment";
+const ingestURL =
+  "https://cards.kernel.example/vault/card-ingest/private-capability";
 
 const kernelWallet = {
   ...item,
@@ -65,6 +67,9 @@ describe("Kernel wallet payment methods", () => {
         "returns an empty connected wallet",
       );
       expect(wallets?.description).toContain("vaults:write plus vaults:use");
+      expect(wallets?.inputSchema.properties?.enrollment).toMatchObject({
+        enum: ["hosted", "server"],
+      });
       expect(cards?.description).toContain(
         "payment_method_id may explicitly select a method",
       );
@@ -188,6 +193,80 @@ describe("Kernel wallet payment methods", () => {
           body: { type: "add_payment_method" },
         },
       ]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("starts server enrollment and exposes only the issuer ingest action", async () => {
+    const serverMethod = {
+      ...pendingPaymentMethod,
+      action: {
+        name: "card_ingest",
+        url: ingestURL,
+        capture_token: "must-not-leak",
+      },
+      expires_at: "2026-10-01T12:05:00Z",
+    };
+    const fixture = await connectVaultTest([
+      Response.json(kernelWallet),
+      Response.json({
+        type: "add_payment_method",
+        payment_method: serverMethod,
+      }),
+    ]);
+    try {
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_wallets", {
+          ...target,
+          action: "add_payment_method",
+          enrollment: "server",
+        }),
+      );
+      expect(fixture.requests[1].body).toEqual({
+        type: "add_payment_method",
+        enrollment: "server",
+      });
+      expect(result.result.payment_method.action).toEqual({
+        name: "card_ingest",
+        url: ingestURL,
+      });
+      expect(result.guidance).toContain("trusted card issuer backend");
+      expect(result.guidance).toContain("5 minutes");
+      expect(JSON.stringify(result)).not.toContain("must-not-leak");
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("projects issuer metadata after server enrollment completes", async () => {
+    const expanded = {
+      ...kernelWallet,
+      expanded: {
+        payment_methods: [
+          {
+            ...pendingPaymentMethod,
+            status: "active",
+            action: undefined,
+            expires_at: undefined,
+            issuer_reference: "issuer-card-42",
+            valid_until: "2026-10-01T13:00:00Z",
+          },
+        ],
+      },
+    };
+    const fixture = await connectVaultTest([Response.json(expanded)]);
+    try {
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_wallets", {
+          ...target,
+          action: "payment_methods",
+        }),
+      );
+      expect(result.item.expanded.payment_methods[0]).toMatchObject({
+        issuer_reference: "issuer-card-42",
+        valid_until: "2026-10-01T13:00:00Z",
+      });
     } finally {
       await fixture.close();
     }
@@ -363,7 +442,7 @@ describe("Kernel wallet payment methods", () => {
         ...target,
         action: "invoke",
         operation: "add_payment_method",
-        inputs: {},
+        inputs: { enrollment: "server" },
       });
       const removed = await fixture.call("manage_vault_items", {
         ...target,
@@ -375,6 +454,7 @@ describe("Kernel wallet payment methods", () => {
       expect(removed.isError).toBeUndefined();
       expect(fixture.requests[1].body).toEqual({
         type: "add_payment_method",
+        enrollment: "server",
       });
       expect(fixture.requests[3].body).toEqual({
         type: "remove_payment_method",
@@ -387,6 +467,7 @@ describe("Kernel wallet payment methods", () => {
 
   test.each([
     { operation: "add_payment_method", inputs: { unexpected: true } },
+    { operation: "add_payment_method", inputs: { enrollment: "batch" } },
     { operation: "remove_payment_method", inputs: {} },
     {
       operation: "remove_payment_method",

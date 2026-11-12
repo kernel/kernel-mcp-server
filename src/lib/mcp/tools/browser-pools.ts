@@ -62,6 +62,7 @@ type PoolConfigParams = Omit<
   memory?: BrowserPoolCreateParams["memory"];
   region?: BrowserPoolCreateParams["region"];
   refresh_on_profile_update?: boolean;
+  start_replay?: boolean;
   telemetry?:
     | BrowserPoolCreateParams["telemetry"]
     | BrowserPoolUpdateParams["telemetry"];
@@ -140,6 +141,9 @@ function buildPoolCreateParams(
       ...(params.region !== undefined && { region: params.region }),
       ...(params.refresh_on_profile_update !== undefined && {
         refresh_on_profile_update: params.refresh_on_profile_update,
+      }),
+      ...(params.start_replay !== undefined && {
+        start_replay: params.start_replay,
       }),
       ...(params.telemetry !== undefined && { telemetry: params.telemetry }),
       ...(params.network !== undefined && { network: params.network }),
@@ -223,6 +227,9 @@ function buildPoolUpdateParams(
       ...(params.refresh_on_profile_update !== undefined && {
         refresh_on_profile_update: params.refresh_on_profile_update,
       }),
+      ...(params.start_replay !== undefined && {
+        start_replay: params.start_replay,
+      }),
       ...(params.telemetry !== undefined && { telemetry: params.telemetry }),
       ...(params.start_url !== undefined && { start_url: params.start_url }),
       ...(params.network !== undefined && { network: params.network }),
@@ -259,6 +266,7 @@ function summarizeBrowserPool(pool: BrowserPool) {
       timeout_seconds: config.timeout_seconds,
       fill_rate_per_minute: config.fill_rate_per_minute,
       refresh_on_profile_update: config.refresh_on_profile_update,
+      start_replay: config.start_replay,
       start_url: config.start_url,
       profile_id: pool.profile_id,
       proxy_id: config.proxy_id,
@@ -293,6 +301,7 @@ function summarizeAcquiredBrowser(browser: BrowserPoolAcquireResponse) {
     pool: browser.pool,
     profile: browser.profile,
     proxy_id: browser.proxy_id,
+    replay: browser.replay,
     network: browser.network,
     start_url: browser.start_url,
     viewport: browser.viewport,
@@ -328,7 +337,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
     "manage_browser_pools",
     {
       description:
-        'manage pre-warmed browser pools when an agent needs fast browser acquisition or reusable session capacity. use "list" for a compact pool inventory, "get" for full details, "acquire" before controlling a pooled browser, and "release" when the browser should return to the pool. acquire returns leased_at for the leased pooled session, showing when it was last leased.',
+        'manage pre-warmed browser pools when an agent needs fast browser acquisition or reusable session capacity. use "list" for a compact pool inventory, "get" for full details, "acquire" before controlling a pooled browser, and "release" when the browser should return to the pool. start_replay can set the pool default or override one acquire; acquire returns replay metadata when recording starts and leased_at showing when the pooled session was last leased.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z
@@ -462,6 +471,12 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
             "(create, update) flush idle browsers when the attached profile changes so newly acquired browsers use the latest profile. requires a profile; defaults to true when a profile is first attached.",
           )
           .optional(),
+        start_replay: z
+          .boolean()
+          .describe(
+            "(create, update) set whether replay recording starts automatically for future acquired browsers. (acquire) lease-only override; omit to inherit the pool setting. acquired responses include replay metadata when recording starts.",
+          )
+          .optional(),
         network: z
           .object({
             private_hosts: privateHostsSchema().optional(),
@@ -518,7 +533,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           .int()
           .min(1)
           .describe(
-            "(create, update) window width in pixels. must pair with viewport_height.",
+            "(create, update) window width in pixels. any positive integer is accepted, but headful browsers require at least 64. must pair with viewport_height.",
           )
           .optional(),
         viewport_height: z
@@ -526,7 +541,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           .int()
           .min(1)
           .describe(
-            "(create, update) window height in pixels. must pair with viewport_width.",
+            "(create, update) window height in pixels. any positive integer is accepted, but headful browsers require at least 64. must pair with viewport_width.",
           )
           .optional(),
         viewport_refresh_rate: z
@@ -710,6 +725,9 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
                       save_changes: params.save_profile_changes,
                     }),
                   },
+                }),
+                ...(params.start_replay !== undefined && {
+                  start_replay: params.start_replay,
                 }),
                 ...(params.start_url !== undefined && {
                   start_url: params.start_url,

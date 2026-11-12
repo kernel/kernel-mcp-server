@@ -61,6 +61,7 @@ function pool() {
     extension_ids: ["extension_resolved"],
     browser_pool_config: {
       size: 3,
+      start_replay: true,
       profile: { name: "configured-profile-name" },
       extensions: [{ name: "configured-extension-name" }],
     },
@@ -121,6 +122,7 @@ describe("browser-pool contract parity", () => {
     expect(response.browser_pool.config).toMatchObject({
       profile_id: "profile_resolved",
       extension_ids: ["extension_resolved"],
+      start_replay: true,
     });
     expect(response.browser_pool.config).not.toHaveProperty("profile");
     expect(response.browser_pool.config).not.toHaveProperty("extensions");
@@ -266,6 +268,7 @@ describe("browser-pool contract parity", () => {
         region: "ap-southeast",
         fill_rate_per_minute: 0,
         refresh_on_profile_update: false,
+        start_replay: false,
         extensions: [{ id: "ext_1" }, { name: "second-extension" }],
         telemetry: {
           enabled: true,
@@ -284,6 +287,7 @@ describe("browser-pool contract parity", () => {
         discard_all_idle: false,
         fill_rate_per_minute: 0,
         refresh_on_profile_update: false,
+        start_replay: true,
         extensions: [],
         telemetry: { enabled: false },
       },
@@ -298,6 +302,7 @@ describe("browser-pool contract parity", () => {
         region: "ap-southeast",
         fill_rate_per_minute: 0,
         refresh_on_profile_update: false,
+        start_replay: false,
         extensions: [{ id: "ext_1" }, { name: "second-extension" }],
         telemetry: {
           enabled: true,
@@ -315,6 +320,7 @@ describe("browser-pool contract parity", () => {
           discard_all_idle: false,
           fill_rate_per_minute: 0,
           refresh_on_profile_update: false,
+          start_replay: true,
           extensions: [],
           telemetry: { enabled: false },
         },
@@ -428,6 +434,10 @@ describe("browser-pool contract parity", () => {
             session_id: "brr_1",
             leased_at: "2026-08-08T12:34:56Z",
             pool: { id: "pool_1" },
+            replay: {
+              replay_id: "rpl_1",
+              started_at: "2026-08-08T12:34:56Z",
+            },
             network,
             memory: "2GiB",
             location,
@@ -445,6 +455,7 @@ describe("browser-pool contract parity", () => {
         name: "checkout-lease",
         profile_id: "profile_1",
         save_profile_changes: false,
+        start_replay: false,
         start_url: "https://example.com",
         tags: { flow: "checkout" },
         telemetry: { browser: { network: { enabled: false } } },
@@ -460,6 +471,7 @@ describe("browser-pool contract parity", () => {
           acquire_timeout_seconds: 0,
           name: "checkout-lease",
           profile: { id: "profile_1", save_changes: false },
+          start_replay: false,
           start_url: "https://example.com",
           tags: { flow: "checkout" },
           telemetry: { browser: { network: { enabled: false } } },
@@ -471,6 +483,10 @@ describe("browser-pool contract parity", () => {
       network,
       memory: "2GiB",
       location,
+      replay: {
+        replay_id: "rpl_1",
+        started_at: "2026-08-08T12:34:56Z",
+      },
     });
   });
 
