@@ -194,6 +194,14 @@ export function nativeOAuthConfig(): NativeOAuthConfig | null {
   return resolvedConfig.value;
 }
 
+// One line for startup and build logs. Throws when the configuration is invalid.
+export function describeNativeOAuthConfig(): string {
+  const config = nativeOAuthConfig();
+  return config
+    ? `native OAuth enabled: issuer ${config.issuer}, resource ${config.audience}`
+    : "native OAuth disabled";
+}
+
 const keySets = new Map<string, JWTVerifyGetKey>();
 
 // Keys come only from the configured issuer's JWKS, never from a URL in the
