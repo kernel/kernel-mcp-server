@@ -498,7 +498,7 @@ export function registerBrowserCapabilities(
     "manage_browsers",
     {
       description:
-        'manage the browser sessions that every web task runs in, and their archived telemetry. once a session exists, drive it with webmcp, browser_repl, execute_playwright_code, or computer_action, preferring the first that can carry the current step. use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished. live sessions can be addressed by id or by the name given at creation or set on update; deleted sessions only by id. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
+        'manage the browser sessions that every web task runs in, and their archived telemetry. once a session exists, drive it with webmcp, browser_repl, execute_playwright_code, or computer_action, preferring the first that can carry the current step. use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, "create_live_view" to get a shareable live view url limited to read-only or control access, and "delete" when finished. live sessions can be addressed by id or by the name given at creation or set on update; deleted sessions only by id. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
       inputSchema: z.strictObject(
         {
           ...projectSelectionInputSchema(),
@@ -509,6 +509,7 @@ export function registerBrowserCapabilities(
               "list",
               "get",
               "get_telemetry",
+              "create_live_view",
               "delete",
             ])
             .describe("operation to perform."),
@@ -519,7 +520,7 @@ export function registerBrowserCapabilities(
           session_id: z
             .string()
             .describe(
-              "browser session id or name. required for update, get, get_telemetry, and delete actions. a name resolves only a live session; for a deleted session (get_telemetry) pass its id.",
+              "browser session id or name. required for update, get, get_telemetry, create_live_view, and delete actions. a name resolves only a live session; for a deleted session (get_telemetry) pass its id.",
             )
             .optional(),
           name: z
@@ -844,6 +845,21 @@ export function registerBrowserCapabilities(
               "(create, update) enable or disable user interaction telemetry (clicks, keys, scrolls). off by default; enable for debugging.",
             )
             .optional(),
+          live_view_scope: z
+            .enum(["read", "control"])
+            .describe(
+              "(create_live_view) read shows the browser without accepting input; control also lets the viewer drive it. defaults to read.",
+            )
+            .optional(),
+          live_view_ttl_seconds: z
+            .number()
+            .int()
+            .min(1)
+            .max(31_536_000)
+            .describe(
+              "(create_live_view) seconds until the url expires. omit to keep it valid until the browser is deleted.",
+            )
+            .optional(),
         },
         { error: unknownBrowserKeyMessage },
       ),
@@ -885,6 +901,15 @@ export function registerBrowserCapabilities(
         ) {
           return errorResponse(
             "proxy routes and private hosts are creation-only; only network.allowed_hosts can change on an existing browser.",
+          );
+        }
+        if (
+          params.action !== "create_live_view" &&
+          (params.live_view_scope !== undefined ||
+            params.live_view_ttl_seconds !== undefined)
+        ) {
+          return errorResponse(
+            "error: live_view_scope and live_view_ttl_seconds apply only to the create_live_view action.",
           );
         }
         if (params.proxy !== undefined) {
@@ -1134,6 +1159,27 @@ export function registerBrowserCapabilities(
               until: params.until,
               order: params.order,
               compact: params.compact,
+            });
+          }
+          case "create_live_view": {
+            if (!params.session_id)
+              return errorResponse(
+                "error: session_id is required for create_live_view action.",
+              );
+            const liveView = await client.browsers.liveView.create(
+              params.session_id,
+              {
+                ...(params.live_view_scope !== undefined && {
+                  scope: params.live_view_scope,
+                }),
+                ...(params.live_view_ttl_seconds !== undefined && {
+                  ttl_seconds: params.live_view_ttl_seconds,
+                }),
+              },
+            );
+            return jsonResponse({
+              ...liveView,
+              note: "the url opens only the live view (not cdp or other browser endpoints) and cannot be revoked before it expires. share it only with the intended viewer.",
             });
           }
           case "delete": {

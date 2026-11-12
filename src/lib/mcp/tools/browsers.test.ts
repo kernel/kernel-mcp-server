@@ -1385,6 +1385,125 @@ describe("manage_browsers next actions", () => {
   });
 });
 
+describe("manage_browsers create_live_view", () => {
+  function liveViewClient(calls: Array<{ id: string; body: unknown }>) {
+    return {
+      browsers: {
+        liveView: {
+          create: async (id: string, body: unknown) => {
+            calls.push({ id, body });
+            return {
+              url: "https://live.example/view",
+              scope: "control",
+              expires_at: "2026-01-01T00:10:00Z",
+            };
+          },
+        },
+      },
+    };
+  }
+
+  test("passes scope and ttl and returns the url", async () => {
+    const calls: Array<{ id: string; body: unknown }> = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      liveViewClient(calls),
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "create_live_view",
+          session_id: "my-browser",
+          live_view_scope: "control",
+          live_view_ttl_seconds: 600,
+        },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(calls).toEqual([
+        { id: "my-browser", body: { scope: "control", ttl_seconds: 600 } },
+      ]);
+      expect(toolResultJSON(result)).toMatchObject({
+        url: "https://live.example/view",
+        scope: "control",
+        expires_at: "2026-01-01T00:10:00Z",
+      });
+    } finally {
+      await close();
+    }
+  });
+
+  test("leaves scope and ttl to the api defaults when omitted", async () => {
+    const calls: Array<{ id: string; body: unknown }> = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      liveViewClient(calls),
+    );
+
+    try {
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: { action: "create_live_view", session_id: "brr_123" },
+      });
+
+      expect(calls).toEqual([{ id: "brr_123", body: {} }]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("requires session_id", async () => {
+    const calls: Array<{ id: string; body: unknown }> = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      liveViewClient(calls),
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: { action: "create_live_view" },
+      });
+
+      expect(result.isError).toBeTrue();
+      expect(toolResultText(result)).toContain(
+        "session_id is required for create_live_view",
+      );
+      expect(calls).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects live view params on other actions", async () => {
+    const calls: Array<{ id: string; body: unknown }> = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      liveViewClient(calls),
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "get",
+          session_id: "brr_123",
+          live_view_scope: "read",
+        },
+      });
+
+      expect(result.isError).toBeTrue();
+      expect(toolResultText(result)).toContain(
+        "apply only to the create_live_view action",
+      );
+    } finally {
+      await close();
+    }
+  });
+});
+
 describe("browser resources", () => {
   test("uses injected dependencies", async () => {
     const kernelClient = {
