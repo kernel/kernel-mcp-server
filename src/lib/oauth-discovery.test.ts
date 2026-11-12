@@ -56,6 +56,8 @@ describe("OAuth protected-resource discovery", () => {
       token_endpoint: "https://auth.onkernel.com/token",
       registration_endpoint: "https://auth.onkernel.com/register",
       scopes_supported: ["openid"],
+      resource_name: "KERNEL",
+      resource_documentation: "https://www.kernel.sh/docs",
     });
   });
 

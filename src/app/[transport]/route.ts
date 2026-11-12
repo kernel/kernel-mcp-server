@@ -7,6 +7,10 @@ import {
 import { verifyToken } from "@clerk/nextjs/server";
 import { after, NextRequest } from "next/server";
 import { isValidJwtFormat } from "@/lib/auth-utils";
+import {
+  authenticateNativeOAuth,
+  isNativeOAuthCredential,
+} from "@/lib/native-oauth";
 import { oauthResourceMetadataUrl } from "@/lib/oauth-discovery";
 import {
   captureMcpConnectionScopeFailure,
@@ -139,7 +143,8 @@ export function connectionScopeFailureResponse(
         return errorResponse(
           403,
           "insufficient_scope",
-          "This credential is not scoped to the requested Kernel project",
+          failure.description ??
+            "This credential is not scoped to the requested Kernel project",
           {
             "WWW-Authenticate": `Bearer realm="OAuth", error="insufficient_scope"`,
           },
@@ -154,7 +159,7 @@ export function connectionScopeFailureResponse(
         return createAuthErrorResponse(
           req,
           "invalid_token",
-          "The Kernel API rejected this credential",
+          failure.description ?? "The Kernel API rejected this credential",
         );
     }
   }
@@ -194,6 +199,7 @@ async function handleMcpRequestWithIdentity({
   credentialType,
   transportSessionId,
   connectionContextCacheIdentity,
+  entitlementsCacheCredential = token,
   observeConnection,
 }: {
   req: NextRequest;
@@ -204,6 +210,7 @@ async function handleMcpRequestWithIdentity({
   credentialType: "api_key" | "oauth";
   transportSessionId: string | null;
   connectionContextCacheIdentity?: string;
+  entitlementsCacheCredential?: string;
   observeConnection: boolean;
 }) {
   const [mcpApps, connection] = await Promise.all([
@@ -239,7 +246,7 @@ async function handleMcpRequestWithIdentity({
           authSubject,
           connection.context.authContext.organization.id,
           transportSessionId ?? "stateless",
-          token,
+          entitlementsCacheCredential,
         ].join("\0"),
       })
     : { vaults: false, search: false };
@@ -282,6 +289,34 @@ async function handleAuthenticatedRequest(
       "invalid_token",
       "Missing or invalid access token",
     );
+  }
+
+  if (isNativeOAuthCredential(token)) {
+    const native = await authenticateNativeOAuth(token);
+    if (native.status !== "ok")
+      return connectionScopeFailureResponse(req, native);
+    const { credential } = native;
+    // The exchanged token rotates; identity is the verified subject, and the
+    // request ends when the exchanged token does, streams included.
+    return await handleMcpRequestWithIdentity({
+      req: new NextRequest(req, {
+        signal: AbortSignal.any([
+          req.signal,
+          AbortSignal.timeout(Math.max(1, credential.expiresAt - Date.now())),
+        ]),
+      }),
+      token: credential.token,
+      authSubject: mcpAppsAuthSubject({
+        token: credential.token,
+        userId: credential.subject,
+      }),
+      scopes: credential.scopes,
+      authInfoExtra: { userId: credential.subject, clerkToken: null },
+      credentialType: "oauth",
+      transportSessionId,
+      entitlementsCacheCredential: credential.grantId,
+      observeConnection,
+    });
   }
 
   if (!isValidJwtFormat(token)) {
