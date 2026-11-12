@@ -343,7 +343,10 @@ describe("native OAuth credentials", () => {
     issuer.revoked.add(String(decodeJwt(revokedParent).jti));
     let response = await POST(mcpRequest(revokedParent));
     expect(response.status).toBe(401);
-    expect((await response.json()).error).toBe("invalid_token");
+    expect(await response.json()).toEqual({
+      error: "invalid_token",
+      error_description: "Invalid or expired access token",
+    });
 
     fetchSpy.mockImplementation((async (input: string | URL | Request) =>
       String(input).endsWith("/token")
@@ -353,6 +356,9 @@ describe("native OAuth credentials", () => {
     expect(response.status).toBe(403);
     expect(response.headers.get("WWW-Authenticate")).toBe(
       'Bearer realm="OAuth", error="insufficient_scope"',
+    );
+    expect((await response.json()).error_description).toBe(
+      "This credential's scope does not cover this request",
     );
     expect(kernelTokens).toEqual([]);
   });

@@ -74,7 +74,7 @@ export type NativeCredential = {
 
 export type NativeOAuthResult =
   | { status: "ok"; credential: NativeCredential }
-  | { status: "rejected"; statusCode: 401 | 403 }
+  | { status: "rejected"; statusCode: 401 | 403; description: string }
   | { status: "unavailable" };
 
 type NativeOAuthFailure = Exclude<NativeOAuthResult, { status: "ok" }>;
@@ -91,7 +91,14 @@ class NativeOAuthError extends Error {
 }
 
 const rejected = (message: string) =>
-  new NativeOAuthError({ status: "rejected", statusCode: 401 }, message);
+  new NativeOAuthError(
+    {
+      status: "rejected",
+      statusCode: 401,
+      description: "Invalid or expired access token",
+    },
+    message,
+  );
 const unavailable = (message: string) =>
   new NativeOAuthError({ status: "unavailable" }, message);
 const serverFault = (message: string) =>
@@ -326,7 +333,11 @@ function exchangeFailure(status: number, body: unknown): NativeOAuthError {
     return rejected("native exchange: grant inactive");
   if (error === "invalid_scope")
     return new NativeOAuthError(
-      { status: "rejected", statusCode: 403 },
+      {
+        status: "rejected",
+        statusCode: 403,
+        description: "This credential's scope does not cover this request",
+      },
       "native exchange: scope not granted",
     );
   if (status >= 500 || error === "temporarily_unavailable")

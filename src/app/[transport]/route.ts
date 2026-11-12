@@ -143,7 +143,8 @@ export function connectionScopeFailureResponse(
         return errorResponse(
           403,
           "insufficient_scope",
-          "This credential is not scoped to the requested Kernel project",
+          failure.description ??
+            "This credential is not scoped to the requested Kernel project",
           {
             "WWW-Authenticate": `Bearer realm="OAuth", error="insufficient_scope"`,
           },
@@ -158,7 +159,7 @@ export function connectionScopeFailureResponse(
         return createAuthErrorResponse(
           req,
           "invalid_token",
-          "The Kernel API rejected this credential",
+          failure.description ?? "The Kernel API rejected this credential",
         );
     }
   }

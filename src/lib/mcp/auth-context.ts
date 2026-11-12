@@ -64,7 +64,7 @@ type ResolveAuthContextOptions = {
 };
 
 export type McpConnectionContextFailure =
-  | { status: "rejected"; statusCode: 401 | 403 | 404 }
+  | { status: "rejected"; statusCode: 401 | 403 | 404; description?: string }
   | { status: "unavailable"; statusCode?: number }
   | { status: "invalid" };
 

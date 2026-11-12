@@ -19,6 +19,12 @@ import {
   nativeIssuer,
 } from "./native-oauth.test-fixtures";
 
+const invalidToken = {
+  status: "rejected",
+  statusCode: 401,
+  description: "Invalid or expired access token",
+} as const;
+
 const ENV_KEYS = [
   "MANAGED_AUTH_APP_ORIGIN",
   "API_BASE_URL",
@@ -275,10 +281,7 @@ describe("native token exchange", () => {
       await issuer.parent({ pad: "x".repeat(4096) }),
     ];
     for (const token of rejected)
-      expect(await authenticate(token)).toEqual({
-        status: "rejected",
-        statusCode: 401,
-      });
+      expect(await authenticate(token)).toEqual(invalidToken);
     expect(issuer.requests).toEqual([]);
   });
 
@@ -305,11 +308,15 @@ describe("native token exchange", () => {
     const cases: [() => Promise<Response>, unknown][] = [
       [
         async () => Response.json({ error: "invalid_grant" }, { status: 400 }),
-        { status: "rejected", statusCode: 401 },
+        invalidToken,
       ],
       [
         async () => Response.json({ error: "invalid_scope" }, { status: 400 }),
-        { status: "rejected", statusCode: 403 },
+        {
+          status: "rejected",
+          statusCode: 403,
+          description: "This credential's scope does not cover this request",
+        },
       ],
       [
         async () => Response.json({ error: "invalid_target" }, { status: 400 }),
@@ -383,10 +390,7 @@ describe("native token exchange", () => {
   test("a revoked grant is rejected and never retried elsewhere", async () => {
     const parent = await issuer.parent();
     issuer.revoked.add(String(decodeJwt(parent).jti));
-    expect(await authenticate(parent)).toEqual({
-      status: "rejected",
-      statusCode: 401,
-    });
+    expect(await authenticate(parent)).toEqual(invalidToken);
     expect(issuer.requests).toHaveLength(1);
   });
 
@@ -512,10 +516,7 @@ describe("native configuration", () => {
       API_BASE_URL: "https://api.dev.onkernel.com",
     });
     expect(nativeOAuthConfig()).toBeNull();
-    expect(await authenticate(await issuer.parent())).toEqual({
-      status: "rejected",
-      statusCode: 401,
-    });
+    expect(await authenticate(await issuer.parent())).toEqual(invalidToken);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
