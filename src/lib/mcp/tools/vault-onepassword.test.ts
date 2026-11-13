@@ -136,7 +136,14 @@ describe("1Password vault credentials", () => {
       expect(items).toContain(
         "the 1password extension decides whether an approved login matches the page",
       );
-      expect(items).toContain("page origin does not identify exactly one");
+      expect(items).toContain(
+        "ask the owner which to use and pass its entry_id",
+      );
+      const itemInputs = tools.find(({ name }) => name === "manage_vault_items")
+        ?.inputSchema.properties?.inputs as { description?: string };
+      expect(itemInputs.description).toContain(
+        "page origin does not identify exactly one",
+      );
       expect(credentials).toContain(
         "no approval link exists before that request",
       );

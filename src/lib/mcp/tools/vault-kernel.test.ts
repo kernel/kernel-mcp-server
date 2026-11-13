@@ -692,16 +692,19 @@ describe("kernel-managed payment tools", () => {
     try {
       const { tools } = await fixture.client.listTools();
       for (const name of ["manage_vault_items", "manage_vault_cards"]) {
-        const description = tools.find(
-          (tool) => tool.name === name,
-        )?.description;
+        const tool = tools.find((tool) => tool.name === name);
+        // manage_vault_items keeps per-operation input detail on its inputs parameter.
+        const description = [
+          tool?.description,
+          (tool?.inputSchema.properties?.inputs as { description?: string })
+            ?.description,
+        ].join(" ");
         for (const text of [
           "confirm_transaction",
           "restart_verification",
-          "billing_*",
           "field_unavailable",
           "occurred_at",
-          ...(name === "manage_vault_items" ? ["0..1000000"] : []),
+          ...(name === "manage_vault_items" ? ["0..1000000"] : ["billing_*"]),
         ])
           expect(description).toContain(text);
       }

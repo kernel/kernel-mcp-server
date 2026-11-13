@@ -84,12 +84,17 @@ describe("Shop Pay vault coverage", () => {
       });
       expect(wallets?.description).toContain("shop_pay_oauth");
       expect(wallets?.description).toContain("shared unchanged");
-      expect(cards?.description).toContain("billing_first_name");
       expect(cards?.description).toContain(
-        "`PURCHASE`, `AUTHORIZATION`, or `CAPTURE`",
+        "the card's guidance covers billing fill and confirm_transaction",
       );
-      expect(items?.description).toContain("order_id");
-      expect(items?.description).toContain("payment_declined");
+      const itemInputs = items?.inputSchema.properties?.inputs as {
+        description?: string;
+      };
+      expect(itemInputs.description).toContain(
+        "shop pay accepts only `PURCHASE`, `AUTHORIZATION`, and `CAPTURE`",
+      );
+      expect(itemInputs.description).toContain("order_id");
+      expect(itemInputs.description).toContain("payment_declined");
 
       const cardSchema = cards?.inputSchema.properties?.spec as
         | { anyOf?: Array<{ properties?: Record<string, unknown> }> }
@@ -286,6 +291,10 @@ describe("Shop Pay vault coverage", () => {
       });
       expect(result.guidance.join(" ")).toContain(
         "sends the page to shop as the merchant",
+      );
+      expect(result.guidance.join(" ")).toContain("billing_first_name");
+      expect(result.guidance.join(" ")).toContain(
+        "`PURCHASE`, `AUTHORIZATION`, or `CAPTURE`",
       );
     } finally {
       await fixture.close();
