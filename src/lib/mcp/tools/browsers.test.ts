@@ -1551,25 +1551,17 @@ describe("manage_browsers save profile", () => {
       expect(profileName?.description).toContain(
         "create when no matching profile exists",
       );
-      expect(browser?.description).toContain("leased_at");
-      expect(browser?.description).toContain(
-        "active cdp, playwright, and webdriver connections close and must reconnect",
+      expect(profileName?.description).toContain(
+        "saving does not attach it or change save_profile_changes",
       );
       expect(browser?.description).toContain(
-        "call save_profile at a stable point, such as right after a login completes",
+        "save_profile restarts the browser: cdp, playwright, and webdriver connections close",
       );
       expect(browser?.description).toContain(
-        "a browser_busy conflict is temporary; retry the call",
+        "call it at a stable point, such as right after a login completes",
       );
       expect(browser?.description).toContain(
-        "browser_not_active (the browser is no longer running) are not retryable",
-      );
-      expect(browser?.description).toContain(
-        "caches, service worker storage, and google drive indexeddb data are omitted",
-      );
-      expect(browser?.description).toContain("the most recently started wins");
-      expect(browser?.description).toContain(
-        "a successful save restarts timeout_seconds",
+        "mint a read or control live-view url",
       );
     } finally {
       await close();
@@ -1636,11 +1628,53 @@ describe("manage_browsers save profile", () => {
       expect(byId).toEqual({
         id: "prf_existing",
         name: "existing-profile",
+        note: expect.any(String),
       });
-      expect(byName).toEqual({
+      expect(byName).toMatchObject({
         id: "prf_created_from_name",
         name: "checkout.snapshot-1",
       });
+      for (const text of [
+        "start a new webdriver session",
+        "caches, service worker storage, and google drive indexeddb data are omitted",
+        "a successful save restarts timeout_seconds",
+        "the most recently started wins",
+      ]) {
+        expect(byId.note).toContain(text);
+      }
+    } finally {
+      await close();
+    }
+  });
+
+  test("returns retry guidance when a save fails", async () => {
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          saveProfile: async () => {
+            throw new Error("browser_busy");
+          },
+        },
+      },
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "save_profile",
+          session_id: "brr_123",
+          profile_name: "profile",
+        },
+      });
+      expect(result.isError).toBe(true);
+      const text = toolResultText(result);
+      expect(text).toContain("a browser_busy conflict is temporary");
+      expect(text).toContain(
+        "browser_not_active (the browser is no longer running) are not retryable",
+      );
+      expect(text).toContain("check the profile before calling again");
     } finally {
       await close();
     }
