@@ -452,10 +452,7 @@ describe("manage_proxies", () => {
         proxy_count: 1,
       });
       expect(calls).toEqual([
-        [
-          "list",
-          { country: "GB", status: "active", limit: 5, offset: 0 },
-        ],
+        ["list", { country: "GB", status: "active", limit: 5, offset: 0 }],
         ["get", "203.0.113.10"],
       ]);
     } finally {

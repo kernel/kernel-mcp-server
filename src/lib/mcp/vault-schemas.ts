@@ -172,7 +172,8 @@ export const passkeyInputsSchema = z
   .strict();
 export type PasskeyInputs = z.infer<typeof passkeyInputsSchema>;
 
-export const addPaymentMethodInputsShape = '{ enrollment?: "hosted" | "server" }';
+export const addPaymentMethodInputsShape =
+  '{ enrollment?: "hosted" | "server" }';
 export const addPaymentMethodInputsSchema = z
   .object({
     enrollment: z
@@ -285,13 +286,7 @@ export const confirmTransactionInputsShape =
   "{ status, transaction_type, amount, currency, occurred_at, order_id?, order_url?, failure_code? }";
 export const confirmTransactionInputsSchema = z
   .object({
-    status: z.enum([
-      "APPROVED",
-      "DECLINED",
-      "PENDING",
-      "ERROR",
-      "CANCELLED",
-    ]),
+    status: z.enum(["APPROVED", "DECLINED", "PENDING", "ERROR", "CANCELLED"]),
     transaction_type: z.enum([
       "PURCHASE",
       "AUTHORIZATION",
@@ -306,13 +301,11 @@ export const confirmTransactionInputsSchema = z
     currency: z.string().regex(/^[A-Z]{3}$/),
     occurred_at: z.string().datetime({ offset: true }),
     order_id: z.string().min(1).max(255).optional(),
-    order_url: z
+    order_url: z.string().url().startsWith("https://").max(2048).optional(),
+    failure_code: z
       .string()
-      .url()
-      .startsWith("https://")
-      .max(2048)
+      .regex(/^[a-z0-9_]{1,64}$/)
       .optional(),
-    failure_code: z.string().regex(/^[a-z0-9_]{1,64}$/).optional(),
   })
   .strict();
 export type ConfirmTransactionInputs = z.infer<

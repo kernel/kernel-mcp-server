@@ -516,7 +516,9 @@ describe("1Password vault credentials", () => {
       expect(guidance).toContain("it needs no browser");
       expect(guidance).toContain("every 2 seconds");
       expect(guidance).toContain("after 3 minutes");
-      expect(guidance).toContain("mcp intentionally omits access_request_reference");
+      expect(guidance).toContain(
+        "mcp intentionally omits access_request_reference",
+      );
       expect(guidance).toContain(
         "create a browser with this vault attached (KERNEL loads the 1password extension into it on demand)",
       );
@@ -933,9 +935,7 @@ describe("1Password vault credentials", () => {
       expect(body.guidance.join(" ")).toContain(
         "may import an access request already approved",
       );
-      expect(body.guidance.join(" ")).toContain(
-        "mcp intentionally omits them",
-      );
+      expect(body.guidance.join(" ")).toContain("mcp intentionally omits them");
       expect(body.item.state.access_request).not.toHaveProperty("resolved");
       expectNoReferences(read);
       expect(
