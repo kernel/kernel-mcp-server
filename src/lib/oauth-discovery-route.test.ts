@@ -31,7 +31,6 @@ describe("/.well-known/oauth-protected-resource/mcp", () => {
       authorization_endpoint: `${issuer}/authorize`,
       token_endpoint: `${issuer}/token`,
       registration_endpoint: `${issuer}/register`,
-      scopes_supported: ["openid"],
       resource_name: "KERNEL",
       resource_documentation: "https://www.kernel.sh/docs",
     });

@@ -181,6 +181,7 @@ const handler = createMcpHandler(({ authInfo }) => {
     mcpApps: authInfo?.extra?.mcpApps === true,
     vaults: authInfo?.extra?.vaults === true,
     search: authInfo?.extra?.search === true,
+    permissions: authInfo?.extra?.permissions as string[] | undefined,
   });
   return server;
 });
@@ -188,6 +189,10 @@ const handler = createMcpHandler(({ authInfo }) => {
 type AuthInfoExtra = {
   userId: string | null;
   clerkToken: string | null;
+  // The actions a Kernel-issued credential names and, when its grant is
+  // limited to some, the projects it may use.
+  permissions?: string[];
+  projects?: string[];
 };
 
 async function handleMcpRequestWithIdentity({
@@ -296,6 +301,10 @@ async function handleAuthenticatedRequest(
     if (native.status !== "ok")
       return connectionScopeFailureResponse(req, native);
     const { credential } = native;
+    // Action scopes name a resource kind and a verb; identity scopes do not.
+    // A token that names no action holds its whole grant, which it does not
+    // list, so nothing is known about what it may do.
+    const actions = credential.scopes.filter((scope) => scope.includes(":"));
     // The exchanged token rotates; identity is the verified subject, and the
     // request ends when the exchanged token does, streams included.
     return await handleMcpRequestWithIdentity({
@@ -311,7 +320,12 @@ async function handleAuthenticatedRequest(
         userId: credential.subject,
       }),
       scopes: credential.scopes,
-      authInfoExtra: { userId: credential.subject, clerkToken: null },
+      authInfoExtra: {
+        userId: credential.subject,
+        clerkToken: null,
+        permissions: actions.length > 0 ? actions : undefined,
+        projects: credential.projects,
+      },
       credentialType: "oauth",
       transportSessionId,
       entitlementsCacheCredential: credential.grantId,

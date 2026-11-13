@@ -275,6 +275,75 @@ describe("MCP toolset allowlist", () => {
   });
 });
 
+describe("MCP toolsets by granted permission", () => {
+  async function toolsFor(permissions?: string[]) {
+    const mcp = await connectTestMcp((server) => {
+      registerMcpCapabilities(server, {
+        mcpApps: true,
+        vaults: true,
+        search: true,
+        permissions,
+      });
+    }, {});
+    try {
+      return (await mcp.client.listTools()).tools.map((tool) => tool.name);
+    } finally {
+      await mcp.close();
+    }
+  }
+
+  test("lists everything when the credential names no action", async () => {
+    expect(await toolsFor()).toEqual(
+      expect.arrayContaining([
+        "manage_browsers",
+        "manage_api_keys",
+        "manage_proxies",
+        "manage_vaults",
+        "web_search",
+        "open_auth_login",
+      ]),
+    );
+  });
+
+  test("leaves out toolsets no granted action can use", async () => {
+    const tools = await toolsFor([
+      "browsers:use",
+      "profiles:read",
+      "invocations:read",
+    ]);
+    expect(tools).toEqual(
+      expect.arrayContaining([
+        "get_connection_context",
+        "search_docs",
+        "manage_browsers",
+        "computer_action",
+        "execute_playwright_code",
+        "manage_replays",
+        "manage_profiles",
+        "manage_apps",
+      ]),
+    );
+    for (const hidden of [
+      "manage_api_keys",
+      "manage_proxies",
+      "manage_vaults",
+      "manage_credentials",
+      "manage_auth_connections",
+      "open_auth_login",
+      "web_search",
+    ])
+      expect(tools).not.toContain(hidden);
+  });
+
+  test("an entitled toolset still needs a granted action", async () => {
+    expect(await toolsFor(["vaults:read"])).toContain("manage_vaults");
+    expect(await toolsFor(["searches:read"])).toContain("web_search");
+    expect(await toolsFor(["auth_connections:use"])).toEqual(
+      expect.arrayContaining(["manage_auth_connections", "open_auth_login"]),
+    );
+  });
+});
+
 describe("project selection registration", () => {
   const projectScopedTools = [
     "manage_profiles",

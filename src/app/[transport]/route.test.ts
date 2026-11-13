@@ -257,6 +257,46 @@ describe("native OAuth credentials", () => {
     expect(issuer.requests).toHaveLength(2);
   });
 
+  test("list only the toolsets the token's actions can use", async () => {
+    issuer.respondWith({ projects: ["proj_a", "proj_b"] });
+    const limited = await issuer.parent({
+      scope: "openid browsers:use profiles:read",
+    });
+    let response = await POST(mcpRequest(limited));
+    expect(response.status).toBe(200);
+    const listed = await response.text();
+    for (const tool of [
+      "manage_browsers",
+      "computer_action",
+      "manage_profiles",
+    ])
+      expect(listed).toContain(`"name":"${tool}"`);
+    for (const tool of ["manage_proxies", "manage_api_keys", "manage_apps"])
+      expect(listed).not.toContain(`"name":"${tool}"`);
+
+    response = await POST(
+      mcpRequest(limited, "tools/call", {
+        name: "get_connection_context",
+        arguments: {},
+      }),
+    );
+    expect(await response.text()).toContain(
+      JSON.stringify(
+        JSON.stringify({
+          permissions: ["browsers:use", "profiles:read"],
+          projects: ["proj_a", "proj_b"],
+        }),
+      ).slice(1, -1),
+    );
+
+    // A token that names no action holds its whole grant; nothing is hidden.
+    issuer.respondWith({});
+    response = await POST(mcpRequest(await refreshed()));
+    const everything = await response.text();
+    expect(everything).toContain('"name":"manage_proxies"');
+    expect(everything).toContain('"name":"manage_api_keys"');
+  });
+
   test("reuse the entitlements snapshot across rotated tokens", async () => {
     for (let n = 0; n < 2; n++) {
       const response = await POST(mcpRequest(await refreshed()));

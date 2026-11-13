@@ -62,7 +62,6 @@ export function oauthResourceMetadata(
     authorization_endpoint: `${authorizationServer}/authorize`,
     token_endpoint: `${authorizationServer}/token`,
     registration_endpoint: `${authorizationServer}/register`,
-    scopes_supported: ["openid"],
     resource_name: "KERNEL",
     resource_documentation: "https://www.kernel.sh/docs",
   };

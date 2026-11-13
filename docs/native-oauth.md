@@ -61,6 +61,13 @@ On every request the server:
   is still authorized by the API.
 - **Requests and streams** end when the exchanged token expires (at most five
   minutes); clients reconnect with a fresh request.
+- **Permissions** are chosen by the person who connects, on the authorization
+  server's consent page. The protected-resource metadata lists no
+  `scopes_supported`, so clients request no scopes and that page decides.
+  When the exchanged token names actions, toolsets none of them can use are
+  left out of the tool list and `get_connection_context` reports them under
+  `granted`. A token that names no action lists every toolset. Either way the
+  API authorizes each call.
 
 ## Configuration
 
