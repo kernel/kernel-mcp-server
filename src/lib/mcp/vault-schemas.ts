@@ -370,6 +370,14 @@ export const kernelCardSpecSchema = z
   .object({
     provider: z.literal("kernel").optional(),
     wallet: vaultKeySchema(),
+    payment_method_id: z
+      .string()
+      .min(1)
+      .max(128)
+      .describe(
+        "explicitly selected id from the wallet's payment_methods expansion; required for a payment_request. omitted on a card, it selects the wallet's default card, card, and never another card.",
+      )
+      .optional(),
     amount: integer()
       .min(1)
       .max(1_000_000)
@@ -396,6 +404,11 @@ export const kernelCardSpecSchema = z
       .optional(),
   })
   .strict();
+
+// Kernel payment requests must name their funding method.
+export const kernelPaymentRequestSpecSchema = kernelCardSpecSchema.required({
+  payment_method_id: true,
+});
 
 export const agentcardCheckoutOriginSchema = z.string().refine((value) => {
   try {

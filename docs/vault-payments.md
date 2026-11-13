@@ -14,8 +14,8 @@ there is no per-item test flag. AgentCard configuration responses report the
 introspected `test_mode`. A development or staging MCP endpoint does not make a
 card request a test transaction.
 
-The released Node SDK dependency is pinned to 0.121.0 in `bun.lock`, including
-Visa `merchant_country` in the generated card spec type. `confirm_transaction`
+The Node SDK dependency is pinned to 0.133.0 in `bun.lock`, which types wallet
+payment-method operations and `payment_request` items. `confirm_transaction`
 and `restart_verification` are forwarded generically only when advertised by the API.
 Never assume recovery operations are available based on state or SDK version; always re-read `available_operations`.
 
@@ -23,22 +23,59 @@ Never assume recovery operations are available based on state or SDK version; al
 
 Use one vault per end user. Create it with `manage_vaults`, then create a wallet with
 `manage_vault_wallets` using `action: "create"`, `provider: "kernel"`, `spec: {}`,
-and a stable wallet key. Give the returned `card_enrollment` action URL only to the
-intended cardholder in a private surface, outside the agent-controlled browser.
-Never request or pass a PAN, CVC, expiration date, or hosted action URL as tool input.
-Observe the wallet with `manage_vault_items` `get` until connected. Use
-`manage_vault_wallets` `payment_methods` to inspect the enrolled card's advisory
+and a stable wallet key. A Kernel wallet holds zero or more cards, each a
+wallet-scoped payment method. What creation returns depends on whether the
+organization has wallet payment methods enabled:
+
+- If the wallet advertises `add_payment_method`, it is created `connected` and empty.
+  Enroll each card with `manage_vault_wallets` `action: "add_payment_method"` (or
+  `manage_vault_items` `invoke` with that operation and no inputs). It returns a
+  `payment_method` in `pending_enrollment` with a single-use `card_enrollment`
+  action URL that expires at its `expires_at` (30 minutes). A wallet holds at most
+  10 methods and 3 open enrollment links; refusals return 409 with the reason.
+- Otherwise the wallet starts `pending_authorization` with its own `card_enrollment`
+  action and becomes `connected` once that card is stored. That card is the
+  wallet's default method, ID `card`.
+
+Give every `card_enrollment` URL only to the intended cardholder in a private
+surface, outside the agent-controlled browser. Embedded card-capture tokens are
+never returned. Never request or pass a PAN, CVC, expiration date, or hosted
+action URL as tool input. Observe the wallet with `manage_vault_items` `get` until
+connected, and `manage_vault_wallets` `payment_methods` until a new method is
+`active`. Methods are listed in creation order with `status`
+(`pending_enrollment`, `active`, `removal_pending`, `recovery_required`),
+`status_reason` and, while pending, `action` and `expires_at`. Methods that are not
+active are ineligible. For `recovery_required`, read `status_reason`: remove a
+method whose enrollment outcome is unknown, and contact support for a stored card
+that cannot be read.
+
+Remove a card with `manage_vault_wallets` `action: "remove_payment_method"` and its
+`payment_method_id`, only when advertised and after explicit user confirmation.
+It deletes the stored card without affecting the wallet's other cards; the wallet
+stays connected even with none left. 409 `purchase_unresolved` means a purchase
+funded by the method has an unresolved outcome; 409 `provider_revocation_pending`
+leaves the method in `removal_pending`, so retry later; 429 `provider_rate_limited`
+means retry later, after any returned `Retry-After`. Removal is not proof that a payment did not occur.
+Adding and removing need `vaults:write` in addition to `vaults:use` on the vault:
+scoped API keys without it are not offered either operation and get 403
+`insufficient_scope`.
+
+Each payment method reports advisory
 `capabilities.single_use_card`: `eligible: false` means do not authorize; missing
 capabilities are unknown, not proof of eligibility. For `network_token_pending`, re-check
 later at most once in this attempt. `network_token_unsupported` and `network_token_failed`
 need a different card. If still ineligible or unknown, ask the cardholder before enrolling
 a different card under a new wallet key; never poll indefinitely or replay an uncertain purchase.
-For `reconnect_required`, share the new `card_enrollment` action. For `degraded`, obtain
+A wallet created before payment methods may report `reconnect_required` until Kernel
+upgrades it; payment and deletion requests are refused until then. For `degraded`, obtain
 user confirmation and delete the wallet only if the API permits it before creating a new
 wallet under a new key for one enrollment; reconcile unresolved child cards first.
 
 Create one card request with `manage_vault_cards` `action: "create"`,
-`provider: "kernel"`, a new immutable key, and `spec` containing `wallet`, `amount` (integer
+`provider: "kernel"`, a new immutable key, and `spec` containing `wallet`, optional
+`payment_method_id` (from the wallet's `payment_methods`; omitted selects the
+default card `card` and never another card, and a wallet without a default card
+returns 400), `amount` (integer
 minor currency units, maximum 1000000 ($10,000 USD)), `currency`, `merchant_name`, HTTPS
 `merchant_url`, and `merchant_country` (ISO 3166-1 alpha-2; required for Visa).
 Optional `merchant_category` and `merchant_category_code` (four-digit MCC other than `0000`)
@@ -46,6 +83,21 @@ are accepted when actually known; omit rather than invent them.
 This only creates a request, not a merchant payment. Kernel cards cannot be updated.
 After user confirmation, delete only if the API permits it and create a new item under
 a new key for a new purchase; reconcile unresolved outcomes first.
+
+Where the organization has payment requests enabled, pass `item_type: "payment_request"`
+to create a Link or Kernel purchase as a `payment_request` item instead. It takes the
+same spec and has the same operations (`authorize`, `fill`, `confirm_transaction`, ...)
+as a card; Kernel payment requests require a `payment_method_id` naming an active,
+eligible method. Link `update` must also pass `item_type: "payment_request"`.
+AgentCard purchases stay `card` items. A purchase's wallet and payment method are
+fixed at creation; an update that changes them returns 409.
+
+A Kernel purchase reports `state.payment_method_id` and `state.funding_status`:
+`available`; `unavailable` while the method is being removed or awaits recovery
+(authorize, fill and confirmation are refused until it recovers); or `removed`,
+after which the purchase can no longer be paid and a new purchase needs another
+method. Neither changes the purchase's `status`.
+
 After explicit user approval and only when the card advertises `authorize`, call
 `manage_vault_cards` with `action: "authorize"`, `provider: "kernel"`, the same
 vault/key, and no spec. This is equivalent to `manage_vault_items` `invoke` with
@@ -348,14 +400,14 @@ response, or failed lookup hides the vault tools but leaves other toolsets usabl
 The lookup has a five-second timeout, forwards cancellation, and is not retried.
 The `vaults` toolset configuration can further restrict access, never grant it.
 
-| Tool                            | Actions                                     |
-| ------------------------------- | ------------------------------------------- |
-| `manage_vault_provider_configs` | `create`, `list`, `get`, `update`, `delete` |
-| `manage_vaults`                 | `create`, `list`, `get`, `delete`           |
-| `manage_vault_wallets`          | `create`, `payment_methods`                 |
-| `manage_vault_cards`            | `create`, `update`, `authorize`             |
-| `manage_vault_credentials`      | `create`, `update`, `connect_account`       |
-| `manage_vault_items`            | `list`, `get`, `invoke`, `events`, `delete` |
+| Tool                            | Actions                                                                    |
+| ------------------------------- | -------------------------------------------------------------------------- |
+| `manage_vault_provider_configs` | `create`, `list`, `get`, `update`, `delete`                                |
+| `manage_vaults`                 | `create`, `list`, `get`, `delete`                                          |
+| `manage_vault_wallets`          | `create`, `payment_methods`, `add_payment_method`, `remove_payment_method` |
+| `manage_vault_cards`            | `create`, `update`, `authorize`                                            |
+| `manage_vault_credentials`      | `create`, `update`, `connect_account`                                      |
+| `manage_vault_items`            | `list`, `get`, `invoke`, `events`, `delete`                                |
 
 Provider configurations are organization-owned and do not accept a project
 selector. Reads are available to project-scoped credentials; writes require an
@@ -370,7 +422,8 @@ to inspect the connection's scope.
 vault, not the item ID. Vault names, item keys, and project ownership cannot be renamed.
 
 Wallet/card writes take a `provider` (`link`, `agentcard`, or `kernel`) and a JSON `spec`
-**object**, not a string or a `{type, spec}` envelope. The tool injects `provider`;
+**object**, not a string or a `{type, spec}` envelope. Card writes select the item type
+with `item_type` (`card` by default, or `payment_request`). The tool injects `provider`;
 if present in `spec`, it must match. Tool schemas describe the provider-specific
 fields and reject unknown fields, including nested ones. No defaults or currency
 normalization are applied. Amounts are integer minor currency units. All integer
@@ -752,6 +805,10 @@ A reusable card remaining `ready` does not establish that the last payment succe
   cursor on an empty result (or omitting `after` when there is no cursor).
   Event responses do not include invocation hints because they do not establish
   current operation availability.
+  Kernel wallet events `payment_method_enrollment_started`, `payment_method_enrolled`,
+  `payment_method_removed` and `payment_method_recovery_required` include
+  `payment_method_id`; `purchase_created` includes `item_type`, `provider` and
+  `payment_method_id_present`.
 - **Ready does not mean paid.** Inspect state and immutable events for outcomes.
   No vault request is automatically retried. After a failed, timed-out, rejected,
   or indeterminate payment, inspect state/events; do not replay checkout, invoke

@@ -33,10 +33,13 @@ const onePasswordReturnedEntryFields = {
   ...onePasswordRequestEntryFields,
   ...fields("id"),
 };
+// Embedded capture tokens on a pending method's action are bearer secrets and
+// are never returned.
 const paymentMethodFields = {
-  ...fields("id provider type is_default"),
+  ...fields("id provider type is_default status status_reason expires_at"),
   display: fields("label brand last4"),
   capabilities: { single_use_card: fields("eligible reasons") },
+  action: fields("name url expires_at"),
 };
 const linkUserInfoFields = {
   ...fields(
@@ -90,7 +93,9 @@ export const vaultItemFields: OutputFields = {
     },
   },
   state: {
-    ...fields("provider status status_reason user_id domains"),
+    ...fields(
+      "provider status status_reason user_id domains payment_method_id funding_status",
+    ),
     fields: { "*": fields("has_value") },
     access_request: {
       ...fields("state has_autofill_token granted_count goal"),
@@ -112,14 +117,15 @@ export const vaultItemFields: OutputFields = {
 };
 
 export const vaultOperationResultFields: OutputFields = {
-  ...fields("type status error_code rp_id"),
+  ...fields("type status error_code rp_id payment_method_id"),
   fields: fields("index status error_code"),
+  payment_method: paymentMethodFields,
 };
 
 export const vaultEventFields: OutputFields = {
   ...fields("id name created_at browser_id"),
   data: fields(
-    "reason status authorization_id preparation_id vault_session_id request_kind outcome_reason provider_status provider_code provider_request_id provider_payment_status provider_error_type provider_error_code provider_decline_code provider_error_param provider_http_status provider_response_bytes provider_latency_ms payment_intent_id payment_method_id checkout_session_id replay_attempted replay_delivered charged_amount_cents charged_currency charged_kind expected_cents actual_cents currency actual_currency intent_status amount_verified psp_error_code",
+    "reason status authorization_id preparation_id vault_session_id item_type provider payment_method_id_present request_kind outcome_reason provider_status provider_code provider_request_id provider_payment_status provider_error_type provider_error_code provider_decline_code provider_error_param provider_http_status provider_response_bytes provider_latency_ms payment_intent_id payment_method_id checkout_session_id replay_attempted replay_delivered charged_amount_cents charged_currency charged_kind expected_cents actual_cents currency actual_currency intent_status amount_verified psp_error_code",
   ),
 };
 
@@ -277,7 +283,7 @@ export function projectVaultOutput(
   if (allowed === vaultItemFields) {
     const recovery = z
       .object({
-        type: z.literal("card"),
+        type: z.enum(["card", "payment_request"]),
         spec: z.object({ provider: z.literal("kernel") }),
         state: z.object({ status: z.literal("recovery_required") }),
         available_operations: z.array(
@@ -436,12 +442,12 @@ export function vaultItemResponse(
   const advertised = advertisedOperationsSchema.safeParse(projected);
   const payment = z
     .object({
-      type: z.enum(["card", "wallet"]),
+      type: z.enum(["card", "payment_request", "wallet"]),
       spec: z.object({ provider: z.enum(["link", "agentcard", "kernel"]) }),
     })
     .safeParse(projected);
   const cardProvider =
-    payment.success && payment.data.type === "card"
+    payment.success && payment.data.type !== "wallet"
       ? payment.data.spec.provider
       : undefined;
   // A requested Link card's authorize hint is incomplete without checkout context.
@@ -481,6 +487,9 @@ export function vaultItemResponse(
                 ...(isPasskeyOperation(type) && {
                   required_inputs: ["browser_id"],
                 }),
+                ...(type === "remove_payment_method" && {
+                  required_inputs: ["payment_method_id"],
+                }),
               }))
               .filter(safeHint)
           : [],
@@ -509,6 +518,7 @@ export function vaultItemResponse(
                 ...(cardProvider === "kernel"
                   ? [
                       'KERNEL cards require merchant_country for visa purchases. after explicit user approval, use manage_vault_cards authorize or manage_vault_items invoke authorize only when advertised; visa or an alias-mode card may return a spend_approval action for the cardholder. poll get/events until ready. attach the vault at browser creation, then invoke advertised fill with browser_id, exact current https top-level page_url on spec.merchant_url\'s origin, and ordered field/selector bindings for number, expiration (format "MM/YY" or "MM/YYYY"), cvc, exp_month, and exp_year. fill delivers card details for only a few minutes, so submit checkout promptly; repeated fill is safe and never submits checkout. alias-mode cards must be filled before their temporary security-code deadline. KERNEL stores no billing details: billing_* fields fail with 400 field_unavailable before any write; enter billing name/zip on the merchant page. fill does not prove payment. after failed or unknown fill, inspect the browser page and item state, fix the cause, then it is safe to retry the field write, not authorization, checkout, or transaction reporting. KERNEL cards cannot be updated. after user confirmation, delete only if the api permits it and create a new item under a new key for a new purchase; deletion is never proof that the original payment did not occur.',
+                      kernelFundingGuidance,
                       kernelTransactionGuidance,
                       kernelTerminalGuidance,
                     ]
@@ -577,7 +587,19 @@ const kernelSupportGuidance =
   "non-restartable recovery_required: do not retry the payment operation. with user confirmation, attempt deletion only to abandon eligible issuance recovery, then create a new purchase under a new key and obtain separate approval; deletion is never proof that the original payment did not occur. recovery while reporting a merchant transaction cannot be deleted: contact support@kernel.sh privately with project, vault, item key, status_reason and relevant event timestamps (never card data, api keys or capability urls).";
 
 const kernelWalletGuidance =
-  "KERNEL wallet enrollment and spend approval are cardholder actions. share action urls only with the intended user privately, never open them or put them in logs or traces. reconnect_required: share the new card_enrollment action. degraded: with user confirmation, delete the wallet only if the api permits it before creating a new wallet under a new key for one enrollment; reconcile unresolved child cards first. payment_methods eligibility is advisory. network_token_pending, network_token_unsupported, or network_token_failed normally means do not authorize, unless the returned capability and advertised flow explicitly support checkout delivery without a network token; then fill types temporary checkout details. for network_token_pending, re-check later at most once in this attempt. if still ineligible or unknown, ask the cardholder before enrolling a different card under a new wallet key; do not poll indefinitely or replay an uncertain purchase.";
+  "KERNEL wallet enrollment and spend approval are cardholder actions. share action urls only with the intended user privately, never open them or put them in logs or traces. a connected KERNEL wallet may hold no cards. when it advertises add_payment_method, enroll each card with manage_vault_wallets add_payment_method and share the returned card_enrollment url with the intended cardholder; otherwise the wallet enrolls one default card, card, through its own card_enrollment action. payment_methods lists each method's status: pending_enrollment has an open link until expires_at, active can pay when eligible, removal_pending means retry remove_payment_method later, and recovery_required means read status_reason: remove a method whose enrollment outcome is unknown, and contact support@kernel.sh for a stored card that cannot be read. remove_payment_method needs explicit user confirmation each time; 409 purchase_unresolved means reconcile the purchases it funded first. removal is not proof that a payment did not occur. 403 insufficient_scope on add or remove means the api key lacks vaults:write on this vault. a wallet created before payment methods may report reconnect_required until KERNEL upgrades it; payment and deletion requests are refused until then. degraded: with user confirmation, delete the wallet only if the api permits it before creating a new wallet under a new key for one enrollment; reconcile unresolved child cards first. payment_methods eligibility is advisory. network_token_pending, network_token_unsupported, or network_token_failed normally means do not authorize, unless the returned capability and advertised flow explicitly support checkout delivery without a network token; then fill types temporary checkout details. for network_token_pending, re-check later at most once in this attempt. if still ineligible or unknown, ask the cardholder before enrolling a different card under a new wallet key; do not poll indefinitely or replay an uncertain purchase.";
+
+const kernelFundingGuidance =
+  "state.payment_method_id names the wallet payment method funding this purchase and is fixed at creation. funding_status unavailable means that method is being removed or awaits recovery, so authorize, fill and confirm_transaction are refused until it recovers. removed means the method was removed and this purchase can no longer be paid: with user confirmation create a new purchase with another active method. neither changes status, which still reports what already happened to this purchase.";
+
+export const paymentMethodOperationGuidance = new Map(
+  Object.entries({
+    add_payment_method:
+      "pending_enrollment means a card_enrollment link is open, not that a card is stored. give payment_method.action.url only to the intended cardholder in a private surface, outside the agent-controlled browser; never open it or put it in logs or traces. it is single-use and expires at payment_method.expires_at. observe the wallet's payment_methods until the method is active and eligible. a failed or expired enrollment does not affect other methods; add another only if the cardholder asks. a wallet holds at most 10 methods and 3 open enrollment links; the api returns 409 with the reason when it refuses.",
+    remove_payment_method:
+      "removed means the stored card was deleted and the method can no longer fund purchases. purchases it funded keep their status and report funding_status removed. removal is not proof that a payment did not occur.",
+  }),
+);
 
 const kernelTerminalGuidance =
   "merchant decline: report the observed DECLINED outcome when confirm_transaction is advertised. expired approval link or code before checkout: do not submit. if checkout was submitted, reconcile and report the observed outcome first (reporting may remain available after expiry). if never submitted, or after a confirmed decline, with user confirmation delete only if the api permits it and create one new card under a new key for a new purchase; ask for a different card or merchant after decline. unknown outcome: ask the user to check the merchant order page, email or statement and report only after they confirm; never guess or repeat checkout.";

@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { agentcardCardSpecSchema } from "./vault-schemas";
+import {
+  agentcardCardSpecSchema,
+  kernelCardSpecSchema,
+  kernelPaymentRequestSpecSchema,
+} from "./vault-schemas";
 
 describe("AgentCard checkout_origin", () => {
   test.each([
@@ -38,6 +42,31 @@ describe("AgentCard checkout_origin", () => {
         currency: "USD",
         checkout_origin,
       }).success,
+    ).toBe(false);
+  });
+});
+
+describe("KERNEL payment_method_id", () => {
+  const spec = {
+    wallet: "wallet-1",
+    amount: 1999,
+    currency: "usd",
+    merchant_name: "Shop",
+    merchant_url: "https://shop.example/pay",
+  };
+
+  test("is optional on a card and required on a payment_request", () => {
+    expect(kernelCardSpecSchema.safeParse(spec).success).toBe(true);
+    expect(kernelPaymentRequestSpecSchema.safeParse(spec).success).toBe(false);
+    for (const schema of [kernelCardSpecSchema, kernelPaymentRequestSpecSchema])
+      expect(
+        schema.safeParse({ ...spec, payment_method_id: "pm_1" }).success,
+      ).toBe(true);
+  });
+
+  test.each(["", "x".repeat(129)])("rejects %p", (payment_method_id) => {
+    expect(
+      kernelCardSpecSchema.safeParse({ ...spec, payment_method_id }).success,
     ).toBe(false);
   });
 });
