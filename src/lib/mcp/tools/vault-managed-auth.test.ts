@@ -42,9 +42,7 @@ describe("managed auth vault credentials", () => {
       expect(credentialTool?.inputSchema.properties?.provider).toMatchObject({
         enum: ["kernel", "1password", "managed_auth"],
       });
-      expect(credentialTool?.description).toContain(
-        'provider:"managed_auth"',
-      );
+      expect(credentialTool?.description).toContain('provider:"managed_auth"');
       expect(credentialTool?.description).toContain(
         "follows future saved-credential changes",
       );

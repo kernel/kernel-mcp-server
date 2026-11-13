@@ -3,10 +3,7 @@ import {
   organizationWideAuthInfo,
   projectScopedAuthInfo,
 } from "@/lib/mcp/auth-context.test-fixtures";
-import {
-  toolResultJSON,
-  toolResultText,
-} from "@/lib/mcp/mcp-test-fixtures";
+import { toolResultJSON, toolResultText } from "@/lib/mcp/mcp-test-fixtures";
 import { connectVaultTest, item, linkSpec } from "./vaults.test-fixtures";
 
 const tool = "manage_vault_provider_configs";
@@ -64,8 +61,9 @@ describe("vault provider config SDK routing", () => {
         "manage_vault_wallets",
         "manage_vault_cards",
       ]) {
-        expect(tools.find((candidate) => candidate.name === name)?.description)
-          .toContain("vgs");
+        expect(
+          tools.find((candidate) => candidate.name === name)?.description,
+        ).toContain("vgs");
       }
 
       const results = [

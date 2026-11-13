@@ -200,9 +200,7 @@ export function registerProxyTools(
         }
         if (
           params.ip_address !== undefined &&
-          !["create", "list", "move", "get_reserved_ip"].includes(
-            params.action,
-          )
+          !["create", "list", "move", "get_reserved_ip"].includes(params.action)
         ) {
           return errorResponse(
             "error: ip_address applies only to list, move, and get_reserved_ip; for create use config.ip_address.",
