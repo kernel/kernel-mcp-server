@@ -593,7 +593,7 @@ export function registerBrowserCapabilities(
             })
             .strict()
             .describe(
-              "(create) closed beta overrides for browser attributes presented to websites. currently supports only os=macos and requires the site-compatibility setting to be true, headless=false, gpu=false, and omitted memory so the default is used. contact KERNEL to enable this capability for the organization; omit it to preserve default browser behavior.",
+              "(create) closed beta overrides for browser attributes presented to websites. currently supports only os=macos and requires the site-compatibility setting to be true and omitted memory so the default is used; headless and gpu may be omitted (they default to false) but cannot be set to true. contact KERNEL to enable this capability for the organization; omit it to preserve default browser behavior.",
             )
             .optional(),
           headless: z
@@ -981,12 +981,12 @@ export function registerBrowserCapabilities(
             if (
               params.fingerprint !== undefined &&
               (params.stealth !== true ||
-                params.headless !== false ||
-                params.gpu !== false ||
+                params.headless === true ||
+                params.gpu === true ||
                 params.memory !== undefined)
             ) {
               return errorResponse(
-                "error: fingerprint requires stealth=true, headless=false, gpu=false, and omitted memory so the default is used.",
+                "error: fingerprint requires stealth=true, headless=false and gpu=false (the defaults when omitted), and omitted memory so the default is used.",
               );
             }
             const createParams: Kernel.BrowserCreateParams = {};

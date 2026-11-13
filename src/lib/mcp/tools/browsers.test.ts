@@ -1244,8 +1244,9 @@ describe("manage_browsers fingerprint overrides", () => {
         | undefined;
       expect(fingerprint?.properties?.os).toMatchObject({ const: "macos" });
       expect(fingerprint?.description).toContain("closed beta");
-      expect(fingerprint?.description).toContain("headless=false");
-      expect(fingerprint?.description).toContain("gpu=false");
+      expect(fingerprint?.description).toContain(
+        "headless and gpu may be omitted",
+      );
       expect(fingerprint?.description).toContain("omitted memory");
 
       const result = await client.callTool({
@@ -1259,6 +1260,16 @@ describe("manage_browsers fingerprint overrides", () => {
         },
       });
       expect(result.isError).toBeFalsy();
+      // headless and gpu default to false, so they need not be passed.
+      const defaults = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "create",
+          fingerprint: { os: "macos" },
+          stealth: true,
+        },
+      });
+      expect(defaults.isError).toBeFalsy();
       expect(creates).toEqual([
         {
           fingerprint: { os: "macos" },
@@ -1266,6 +1277,7 @@ describe("manage_browsers fingerprint overrides", () => {
           headless: false,
           gpu: false,
         },
+        { fingerprint: { os: "macos" }, stealth: true },
       ]);
     } finally {
       await close();
@@ -1306,6 +1318,16 @@ describe("manage_browsers fingerprint overrides", () => {
           stealth: true,
           headless: true,
           gpu: false,
+        },
+        {
+          action: "create",
+          fingerprint: { os: "macos" },
+          stealth: true,
+          gpu: true,
+        },
+        {
+          action: "create",
+          fingerprint: { os: "macos" },
         },
         {
           action: "update",
