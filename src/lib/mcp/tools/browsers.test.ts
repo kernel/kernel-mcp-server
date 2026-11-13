@@ -362,6 +362,51 @@ describe("manage_browsers telemetry", () => {
     }
   });
 
+  test("preserves the payment-window proxy error and documents its meaning", async () => {
+    const queries: unknown[] = [];
+    const proxyError = {
+      seq: 44,
+      event: {
+        ts: 1_700_000_000_000_002,
+        category: "network",
+        type: "browser_proxy_error",
+        source: { service: "proxy" },
+        data: { code: "payment_window_expired" },
+      },
+    };
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      telemetryClient(queries, [proxyError]),
+    );
+
+    try {
+      const result = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action: "get_telemetry",
+            session_id: "brr_123",
+            categories: ["network"],
+            limit: 1,
+          },
+        }),
+      );
+      expect(result.items[0].data).toEqual({
+        code: "payment_window_expired",
+      });
+
+      const { tools } = await client.listTools();
+      const tool = tools.find(({ name }) => name === "manage_browsers");
+      const categories = tool?.inputSchema.properties?.categories as
+        | { description?: string }
+        | undefined;
+      expect(categories?.description).toContain("payment_window_expired");
+      expect(categories?.description).toContain("raw_code");
+    } finally {
+      await close();
+    }
+  });
+
   test("documents bounded best-effort raw replay", async () => {
     const kernelClient = { browsers: {} };
     const { client, close } = await connectTestMcp(
@@ -432,7 +477,11 @@ describe("manage_browsers proxy routes", () => {
         { hosts: ["example.com", "*.example.org"], proxy: { id: "prx_route" } },
       ],
     };
-    const browser = { session_id: "brr_123", network };
+    const browser = {
+      session_id: "brr_123",
+      leased_at: "2026-08-08T00:05:00Z",
+      network,
+    };
     const { client, close } = await connectTestMcp(
       registerBrowserCapabilities,
       {
@@ -465,6 +514,7 @@ describe("manage_browsers proxy routes", () => {
         { proxy: { id: "prx_default" }, network: { proxy_routes } },
       ]);
       expect(created.browser.network).toEqual(network);
+      expect(created.browser.leased_at).toBe("2026-08-08T00:05:00Z");
       const retrieved = toolResultJSON(
         await client.callTool({
           name: "manage_browsers",
@@ -472,6 +522,7 @@ describe("manage_browsers proxy routes", () => {
         }),
       );
       expect(retrieved.network).toEqual(network);
+      expect(retrieved.leased_at).toBe("2026-08-08T00:05:00Z");
     } finally {
       await close();
     }
@@ -970,6 +1021,7 @@ describe("manage_browsers location, memory, and conditional allowlists", () => {
           action: "create",
           headless: false,
           memory: "8GiB",
+          start_replay: false,
           extensions,
           telemetry,
           location: {
@@ -1005,6 +1057,7 @@ describe("manage_browsers location, memory, and conditional allowlists", () => {
         {
           headless: false,
           memory: "8GiB",
+          start_replay: false,
           extensions,
           telemetry,
           location: {
@@ -1165,6 +1218,136 @@ describe("manage_browsers location, memory, and conditional allowlists", () => {
   });
 });
 
+describe("manage_browsers fingerprint overrides", () => {
+  test("advertises and forwards the closed-beta macos override with required false values", async () => {
+    const creates: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (params: unknown) => {
+            creates.push(params);
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+
+    try {
+      const { tools } = await client.listTools();
+      const browser = tools.find(({ name }) => name === "manage_browsers");
+      const fingerprint = browser?.inputSchema.properties?.fingerprint as
+        | {
+            description?: string;
+            properties?: { os?: { const?: string; description?: string } };
+          }
+        | undefined;
+      expect(fingerprint?.properties?.os).toMatchObject({ const: "macos" });
+      expect(fingerprint?.description).toContain("closed beta");
+      expect(fingerprint?.description).toContain(
+        "headless and gpu may be omitted",
+      );
+      expect(fingerprint?.description).toContain("omitted memory");
+
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "create",
+          fingerprint: { os: "macos" },
+          stealth: true,
+          headless: false,
+          gpu: false,
+        },
+      });
+      expect(result.isError).toBeFalsy();
+      // headless and gpu default to false, so they need not be passed.
+      const defaults = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "create",
+          fingerprint: { os: "macos" },
+          stealth: true,
+        },
+      });
+      expect(defaults.isError).toBeFalsy();
+      expect(creates).toEqual([
+        {
+          fingerprint: { os: "macos" },
+          stealth: true,
+          headless: false,
+          gpu: false,
+        },
+        { fingerprint: { os: "macos" }, stealth: true },
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects invalid or update-time fingerprint overrides before the SDK", async () => {
+    let calls = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+          update: async () => {
+            calls++;
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+
+    try {
+      for (const arguments_ of [
+        {
+          action: "create",
+          fingerprint: { os: "macos" },
+          stealth: true,
+          headless: false,
+          gpu: false,
+          memory: "8GiB",
+        },
+        {
+          action: "create",
+          fingerprint: { os: "macos" },
+          stealth: true,
+          headless: true,
+          gpu: false,
+        },
+        {
+          action: "create",
+          fingerprint: { os: "macos" },
+          stealth: true,
+          gpu: true,
+        },
+        {
+          action: "create",
+          fingerprint: { os: "macos" },
+        },
+        {
+          action: "update",
+          session_id: "brr_123",
+          fingerprint: { os: "macos" },
+        },
+      ]) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: arguments_,
+        });
+        expect(result.isError).toBe(true);
+      }
+      expect(calls).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+});
+
 describe("manage_browsers region", () => {
   test("passes region to create and list", async () => {
     const createCalls: unknown[] = [];
@@ -1179,7 +1362,11 @@ describe("manage_browsers region", () => {
           listCalls.push(params);
           return {
             getPaginatedItems: () => [
-              { session_id: "brr_eu", cdp_ws_url: "ws://example.test" },
+              {
+                session_id: "brr_eu",
+                leased_at: "2026-08-08T00:05:00Z",
+                cdp_ws_url: "ws://example.test",
+              },
             ],
             has_more: false,
             next_offset: null,
@@ -1209,7 +1396,434 @@ describe("manage_browsers region", () => {
         }),
       );
       expect(listCalls).toEqual([{ region: "eu-west" }]);
-      expect(listed.items).toEqual([{ session_id: "brr_eu" }]);
+      expect(listed.items).toEqual([
+        {
+          session_id: "brr_eu",
+          leased_at: "2026-08-08T00:05:00Z",
+        },
+      ]);
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe("manage_browsers replay creation and live view", () => {
+  test("forwards start_replay=false and returns replay metadata", async () => {
+    const calls: unknown[] = [];
+    const replay = {
+      replay_id: "rpl_123",
+      started_at: "2026-09-01T12:00:00Z",
+      replay_view_url: "https://replays.example/rpl_123",
+    };
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (...args: unknown[]) => {
+            calls.push(args);
+            return { session_id: "brr_123", replay };
+          },
+        },
+      },
+    );
+    try {
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: { action: "create", start_replay: false },
+      });
+      expect(calls).toEqual([[{ start_replay: false }, undefined]]);
+      expect(toolResultJSON(result).browser.replay).toEqual(replay);
+    } finally {
+      await close();
+    }
+  });
+
+  test("creates scoped live-view URLs once without SDK retries", async () => {
+    const calls: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          liveView: {
+            create: async (...args: unknown[]) => {
+              calls.push(args);
+              return {
+                url: "https://live.example/view?token=secret",
+                scope: "control",
+                expires_at: "2026-09-01T12:10:00Z",
+              };
+            },
+          },
+        },
+      },
+    );
+    try {
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "create_live_view",
+          session_id: "named-browser",
+          live_view_scope: "control",
+          live_view_ttl_seconds: 600,
+        },
+      });
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toEqual([
+        "named-browser",
+        { scope: "control", ttl_seconds: 600 },
+        expect.objectContaining({
+          maxRetries: 0,
+          signal: expect.any(AbortSignal),
+        }),
+      ]);
+      expect(toolResultJSON(result)).toMatchObject({
+        scope: "control",
+        expires_at: "2026-09-01T12:10:00Z",
+        note: expect.stringContaining("cannot be revoked"),
+      });
+    } finally {
+      await close();
+    }
+  });
+
+  test("defaults control live views to a 24-hour ttl", async () => {
+    const calls: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          liveView: {
+            create: async (_id: string, body: unknown) => {
+              calls.push(body);
+              return { url: "https://live.example/view", scope: "control" };
+            },
+          },
+        },
+      },
+    );
+    try {
+      const defaulted = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action: "create_live_view",
+            session_id: "brr_123",
+            live_view_scope: "control",
+          },
+        }),
+      );
+      const explicit = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action: "create_live_view",
+            session_id: "brr_123",
+            live_view_scope: "control",
+            live_view_ttl_seconds: 31_536_000,
+          },
+        }),
+      );
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "create_live_view",
+          session_id: "brr_123",
+          live_view_scope: "read",
+        },
+      });
+
+      expect(calls).toEqual([
+        { scope: "control", ttl_seconds: 86_400 },
+        { scope: "control", ttl_seconds: 31_536_000 },
+        { scope: "read" },
+      ]);
+      expect(defaulted.note).toContain("expire after 24 hours by default");
+      expect(explicit.note).not.toContain("24 hours");
+
+      const { tools } = await client.listTools();
+      const ttl = tools.find(({ name }) => name === "manage_browsers")
+        ?.inputSchema.properties?.live_view_ttl_seconds as {
+        description?: string;
+      };
+      expect(ttl.description).toContain(
+        "a control url expires after 86400 seconds (24 hours)",
+      );
+    } finally {
+      await close();
+    }
+  });
+
+  test("omits live-view defaults and validates action-only fields", async () => {
+    const calls: unknown[][] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          liveView: {
+            create: async (...args: unknown[]) => {
+              calls.push(args);
+              return { url: "https://live.example/view", scope: "read" };
+            },
+          },
+          retrieve: async () => ({ session_id: "brr_123" }),
+        },
+      },
+    );
+    try {
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: { action: "create_live_view", session_id: "brr_123" },
+      });
+      expect(calls[0]?.[1]).toEqual({});
+
+      const missing = await client.callTool({
+        name: "manage_browsers",
+        arguments: { action: "create_live_view" },
+      });
+      expect(toolResultText(missing)).toContain(
+        "session_id is required for create_live_view",
+      );
+
+      const wrongAction = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "get",
+          session_id: "brr_123",
+          live_view_scope: "read",
+        },
+      });
+      expect(toolResultText(wrongAction)).toContain(
+        "apply only to the create_live_view action",
+      );
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe("manage_browsers save profile", () => {
+  test("advertises the restart and destination contract", async () => {
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {},
+    );
+
+    try {
+      const { tools } = await client.listTools();
+      const browser = tools.find(({ name }) => name === "manage_browsers");
+      const action = browser?.inputSchema.properties?.action as
+        | { enum?: string[] }
+        | undefined;
+      const profileId = browser?.inputSchema.properties?.profile_id as
+        | { minLength?: number; description?: string }
+        | undefined;
+      const profileName = browser?.inputSchema.properties?.profile_name as
+        | {
+            minLength?: number;
+            maxLength?: number;
+            pattern?: string;
+            description?: string;
+          }
+        | undefined;
+
+      expect(action?.enum).toContain("save_profile");
+      expect(profileId).toMatchObject({ minLength: 1 });
+      expect(profileId?.description).toContain(
+        "existing destination profile id to overwrite",
+      );
+      expect(profileName).toMatchObject({
+        minLength: 1,
+        maxLength: 255,
+        pattern: "^[a-zA-Z0-9._-]{1,255}$",
+      });
+      expect(profileName?.description).toContain(
+        "create when no matching profile exists",
+      );
+      expect(profileName?.description).toContain(
+        "saving does not attach it or change save_profile_changes",
+      );
+      expect(browser?.description).toContain(
+        "save_profile restarts the browser: cdp, playwright, and webdriver connections close",
+      );
+      expect(browser?.description).toContain(
+        "call it at a stable point, such as right after a login completes",
+      );
+      expect(browser?.description).toContain(
+        "mint a read or control live-view url",
+      );
+    } finally {
+      await close();
+    }
+  });
+
+  test("forwards exactly one destination by id or name", async () => {
+    const calls: unknown[] = [];
+    const requestOptions: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          saveProfile: async (
+            sessionId: string,
+            destination: { id?: string; name?: string },
+            options?: { maxRetries?: number; timeout?: number },
+          ) => {
+            calls.push([sessionId, destination]);
+            requestOptions.push({
+              maxRetries: options?.maxRetries,
+              timeout: options?.timeout,
+            });
+            return {
+              id: destination.id ?? "prf_created_from_name",
+              name: destination.name ?? "existing-profile",
+            };
+          },
+        },
+      },
+    );
+
+    try {
+      const byId = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action: "save_profile",
+            session_id: "checkout-flow",
+            profile_id: "prf_existing",
+          },
+        }),
+      );
+      const byName = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action: "save_profile",
+            session_id: "brr_123",
+            profile_name: "checkout.snapshot-1",
+          },
+        }),
+      );
+
+      expect(calls).toEqual([
+        ["checkout-flow", { id: "prf_existing" }],
+        ["brr_123", { name: "checkout.snapshot-1" }],
+      ]);
+      // A slow save must not time out at the SDK default or start a second save.
+      expect(requestOptions).toEqual([
+        { maxRetries: 0, timeout: 190_000 },
+        { maxRetries: 0, timeout: 190_000 },
+      ]);
+      expect(byId).toEqual({
+        id: "prf_existing",
+        name: "existing-profile",
+        note: expect.any(String),
+      });
+      expect(byName).toMatchObject({
+        id: "prf_created_from_name",
+        name: "checkout.snapshot-1",
+      });
+      for (const text of [
+        "start a new webdriver session",
+        "caches, service worker storage, and google drive indexeddb data are omitted",
+        "a successful save restarts timeout_seconds",
+        "the most recently started wins",
+      ]) {
+        expect(byId.note).toContain(text);
+      }
+    } finally {
+      await close();
+    }
+  });
+
+  test("returns retry guidance when a save fails", async () => {
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          saveProfile: async () => {
+            throw new Error("browser_busy");
+          },
+        },
+      },
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "save_profile",
+          session_id: "brr_123",
+          profile_name: "profile",
+        },
+      });
+      expect(result.isError).toBe(true);
+      const text = toolResultText(result);
+      expect(text).toContain("a browser_busy conflict is temporary");
+      expect(text).toContain(
+        "browser_not_active (the browser is no longer running) are not retryable",
+      );
+      expect(text).toContain("check the profile before calling again");
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects missing, ambiguous, and inapplicable save inputs", async () => {
+    let saves = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          saveProfile: async () => {
+            saves++;
+            return { id: "prf_123", name: "profile" };
+          },
+        },
+      },
+    );
+
+    try {
+      const cases: Array<Record<string, unknown>> = [
+        { action: "save_profile", profile_id: "prf_123" },
+        { action: "save_profile", session_id: "brr_123" },
+        {
+          action: "save_profile",
+          session_id: "brr_123",
+          profile_id: "prf_123",
+          profile_name: "profile",
+        },
+        {
+          action: "save_profile",
+          session_id: "brr_123",
+          profile_id: "prf_123",
+          save_profile_changes: false,
+        },
+        {
+          action: "save_profile",
+          session_id: "brr_123",
+          profile_name: "invalid profile name",
+        },
+        {
+          action: "save_profile",
+          session_id: "brr_123",
+          profile_id: "",
+        },
+        {
+          action: "save_profile",
+          session_id: "brr_123",
+          profile_name: "x".repeat(256),
+        },
+      ];
+
+      for (const arguments_ of cases) {
+        const result = await client.callTool({
+          name: "manage_browsers",
+          arguments: arguments_,
+        });
+        expect(result.isError).toBe(true);
+      }
+      expect(saves).toBe(0);
     } finally {
       await close();
     }
@@ -1228,7 +1842,10 @@ describe("manage_browsers id or name", () => {
         },
         update: async (idOrName: string, params: unknown) => {
           updateCalls.push([idOrName, params]);
-          return { session_id: "brr_123" };
+          return {
+            session_id: "brr_123",
+            leased_at: "2026-08-08T00:05:00Z",
+          };
         },
       },
     };
@@ -1250,16 +1867,19 @@ describe("manage_browsers id or name", () => {
         { name: "checkout-flow", tags: { team: "payments" } },
       ]);
 
-      await client.callTool({
-        name: "manage_browsers",
-        arguments: {
-          action: "update",
-          session_id: "checkout-flow",
-          name: "checkout-flow-2",
-          tags: {},
-          start_url: "https://example.com/checkout",
-        },
-      });
+      const updated = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action: "update",
+            session_id: "checkout-flow",
+            name: "checkout-flow-2",
+            tags: {},
+            start_url: "https://example.com/checkout",
+          },
+        }),
+      );
+      expect(updated.browser.leased_at).toBe("2026-08-08T00:05:00Z");
       expect(updateCalls).toEqual([
         [
           "checkout-flow",

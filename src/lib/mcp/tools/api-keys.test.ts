@@ -22,6 +22,32 @@ async function callAPIKeys(apiKeys: unknown, args: Record<string, unknown>[]) {
 }
 
 describe("manage_api_keys SDK parity", () => {
+  test("advertises last-used sorting and null ordering", async () => {
+    const { client, close } = await connectTestMcp(
+      registerAPIKeyCapabilities,
+      {},
+    );
+    try {
+      const tool = (await client.listTools()).tools.find(
+        ({ name }) => name === "manage_api_keys",
+      );
+      expect(tool?.inputSchema.properties?.sort_by).toMatchObject({
+        enum: ["created_at", "name", "expires_at", "last_used_at"],
+        description: expect.stringContaining(
+          "keys missing that value sort last in either direction",
+        ),
+      });
+      expect(tool?.description).toContain(
+        "delete asynchronously ends browser sessions",
+      );
+      expect(tool?.description).toContain(
+        "grace-period or natural expiry does not end existing browsers",
+      );
+    } finally {
+      await close();
+    }
+  });
+
   test("rejects an empty api_key_id in the schema", async () => {
     let called = false;
     const [result] = await callAPIKeys(
@@ -106,7 +132,7 @@ describe("manage_api_keys SDK parity", () => {
           name: "staging",
           query: "stage",
           status: "all",
-          sort_by: "expires_at",
+          sort_by: "last_used_at",
           sort_direction: "asc",
           limit: 5,
           offset: 0,
@@ -123,7 +149,7 @@ describe("manage_api_keys SDK parity", () => {
           name: "staging",
           query: "stage",
           status: "all",
-          sort_by: "expires_at",
+          sort_by: "last_used_at",
           sort_direction: "asc",
           limit: 5,
           offset: 0,

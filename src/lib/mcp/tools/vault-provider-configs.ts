@@ -30,7 +30,7 @@ export function registerVaultProviderConfigTools(
     "manage_vault_provider_configs",
     {
       description:
-        'manage organization-owned link and agentcard application credentials, not user oauth grants. "create" requires name, provider, and credentials (client_id/client_secret, plus publishable_key for link); duplicate names conflict without replacing secrets. "list" and "get" return public configuration metadata only. "update" renames, rotates client_secret, or sets the link publishable_key across all bound wallets; omitted fields stay unchanged. provider, client_id, mode, and wallet bindings are immutable. "delete" requires user confirmation and fails while any non-deleted item references the config; it does not revoke unrelated grants. writes require an organization-scoped connection. supply write-only secrets through a trusted client, never chat. no automatic retries.',
+        'manage organization-owned link and agentcard application credentials, not user oauth grants. "create" requires name, provider, and credentials (client_id/client_secret, plus publishable_key for link); duplicate names conflict without replacing secrets. "list" and "get" return public configuration metadata only. "update" renames, rotates client_secret, or sets the link publishable_key across all bound wallets; omitted fields stay unchanged. provider, client_id, mode, and wallet bindings are immutable. "delete" requires user confirmation and fails while any non-deleted item references the config; it does not revoke unrelated grants. writes require an organization-scoped connection. supply write-only secrets through a trusted client, never chat. list/get preserve safe metadata for existing vgs configurations, including environment and vault_id, but vgs writes are deliberately unavailable through mcp because the usable purchase flow requires pan and cvc aliases that must not enter a model-facing tool; configure vgs through a trusted backend with the direct api/sdk. partial vgs config creation is omitted so mcp cannot create unusable wallet bindings. no automatic retries.',
       inputSchema: vaultToolInput({
         action: z.enum(["create", "list", "get", "update", "delete"]),
         config: vaultSelectorSchema()
@@ -42,7 +42,7 @@ export function registerVaultProviderConfigTools(
           .describe("(create, update) unique organization-wide name.")
           .optional(),
         provider: vaultProviderSchema
-          .exclude(["kernel"])
+          .exclude(["kernel", "shop_pay"])
           .describe("(create only) immutable provider.")
           .optional(),
         credentials: providerCredentialsSchema

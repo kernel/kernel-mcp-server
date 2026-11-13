@@ -35,11 +35,18 @@ describe("manage_auth_connections programmatic surface", () => {
     expect(schema?.allowed_domains).toBeDefined();
     expect(schema?.login_url).toBeDefined();
     expect(schema?.health_checks).toBeDefined();
+    expect(schema?.hitl).toBeDefined();
     expect(schema?.auto_reauth).toBeDefined();
     expect(schema?.browser_region.safeParse("eu-west").success).toBe(true);
     expect(schema?.browser_region.safeParse("us-west").success).toBe(true);
     expect(schema?.browser_region.safeParse("emea").success).toBe(false);
     expect(schema?.browser_stealth).toBeDefined();
+    expect(
+      schema?.browser.safeParse({ location: { locale: "sv-SE" } }).success,
+    ).toBe(true);
+    expect(
+      schema?.browser.safeParse({ location: { locale: null } }).success,
+    ).toBe(true);
     expect(schema?.query).toBeDefined();
     expect(schema?.timeline_type).toBeDefined();
     expect(schema?.record_session).toBeDefined();
@@ -88,6 +95,12 @@ describe("manage_auth_connections programmatic surface", () => {
         ({ name }) => name === "manage_auth_connections",
       );
       const browserTelemetry = tool?.inputSchema.properties?.browser_telemetry;
+      expect(tool?.inputSchema.properties?.hitl).toMatchObject({
+        description: expect.stringContaining("AWAITING_HUMAN_INTERVENTION"),
+      });
+      expect(tool?.inputSchema.properties?.selected_choice_id).toMatchObject({
+        description: expect.stringContaining("human_intervention"),
+      });
       for (const field of [
         "credential_name",
         "credential_provider",
@@ -187,6 +200,7 @@ describe("manage_auth_connections programmatic surface", () => {
           domain: "example.com",
           profile_name: "work",
           record_session: true,
+          hitl: true,
           browser_region: "eu-west",
           browser_telemetry: {
             enabled: true,
@@ -197,6 +211,7 @@ describe("manage_auth_connections programmatic surface", () => {
       );
       expect(createBody).toMatchObject({
         record_session: true,
+        hitl: true,
         browser: {
           region: "eu-west",
           telemetry: {
@@ -294,6 +309,81 @@ describe("manage_auth_connections programmatic surface", () => {
     }
   });
 
+  test("forwards managed-auth locale on create/update and rejects login overrides", async () => {
+    const { handler } = captureHandler();
+    const bodies: unknown[] = [];
+    kernelClientMock.factory = () => ({
+      auth: {
+        connections: {
+          create: async (body: unknown) => {
+            bodies.push(body);
+            return connection();
+          },
+          update: async (_id: string, body: unknown) => {
+            bodies.push(body);
+            return connection();
+          },
+          login: async () => ({ id: "conn_1" }),
+        },
+      },
+    });
+    try {
+      const extra = { authInfo: { token: "test-token" } };
+      await handler(
+        {
+          action: "create",
+          domain: "example.com",
+          profile_name: "work",
+          browser: { location: { locale: "sv-SE" } },
+        },
+        extra,
+      );
+      await handler(
+        {
+          action: "update",
+          id: "conn_1",
+          browser: { location: { locale: null } },
+        },
+        extra,
+      );
+      expect(bodies).toEqual([
+        {
+          domain: "example.com",
+          profile_name: "work",
+          browser: { location: { locale: "sv-SE" } },
+        },
+        { browser: { location: { locale: null } } },
+      ]);
+
+      const login = await handler(
+        {
+          action: "login",
+          id: "conn_1",
+          browser: { location: { locale: "fr-FR" } },
+        },
+        extra,
+      );
+      expect(login.isError).toBe(true);
+      expect(login.content[0].text).toContain(
+        "browser.location is not supported for login",
+      );
+
+      const createNull = await handler(
+        {
+          action: "create",
+          domain: "example.com",
+          profile_name: "other",
+          browser: { location: { locale: null } },
+        },
+        extra,
+      );
+      expect(createNull.isError).toBe(true);
+      expect(createNull.content[0].text).toContain("update-only");
+    } finally {
+      kernelClientMock.factory = () => unusedKernelClient;
+    }
+  });
+
   test("rejects a nested browser object mixed with deprecated fields", async () => {
     const { handler } = captureHandler();
     const extra = { authInfo: { token: "test-token" } };
@@ -347,6 +437,7 @@ describe("manage_auth_connections programmatic surface", () => {
           login_url: "",
           health_check_interval: 1200,
           health_checks: false,
+          hitl: false,
           auto_reauth: false,
           save_credentials: false,
           record_session: true,
@@ -372,6 +463,7 @@ describe("manage_auth_connections programmatic surface", () => {
         login_url: "",
         health_check_interval: 1200,
         health_checks: false,
+        hitl: false,
         auto_reauth: false,
         save_credentials: false,
         record_session: true,
@@ -560,7 +652,19 @@ describe("manage_auth_connections programmatic surface", () => {
           },
           retrieve: async () => {
             calls.retrieve++;
-            return connection({ status: "AUTHENTICATED" });
+            return connection({
+              status: "AUTHENTICATED",
+              hitl: true,
+              flow_status: "IN_PROGRESS",
+              flow_step: "AWAITING_HUMAN_INTERVENTION",
+              choices: [
+                {
+                  id: "captcha-complete",
+                  label: "I completed the challenge",
+                  type: "human_intervention",
+                },
+              ],
+            });
           },
           login: async () => {
             calls.login++;
@@ -603,9 +707,17 @@ describe("manage_auth_connections programmatic surface", () => {
       const got = await handler({ action: "get", id: "conn_1" }, extra);
       const gotJson = JSON.parse(got.content[0].text);
       expect(gotJson.status).toBe("AUTHENTICATED");
+      expect(gotJson.hitl).toBe(true);
+      expect(gotJson.flow_step).toBe("AWAITING_HUMAN_INTERVENTION");
       expect(gotJson.interaction_id).toBe("mai_secret");
       expect(gotJson.fields).toHaveLength(1);
-      expect(gotJson.choices).toHaveLength(1);
+      expect(gotJson.choices).toEqual([
+        {
+          id: "captcha-complete",
+          label: "I completed the challenge",
+          type: "human_intervention",
+        },
+      ]);
       expect(gotJson.discovered_fields).toHaveLength(1);
 
       // login returns the raw hosted flow response.
@@ -826,6 +938,43 @@ describe("manage_auth_connections programmatic surface", () => {
       expect(result.structuredContent.connection.id).toBe("conn_1");
       expect(result.structuredContent.instruction).toContain("verified");
       expect(calls).toBe(2);
+      assertNoSecrets(result.structuredContent);
+    } finally {
+      kernelClientMock.factory = () => unusedKernelClient;
+    }
+  });
+
+  test("wait returns human-intervention guidance without polling", async () => {
+    const { handler } = captureHandler();
+    let calls = 0;
+    kernelClientMock.factory = () => ({
+      auth: {
+        connections: {
+          retrieve: async () => {
+            calls++;
+            return connection({
+              hitl: true,
+              flow_status: "IN_PROGRESS",
+              flow_step: "AWAITING_HUMAN_INTERVENTION",
+            });
+          },
+        },
+      },
+    });
+    try {
+      const result = await handler(
+        { action: "wait", id: "conn_1", wait_seconds: 30 },
+        { authInfo: { token: "test-token" } },
+      );
+      expect(result.structuredContent.state).toBe("pending");
+      expect(result.structuredContent.connection.flow_step).toBe(
+        "AWAITING_HUMAN_INTERVENTION",
+      );
+      expect(result.structuredContent.instruction).toContain("action=get");
+      expect(result.structuredContent.instruction).toContain(
+        "human_intervention",
+      );
+      expect(calls).toBe(1);
       assertNoSecrets(result.structuredContent);
     } finally {
       kernelClientMock.factory = () => unusedKernelClient;

@@ -260,6 +260,12 @@ const maxRawTelemetryEvents = 5;
 // Producers cap each archived record at 1,000,000 bytes. This leaves room for
 // the page envelope while ensuring one response cannot carry multiple max-size records.
 const maxRawTelemetryResponseBytes = 1024 * 1024;
+const saveProfileTimeoutMs = 190_000;
+const controlLiveViewDefaultTtlSeconds = 86_400;
+const saveProfileNote =
+  "the browser restarted: reconnect cdp and playwright clients, start a new webdriver session, and expect restored tabs to have reloaded without in-memory page state. caches, service worker storage, and google drive indexeddb data are omitted from the saved profile but remain in the running browser. a successful save restarts timeout_seconds. browsers already using this profile keep their in-memory state; pools with refresh_on_profile_update replace idle sessions from the new snapshot, and other browsers use it when they next load the profile. among overlapping save_profile calls to the same profile, the most recently started wins even if an earlier call finishes later; an automatic session-end save with save_profile_changes is ordered against them by finish time.";
+const saveProfileErrorNote =
+  "a browser_busy conflict is temporary; retry the call. browser_lease_changed (a pooled browser was released or reacquired after the call began) and browser_not_active (the browser is no longer running) are not retryable against that browser. save_profile waits up to 190 seconds and is not retried automatically; after a timeout the save may still finish, so check the profile before calling again. a failed save leaves timeout_seconds unchanged.";
 
 function rawTelemetryPageError(items: TelemetryEnvelope[]) {
   for (const { event } of items) {
@@ -498,7 +504,7 @@ export function registerBrowserCapabilities(
     "manage_browsers",
     {
       description:
-        'manage the browser sessions that every web task runs in, and their archived telemetry. once a session exists, drive it with webmcp, browser_repl, execute_playwright_code, or computer_action, preferring the first that can carry the current step. use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, and "delete" when finished. live sessions can be addressed by id or by the name given at creation or set on update; deleted sessions only by id. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
+        'manage the browser sessions that every web task runs in, and their archived telemetry. once a session exists, drive it with webmcp, browser_repl, execute_playwright_code, or computer_action, preferring the first that can carry the current step. use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, "create_live_view" to mint a read or control live-view url for a headful browser, "save_profile" to snapshot a running session to a profile without ending it, and "delete" when finished. live view urls are bearer credentials that cannot be revoked before they expire. save_profile restarts the browser: cdp, playwright, and webdriver connections close and tabs reload, so call it at a stable point, such as right after a login completes. live sessions can be addressed by id or by the name given at creation or set on update; deleted sessions only by id. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
       inputSchema: z.strictObject(
         {
           ...projectSelectionInputSchema(),
@@ -509,6 +515,8 @@ export function registerBrowserCapabilities(
               "list",
               "get",
               "get_telemetry",
+              "create_live_view",
+              "save_profile",
               "delete",
             ])
             .describe("operation to perform."),
@@ -519,7 +527,7 @@ export function registerBrowserCapabilities(
           session_id: z
             .string()
             .describe(
-              "browser session id or name. required for update, get, get_telemetry, and delete actions. a name resolves only a live session; for a deleted session (get_telemetry) pass its id.",
+              "browser session id or name. required for update, get, get_telemetry, create_live_view, save_profile, and delete actions. a name resolves only a live session; for a deleted session (get_telemetry) pass its id.",
             )
             .optional(),
           name: z
@@ -578,6 +586,17 @@ export function registerBrowserCapabilities(
               "(create) chrome enterprise policy overrides. KERNEL-managed policies such as extensions, proxy, cdp, and automation are blocked by the api.",
             )
             .optional(),
+          fingerprint: z
+            .object({
+              os: z
+                .literal("macos")
+                .describe("operating system the browser reports to websites."),
+            })
+            .strict()
+            .describe(
+              "(create) closed beta overrides for browser attributes presented to websites. currently supports only os=macos and requires the site-compatibility setting to be true and omitted memory so the default is used; headless and gpu may be omitted (they default to false) but cannot be set to true. contact KERNEL to enable this capability for the organization; omit it to preserve default browser behavior.",
+            )
+            .optional(),
           headless: z
             .boolean()
             .describe("(create) launch without gui. faster but no live view.")
@@ -622,16 +641,26 @@ export function registerBrowserCapabilities(
               "(create) inactivity timeout in seconds (max 259200 = 72h). default 60.",
             )
             .optional(),
+          start_replay: z
+            .boolean()
+            .describe(
+              "(create) start replay recording as part of browser creation. the response includes replay metadata when recording starts; use manage_replays to inspect or stop it.",
+            )
+            .optional(),
           profile_name: z
             .string()
+            .min(1)
+            .max(255)
+            .regex(/^[a-zA-Z0-9._-]{1,255}$/)
             .describe(
-              "(create, update) profile name to load saved cookies/logins. cannot use with profile_id.",
+              "(create, update) profile name to load saved cookies/logins. (save_profile) destination profile name to overwrite, or create when no matching profile exists in the browser project; saving does not attach it or change save_profile_changes. must be 1-255 letters, digits, '.', '_' or '-'; cannot use with profile_id.",
             )
             .optional(),
           profile_id: z
             .string()
+            .min(1)
             .describe(
-              "(create, update) profile id to load. cannot use with profile_name.",
+              "(create, update) existing profile id to load. (save_profile) existing destination profile id to overwrite; saving does not attach it or change save_profile_changes. cannot use with profile_name.",
             )
             .optional(),
           save_profile_changes: z
@@ -700,7 +729,7 @@ export function registerBrowserCapabilities(
             .int()
             .min(1)
             .describe(
-              "(create, update) window width in pixels. must pair with viewport_height.",
+              "(create, update) window width in pixels. any positive integer is accepted, but headful browsers require at least 64. must pair with viewport_height.",
             )
             .optional(),
           viewport_height: z
@@ -708,7 +737,7 @@ export function registerBrowserCapabilities(
             .int()
             .min(1)
             .describe(
-              "(create, update) window height in pixels. must pair with viewport_width.",
+              "(create, update) window height in pixels. any positive integer is accepted, but headful browsers require at least 64. must pair with viewport_width.",
             )
             .optional(),
           viewport_refresh_rate: z
@@ -844,6 +873,21 @@ export function registerBrowserCapabilities(
               "(create, update) enable or disable user interaction telemetry (clicks, keys, scrolls). off by default; enable for debugging.",
             )
             .optional(),
+          live_view_scope: z
+            .enum(["read", "control"])
+            .describe(
+              "(create_live_view) read shows the browser without accepting input; control also lets the viewer drive it. defaults to read.",
+            )
+            .optional(),
+          live_view_ttl_seconds: z
+            .number()
+            .int()
+            .min(1)
+            .max(31_536_000)
+            .describe(
+              "(create_live_view) seconds until the url expires. when omitted, a control url expires after 86400 seconds (24 hours), and a read url stays valid until the browser is deleted or, for a pooled browser, released.",
+            )
+            .optional(),
         },
         { error: unknownBrowserKeyMessage },
       ),
@@ -866,6 +910,25 @@ export function registerBrowserCapabilities(
         if (params.vaults !== undefined && params.action !== "create") {
           return errorResponse(
             "vault bindings are creation-only; they cannot be added to an existing browser.",
+          );
+        }
+        if (params.action !== "create" && params.fingerprint !== undefined) {
+          return errorResponse(
+            "fingerprint overrides are creation-only; use a new browser to change them.",
+          );
+        }
+        if (params.action !== "create" && params.start_replay !== undefined) {
+          return errorResponse(
+            "error: start_replay is creation-only; use manage_replays on an existing browser.",
+          );
+        }
+        if (
+          params.action !== "create_live_view" &&
+          (params.live_view_scope !== undefined ||
+            params.live_view_ttl_seconds !== undefined)
+        ) {
+          return errorResponse(
+            "error: live_view_scope and live_view_ttl_seconds apply only to the create_live_view action.",
           );
         }
         if (
@@ -916,9 +979,22 @@ export function registerBrowserCapabilities(
         }
         switch (params.action) {
           case "create": {
+            if (
+              params.fingerprint !== undefined &&
+              (params.stealth !== true ||
+                params.headless === true ||
+                params.gpu === true ||
+                params.memory !== undefined)
+            ) {
+              return errorResponse(
+                "error: fingerprint requires stealth=true, headless=false and gpu=false (the defaults when omitted), and omitted memory so the default is used.",
+              );
+            }
             const createParams: Kernel.BrowserCreateParams = {};
             if (params.vaults !== undefined)
               createParams.vaults = params.vaults;
+            if (params.fingerprint !== undefined)
+              createParams.fingerprint = params.fingerprint;
             if (params.headless !== undefined)
               createParams.headless = params.headless;
             if (params.gpu !== undefined) createParams.gpu = params.gpu;
@@ -940,6 +1016,8 @@ export function registerBrowserCapabilities(
               createParams.region = params.region;
             if (params.timeout_seconds !== undefined)
               createParams.timeout_seconds = params.timeout_seconds;
+            if (params.start_replay !== undefined)
+              createParams.start_replay = params.start_replay;
             if (params.kiosk_mode !== undefined)
               createParams.kiosk_mode = params.kiosk_mode;
             if (
@@ -1136,6 +1214,89 @@ export function registerBrowserCapabilities(
               compact: params.compact,
             });
           }
+          case "create_live_view": {
+            if (!params.session_id) {
+              return errorResponse(
+                "error: session_id is required for create_live_view action.",
+              );
+            }
+            // A control url cannot be revoked, so it expires by default.
+            const defaultedTtl =
+              params.live_view_scope === "control" &&
+              params.live_view_ttl_seconds === undefined;
+            const ttlSeconds = defaultedTtl
+              ? controlLiveViewDefaultTtlSeconds
+              : params.live_view_ttl_seconds;
+            const liveView = await client.browsers.liveView.create(
+              params.session_id,
+              {
+                ...(params.live_view_scope !== undefined && {
+                  scope: params.live_view_scope,
+                }),
+                ...(ttlSeconds !== undefined && { ttl_seconds: ttlSeconds }),
+              },
+              // Each call mints a capability URL that cannot be revoked. Never
+              // retry a request whose response may have been lost.
+              { maxRetries: 0, signal: ctx.mcpReq.signal },
+            );
+            return jsonResponse({
+              ...liveView,
+              note:
+                "this bearer url opens only the live view, not cdp, webdriver, or other browser endpoints. it cannot be revoked before expiry; share it only with the intended viewer." +
+                (defaultedTtl
+                  ? " control urls expire after 24 hours by default; pass live_view_ttl_seconds to choose another lifetime."
+                  : ""),
+            });
+          }
+          case "save_profile": {
+            if (!params.session_id) {
+              return errorResponse(
+                "error: session_id is required for save_profile action.",
+              );
+            }
+            if (
+              params.profile_id !== undefined &&
+              params.profile_name !== undefined
+            ) {
+              return errorResponse(
+                "error: cannot specify both profile_name and profile_id for save_profile.",
+              );
+            }
+            if (
+              params.profile_id === undefined &&
+              params.profile_name === undefined
+            ) {
+              return errorResponse(
+                "error: profile_name or profile_id is required for save_profile.",
+              );
+            }
+            if (params.save_profile_changes !== undefined) {
+              return errorResponse(
+                "error: save_profile_changes does not apply to save_profile; saving does not attach the destination profile or change the browser's session-end save setting.",
+              );
+            }
+
+            // A save can outlast the SDK's one-minute default, and a retry would
+            // start a second save and restart the browser again.
+            const options = {
+              maxRetries: 0,
+              timeout: saveProfileTimeoutMs,
+              signal: ctx.mcpReq.signal,
+            };
+            const profile =
+              params.profile_id !== undefined
+                ? await client.browsers.saveProfile(
+                    params.session_id,
+                    { id: params.profile_id },
+                    options,
+                  )
+                : await client.browsers.saveProfile(
+                    params.session_id,
+                    { name: params.profile_name },
+                    options,
+                  );
+            return jsonResponse({ ...profile, note: saveProfileNote });
+          }
           case "delete": {
             if (!params.session_id)
               return errorResponse(
@@ -1146,7 +1307,12 @@ export function registerBrowserCapabilities(
           }
         }
       } catch (error) {
-        throwToolError("manage_browsers", params.action, error);
+        throwToolError(
+          "manage_browsers",
+          params.action,
+          error,
+          params.action === "save_profile" ? saveProfileErrorNote : undefined,
+        );
       }
     },
   );

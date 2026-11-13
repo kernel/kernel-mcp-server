@@ -113,7 +113,8 @@ const EXPECTED_ANNOTATIONS: Record<string, [boolean, boolean, boolean]> = {
   manage_vault_items: [false, true, true],
   manage_vault_credentials: [false, true, true],
   manage_vault_cards: [false, true, true],
-  manage_vault_wallets: [false, false, true],
+  manage_vault_payment_requests: [false, true, true],
+  manage_vault_wallets: [false, true, true],
   manage_vault_provider_configs: [false, true, true],
 };
 
@@ -224,6 +225,7 @@ describe("MCP toolset allowlist", () => {
           "manage_vault_provider_configs",
           "manage_vault_wallets",
           "manage_vault_cards",
+          "manage_vault_payment_requests",
           "manage_vault_credentials",
           "manage_vault_items",
           "manage_vaults",
@@ -297,6 +299,7 @@ describe("project selection registration", () => {
     "manage_vaults",
     "manage_vault_wallets",
     "manage_vault_cards",
+    "manage_vault_payment_requests",
     "manage_vault_credentials",
     "manage_vault_items",
     "open_auth_login",

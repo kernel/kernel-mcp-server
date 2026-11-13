@@ -256,9 +256,204 @@ describe("manage_proxies", () => {
         name: "manage_proxies",
         arguments: { action: "list", query: "residential", limit: 5 },
       });
+      await client.callTool({
+        name: "manage_proxies",
+        arguments: { action: "list", ip_address: "203.0.113.10", offset: 0 },
+      });
       expect(lists).toEqual([
         { name: "us-residential" },
         { query: "residential", limit: 5 },
+        { ip_address: "203.0.113.10", offset: 0 },
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  test("pins, filters, and moves reserved IPv4 addresses", async () => {
+    const creates: unknown[] = [];
+    const updates: unknown[][] = [];
+    const { client, close } = await connectTestMcp(registerProxyTools, {
+      proxies: {
+        create: async (params: unknown) => {
+          creates.push(params);
+          return { id: "prx_1" };
+        },
+        update: async (...args: unknown[]) => {
+          updates.push(args);
+          return { id: args[0] };
+        },
+      },
+    });
+    try {
+      await client.callTool({
+        name: "manage_proxies",
+        arguments: {
+          action: "create",
+          type: "isp",
+          config: { ip_address: "203.0.113.10" },
+        },
+      });
+      await client.callTool({
+        name: "manage_proxies",
+        arguments: {
+          action: "move",
+          id_or_name: "prx_1",
+          ip_address: "203.0.113.11",
+        },
+      });
+      expect(creates).toEqual([
+        { type: "isp", config: { ip_address: "203.0.113.10" } },
+      ]);
+      expect(updates).toHaveLength(1);
+      expect(updates[0]?.slice(0, 2)).toEqual([
+        "prx_1",
+        { config: { ip_address: "203.0.113.11" } },
+      ]);
+      expect(updates[0]?.[2]).toMatchObject({ maxRetries: 0 });
+
+      const wrongCreateField = await client.callTool({
+        name: "manage_proxies",
+        arguments: {
+          action: "create",
+          type: "isp",
+          ip_address: "203.0.113.12",
+        },
+      });
+      expect(toolResultText(wrongCreateField)).toBe(
+        "error: use config.ip_address to pin a new isp proxy to a reserved ip.",
+      );
+
+      const wrongType = await client.callTool({
+        name: "manage_proxies",
+        arguments: {
+          action: "create",
+          type: "residential",
+          config: { ip_address: "203.0.113.12" },
+        },
+      });
+      expect(toolResultText(wrongType)).toBe(
+        "error: config.ip_address is supported only for isp proxies.",
+      );
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects non-IPv4 reserved IP inputs", async () => {
+    const { client, close } = await connectTestMcp(
+      registerProxyTools,
+      proxyClient([]),
+    );
+    try {
+      for (const arguments_ of [
+        {
+          action: "move",
+          id_or_name: "prx_1",
+          ip_address: "2001:db8::1",
+        },
+        {
+          action: "create",
+          type: "isp",
+          config: { ip_address: "not-an-ip" },
+        },
+      ]) {
+        const result = await client.callTool({
+          name: "manage_proxies",
+          arguments: arguments_,
+        });
+        expect(result.isError).toBe(true);
+        expect(toolResultText(result)).toContain("ip_address");
+      }
+    } finally {
+      await close();
+    }
+  });
+
+  test("rejects reserved-IP filters on actions that would ignore them", async () => {
+    const { client, close } = await connectTestMcp(
+      registerProxyTools,
+      proxyClient([]),
+    );
+    try {
+      const wrongStatus = await client.callTool({
+        name: "manage_proxies",
+        arguments: { action: "list", status: "active" },
+      });
+      expect(toolResultText(wrongStatus)).toBe(
+        "error: ip_country and status apply only to list_reserved_ips.",
+      );
+
+      const wrongIP = await client.callTool({
+        name: "manage_proxies",
+        arguments: {
+          action: "rename",
+          id_or_name: "prx_1",
+          name: "renamed",
+          ip_address: "203.0.113.10",
+        },
+      });
+      expect(toolResultText(wrongIP)).toContain(
+        "ip_address applies only to list, move, and get_reserved_ip",
+      );
+    } finally {
+      await close();
+    }
+  });
+
+  test("lists and retrieves reserved ISP IPs with pagination filters", async () => {
+    const calls: unknown[] = [];
+    const { client, close } = await connectTestMcp(registerProxyTools, {
+      proxyIPs: {
+        list: async (params: unknown) => {
+          calls.push(["list", params]);
+          return {
+            getPaginatedItems: () => [
+              { ip_address: "203.0.113.10", country: "GB", status: "active" },
+            ],
+            has_more: false,
+            next_offset: null,
+          };
+        },
+        retrieve: async (ipAddress: string) => {
+          calls.push(["get", ipAddress]);
+          return {
+            ip_address: ipAddress,
+            country: "GB",
+            status: "active",
+            proxy_count: 1,
+            proxies: [{ id: "prx_1" }],
+          };
+        },
+      },
+    });
+    try {
+      const listed = await client.callTool({
+        name: "manage_proxies",
+        arguments: {
+          action: "list_reserved_ips",
+          ip_country: "GB",
+          status: "active",
+          limit: 5,
+          offset: 0,
+        },
+      });
+      expect(toolResultJSON(listed).items).toHaveLength(1);
+
+      const got = await client.callTool({
+        name: "manage_proxies",
+        arguments: {
+          action: "get_reserved_ip",
+          ip_address: "203.0.113.10",
+        },
+      });
+      expect(toolResultJSON(got)).toMatchObject({
+        ip_address: "203.0.113.10",
+        proxy_count: 1,
+      });
+      expect(calls).toEqual([
+        ["list", { country: "GB", status: "active", limit: 5, offset: 0 }],
+        ["get", "203.0.113.10"],
       ]);
     } finally {
       await close();

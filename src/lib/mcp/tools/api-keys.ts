@@ -24,7 +24,7 @@ export function registerAPIKeyCapabilities(
     "manage_api_keys",
     {
       description:
-        'manage KERNEL api keys. use "create" to create an org-wide, project-scoped, or policy-scoped key, "list" to discover masked keys, "get" to retrieve one masked key, "update" to rename a key, "rotate" to issue a replacement with an optional grace period, or "delete" to revoke a key. list and get include last_used_at, an approximate timestamp accurate within about 20 minutes; it is null when the key has not authenticated a request since last-use tracking began. create and rotate return the new plaintext key once; handle it as a secret and never repeat it in chat.',
+        'manage KERNEL api keys. use "create" to create an org-wide, project-scoped, or policy-scoped key, "list" to discover masked keys, "get" to retrieve one masked key, "update" to rename a key, "rotate" to issue a replacement with an optional grace period, or "delete" to revoke a key. list and get include last_used_at, an approximate timestamp accurate within about 20 minutes; it is null when the key has not authenticated a request since last-use tracking began. create and rotate return the new plaintext key once; handle it as a secret and never repeat it in chat. delete asynchronously ends browser sessions attributed to the revoked key and discards unsaved profile changes; if cleanup cannot be registered, deletion is not committed. rotate with expire_in_days=0 does the same immediate browser cleanup for the old key; grace-period or natural expiry does not end existing browsers, and an immediate rotation is not committed if cleanup cannot be registered.',
       inputSchema: z.object({
         action: z
           .enum(["create", "list", "get", "update", "rotate", "delete"])
@@ -115,8 +115,10 @@ export function registerAPIKeyCapabilities(
           .describe("(list) key status filter. defaults to active.")
           .optional(),
         sort_by: z
-          .enum(["created_at", "name", "expires_at"])
-          .describe("(list) field to sort by.")
+          .enum(["created_at", "name", "expires_at", "last_used_at"])
+          .describe(
+            "(list) field to sort by. when sorting by expires_at or last_used_at, keys missing that value sort last in either direction.",
+          )
           .optional(),
         sort_direction: z
           .enum(["asc", "desc"])

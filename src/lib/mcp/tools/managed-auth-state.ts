@@ -320,6 +320,9 @@ export async function waitForAuthConnection(
             return { state: "failed", connection: latest };
           }
         }
+        if (latest.flow_step === "AWAITING_HUMAN_INTERVENTION") {
+          return { state: "pending", connection: latest };
+        }
       }
     } catch (error) {
       if (error instanceof AuthLoginStartError) throw error;

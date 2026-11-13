@@ -53,9 +53,10 @@ describe("manage_apps invocation contract", () => {
 
     try {
       const tools = await client.listTools();
-      expect(
-        tools.tools.some((tool) => tool.name === "manage_apps"),
-      ).toBeTrue();
+      const appTool = tools.tools.find((tool) => tool.name === "manage_apps");
+      expect(appTool).toBeDefined();
+      expect(appTool?.description).toContain("leased_at");
+      expect(appTool?.description).toContain("replay metadata");
 
       const result = await client.callTool({
         name: "manage_apps",
@@ -110,6 +111,7 @@ describe("manage_apps invocation contract", () => {
                 cdp_ws_url: "wss://api.onkernel.com/cdp",
                 webdriver_ws_url: "wss://api.onkernel.com/webdriver",
                 created_at: "2026-08-08T00:00:00Z",
+                leased_at: "2026-08-08T00:05:00Z",
                 headless: false,
                 stealth: true,
                 memory: "2GiB",
@@ -120,6 +122,12 @@ describe("manage_apps invocation contract", () => {
                   timezone_source: "default",
                   locale: "en-US",
                   locale_source: "override",
+                },
+                replay: {
+                  replay_id: "rpl_123",
+                  replay_view_url: "https://replay.example/view/rpl_123",
+                  started_at: "2026-08-08T00:00:01Z",
+                  finished_at: null,
                 },
               },
             ],
@@ -149,11 +157,18 @@ describe("manage_apps invocation contract", () => {
             session_id: "brr_123",
             browser_live_view_url:
               "https://api.onkernel.com/browser/live/signed",
+            leased_at: "2026-08-08T00:05:00Z",
             location: {
               timezone: "America/New_York",
               timezone_source: "default",
               locale: "en-US",
               locale_source: "override",
+            },
+            replay: {
+              replay_id: "rpl_123",
+              replay_view_url: "https://replay.example/view/rpl_123",
+              started_at: "2026-08-08T00:00:01Z",
+              finished_at: null,
             },
           },
         ],

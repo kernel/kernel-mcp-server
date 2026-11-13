@@ -45,7 +45,7 @@ export function registerAuthConnectionTools(server: McpServer) {
     "manage_auth_connections",
     {
       description:
-        'manage reusable authenticated profiles for third-party websites. before a browser task that needs a user account, call "list" with the exact domain_filter and inspect every page. if one relevant connection is authenticated, create the browser with its profile_name. if multiple relevant accounts exist, ask the user which one to use. if authentication is needed and open_auth_login is available, prefer that secure app so credentials and mfa never enter chat: a direct user request to log in is already consent; if login is only discovered incidentally, ask first. for a new app login, choose a concise stable profile name derived from the service unless the user specified one. the programmatic actions remain available for every client: "create" or "update" a connection, "login" to start a hosted flow, "submit" fields or choices, "get" status, inspect the "timeline", "delete", or "wait" for completion. prefer interaction_id with canonical field_values or selected_choice_id when the connection returns fields or choices. after authentication, resume the original task with manage_browsers using the verified profile_name.',
+        'manage reusable authenticated profiles for third-party websites. before a browser task that needs a user account, call "list" with the exact domain_filter and inspect every page. if one relevant connection is authenticated, create the browser with its profile_name. if multiple relevant accounts exist, ask the user which one to use. if authentication is needed and open_auth_login is available, prefer that secure app so credentials and mfa never enter chat: a direct user request to log in is already consent; if login is only discovered incidentally, ask first. for a new app login, choose a concise stable profile name derived from the service unless the user specified one. the programmatic actions remain available for every client: "create" or "update" a connection, "login" to start a hosted flow, "submit" fields or choices, "get" status, inspect the "timeline", "delete", or "wait" for completion. prefer interaction_id with canonical field_values or selected_choice_id when the connection returns fields or choices. when hitl is enabled and get returns flow_step=AWAITING_HUMAN_INTERVENTION, have the person complete the challenge in live_view_url, then submit the returned human_intervention choice. reauthentication never pauses for this step. after authentication, resume the original task with manage_browsers using the verified profile_name.',
       inputSchema: objectRejectingRemovedParams("manage_auth_connections")({
         ...projectSelectionInputSchema(),
         action: z
@@ -128,6 +128,12 @@ export function registerAuthConnectionTools(server: McpServer) {
             "(create, update) enable scheduled authentication health checks. defaults to true on create.",
           )
           .optional(),
+        hitl: z
+          .boolean()
+          .describe(
+            "(create, update) when a login is blocked by a captcha the browser cannot complete, pause for a person instead of failing. the flow moves to AWAITING_HUMAN_INTERVENTION; have the person complete the challenge in live_view_url, then submit the returned human_intervention choice. reauthentication never pauses. defaults to false on create.",
+          )
+          .optional(),
         auto_reauth: z
           .boolean()
           .describe(
@@ -154,6 +160,22 @@ export function registerAuthConnectionTools(server: McpServer) {
           .optional(),
         browser: z
           .object({
+            location: z
+              .object({
+                locale: z
+                  .string()
+                  .min(1)
+                  .nullable()
+                  .describe(
+                    "canonical bcp 47 locale for login, reauthentication, and health-check browsers. omit on create to use the region default, omit on update to preserve it, or use null on update to clear it.",
+                  )
+                  .optional(),
+              })
+              .strict()
+              .describe(
+                "(create, update only) browser locale for future managed-auth sessions. not supported as a per-login override.",
+              )
+              .optional(),
             proxy: proxyConfigSchema()
               .describe(
                 "proxy egress, set with exactly one of id, name, or mode. id or name selects that proxy; mode direct forces direct egress; mode default restores the default egress. omitted on create derives the default; omitted on update or login preserves or inherits the connection setting.",
@@ -178,7 +200,7 @@ export function registerAuthConnectionTools(server: McpServer) {
               .optional(),
           })
           .describe(
-            "(create, update) set the connection defaults for future managed-auth browser sessions. (login) override them for this login only. cannot be combined with the deprecated browser_* or proxy_mode fields.",
+            "set managed-auth browser settings. create/update set connection defaults; login can override proxy, region, site-compatibility, and telemetry for that login only, but not location. cannot be combined with the deprecated browser_* or proxy_mode fields.",
           )
           .optional(),
         browser_telemetry: managedAuthBrowserTelemetrySchema
@@ -230,7 +252,7 @@ export function registerAuthConnectionTools(server: McpServer) {
           .string()
           .min(1)
           .describe(
-            "(submit) canonical choice id. use with interaction_id when `get` returns choices.",
+            "(submit) canonical choice id. use with interaction_id when `get` returns choices. submit a human_intervention choice only after the person finishes the challenge in live_view_url.",
           )
           .optional(),
         fields: z
@@ -386,6 +408,21 @@ export function registerAuthConnectionTools(server: McpServer) {
         if (params.skill_mode !== undefined && params.action !== "login") {
           return errorResponse("error: skill_mode is login-only.");
         }
+        if (params.browser?.location !== undefined) {
+          if (params.action === "login") {
+            return errorResponse(
+              "error: browser.location is not supported for login; set it on the connection with create or update.",
+            );
+          }
+          if (
+            params.action === "create" &&
+            params.browser.location.locale === null
+          ) {
+            return errorResponse(
+              "error: browser.location.locale=null is update-only; omit it on create to use the region default.",
+            );
+          }
+        }
 
         switch (params.action) {
           case "create": {
@@ -411,6 +448,7 @@ export function registerAuthConnectionTools(server: McpServer) {
               ...(params.health_checks !== undefined && {
                 health_checks: params.health_checks,
               }),
+              ...(params.hitl !== undefined && { hitl: params.hitl }),
               ...(params.auto_reauth !== undefined && {
                 auto_reauth: params.auto_reauth,
               }),
@@ -456,6 +494,7 @@ export function registerAuthConnectionTools(server: McpServer) {
               params.login_url !== undefined ||
               params.health_check_interval !== undefined ||
               params.health_checks !== undefined ||
+              params.hitl !== undefined ||
               params.auto_reauth !== undefined ||
               params.save_credentials !== undefined ||
               params.record_session !== undefined ||
@@ -479,6 +518,7 @@ export function registerAuthConnectionTools(server: McpServer) {
               ...(params.health_checks !== undefined && {
                 health_checks: params.health_checks,
               }),
+              ...(params.hitl !== undefined && { hitl: params.hitl }),
               ...(params.auto_reauth !== undefined && {
                 auto_reauth: params.auto_reauth,
               }),
@@ -656,7 +696,10 @@ export function registerAuthConnectionTools(server: McpServer) {
                   ? "authentication is verified. continue the pending task now, using this profile_name when creating the browser."
                   : result.state === "failed"
                     ? "authentication did not complete. explain the safe error and ask whether to retry the login flow."
-                    : "authentication is still pending. immediately call manage_auth_connections with action=wait and the same selector again. do not ask the user to report completion.",
+                    : result.connection?.flow_step ===
+                        "AWAITING_HUMAN_INTERVENTION"
+                      ? "authentication needs a person to complete a challenge. call manage_auth_connections with action=get and this connection id to read live_view_url, interaction_id, and choices. have the person finish the challenge in the live view, then submit the human_intervention choice with interaction_id and selected_choice_id. do not keep waiting before that submission."
+                      : "authentication is still pending. immediately call manage_auth_connections with action=wait and the same selector again. do not ask the user to report completion.",
             });
           }
         }
