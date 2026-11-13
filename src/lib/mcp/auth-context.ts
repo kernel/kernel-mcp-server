@@ -279,10 +279,11 @@ export function connectionAnalyticsFromContext(
     authContext.authentication.method === "jwt" &&
     authContext.authentication.source === "oauth" &&
     authContext.principal.type === "user";
-  if (!isApiKey && !isOAuth) return null;
+  // The route decides the credential type; the context must agree with it.
+  if (!(credentialType === "api_key" ? isApiKey : isOAuth)) return null;
 
   return {
-    authMethod: isApiKey ? "api_key" : credentialType,
+    authMethod: credentialType,
     credentialScope: authContext.authorization.credential_scope.project_id
       ? "project"
       : "organization",

@@ -38,7 +38,7 @@ const captureMcpConnectionScopeFailure =
 const instrumentMcpAnalytics = analytics.instrumentMcpAnalytics;
 const isMcpAnalyticsEnabled = analytics.isMcpAnalyticsEnabled;
 let analyticsClient: unknown = null;
-let observeConnections = false;
+let forceAnalyticsEnabled = false;
 mock.module("@/lib/mcp/analytics", () => ({
   ...analytics,
   instrumentMcpAnalytics: (
@@ -48,7 +48,7 @@ mock.module("@/lib/mcp/analytics", () => ({
       server,
       (analyticsClient as typeof client) ?? client,
     ),
-  isMcpAnalyticsEnabled: () => observeConnections || isMcpAnalyticsEnabled(),
+  isMcpAnalyticsEnabled: () => forceAnalyticsEnabled || isMcpAnalyticsEnabled(),
   captureMcpConnectionScopeFailure: (
     ...args: Parameters<typeof analytics.captureMcpConnectionScopeFailure>
   ) => {
@@ -200,7 +200,7 @@ describe("native OAuth credentials", () => {
   afterEach(() => {
     appMarkers = null;
     analyticsClient = null;
-    observeConnections = false;
+    forceAnalyticsEnabled = false;
     fetchSpy.mockRestore();
     for (const key of envKeys)
       if (savedEnv[key] === undefined) delete process.env[key];
@@ -292,7 +292,7 @@ describe("native OAuth credentials", () => {
   });
 
   test("report connections as native OAuth in analytics", async () => {
-    observeConnections = true;
+    forceAnalyticsEnabled = true;
     const events: { event: string; properties: Record<string, unknown> }[] = [];
     analyticsClient = {
       capture: (event: {
@@ -378,11 +378,14 @@ describe("native OAuth credentials", () => {
     });
     expect(captured).toEqual([
       {
+        stage: "authentication",
         outcome: "rejected",
         credentialType: "native_oauth",
-        upstreamStatusCode: 401,
+        upstreamStatusCode: undefined,
+        responseStatusCode: 401,
       },
     ]);
+    captured.length = 0;
 
     fetchSpy.mockImplementation((async (input: string | URL | Request) =>
       String(input).endsWith("/token")
@@ -397,6 +400,15 @@ describe("native OAuth credentials", () => {
       "This credential's scope does not cover this request",
     );
     expect(kernelTokens).toEqual([]);
+    expect(captured).toEqual([
+      {
+        stage: "authentication",
+        outcome: "rejected",
+        credentialType: "native_oauth",
+        upstreamStatusCode: undefined,
+        responseStatusCode: 403,
+      },
+    ]);
   });
 
   test("issuer outages are retryable 503s", async () => {
@@ -409,9 +421,11 @@ describe("native OAuth credentials", () => {
     expect(kernelTokens).toEqual([]);
     expect(captured).toEqual([
       {
+        stage: "authentication",
         outcome: "unavailable",
         credentialType: "native_oauth",
         upstreamStatusCode: undefined,
+        responseStatusCode: 503,
       },
     ]);
   });
@@ -583,9 +597,11 @@ describe("connection scope failures through the handler", () => {
     });
     expect(captured).toEqual([
       {
+        stage: "scope",
         outcome: "rejected",
         credentialType: "api_key",
         upstreamStatusCode: 401,
+        responseStatusCode: 401,
       },
     ]);
   });
@@ -600,6 +616,7 @@ describe("connection scope failures through the handler", () => {
     expect(response.status).toBe(403);
     expect((await response.json()).error).toBe("insufficient_scope");
     expect(captured[0]?.upstreamStatusCode).toBe(403);
+    expect(captured[0]?.responseStatusCode).toBe(403);
   });
 
   test("answers an upstream outage with a retryable 503", async () => {
@@ -613,9 +630,11 @@ describe("connection scope failures through the handler", () => {
     expect(response.headers.get("Retry-After")).toBe("1");
     expect(captured).toEqual([
       {
+        stage: "scope",
         outcome: "unavailable",
         credentialType: "api_key",
         upstreamStatusCode: 502,
+        responseStatusCode: 503,
       },
     ]);
   });
@@ -628,9 +647,9 @@ describe("connection scope failures through the handler", () => {
     );
     expect(captured).toEqual([
       {
+        stage: "scope",
         outcome: "invalid",
         credentialType: "api_key",
-        upstreamStatusCode: undefined,
       },
     ]);
   });

@@ -17,6 +17,7 @@ import {
   flushMcpAnalytics,
   instrumentMcpAnalytics,
   isMcpAnalyticsEnabled,
+  type McpConnectionScopeFailureAnalytics,
 } from "@/lib/mcp/analytics";
 import {
   connectionAnalyticsFromContext,
@@ -191,6 +192,33 @@ type AuthInfoExtra = {
   clerkToken: string | null;
 };
 
+// A refused connection never reaches the instrumented server, so this
+// capture is its only analytics record.
+function refuseConnection(
+  req: Request,
+  stage: McpConnectionScopeFailureAnalytics["stage"],
+  credentialType: McpCredentialType,
+  failure: McpConnectionContextFailure,
+): Response {
+  if (failure.status === "invalid") {
+    captureMcpConnectionScopeFailure({
+      stage,
+      outcome: failure.status,
+      credentialType,
+    });
+    throw new Error("Unable to resolve Kernel connection scope");
+  }
+  const response = connectionScopeFailureResponse(req, failure);
+  captureMcpConnectionScopeFailure({
+    stage,
+    outcome: failure.status,
+    credentialType,
+    upstreamStatusCode: stage === "scope" ? failure.statusCode : undefined,
+    responseStatusCode: response.status,
+  });
+  return response;
+}
+
 async function handleMcpRequestWithIdentity({
   req,
   token,
@@ -226,18 +254,8 @@ async function handleMcpRequestWithIdentity({
       cacheIdentity: connectionContextCacheIdentity,
     }),
   ]);
-  if (connection.status !== "ok") {
-    captureMcpConnectionScopeFailure({
-      outcome: connection.status,
-      credentialType,
-      upstreamStatusCode:
-        connection.status === "invalid" ? undefined : connection.statusCode,
-    });
-    if (connection.status === "invalid") {
-      throw new Error("Unable to resolve Kernel connection scope");
-    }
-    return connectionScopeFailureResponse(req, connection);
-  }
+  if (connection.status !== "ok")
+    return refuseConnection(req, "scope", credentialType, connection);
   // Resolve entitlements only for tool discovery and gated tool calls.
   const entitlements = (await requestRequiresMcpEntitlements(req))
     ? await resolveMcpEntitlements({
@@ -294,15 +312,8 @@ async function handleAuthenticatedRequest(
 
   if (isNativeOAuthCredential(token)) {
     const native = await authenticateNativeOAuth(token);
-    if (native.status !== "ok") {
-      captureMcpConnectionScopeFailure({
-        outcome: native.status,
-        credentialType: "native_oauth",
-        upstreamStatusCode:
-          native.status === "rejected" ? native.statusCode : undefined,
-      });
-      return connectionScopeFailureResponse(req, native);
-    }
+    if (native.status !== "ok")
+      return refuseConnection(req, "authentication", "native_oauth", native);
     const { credential } = native;
     // The exchanged token rotates; identity is the verified subject, and the
     // request ends when the exchanged token does, streams included.

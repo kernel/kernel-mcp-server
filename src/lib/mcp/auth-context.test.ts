@@ -159,6 +159,33 @@ describe("resolveMcpConnectionContext", () => {
     );
   });
 
+  test("reports nothing when the credential type and auth context disagree", async () => {
+    const oauthContext = expectResolved(
+      await resolveMcpConnectionContext({
+        token: "jwt.secret.value",
+        dependencies: dependencies(
+          response({
+            method: "jwt",
+            source: "oauth",
+            principalType: "user",
+            principalId: "user_kernel_123",
+          }),
+        ),
+      }),
+    );
+    const apiKeyContext = expectResolved(
+      await resolveMcpConnectionContext({
+        token: "sk_secret",
+        dependencies: dependencies(response({})),
+      }),
+    );
+
+    expect(connectionAnalyticsFromContext(oauthContext, "api_key")).toBeNull();
+    expect(
+      connectionAnalyticsFromContext(apiKeyContext, "native_oauth"),
+    ).toBeNull();
+  });
+
   test("normalizes KERNEL_PROJECT as a server pin", () => {
     const scope = connectionScopeFromAuthContext(
       response({ effectiveProjectId: "project_pinned" }),
