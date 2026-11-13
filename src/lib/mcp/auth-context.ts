@@ -45,8 +45,12 @@ export type McpConnectionContext = {
   scope: ConnectionScope;
 };
 
+// Which credential path authenticated the connection. "oauth" is a Clerk-issued
+// token; "native_oauth" one issued by the Kernel authorization server.
+export type McpCredentialType = "api_key" | "oauth" | "native_oauth";
+
 export type McpConnectionAnalyticsContext = {
-  authMethod: "api_key" | "oauth";
+  authMethod: McpCredentialType;
   credentialScope: "organization" | "project";
   connectionScope: "organization" | "project";
   scopeSource: "credential" | "server_pin";
@@ -263,10 +267,10 @@ export function expireMcpConnectionContextCacheForTests() {
   for (const entry of connectionContextCache.values()) entry.expiresAt = 0;
 }
 
-export function connectionAnalyticsFromContext({
-  authContext,
-  scope,
-}: McpConnectionContext): McpConnectionAnalyticsContext | null {
+export function connectionAnalyticsFromContext(
+  { authContext, scope }: McpConnectionContext,
+  credentialType: McpCredentialType,
+): McpConnectionAnalyticsContext | null {
   const isApiKey =
     authContext.authentication.method === "api_key" &&
     authContext.authentication.source === "api_key" &&
@@ -275,10 +279,11 @@ export function connectionAnalyticsFromContext({
     authContext.authentication.method === "jwt" &&
     authContext.authentication.source === "oauth" &&
     authContext.principal.type === "user";
-  if (!isApiKey && !isOAuth) return null;
+  // The route decides the credential type; the context must agree with it.
+  if (!(credentialType === "api_key" ? isApiKey : isOAuth)) return null;
 
   return {
-    authMethod: isApiKey ? "api_key" : "oauth",
+    authMethod: credentialType,
     credentialScope: authContext.authorization.credential_scope.project_id
       ? "project"
       : "organization",

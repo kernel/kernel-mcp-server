@@ -97,7 +97,7 @@ describe("resolveMcpConnectionContext", () => {
       projectId: null,
       source: "credential",
     });
-    const analytics = connectionAnalyticsFromContext(context);
+    const analytics = connectionAnalyticsFromContext(context, "api_key");
     expect(analytics).toEqual({
       authMethod: "api_key",
       credentialScope: "organization",
@@ -128,9 +128,9 @@ describe("resolveMcpConnectionContext", () => {
       projectId: "project_123",
       source: "credential",
     });
-    expect(connectionAnalyticsFromContext(context)?.credentialScope).toBe(
-      "project",
-    );
+    expect(
+      connectionAnalyticsFromContext(context, "api_key")?.credentialScope,
+    ).toBe("project");
   });
 
   test("uses the canonical OAuth user principal for analytics", async () => {
@@ -148,10 +148,42 @@ describe("resolveMcpConnectionContext", () => {
       }),
     );
 
-    expect(connectionAnalyticsFromContext(context)?.authMethod).toBe("oauth");
-    expect(connectionAnalyticsFromContext(context)?.userId).toBe(
+    expect(connectionAnalyticsFromContext(context, "oauth")?.authMethod).toBe(
+      "oauth",
+    );
+    expect(
+      connectionAnalyticsFromContext(context, "native_oauth")?.authMethod,
+    ).toBe("native_oauth");
+    expect(connectionAnalyticsFromContext(context, "oauth")?.userId).toBe(
       "user_kernel_123",
     );
+  });
+
+  test("reports nothing when the credential type and auth context disagree", async () => {
+    const oauthContext = expectResolved(
+      await resolveMcpConnectionContext({
+        token: "jwt.secret.value",
+        dependencies: dependencies(
+          response({
+            method: "jwt",
+            source: "oauth",
+            principalType: "user",
+            principalId: "user_kernel_123",
+          }),
+        ),
+      }),
+    );
+    const apiKeyContext = expectResolved(
+      await resolveMcpConnectionContext({
+        token: "sk_secret",
+        dependencies: dependencies(response({})),
+      }),
+    );
+
+    expect(connectionAnalyticsFromContext(oauthContext, "api_key")).toBeNull();
+    expect(
+      connectionAnalyticsFromContext(apiKeyContext, "native_oauth"),
+    ).toBeNull();
   });
 
   test("normalizes KERNEL_PROJECT as a server pin", () => {

@@ -20,6 +20,7 @@ import { PostHog } from "posthog-node";
 import type {
   McpConnectionAnalyticsContext,
   McpConnectionContext,
+  McpCredentialType,
 } from "@/lib/mcp/auth-context";
 import { MCP_INTENT_ARGUMENT_DESCRIPTION } from "@/lib/mcp/analytics-context";
 import {
@@ -83,13 +84,20 @@ export type OAuthTokenExchangeAnalytics = {
 
 export const OAUTH_TOKEN_EXCHANGE_EVENT = "oauth_token_exchange";
 
-// Scope resolution runs before a request reaches the instrumented server, so a
-// connection that never gets a scope emits no $mcp_* event. This is the only
-// record of it.
+// A connection the server refuses never reaches the instrumented server, so it
+// emits no $mcp_* event and this is its only record. Recorded for native OAuth
+// authentication failures and for connection-scope refusals from the Kernel
+// API. Clerk token verification failures are not recorded.
 export type McpConnectionScopeFailureAnalytics = {
+  // "authentication": this server refused a native token (local verification
+  // or token exchange). "scope": the Kernel API refused the connection.
+  stage: "authentication" | "scope";
   outcome: "rejected" | "unavailable" | "invalid";
-  credentialType: "api_key" | "oauth";
+  credentialType: McpCredentialType;
+  // Status the Kernel API returned from /auth/context. Only set for "scope".
   upstreamStatusCode?: number;
+  // Status this server answered with. Unset for "invalid", which throws.
+  responseStatusCode?: number;
 };
 
 export const MCP_CONNECTION_SCOPE_FAILURE_EVENT =
@@ -799,9 +807,11 @@ export function captureMcpConnectionScopeFailure(
   if (!client) return;
 
   const properties = {
+    connection_failure_stage: failure.stage,
     connection_scope_outcome: failure.outcome,
     connection_credential_type: failure.credentialType,
     upstream_status_code: failure.upstreamStatusCode,
+    response_status_code: failure.responseStatusCode,
   };
 
   try {
