@@ -261,6 +261,7 @@ const maxRawTelemetryEvents = 5;
 // the page envelope while ensuring one response cannot carry multiple max-size records.
 const maxRawTelemetryResponseBytes = 1024 * 1024;
 const saveProfileTimeoutMs = 190_000;
+const controlLiveViewDefaultTtlSeconds = 86_400;
 const saveProfileNote =
   "the browser restarted: reconnect cdp and playwright clients, start a new webdriver session, and expect restored tabs to have reloaded without in-memory page state. caches, service worker storage, and google drive indexeddb data are omitted from the saved profile but remain in the running browser. a successful save restarts timeout_seconds. browsers already using this profile keep their in-memory state; pools with refresh_on_profile_update replace idle sessions from the new snapshot, and other browsers use it when they next load the profile. among overlapping save_profile calls to the same profile, the most recently started wins even if an earlier call finishes later; an automatic session-end save with save_profile_changes is ordered against them by finish time.";
 const saveProfileErrorNote =
@@ -884,7 +885,7 @@ export function registerBrowserCapabilities(
             .min(1)
             .max(31_536_000)
             .describe(
-              "(create_live_view) seconds until the url expires. omit to keep it valid until the browser is deleted or, for a pooled browser, released.",
+              "(create_live_view) seconds until the url expires. when omitted, a control url expires after 86400 seconds (24 hours), and a read url stays valid until the browser is deleted or, for a pooled browser, released.",
             )
             .optional(),
         },
@@ -1219,15 +1220,20 @@ export function registerBrowserCapabilities(
                 "error: session_id is required for create_live_view action.",
               );
             }
+            // A control url cannot be revoked, so it expires by default.
+            const defaultedTtl =
+              params.live_view_scope === "control" &&
+              params.live_view_ttl_seconds === undefined;
+            const ttlSeconds = defaultedTtl
+              ? controlLiveViewDefaultTtlSeconds
+              : params.live_view_ttl_seconds;
             const liveView = await client.browsers.liveView.create(
               params.session_id,
               {
                 ...(params.live_view_scope !== undefined && {
                   scope: params.live_view_scope,
                 }),
-                ...(params.live_view_ttl_seconds !== undefined && {
-                  ttl_seconds: params.live_view_ttl_seconds,
-                }),
+                ...(ttlSeconds !== undefined && { ttl_seconds: ttlSeconds }),
               },
               // Each call mints a capability URL that cannot be revoked. Never
               // retry a request whose response may have been lost.
@@ -1235,7 +1241,11 @@ export function registerBrowserCapabilities(
             );
             return jsonResponse({
               ...liveView,
-              note: "this bearer url opens only the live view, not cdp, webdriver, or other browser endpoints. it cannot be revoked before expiry; share it only with the intended viewer.",
+              note:
+                "this bearer url opens only the live view, not cdp, webdriver, or other browser endpoints. it cannot be revoked before expiry; share it only with the intended viewer." +
+                (defaultedTtl
+                  ? " control urls expire after 24 hours by default; pass live_view_ttl_seconds to choose another lifetime."
+                  : ""),
             });
           }
           case "save_profile": {

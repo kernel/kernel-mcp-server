@@ -1487,6 +1487,73 @@ describe("manage_browsers replay creation and live view", () => {
     }
   });
 
+  test("defaults control live views to a 24-hour ttl", async () => {
+    const calls: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          liveView: {
+            create: async (_id: string, body: unknown) => {
+              calls.push(body);
+              return { url: "https://live.example/view", scope: "control" };
+            },
+          },
+        },
+      },
+    );
+    try {
+      const defaulted = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action: "create_live_view",
+            session_id: "brr_123",
+            live_view_scope: "control",
+          },
+        }),
+      );
+      const explicit = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: {
+            action: "create_live_view",
+            session_id: "brr_123",
+            live_view_scope: "control",
+            live_view_ttl_seconds: 31_536_000,
+          },
+        }),
+      );
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "create_live_view",
+          session_id: "brr_123",
+          live_view_scope: "read",
+        },
+      });
+
+      expect(calls).toEqual([
+        { scope: "control", ttl_seconds: 86_400 },
+        { scope: "control", ttl_seconds: 31_536_000 },
+        { scope: "read" },
+      ]);
+      expect(defaulted.note).toContain("expire after 24 hours by default");
+      expect(explicit.note).not.toContain("24 hours");
+
+      const { tools } = await client.listTools();
+      const ttl = tools.find(({ name }) => name === "manage_browsers")
+        ?.inputSchema.properties?.live_view_ttl_seconds as {
+        description?: string;
+      };
+      expect(ttl.description).toContain(
+        "a control url expires after 86400 seconds (24 hours)",
+      );
+    } finally {
+      await close();
+    }
+  });
+
   test("omits live-view defaults and validates action-only fields", async () => {
     const calls: unknown[][] = [];
     const { client, close } = await connectTestMcp(
