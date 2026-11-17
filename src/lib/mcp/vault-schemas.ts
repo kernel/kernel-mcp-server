@@ -39,7 +39,7 @@ export const vaultWaitSchema = z
   .min(0)
   .max(60)
   .describe(
-    "(get, events) one bounded server-side observation, in seconds (0-60). not supported for invoke, list, or delete. pending state is returned as-is; this never retries an operation or guarantees readiness. for credentials, wait observes required-value readiness, not edits to an already-ready item; compare version using get without wait.",
+    "(get, events) one bounded server-side observation, in seconds (0-60). not supported for invoke, list, or delete; events ignores wait when include_deleted resolves a deleted item or vault. pending state is returned as-is; this never retries an operation or guarantees readiness. for credentials, wait observes required-value readiness, not edits to an already-ready item; compare version using get without wait.",
   )
   .optional();
 

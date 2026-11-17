@@ -130,6 +130,11 @@ describe("1Password vault credentials", () => {
       expect(items).toContain("1pw_create_access_request");
       expect(items).toContain("1pw_access_request_status");
       expect(items).toContain("recover a failed account link");
+      expect(items).toContain("1pw_disconnect");
+      expect(items).toContain("provider_revocation_pending");
+      expect(descriptionOf("manage_vaults")).toContain(
+        "provider_revocation_pending",
+      );
       expect(items).toContain(
         "1pw_create_access_request and 1pw_access_request_status need no browser",
       );
@@ -143,6 +148,9 @@ describe("1Password vault credentials", () => {
         ?.inputSchema.properties?.inputs as { description?: string };
       expect(itemInputs.description).toContain(
         "page origin does not identify exactly one",
+      );
+      expect(itemInputs.description).toContain(
+        "1pw_disconnect takes no inputs",
       );
       expect(credentials).toContain(
         "no approval link exists before that request",
@@ -454,6 +462,92 @@ describe("1Password vault credentials", () => {
       });
     } finally {
       await fixture.close();
+    }
+  });
+
+  test("disconnects a 1Password account without deleting its item", async () => {
+    const disconnectable = {
+      ...account,
+      state: { provider: "1password", status: "connected" },
+      action: undefined,
+      available_operations: [
+        {
+          type: "1pw_disconnect",
+          description: "End the connection and keep the item.",
+        },
+      ],
+    };
+    const revoking = {
+      ...disconnectable,
+      state: {
+        provider: "1password",
+        status: "revoking",
+        status_reason: "Waiting for provider confirmation",
+      },
+      available_operations: [],
+    };
+    const fixture = await connectVaultTest([
+      Response.json(disconnectable),
+      Response.json(disconnectable),
+      Response.json(revoking),
+    ]);
+    try {
+      const read = toolResultJSON(
+        await fixture.call("manage_vault_items", {
+          vault: target.vault,
+          key: account.key,
+          action: "get",
+        }),
+      );
+      expect(read.hints.invocation).toContainEqual({
+        tool: "manage_vault_items",
+        arguments: {
+          project: "proj_test",
+          vault: target.vault,
+          key: account.key,
+          action: "invoke",
+          operation: "1pw_disconnect",
+        },
+        requires_user_approval: true,
+      });
+      expect(read.guidance.join(" ")).toContain(
+        "stop fills and end this vault's connection while keeping the item",
+      );
+
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_items", {
+          vault: target.vault,
+          key: account.key,
+          action: "invoke",
+          operation: "1pw_disconnect",
+        }),
+      );
+      expect(fixture.requests[2].body).toEqual({ type: "1pw_disconnect" });
+      expect(result.item.state.status).toBe("revoking");
+      expect(result.guidance.join(" ")).toContain(
+        "revoking means the item is unusable",
+      );
+      expect(JSON.stringify(result)).not.toContain("deleted_or_not_found");
+    } finally {
+      await fixture.close();
+    }
+
+    const invalid = await connectVaultTest([]);
+    try {
+      const result = await invalid.call("manage_vault_items", {
+        vault: target.vault,
+        key: account.key,
+        action: "invoke",
+        operation: "1pw_disconnect",
+        inputs: { unexpected: true },
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain(
+        "1pw_disconnect does not accept inputs",
+      );
+      expect(invalid.requests).toHaveLength(0);
+    } finally {
+      await invalid.close();
     }
   });
 

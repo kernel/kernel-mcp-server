@@ -3,6 +3,7 @@ import {
   isDisplaySafeVaultURL,
   projectVaultOutput,
   vaultItemFields,
+  vaultItemResponse,
 } from "@/lib/mcp/vault-responses";
 import { toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
 import {
@@ -44,7 +45,8 @@ const unsafeItem = {
     authorization: {
       id: "auth_1",
       status: "approved",
-      charged_kind: "captured",
+      amount_authority: "processor",
+      charged_kind: "none",
       charged_amount_cents: 1234,
       charged_currency: "usd",
       amount_verified: false,
@@ -78,9 +80,10 @@ describe("vault public responses", () => {
         aliases,
         credential_type: "link_pay_token",
         authorization: {
+          amount_authority: "processor",
           amount_verified: false,
           replay_delivered: false,
-          charged_kind: "captured",
+          charged_kind: "none",
           charged_amount_cents: 1234,
         },
       },
@@ -103,6 +106,26 @@ describe("vault public responses", () => {
     expect(projected).not.toHaveProperty("expires_at");
     expect(projected).not.toHaveProperty("action.capture_token");
     expect(projected).not.toHaveProperty("state.authorization.approval_url");
+  });
+
+  test("explains agentcard amount authority and tokenization evidence", () => {
+    const result = vaultItemResponse(
+      {
+        ...unsafeItem,
+        spec: { provider: "agentcard", wallet: "wallet-1" },
+        state: {
+          ...unsafeItem.state,
+          provider: "agentcard",
+        },
+      },
+      { project: "project_1", vault: "checkout", key: "order-1" },
+    );
+    const guidance = toolResultJSON(result).guidance.join(" ");
+    expect(guidance).toContain("amount_authority processor");
+    expect(guidance).toContain("charged_kind none means tokenization");
+    expect(guidance).toContain(
+      "agent and display_only do not prove what was charged",
+    );
   });
 
   test("does not pass opaque objects through scalar leaves", () => {

@@ -6,6 +6,7 @@ import { KERNEL_MCP_TOOL_NAMES } from "@/lib/mcp/tool-names";
 
 const NON_AUTH_TOOLSETS = [
   "profiles",
+  "tasks",
   "docs",
   "browsers",
   "projects",
@@ -104,6 +105,7 @@ const EXPECTED_ANNOTATIONS: Record<string, [boolean, boolean, boolean]> = {
   browser_repl: [false, true, true],
   webmcp: [false, true, true],
   manage_replays: [false, true, false],
+  manage_tasks: [false, false, false],
   manage_auth_connections: [false, true, true],
   open_auth_login: [false, false, true],
   begin_auth_login: [false, false, true],
@@ -280,6 +282,7 @@ describe("MCP toolset allowlist", () => {
 describe("project selection registration", () => {
   const projectScopedTools = [
     "manage_profiles",
+    "manage_tasks",
     "manage_config_registry",
     "manage_browsers",
     "manage_browser_pools",

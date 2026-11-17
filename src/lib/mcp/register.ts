@@ -27,6 +27,7 @@ import { registerProxyTools } from "@/lib/mcp/tools/proxies";
 import { registerReplayTools } from "@/lib/mcp/tools/replays";
 import { registerSearchTools } from "@/lib/mcp/tools/search";
 import { registerShellTool } from "@/lib/mcp/tools/shell";
+import { registerTaskCapabilities } from "@/lib/mcp/tools/tasks";
 import { registerWebMcpTool } from "@/lib/mcp/tools/webmcp";
 import { registerVaultCapabilities } from "@/lib/mcp/tools/vaults";
 type McpToolOptions = McpDependencies;
@@ -44,6 +45,7 @@ function registerManagedAuthCapabilities(server: McpServer) {
 
 const mcpToolRegistrations = [
   ["profiles", registerProfileCapabilities],
+  ["tasks", registerTaskCapabilities],
   ["docs", registerDocsTools],
   ["browsers", registerBrowserCapabilities],
   ["projects", registerProjectCapabilities],

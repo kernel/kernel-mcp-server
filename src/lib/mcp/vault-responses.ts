@@ -391,21 +391,28 @@ const advertisedOperationsSchema = z.object({
   ),
 });
 
-export function vaultObservationHints(target: VaultItemTarget, after?: string) {
+export function vaultObservationHints(
+  target: VaultItemTarget,
+  after?: string,
+  includeDeleted = false,
+) {
+  const eventHint = {
+    tool: "manage_vault_items",
+    arguments: {
+      ...target,
+      action: "events",
+      wait: 0,
+      ...(after !== undefined && { after }),
+      ...(includeDeleted && { include_deleted: true }),
+    },
+  };
+  if (includeDeleted) return [eventHint];
   return [
     {
       tool: "manage_vault_items",
       arguments: { ...target, action: "get", wait: 0 },
     },
-    {
-      tool: "manage_vault_items",
-      arguments: {
-        ...target,
-        action: "events",
-        wait: 0,
-        ...(after !== undefined && { after }),
-      },
-    },
+    eventHint,
   ];
 }
 
@@ -614,6 +621,7 @@ export function vaultItemResponse(
                   ? [
                       "agentcard aliases remain supported for explicitly chosen egress-substitution integrations: use only returned state.aliases in a browser created with this vault attached, respecting returned permitted domains. checkout hold, approval, and replay remain supported; observe checkout authorization and approval urls. never fall back to aliases after an uncertain fill or preparation.",
                       "for checkout preparation, supply the api-required checkout context and deliver the returned approval url and keep the approval page open. poll the item until ready_to_submit, then submit native pay before state.preparation.expires_at. readiness lasts at most 30 seconds; polling does not extend it. preparations are single-use even after failure or expiry. preparation consumed means claimed, not payment success.",
+                      "interpret state.authorization evidence conservatively. amount_authority processor comes from a processor request or payment, agent from the item declaration, page from the checkout total, none means no amount was named, and display_only is a recovered authorization without a provider read; agent and display_only do not prove what was charged. amount_verified is absent when there was no charge to compare. charged_kind none means tokenization for a later merchant charge; an absent charged_kind, charged amount, or currency means the provider observed none, so use item events and the merchant order record.",
                     ]
                   : []),
                 ...(purchaseProvider === "link" ||
@@ -802,7 +810,7 @@ const webmcpInvokeItemGuidance =
 
 const onePasswordAccountGuidance = [
   "this credential_account connects the end user's 1password account to this vault only; it is not a fillable credential, and another end user's vault needs its own connection. if an action url is present, present it only to the account owner, outside the agent-controlled browser, and let them complete 1password consent. never ask for 1password passwords, secret keys, oauth codes, or tokens in chat.",
-  'observe with manage_vault_items action: "get" until state.status is connected, then create 1password credentials with manage_vault_credentials, provider: "1password", and account set to this item\'s key. declined or reconnect_required need the user to connect again with connect_account on the same key. 1pw_recover is advertised only when KERNEL can recover a failed account link: after explicit user approval, call manage_vault_items with action: "invoke" and operation: "1pw_recover", present the returned link to the account owner the same way, and once recovery completes connect again on the same key. never delete the account to recover.',
+  'observe with manage_vault_items action: "get" until state.status is connected, then create 1password credentials with manage_vault_credentials, provider: "1password", and account set to this item\'s key. declined or reconnect_required need the user to connect again with connect_account on the same key. 1pw_recover is advertised only when KERNEL can recover a failed account link: after explicit user approval, call manage_vault_items with action: "invoke" and operation: "1pw_recover", present the returned link to the account owner the same way, and once recovery completes connect again on the same key. never delete the account to recover. when 1pw_disconnect is advertised, invoke it only after explicit user approval to stop fills and end this vault\'s connection while keeping the item so it can be linked again. when no other vault uses the person\'s connection, KERNEL revokes it at 1password; revoking means the item is unusable while KERNEL waits for confirmation and keeps retrying, so observe state instead of retrying automatically.',
 ];
 
 const onePasswordCredentialGuidance = [
