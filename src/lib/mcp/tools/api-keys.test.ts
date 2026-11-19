@@ -38,16 +38,32 @@ describe("manage_api_keys SDK parity", () => {
         ),
       });
       expect(tool?.description).toContain(
-        "delete asynchronously ends browser sessions",
+        "delete/immediate rotation end attributed browsers asynchronously",
       );
-      expect(tool?.description).toContain(
-        "grace-period or natural expiry does not end existing browsers",
-      );
+      expect(tool?.description).toContain("grace or natural expiry does not");
       expect(tool?.description).toContain("service-account key");
-      expect(tool?.description).toContain("source_ip conditions");
-      expect(tool?.inputSchema.properties).toHaveProperty(
-        "service_account_id",
-      );
+      expect(tool?.description).toContain("source_ip");
+      expect(tool?.inputSchema.properties?.service_account_id).toMatchObject({
+        description: expect.stringContaining("created_by"),
+      });
+      expect(tool?.inputSchema.properties?.expire_in_days).toMatchObject({
+        description: expect.stringContaining(
+          "retains its service-account principal and policy",
+        ),
+      });
+      expect(tool?.inputSchema.properties?.status).toMatchObject({
+        enum: ["active", "expired", "deleted", "all"],
+        description: expect.stringContaining(
+          "active excludes deleted and expired",
+        ),
+      });
+      expect(tool?.inputSchema.properties?.principal_type).toMatchObject({
+        enum: ["user", "service_account"],
+      });
+      expect(tool?.inputSchema.properties).toHaveProperty("created_by");
+      expect(tool?.inputSchema.properties?.project_id).toMatchObject({
+        description: expect.stringContaining('"org"'),
+      });
       expect(tool?.inputSchema.properties?.policy).toMatchObject({
         description: expect.stringContaining("fully replaces"),
       });
@@ -227,7 +243,11 @@ describe("manage_api_keys SDK parity", () => {
           include_deleted: false,
           name: "staging",
           query: "stage",
-          status: "all",
+          service_account_id: "svc_1",
+          principal_type: "service_account",
+          created_by: "user_1",
+          project_id: "org",
+          status: "expired",
           sort_by: "last_used_at",
           sort_direction: "asc",
           limit: 5,
@@ -244,7 +264,11 @@ describe("manage_api_keys SDK parity", () => {
           include_deleted: false,
           name: "staging",
           query: "stage",
-          status: "all",
+          service_account_id: "svc_1",
+          principal_type: "service_account",
+          created_by: "user_1",
+          project_id: "org",
+          status: "expired",
           sort_by: "last_used_at",
           sort_direction: "asc",
           limit: 5,
@@ -395,6 +419,16 @@ describe("manage_api_keys SDK parity", () => {
       "update",
       { name: "renamed", days_to_expire: 30 },
       "error: days_to_expire applies only to create and rotate.",
+    ],
+    [
+      "get",
+      { principal_type: "user" },
+      "error: principal_type and created_by are list-only.",
+    ],
+    [
+      "list",
+      { project_id: null },
+      'error: project_id cannot be null for list; use "org" for org-wide keys.',
     ],
   ])(
     "rejects %s parameters the SDK would drop: %p",

@@ -11,6 +11,7 @@ const NON_AUTH_TOOLSETS = [
   "browsers",
   "projects",
   "api_keys",
+  "workload_identity",
   "browser_pools",
   "config_registry",
   "browser_curl",
@@ -91,6 +92,7 @@ const EXPECTED_ANNOTATIONS: Record<string, [boolean, boolean, boolean]> = {
   manage_browsers: [false, true, false],
   manage_projects: [false, true, false],
   manage_api_keys: [false, true, false],
+  manage_workload_identity: [false, true, true],
   manage_browser_pools: [false, true, false],
   manage_browser_files: [false, true, false],
   manage_config_registry: [false, true, true],
@@ -332,5 +334,12 @@ describe("project selection registration", () => {
       expect(registration.schemas.get(name)).not.toHaveProperty("project");
       expect(registration.schemas.get(name)).not.toHaveProperty("project_id");
     }
+
+    expect(
+      registration.schemas.get("manage_workload_identity"),
+    ).not.toHaveProperty("project");
+    expect(registration.schemas.get("manage_workload_identity")).toHaveProperty(
+      "project_id",
+    );
   });
 });
