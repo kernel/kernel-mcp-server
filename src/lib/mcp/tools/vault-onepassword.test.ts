@@ -425,10 +425,12 @@ describe("1Password vault credentials", () => {
       expect(guidance).toContain(
         "if the connect link leaves the account pending",
       );
-      expect(guidance).toContain("whichever flow completes first");
+      expect(guidance).toContain(
+        "whichever link the owner approves or declines first",
+      );
       expect(guidance).toContain("both links expire with item.expires_at");
       expect(guidance).toContain(
-        "connect_account again on the same key for fresh links",
+        "after that, use manage_vault_credentials connect_account again on the same key for fresh links",
       );
       expect(guidance).toContain("recovery actions omit connect_url");
       expect(guidance).toContain("only to the account owner");
