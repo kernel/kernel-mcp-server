@@ -9,6 +9,8 @@ const approvalLink = `onepassword://grant-brokered-access?access_request_referen
 const approvalInstructions = `Present ${approvalLink} for ${requestID}.`;
 const oauthURL =
   "https://1password.example/oauth/authorize?client_id=kernel&state=opaque";
+const connectURL =
+  "https://start.1password.example/connect/kernel?state=opaque";
 
 const account = {
   id: "vi_account",
@@ -19,7 +21,11 @@ const account = {
     authorization: { method: "oauth", client: { type: "kernel_managed" } },
   },
   state: { provider: "1password", status: "pending_authorization" },
-  action: { name: "1password_oauth", url: oauthURL },
+  action: {
+    name: "1password_oauth",
+    url: oauthURL,
+    connect_url: connectURL,
+  },
   available_operations: [],
   available_expansions: [],
   created_at: "2026-09-25T00:00:00Z",
@@ -404,12 +410,29 @@ describe("1Password vault credentials", () => {
       expect(result.item.action).toEqual({
         name: "1password_oauth",
         url: oauthURL,
+        connect_url: connectURL,
       });
       expect(result.item.state.status).toBe("pending_authorization");
-      expect(result.guidance.join(" ")).toContain("only to the account owner");
-      expect(result.guidance.join(" ")).toContain(
-        "account set to this item's key",
+      const guidance = result.guidance.join(" ");
+      expect(guidance).toContain("action.connect_url");
+      expect(guidance).toContain("their own device");
+      expect(guidance).toContain("on ios or android");
+      expect(guidance).toContain("web flow and can support signup");
+      expect(guidance).toContain("also offer action.url");
+      expect(guidance).toContain(
+        "someone already using 1password on a computer",
       );
+      expect(guidance).toContain(
+        "if the connect link leaves the account pending",
+      );
+      expect(guidance).toContain("whichever flow completes first");
+      expect(guidance).toContain("both links expire with item.expires_at");
+      expect(guidance).toContain(
+        "connect_account again on the same key for fresh links",
+      );
+      expect(guidance).toContain("recovery actions omit connect_url");
+      expect(guidance).toContain("only to the account owner");
+      expect(guidance).toContain("account set to this item's key");
       expect(result.guidance.join(" ")).toContain(
         "another end user's vault needs its own connection",
       );
@@ -433,7 +456,10 @@ describe("1Password vault credentials", () => {
     const fixture = await connectVaultTest([
       Response.json(recoverable),
       Response.json(recoverable),
-      Response.json({ ...recoverable, action: account.action }),
+      Response.json({
+        ...recoverable,
+        action: { name: "1password_oauth", url: oauthURL },
+      }),
     ]);
     try {
       const read = toolResultJSON(
@@ -460,6 +486,7 @@ describe("1Password vault credentials", () => {
         name: "1password_oauth",
         url: oauthURL,
       });
+      expect(result.item.action).not.toHaveProperty("connect_url");
     } finally {
       await fixture.close();
     }

@@ -213,14 +213,42 @@ describe("vault public responses", () => {
 
   test("keeps full safe action URLs and operation descriptions", () => {
     const url = "https://provider.example/approve?request=" + "x".repeat(300);
+    const connectURL = "https://provider.example/connect?state=opaque";
     expect(
       projectVaultOutput(
-        { ...item, action: { name: "spend_approval", url } },
+        {
+          ...item,
+          action: {
+            name: "1password_oauth",
+            url,
+            connect_url: connectURL,
+          },
+        },
         vaultItemFields,
       ),
     ).toMatchObject({
-      action: { url },
+      action: { url, connect_url: connectURL },
       available_operations: item.available_operations,
+    });
+  });
+
+  test("filters unsafe 1Password connect links", () => {
+    expect(
+      projectVaultOutput(
+        {
+          action: {
+            name: "1password_oauth",
+            url: "https://provider.example/oauth?state=opaque",
+            connect_url: "https://provider.example/connect?code=hidden",
+          },
+        },
+        vaultItemFields,
+      ),
+    ).toEqual({
+      action: {
+        name: "1password_oauth",
+        url: "https://provider.example/oauth?state=opaque",
+      },
     });
   });
 
