@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
+  browserCaptchaSolverSchema,
   browserExtensionsSchema,
   buildBrowserCreateConfig,
   buildBrowserSharedConfig,
@@ -53,6 +54,7 @@ type PoolConfigParams = Omit<
   size?: number;
   name?: string;
   headless?: boolean;
+  captcha_solver?: BrowserPoolCreateParams["captcha_solver"];
   stealth?: boolean;
   timeout_seconds?: number;
   proxy_id?: string;
@@ -127,6 +129,9 @@ function buildPoolCreateParams(
       size: params.size,
       ...(params.name && { name: params.name }),
       ...(params.headless !== undefined && { headless: params.headless }),
+      ...(params.captcha_solver !== undefined && {
+        captcha_solver: params.captcha_solver,
+      }),
       ...(params.stealth !== undefined && { stealth: params.stealth }),
       ...(params.timeout_seconds !== undefined && {
         timeout_seconds: params.timeout_seconds,
@@ -211,6 +216,9 @@ function buildPoolUpdateParams(
       ...(params.size !== undefined && { size: params.size }),
       ...(params.name && { name: params.name }),
       ...(params.headless !== undefined && { headless: params.headless }),
+      ...(params.captcha_solver !== undefined && {
+        captcha_solver: params.captcha_solver,
+      }),
       ...(params.stealth !== undefined && { stealth: params.stealth }),
       ...(params.timeout_seconds !== undefined && {
         timeout_seconds: params.timeout_seconds,
@@ -260,6 +268,7 @@ function summarizeBrowserPool(pool: BrowserPool) {
     },
     config: {
       headless: config.headless,
+      captcha_solver: config.captcha_solver,
       stealth: config.stealth,
       kiosk_mode: config.kiosk_mode,
       memory: config.memory,
@@ -294,7 +303,9 @@ function summarizeAcquiredBrowser(browser: BrowserPoolAcquireResponse) {
     browser_live_view_url: browser.browser_live_view_url,
     base_url: browser.base_url,
     headless: browser.headless,
+    captcha_solver: browser.captcha_solver,
     stealth: browser.stealth,
+    fingerprint: browser.fingerprint,
     timeout_seconds: browser.timeout_seconds,
     memory: browser.memory,
     location: browser.location,
@@ -397,10 +408,15 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           .boolean()
           .describe("(create, update) headless mode for pool browsers.")
           .optional(),
+        captcha_solver: browserCaptchaSolverSchema
+          .describe(
+            "(create, update) automatic captcha handling for authorized site access. disabled by default and does not select egress; without proxy_id, direct egress remains unless the deprecated compatibility setting is true.",
+          )
+          .optional(),
         stealth: z
           .boolean()
           .describe(
-            "(create, update) apply site-compatibility settings to pool browsers.",
+            "deprecated site-compatibility setting. use only on sites and accounts the user is authorized to access. true enables automatic captcha handling and, without proxy_id, KERNEL's compatibility proxy; on update it moves direct egress there. incompatible with captcha_solver.enabled=false.",
           )
           .optional(),
         timeout_seconds: browserPoolTimeoutSchema
@@ -604,6 +620,14 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
       );
 
       try {
+        if (
+          params.stealth === true &&
+          params.captcha_solver?.enabled === false
+        ) {
+          return errorResponse(
+            "error: stealth=true cannot be combined with captcha_solver.enabled=false.",
+          );
+        }
         switch (params.action) {
           case "create": {
             const createParams = buildPoolCreateParams(params);

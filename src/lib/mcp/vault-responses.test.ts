@@ -23,6 +23,21 @@ const unsafeItem = {
   secret: "hidden-top-level",
   spec: {
     ...item.spec,
+    line_items: [
+      {
+        title: "Free sample",
+        quantity: 1,
+        unit_amount: 0,
+        amount: 0,
+        brand: "Example",
+        options: "Size S",
+        image_url: "https://images.example/sample.png",
+      },
+    ],
+    subtotal: 0,
+    shipping: 0,
+    tax: 0,
+    discount: 0,
     metadata: { order: "hidden-metadata" },
     authorization: {
       method: "oauth",
@@ -76,6 +91,13 @@ describe("vault public responses", () => {
     const projected = projectVaultOutput(unsafeItem, vaultItemFields);
     expect(JSON.stringify(projected)).not.toContain("hidden");
     expect(projected).toMatchObject({
+      spec: {
+        line_items: [{ unit_amount: 0, amount: 0 }],
+        subtotal: 0,
+        shipping: 0,
+        tax: 0,
+        discount: 0,
+      },
       state: {
         aliases,
         credential_type: "link_pay_token",

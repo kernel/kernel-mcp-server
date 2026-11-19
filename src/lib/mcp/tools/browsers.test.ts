@@ -362,7 +362,7 @@ describe("manage_browsers telemetry", () => {
     }
   });
 
-  test("preserves the payment-window proxy error and documents its meaning", async () => {
+  test("preserves the payment reveal proxy error and documents its meaning", async () => {
     const queries: unknown[] = [];
     const proxyError = {
       seq: 44,
@@ -371,7 +371,7 @@ describe("manage_browsers telemetry", () => {
         category: "network",
         type: "browser_proxy_error",
         source: { service: "proxy" },
-        data: { code: "payment_window_expired" },
+        data: { code: "payment_reveal_refused" },
       },
     };
     const { client, close } = await connectTestMcp(
@@ -392,7 +392,7 @@ describe("manage_browsers telemetry", () => {
         }),
       );
       expect(result.items[0].data).toEqual({
-        code: "payment_window_expired",
+        code: "payment_reveal_refused",
       });
 
       const { tools } = await client.listTools();
@@ -401,6 +401,7 @@ describe("manage_browsers telemetry", () => {
         | { description?: string }
         | undefined;
       expect(categories?.description).toContain("payment_window_expired");
+      expect(categories?.description).toContain("payment_reveal_refused");
       expect(categories?.description).toContain("raw_code");
     } finally {
       await close();
@@ -1218,8 +1219,65 @@ describe("manage_browsers location, memory, and conditional allowlists", () => {
   });
 });
 
-describe("manage_browsers fingerprint overrides", () => {
-  test("advertises and forwards the closed-beta macos override with required false values", async () => {
+describe("manage_browsers captcha solving and fingerprint overrides", () => {
+  test("forwards captcha_solver false and rejects update-time or conflicting settings", async () => {
+    const creates: unknown[] = [];
+    let updates = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (params: unknown) => {
+            creates.push(params);
+            return { session_id: "brr_123" };
+          },
+          update: async () => {
+            updates++;
+            return { session_id: "brr_123" };
+          },
+        },
+      },
+    );
+
+    try {
+      const created = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "create",
+          captcha_solver: { enabled: false },
+        },
+      });
+      expect(created.isError).toBeFalsy();
+      expect(creates).toEqual([{ captcha_solver: { enabled: false } }]);
+
+      for (const arguments_ of [
+        {
+          action: "create",
+          stealth: true,
+          captcha_solver: { enabled: false },
+        },
+        {
+          action: "update",
+          session_id: "brr_123",
+          captcha_solver: { enabled: true },
+        },
+      ]) {
+        expect(
+          (
+            await client.callTool({
+              name: "manage_browsers",
+              arguments: arguments_,
+            })
+          ).isError,
+        ).toBe(true);
+      }
+      expect(updates).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+
+  test("advertises linux and macos fingerprints and forwards required false values", async () => {
     const creates: unknown[] = [];
     const { client, close } = await connectTestMcp(
       registerBrowserCapabilities,
@@ -1239,10 +1297,12 @@ describe("manage_browsers fingerprint overrides", () => {
       const fingerprint = browser?.inputSchema.properties?.fingerprint as
         | {
             description?: string;
-            properties?: { os?: { const?: string; description?: string } };
+            properties?: { os?: { enum?: string[]; description?: string } };
           }
         | undefined;
-      expect(fingerprint?.properties?.os).toMatchObject({ const: "macos" });
+      expect(fingerprint?.properties?.os).toMatchObject({
+        enum: ["linux", "macos"],
+      });
       expect(fingerprint?.description).toContain("closed beta");
       expect(fingerprint?.description).toContain(
         "headless and gpu may be omitted",
@@ -1253,8 +1313,8 @@ describe("manage_browsers fingerprint overrides", () => {
         name: "manage_browsers",
         arguments: {
           action: "create",
-          fingerprint: { os: "macos" },
-          stealth: true,
+          fingerprint: { os: "linux" },
+          captcha_solver: { enabled: true },
           headless: false,
           gpu: false,
         },
@@ -1266,18 +1326,21 @@ describe("manage_browsers fingerprint overrides", () => {
         arguments: {
           action: "create",
           fingerprint: { os: "macos" },
-          stealth: true,
+          captcha_solver: { enabled: true },
         },
       });
       expect(defaults.isError).toBeFalsy();
       expect(creates).toEqual([
         {
-          fingerprint: { os: "macos" },
-          stealth: true,
+          fingerprint: { os: "linux" },
+          captcha_solver: { enabled: true },
           headless: false,
           gpu: false,
         },
-        { fingerprint: { os: "macos" }, stealth: true },
+        {
+          fingerprint: { os: "macos" },
+          captcha_solver: { enabled: true },
+        },
       ]);
     } finally {
       await close();
@@ -1307,7 +1370,7 @@ describe("manage_browsers fingerprint overrides", () => {
         {
           action: "create",
           fingerprint: { os: "macos" },
-          stealth: true,
+          captcha_solver: { enabled: true },
           headless: false,
           gpu: false,
           memory: "8GiB",
@@ -1315,15 +1378,20 @@ describe("manage_browsers fingerprint overrides", () => {
         {
           action: "create",
           fingerprint: { os: "macos" },
-          stealth: true,
+          captcha_solver: { enabled: true },
           headless: true,
           gpu: false,
         },
         {
           action: "create",
           fingerprint: { os: "macos" },
-          stealth: true,
+          captcha_solver: { enabled: true },
           gpu: true,
+        },
+        {
+          action: "create",
+          fingerprint: { os: "macos" },
+          captcha_solver: { enabled: false },
         },
         {
           action: "create",

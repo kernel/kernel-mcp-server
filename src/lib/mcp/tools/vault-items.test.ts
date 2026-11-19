@@ -1135,7 +1135,6 @@ describe("Link checkout authorize and fill", () => {
   );
 
   test.each([
-    { inputs: { browser_id: checkout.browser_id }, message: "(browser_id)" },
     { inputs: { page_url: checkout.page_url }, message: "(browser_id)" },
     {
       inputs: { ...checkout, page_url: "http://shop.example/checkout" },
@@ -1160,7 +1159,7 @@ describe("Link checkout authorize and fill", () => {
         expect(result.isError).toBe(true);
         expect(text).toContain(message);
         expect(text).toContain(
-          "expected {} or { browser_id, page_url }: pass browser_id and the https page_url of the final checkout page together, or neither.",
+          "expected {} or { browser_id } or { browser_id, page_url }",
         );
         expect(fixture.requests).toHaveLength(0);
       } finally {
@@ -1168,6 +1167,26 @@ describe("Link checkout authorize and fill", () => {
       }
     },
   );
+
+  test("rejects browser_id alone after identifying a Link item", async () => {
+    const fixture = await connectVaultTest([Response.json(item)]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        ...target,
+        action: "invoke",
+        operation: "authorize",
+        inputs: { browser_id: checkout.browser_id },
+      });
+      const text = (result.content as Array<{ text: string }>)[0].text;
+      expect(result.isError).toBe(true);
+      expect(text).toContain(
+        "link cards and payment requests require browser_id and page_url together",
+      );
+      expect(fixture.requests.map(({ method }) => method)).toEqual(["GET"]);
+    } finally {
+      await fixture.close();
+    }
+  });
 
   test.each([
     {

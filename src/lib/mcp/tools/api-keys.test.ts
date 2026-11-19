@@ -43,6 +43,14 @@ describe("manage_api_keys SDK parity", () => {
       expect(tool?.description).toContain(
         "grace-period or natural expiry does not end existing browsers",
       );
+      expect(tool?.description).toContain("service-account key");
+      expect(tool?.description).toContain("source_ip conditions");
+      expect(tool?.inputSchema.properties).toHaveProperty(
+        "service_account_id",
+      );
+      expect(tool?.inputSchema.properties?.policy).toMatchObject({
+        description: expect.stringContaining("fully replaces"),
+      });
     } finally {
       await close();
     }
@@ -105,6 +113,94 @@ describe("manage_api_keys SDK parity", () => {
         policy,
       },
     ]);
+  });
+
+  test("creates a service-account key with a source-ip condition", async () => {
+    const calls: unknown[] = [];
+    const policy = {
+      statements: [
+        {
+          action: "browsers:use",
+          resource: "projects/proj_1/browsers/*",
+          condition: {
+            key: "source_ip",
+            operator: "in",
+            values: ["203.0.113.0/24"],
+          },
+        },
+      ],
+    };
+
+    const [result] = await callAPIKeys(
+      {
+        create: async (params: unknown) => {
+          calls.push(params);
+          return {
+            id: "key_service",
+            key: "secret-once",
+            created_by: null,
+            principal: { type: "service_account", id: "svc_1" },
+            service_account_id: "svc_1",
+          };
+        },
+      },
+      [
+        {
+          action: "create",
+          name: "worker",
+          project_id: "proj_1",
+          service_account_id: "svc_1",
+          policy,
+        },
+      ],
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(calls).toEqual([
+      {
+        name: "worker",
+        project_id: "proj_1",
+        service_account_id: "svc_1",
+        policy,
+      },
+    ]);
+    expect(
+      JSON.parse((result.content[0] as { text: string }).text),
+    ).toMatchObject({
+      created_by: null,
+      principal: { type: "service_account", id: "svc_1" },
+      service_account_id: "svc_1",
+    });
+  });
+
+  test("replaces an API key policy without requiring a rename", async () => {
+    const calls: unknown[] = [];
+    const policy = {
+      statements: [
+        {
+          action: "vaults:read",
+          resource: "projects/proj_1/vaults/*",
+          condition: {
+            key: "source_ip",
+            operator: "in",
+            values: ["2001:db8::/32"],
+          },
+        },
+      ],
+    };
+
+    const [result] = await callAPIKeys(
+      {
+        update: async (...args: unknown[]) => {
+          calls.push(args);
+          return { id: "key_1", name: "unchanged", policy };
+        },
+      },
+      [{ action: "update", api_key_id: "key_1", policy }],
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(calls).toEqual([["key_1", { policy }]]);
   });
 
   test("forwards list/get filters including false and zero offsets", async () => {
@@ -228,19 +324,48 @@ describe("manage_api_keys SDK parity", () => {
 
   test("rejects invalid input before the SDK", async () => {
     let calls = 0;
-    const create = async () => {
+    const record = async () => {
       calls++;
     };
 
-    const results = await callAPIKeys({ create }, [
-      {
-        action: "create",
-        name: "conflict",
-        days_to_expire: 30,
-        expires_at: "2030-01-01T00:00:00Z",
-      },
-      { action: "create", name: "bad-expiry", expires_at: 30 },
-    ]);
+    const results = await callAPIKeys(
+      { create: record, update: record },
+      [
+        {
+          action: "create",
+          name: "conflict",
+          days_to_expire: 30,
+          expires_at: "2030-01-01T00:00:00Z",
+        },
+        { action: "create", name: "bad-expiry", expires_at: 30 },
+        {
+          action: "create",
+          name: "missing-service-scope",
+          service_account_id: "svc_1",
+        },
+        { action: "update", api_key_id: "key_1" },
+        {
+          action: "create",
+          name: "too-many-networks",
+          policy: {
+            statements: [
+              {
+                action: "browsers:use",
+                resource: "*",
+                condition: {
+                  key: "source_ip",
+                  operator: "in",
+                  values: Array.from(
+                    { length: 17 },
+                    (_, index) => `203.0.${index}.0/24`,
+                  ),
+                },
+              },
+            ],
+          },
+        },
+      ],
+    );
 
     for (const result of results) expect(result.isError).toBe(true);
     expect(calls).toBe(0);
@@ -250,7 +375,7 @@ describe("manage_api_keys SDK parity", () => {
     [
       "rotate",
       { expires_at: "2027-01-01T00:00:00Z" },
-      "error: expires_at and policy are create-only.",
+      "error: expires_at is create-only.",
     ],
     [
       "rotate",
@@ -259,17 +384,7 @@ describe("manage_api_keys SDK parity", () => {
           statements: [{ action: "browsers:use", resource: "*" }],
         },
       },
-      "error: expires_at and policy are create-only.",
-    ],
-    [
-      "update",
-      {
-        name: "renamed",
-        policy: {
-          statements: [{ action: "browsers:use", resource: "*" }],
-        },
-      },
-      "error: expires_at and policy are create-only.",
+      "error: policy applies only to create and update.",
     ],
     [
       "create",

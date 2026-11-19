@@ -893,6 +893,70 @@ describe("kernel-managed payment tools", () => {
     },
   );
 
+  test("generic authorize routes a KERNEL card through browser_id", async () => {
+    const fixture = await connectVaultTest([
+      Response.json(card),
+      Response.json(card),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "invoke",
+        operation: "authorize",
+        vault: "checkout",
+        key: "order-1",
+        inputs: { browser_id: "browser-1" },
+      });
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[1].body).toEqual({
+        type: "authorize",
+        browser_id: "browser-1",
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    {
+      name: "KERNEL card page_url",
+      item: card,
+      inputs: {
+        browser_id: "browser-1",
+        page_url: "https://shop.example/pay",
+      },
+      message: "kernel cards accept browser_id but not page_url",
+    },
+    {
+      name: "VGS browser context",
+      item: { ...card, spec: { ...card.spec, provider: "vgs" } },
+      inputs: { browser_id: "browser-1" },
+      message: "vgs cards do not accept browser_id or page_url",
+    },
+    {
+      name: "Link partial checkout context",
+      item: { ...card, spec: { ...card.spec, provider: "link" } },
+      inputs: { browser_id: "browser-1" },
+      message:
+        "link cards and payment requests require browser_id and page_url together",
+    },
+  ])("generic authorize rejects $name", async (example) => {
+    const fixture = await connectVaultTest([Response.json(example.item)]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "invoke",
+        operation: "authorize",
+        vault: "checkout",
+        key: "order-1",
+        inputs: example.inputs,
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain(example.message);
+      expect(fixture.requests.map(({ method }) => method)).toEqual(["GET"]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test("generic authorize keeps validation rejection distinct from uncertainty", async () => {
     const fixture = await connectVaultTest([
       Response.json(card),

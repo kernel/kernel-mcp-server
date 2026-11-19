@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { browserCaptchaSolverSchema } from "@/lib/mcp/browser-config";
 import { createKernelClient } from "@/lib/mcp/kernel-client";
 import {
   AuthLoginStartError,
@@ -176,9 +177,14 @@ export function registerAuthConnectionTools(server: McpServer) {
                 "(create, update only) browser locale for future managed-auth sessions. not supported as a per-login override.",
               )
               .optional(),
+            captcha_solver: browserCaptchaSolverSchema
+              .describe(
+                "automatic captcha handling for authorized login flows. supplied alone, it disables the deprecated compatibility default. it does not select egress; proxy.mode=default selects KERNEL's compatibility proxy. false preserves direct egress or moves off that proxy. omit on update to keep or on login to inherit.",
+              )
+              .optional(),
             proxy: proxyConfigSchema()
               .describe(
-                "proxy egress, set with exactly one of id, name, or mode. id or name selects that proxy; mode direct forces direct egress; mode default restores the default egress. omitted on create derives the default; omitted on update or login preserves or inherits the connection setting.",
+                "egress with exactly one of id, name, or mode; selection does not change automatic captcha handling. direct forces direct egress; default uses KERNEL's compatibility proxy when handling is enabled, otherwise direct. omit on create to derive egress from the compatibility settings, or on update/login to preserve or inherit.",
               )
               .optional(),
             region: z
@@ -190,7 +196,7 @@ export function registerAuthConnectionTools(server: McpServer) {
             stealth: z
               .boolean()
               .describe(
-                "whether managed-auth browser sessions use site-compatibility settings. defaults to true on create; omitted on update or login preserves or inherits the connection setting.",
+                "deprecated site-compatibility setting for authorized login flows. combines automatic captcha handling with KERNEL's compatibility proxy unless proxy is set. defaults true on create only when neither compatibility option nor captcha_solver is supplied; incompatible with captcha_solver.enabled=false. omit on update/login to preserve or inherit.",
               )
               .optional(),
             telemetry: managedAuthBrowserTelemetrySchema
@@ -200,7 +206,7 @@ export function registerAuthConnectionTools(server: McpServer) {
               .optional(),
           })
           .describe(
-            "set managed-auth browser settings. create/update set connection defaults; login can override proxy, region, site-compatibility, and telemetry for that login only, but not location. cannot be combined with the deprecated browser_* or proxy_mode fields.",
+            "managed-auth browser settings. create/update set defaults; login may override captcha_solver, proxy, region, the deprecated compatibility option, and telemetry, but not location. cannot combine with deprecated browser_* or proxy_mode fields.",
           )
           .optional(),
         browser_telemetry: managedAuthBrowserTelemetrySchema
@@ -404,6 +410,14 @@ export function registerAuthConnectionTools(server: McpServer) {
             (params.browser.proxy &&
               proxyConfigError("browser.proxy", params.browser.proxy));
           if (error) return errorResponse(`error: ${error}`);
+          if (
+            params.browser.stealth === true &&
+            params.browser.captcha_solver?.enabled === false
+          ) {
+            return errorResponse(
+              "error: browser.stealth=true cannot be combined with browser.captcha_solver.enabled=false.",
+            );
+          }
         }
         if (params.skill_mode !== undefined && params.action !== "login") {
           return errorResponse("error: skill_mode is login-only.");

@@ -280,6 +280,10 @@ export function registerAppCapabilities(
               browsers: browsers.browsers.map((browser) => ({
                 session_id: browser.session_id,
                 browser_live_view_url: browser.browser_live_view_url,
+                captcha_solver: browser.captcha_solver,
+                ...(browser.fingerprint !== undefined && {
+                  fingerprint: browser.fingerprint,
+                }),
                 ...(browser.leased_at !== undefined && {
                   leased_at: browser.leased_at,
                 }),

@@ -47,6 +47,10 @@ describe("manage_auth_connections programmatic surface", () => {
     expect(
       schema?.browser.safeParse({ location: { locale: null } }).success,
     ).toBe(true);
+    expect(
+      schema?.browser.safeParse({ captcha_solver: { enabled: false } })
+        .success,
+    ).toBe(true);
     expect(schema?.query).toBeDefined();
     expect(schema?.timeline_type).toBeDefined();
     expect(schema?.record_session).toBeDefined();
@@ -269,6 +273,7 @@ describe("manage_auth_connections programmatic surface", () => {
     try {
       const extra = { authInfo: { token: "test-token" } };
       const browser = {
+        captcha_solver: { enabled: false },
         proxy: { name: "residential" },
         region: "eu-west",
         stealth: false,
@@ -384,7 +389,7 @@ describe("manage_auth_connections programmatic surface", () => {
     }
   });
 
-  test("rejects a nested browser object mixed with deprecated fields", async () => {
+  test("rejects a nested browser object mixed with deprecated or conflicting fields", async () => {
     const { handler } = captureHandler();
     const extra = { authInfo: { token: "test-token" } };
     const cases: Array<[Record<string, unknown>, string]> = [
@@ -404,6 +409,17 @@ describe("manage_auth_connections programmatic surface", () => {
           browser: { proxy: { id: "proxy_1", mode: "direct" } },
         },
         "browser.proxy requires exactly one of id, name, or mode",
+      ],
+      [
+        {
+          action: "login",
+          id: "conn_1",
+          browser: {
+            stealth: true,
+            captcha_solver: { enabled: false },
+          },
+        },
+        "browser.stealth=true cannot be combined",
       ],
     ];
     for (const [params, message] of cases) {

@@ -93,8 +93,8 @@ mock.module("@/lib/mcp-apps-request", () => ({
 const originalCreateKernelClient = defaultMcpDependencies.createKernelClient;
 const { GET, POST, connectionScopeFailureResponse } = await import("./route");
 
-function initializeRequest(token = "sk_opaque_key") {
-  return new Request("https://mcp.example.test/sse", {
+function initializeRequest(token = "sk_opaque_key", path = "/sse") {
+  return new Request(`https://mcp.example.test${path}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -511,6 +511,69 @@ describe("native OAuth credentials", () => {
       );
     });
   });
+});
+
+describe("workload-identity credentials", () => {
+  test(
+    "sends an API-audience JWT to the Kernel API instead of Clerk",
+    async () => {
+      const kernelTokens: string[] = [];
+      defaultMcpDependencies.createKernelClient = (token) => {
+        kernelTokens.push(token);
+        return {
+          auth: {
+            context: {
+              retrieve: async () => ({
+                authentication: {
+                  method: "jwt",
+                  source: "api_key",
+                  credential_id: null,
+                },
+                principal: { type: "service_account", id: "svc_123" },
+                organization: { id: "org_123" },
+                authorization: {
+                  credential_scope: { project_id: "proj_123" },
+                  effective_scope: { project_id: "proj_123" },
+                  effective_policy: {
+                    statements: [
+                      {
+                        action: "browsers:use",
+                        resource: "projects/proj_123/browsers/*",
+                      },
+                    ],
+                  },
+                },
+                workload_identity: {
+                  issuer_id: "wii_123",
+                  federation_rule_id: "wifr_123",
+                  external_subject_digest: "sha256:subject-digest",
+                },
+              }),
+            },
+          },
+        } as never;
+      };
+      const token = [
+        Buffer.from(JSON.stringify({ alg: "HS256", typ: "at+jwt" })).toString(
+          "base64url",
+        ),
+        Buffer.from(
+          JSON.stringify({
+            sub: "svc_123",
+            aud: ["https://api.onkernel.com"],
+          }),
+        ).toString("base64url"),
+        Buffer.from("not-a-real-signature").toString("base64url"),
+      ].join(".");
+
+      const response = await POST(initializeRequest(token, "/mcp"));
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain('"result"');
+      expect(kernelTokens).toEqual([token]);
+    },
+    10_000,
+  );
 });
 
 describe("unauthenticated discovery", () => {

@@ -240,6 +240,21 @@ describe("vault SDK request contracts", () => {
               provider,
               card_id: "vc_chosen",
               amount: Number.MAX_SAFE_INTEGER,
+              line_items: [
+                {
+                  title: "Free sample",
+                  quantity: 1,
+                  unit_amount: 0,
+                  amount: 0,
+                  brand: "Example",
+                  options: "Size S",
+                  image_url: "https://images.example/sample.png",
+                },
+              ],
+              subtotal: 0,
+              shipping: 0,
+              tax: 0,
+              discount: 0,
             };
       const replacement = provider === "link" ? linkSpec : agentcardSpec;
       const fixture = await connectVaultTest([
@@ -786,7 +801,6 @@ describe("Link checkout through manage_vault_cards", () => {
   });
 
   test.each<{ args: Record<string, unknown> }>([
-    { args: { action: "authorize", browser_id: checkout.browser_id } },
     { args: { action: "authorize", page_url: checkout.page_url } },
     {
       args: {
@@ -818,7 +832,51 @@ describe("Link checkout through manage_vault_cards", () => {
     }
   });
 
-  test("does not send checkout context for a KERNEL card", async () => {
+  test("rejects partial checkout context after identifying a Link card", async () => {
+    const fixture = await connectVaultTest([Response.json(item)]);
+    try {
+      const result = await fixture.call("manage_vault_cards", {
+        ...target,
+        action: "authorize",
+        browser_id: checkout.browser_id,
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain(
+        "link cards require browser_id and page_url together",
+      );
+      expect(fixture.requests.map(({ method }) => method)).toEqual(["GET"]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("routes a KERNEL card through browser_id without page_url", async () => {
+    const kernelCard = {
+      ...item,
+      spec: { provider: "kernel", wallet: "wallet-1" },
+      state: { provider: "kernel", status: "requested" },
+    };
+    const fixture = await connectVaultTest([
+      Response.json(kernelCard),
+      Response.json(kernelCard),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_cards", {
+        ...target,
+        action: "authorize",
+        browser_id: checkout.browser_id,
+      });
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[1].body).toEqual({
+        type: "authorize",
+        browser_id: checkout.browser_id,
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("rejects page_url for a KERNEL card", async () => {
     const fixture = await connectVaultTest([
       Response.json({
         ...item,
@@ -834,7 +892,7 @@ describe("Link checkout through manage_vault_cards", () => {
       });
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result)).toContain(
-        "kernel cards do not accept browser_id or page_url",
+        "kernel cards accept browser_id but not page_url",
       );
       expect(fixture.requests.map(({ method }) => method)).toEqual(["GET"]);
     } finally {

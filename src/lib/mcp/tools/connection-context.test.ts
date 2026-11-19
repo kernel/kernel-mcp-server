@@ -20,9 +20,27 @@ describe("get_connection_context", () => {
       authorization: {
         credential_scope: { project_id: null },
         effective_scope: { project_id: null },
+        effective_policy: {
+          statements: [
+            {
+              action: "browsers:use",
+              resource: "projects/proj_1/browsers/*",
+              condition: {
+                key: "source_ip",
+                operator: "in",
+                values: ["203.0.113.0/24"],
+              },
+            },
+          ],
+        },
       },
       organization: { id: "org_123" },
-      principal: { id: "key_123", type: "api_key" },
+      principal: { id: "svc_123", type: "service_account" },
+      workload_identity: {
+        external_subject_digest: "sha256:subject-digest",
+        federation_rule_id: "wfr_123",
+        issuer_id: "wii_123",
+      },
     };
     const server = new McpServer({ name: "test", version: "0.0.0" });
     registerConnectionContextTool(server);
@@ -61,6 +79,11 @@ describe("get_connection_context", () => {
       expect(tools.tools.map((tool) => tool.name)).toContain(
         "get_connection_context",
       );
+      const contextTool = tools.tools.find(
+        (tool) => tool.name === "get_connection_context",
+      );
+      expect(contextTool?.description).toContain("current effective policy");
+      expect(contextTool?.description).toContain("workload_identity");
 
       const result = (await client.callTool({
         name: "get_connection_context",

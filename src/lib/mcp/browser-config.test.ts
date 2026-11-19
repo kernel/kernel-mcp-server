@@ -2,9 +2,21 @@
 
 import { expect, test } from "bun:test";
 import {
+  browserCaptchaSolverSchema,
   buildBrowserCreateConfig,
   buildBrowserUpdateConfig,
 } from "@/lib/mcp/browser-config";
+
+test("captcha solver config preserves false and rejects extra fields", () => {
+  expect(browserCaptchaSolverSchema.parse({ enabled: false })).toEqual({
+    enabled: false,
+  });
+  expect(browserCaptchaSolverSchema.safeParse({}).success).toBe(false);
+  expect(
+    browserCaptchaSolverSchema.safeParse({ enabled: true, provider: "other" })
+      .success,
+  ).toBe(false);
+});
 
 test("browser create config rejects an empty start URL", () => {
   expect(buildBrowserCreateConfig({ start_url: "" })).toEqual({
