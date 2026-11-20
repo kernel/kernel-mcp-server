@@ -85,6 +85,12 @@ Prettier formats the following file types: `*.ts`, `*.js`, `*.json`, `*.md`
 
 Model-facing JSON (tool results and resources) is compact: use `jsonResponse` or `JSON.stringify(value)` without indentation.
 
+### Request parameter defaults
+
+Tools and resources keep the API's defaults for optional request parameters. When the API defaults a parameter off, usually because it adds work or latency (for example `include_cost` on browser get), the tool also defaults it off. Send the parameter only when the caller passes it, and describe the default as off in its `.describe()` text. Resources take no caller parameters, so they never request opt-in data such as cost.
+
+If existing code turns on a parameter the API defaults off, change it to match the API default and update its description and tests.
+
 ## Project Structure
 
 - `src/` - Source code directory
