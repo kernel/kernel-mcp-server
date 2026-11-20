@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
+import {
+  toolResultJSON,
+  toolResultText,
+} from "@/lib/mcp/mcp-test-fixtures";
 import { connectVaultTest, item } from "@/lib/mcp/tools/vaults.test-fixtures";
 
 const target = { vault: "checkout", key: "wallet-1" };
@@ -7,6 +10,8 @@ const enrollmentURL =
   "https://vault.kernel.example/card#capability=private-enrollment";
 const ingestURL =
   "https://cards.kernel.example/vault/card-ingest/private-capability";
+const balanceSetupURL =
+  "https://link.example/balance/setup?session=opaque-user-capability";
 
 const kernelWallet = {
   ...item,
@@ -25,6 +30,30 @@ const kernelWallet = {
     },
   ],
   available_expansions: [{ type: "payment_methods", description: "Cards." }],
+};
+
+const linkWallet = {
+  ...item,
+  key: "wallet-1",
+  type: "wallet",
+  spec: {
+    provider: "link",
+    authorization: {
+      method: "oauth",
+      client: { type: "kernel_managed" },
+    },
+  },
+  state: { provider: "link", status: "connected" },
+  available_operations: [
+    {
+      type: "link_balance_setup",
+      description: "Open Link balance setup.",
+    },
+  ],
+  available_expansions: [
+    { type: "payment_methods", description: "Live payment methods." },
+    { type: "link_user_info", description: "Live Link user info." },
+  ],
 };
 
 const pendingPaymentMethod = {
@@ -59,6 +88,7 @@ describe("Kernel wallet payment methods", () => {
         enum: [
           "create",
           "payment_methods",
+          "link_balance_setup",
           "add_payment_method",
           "remove_payment_method",
         ],
@@ -66,6 +96,7 @@ describe("Kernel wallet payment methods", () => {
       expect(wallets?.description).toContain(
         "returns an empty connected wallet",
       );
+      expect(wallets?.description).toContain('"link_balance_setup"');
       expect(wallets?.description).toContain("vaults:write plus vaults:use");
       expect(wallets?.inputSchema.properties?.enrollment).toMatchObject({
         enum: ["hosted", "server"],
@@ -527,6 +558,226 @@ describe("Kernel wallet payment methods", () => {
       await fixture.close();
     }
   });
+});
+
+describe("Link balance setup", () => {
+  test("projects live balance amounts including zero", async () => {
+    const expanded = {
+      ...linkWallet,
+      expanded: {
+        payment_methods: [
+          {
+            id: "pm_link_balance",
+            provider: "link",
+            type: "balance",
+            is_default: false,
+            display: { label: "Link balance" },
+            capabilities: {},
+            balance: {
+              available: { amount: 0, currency: "usd" },
+              provider_private: "hidden",
+            },
+          },
+        ],
+      },
+    };
+    const fixture = await connectVaultTest([Response.json(expanded)]);
+    try {
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_wallets", {
+          ...target,
+          action: "payment_methods",
+        }),
+      );
+      expect(result.item.expanded.payment_methods[0]).toMatchObject({
+        id: "pm_link_balance",
+        type: "balance",
+        balance: { available: { amount: 0, currency: "usd" } },
+      });
+      expect(JSON.stringify(result)).not.toContain("provider_private");
+      expect(result.guidance.join(" ")).toContain(
+        "payment_methods is live provider data",
+      );
+      expect(result.guidance.join(" ")).toContain("never stores the balance");
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("advertises bounded whole-dollar suggestions and forwards grouped setup", async () => {
+    const fixture = await connectVaultTest([
+      Response.json(linkWallet),
+      Response.json({
+        type: "link_balance_setup",
+        url: balanceSetupURL,
+        provider_private: "hidden",
+      }),
+    ]);
+    try {
+      const wallets = (await fixture.client.listTools()).tools.find(
+        ({ name }) => name === "manage_vault_wallets",
+      );
+      expect(
+        wallets?.inputSchema.properties?.desired_balance_amount,
+      ).toMatchObject({
+        minimum: 100,
+        multipleOf: 100,
+      });
+      expect(
+        wallets?.inputSchema.properties?.desired_transaction_limit,
+      ).toMatchObject({
+        minimum: 100,
+        maximum: 50000,
+        multipleOf: 100,
+      });
+
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_wallets", {
+          ...target,
+          action: "link_balance_setup",
+          desired_balance_amount: 100,
+          desired_transaction_limit: 50000,
+        }),
+      );
+      expect(
+        fixture.requests.map(({ method, path, body }) => ({
+          method,
+          path,
+          body,
+        })),
+      ).toEqual([
+        {
+          method: "GET",
+          path: "/vaults/checkout/items/wallet-1",
+          body: undefined,
+        },
+        {
+          method: "POST",
+          path: "/vaults/checkout/items/wallet-1/operations",
+          body: {
+            type: "link_balance_setup",
+            desired_balance_amount: 100,
+            desired_transaction_limit: 50000,
+          },
+        },
+      ]);
+      expect(result.result).toEqual({
+        type: "link_balance_setup",
+        url: balanceSetupURL,
+      });
+      expect(result.guidance).toContain("only the user can complete");
+      expect(result.guidance).toContain("does not expire");
+      expect(result.guidance).toContain("balance.available");
+      expect(result.guidance).toContain("still require the user's approval");
+      expect(JSON.stringify(result)).not.toContain("provider_private");
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("supports advertised generic invocation and optional fields", async () => {
+    const fixture = await connectVaultTest([
+      Response.json(linkWallet),
+      Response.json({ type: "link_balance_setup", url: balanceSetupURL }),
+    ]);
+    try {
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_items", {
+          ...target,
+          action: "invoke",
+          operation: "link_balance_setup",
+          inputs: { desired_balance_amount: 200 },
+        }),
+      );
+      expect(fixture.requests[1].body).toEqual({
+        type: "link_balance_setup",
+        desired_balance_amount: 200,
+      });
+      expect(result.result.url).toBe(balanceSetupURL);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("rejects an unsafe setup response without echoing its secret", async () => {
+    const fixture = await connectVaultTest([
+      Response.json(linkWallet),
+      Response.json({
+        type: "link_balance_setup",
+        url: "https://link.example/setup?access_token=hidden-capability",
+      }),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_wallets", {
+        ...target,
+        action: "link_balance_setup",
+      });
+      expect(result.isError).toBe(true);
+      expect(toolResultText(result)).toContain(
+        "unrecognized Link balance setup response",
+      );
+      expect(toolResultText(result)).not.toContain("hidden-capability");
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    {
+      tool: "manage_vault_wallets",
+      args: {
+        ...target,
+        action: "link_balance_setup",
+        desired_balance_amount: 0,
+      },
+    },
+    {
+      tool: "manage_vault_wallets",
+      args: {
+        ...target,
+        action: "link_balance_setup",
+        desired_balance_amount: 150,
+      },
+    },
+    {
+      tool: "manage_vault_wallets",
+      args: {
+        ...target,
+        action: "link_balance_setup",
+        desired_transaction_limit: 50100,
+      },
+    },
+    {
+      tool: "manage_vault_items",
+      args: {
+        ...target,
+        action: "invoke",
+        operation: "link_balance_setup",
+        inputs: { desired_transaction_limit: 0 },
+      },
+    },
+    {
+      tool: "manage_vault_items",
+      args: {
+        ...target,
+        action: "invoke",
+        operation: "link_balance_setup",
+        inputs: { unexpected: false },
+      },
+    },
+  ])(
+    "rejects invalid setup suggestions before reading the wallet",
+    async ({ tool, args }) => {
+      const fixture = await connectVaultTest([]);
+      try {
+        const result = await fixture.call(tool, args);
+        expect(result.isError).toBe(true);
+        expect(fixture.requests).toHaveLength(0);
+      } finally {
+        await fixture.close();
+      }
+    },
+  );
 });
 
 describe("Kernel purchase funding selection", () => {

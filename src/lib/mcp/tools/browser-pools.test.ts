@@ -466,7 +466,7 @@ describe("browser-pool contract parity", () => {
     });
   });
 
-  test("forwards acquire overrides and returns leased time, network, memory, and location", async () => {
+  test("forwards acquire overrides and returns leased time, platform, network, memory, and location", async () => {
     const network = { allowed_hosts: ["example.com"] };
     const location = {
       timezone: "America/New_York",
@@ -491,6 +491,7 @@ describe("browser-pool contract parity", () => {
             memory: "2GiB",
             captcha_solver: { enabled: true },
             fingerprint: { os: "linux" },
+            platform: { os: "linux" },
             location,
           };
         },
@@ -535,6 +536,7 @@ describe("browser-pool contract parity", () => {
       memory: "2GiB",
       captcha_solver: { enabled: true },
       fingerprint: { os: "linux" },
+      platform: { os: "linux" },
       location,
       replay: {
         replay_id: "rpl_1",

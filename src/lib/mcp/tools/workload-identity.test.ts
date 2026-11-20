@@ -103,14 +103,23 @@ describe("manage_workload_identity SDK coverage", () => {
         },
       });
       expect(tool?.inputSchema.properties?.token_validation).toMatchObject({
-        description: expect.stringContaining(
-          "independently of issued token ttl",
-        ),
         properties: {
-          max_lifetime_seconds: { maximum: 86400, minimum: 1 },
+          max_lifetime_seconds: { maximum: 172800, minimum: 1 },
           replay_protection: { enum: ["single_use", "allow_reuse"] },
         },
       });
+      const tokenValidationDescription = String(
+        (
+          tool?.inputSchema.properties?.token_validation as
+            | { description?: string }
+            | undefined
+        )?.description,
+      );
+      expect(tokenValidationDescription).toContain(
+        "independently of issued token ttl",
+      );
+      expect(tokenValidationDescription).toContain("48 hours");
+      expect(tokenValidationDescription).toContain("azure");
       expect(tool?.inputSchema.properties?.expected_version).toMatchObject({
         description: expect.stringContaining("authority security_version"),
       });
@@ -209,7 +218,7 @@ describe("manage_workload_identity SDK coverage", () => {
       keys: [{ kty: "RSA", kid: "key-1", n: "public", e: "AQAB" }],
     };
     const tokenValidation = {
-      max_lifetime_seconds: 3600,
+      max_lifetime_seconds: 172800,
       replay_protection: "allow_reuse",
     };
 
@@ -542,6 +551,7 @@ describe("manage_workload_identity SDK coverage", () => {
     const results = await callWorkloadIdentity(
       {
         serviceAccounts: { list: record },
+        workloadIdentityIssuers: { create: record },
         workloadIdentityFederationRules: {
           create: record,
           update: record,
@@ -558,6 +568,11 @@ describe("manage_workload_identity SDK coverage", () => {
         {
           action: "list_service_accounts",
           description: "does not apply",
+        },
+        {
+          action: "create_issuer",
+          name: "azure-too-long",
+          token_validation: { max_lifetime_seconds: 172801 },
         },
         {
           action: "create_rule",
@@ -589,6 +604,7 @@ describe("manage_workload_identity SDK coverage", () => {
         text: "error: description does not apply to list_service_accounts.",
       },
     ]);
+    expect(results[3].isError).toBe(true);
   });
 
   test("rejects API-key and workload-identity MCP credentials locally", async () => {

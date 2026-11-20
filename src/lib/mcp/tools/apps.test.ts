@@ -116,6 +116,7 @@ describe("manage_apps invocation contract", () => {
                 captcha_solver: { enabled: true },
                 stealth: true,
                 fingerprint: { os: "linux" },
+                platform: { os: "macos" },
                 memory: "2GiB",
                 timeout_seconds: 600,
                 region: "us-east",
@@ -161,6 +162,7 @@ describe("manage_apps invocation contract", () => {
               "https://api.onkernel.com/browser/live/signed",
             captcha_solver: { enabled: true },
             fingerprint: { os: "linux" },
+            platform: { os: "macos" },
             leased_at: "2026-08-08T00:05:00Z",
             location: {
               timezone: "America/New_York",

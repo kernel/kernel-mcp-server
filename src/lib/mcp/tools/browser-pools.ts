@@ -306,6 +306,7 @@ function summarizeAcquiredBrowser(browser: BrowserPoolAcquireResponse) {
     captcha_solver: browser.captcha_solver,
     stealth: browser.stealth,
     fingerprint: browser.fingerprint,
+    platform: browser.platform,
     timeout_seconds: browser.timeout_seconds,
     memory: browser.memory,
     location: browser.location,
