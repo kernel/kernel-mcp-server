@@ -7,6 +7,22 @@ import {
   type McpDependencies,
 } from "@/lib/mcp/dependencies";
 
+const policyConditionSchema = z.object({
+  key: z.literal("source_ip"),
+  operator: z.literal("in"),
+  values: z.array(z.string()),
+});
+
+const effectivePolicySchema = z.object({
+  statements: z.array(
+    z.object({
+      action: z.string(),
+      resource: z.string(),
+      condition: policyConditionSchema.optional(),
+    }),
+  ),
+});
+
 const authContextSchema: z.ZodType<AuthContext> = z.object({
   authentication: z.object({
     method: z.enum(["api_key", "jwt"]),
@@ -14,7 +30,7 @@ const authContextSchema: z.ZodType<AuthContext> = z.object({
     credential_id: z.string().nullable(),
   }),
   principal: z.object({
-    type: z.enum(["api_key", "user"]),
+    type: z.enum(["api_key", "user", "service_account"]),
     id: z.string().min(1),
   }),
   organization: z.object({
@@ -23,7 +39,15 @@ const authContextSchema: z.ZodType<AuthContext> = z.object({
   authorization: z.object({
     credential_scope: z.object({ project_id: z.string().nullable() }),
     effective_scope: z.object({ project_id: z.string().nullable() }),
+    effective_policy: effectivePolicySchema.optional(),
   }),
+  workload_identity: z
+    .object({
+      issuer_id: z.string().min(1),
+      federation_rule_id: z.string().min(1),
+      external_subject_digest: z.string().min(1),
+    })
+    .optional(),
 });
 
 export type ConnectionScope =
@@ -271,10 +295,17 @@ export function connectionAnalyticsFromContext(
   { authContext, scope }: McpConnectionContext,
   credentialType: McpCredentialType,
 ): McpConnectionAnalyticsContext | null {
-  const isApiKey =
-    authContext.authentication.method === "api_key" &&
+  const isWorkloadIdentity =
+    authContext.authentication.method === "jwt" &&
     authContext.authentication.source === "api_key" &&
-    authContext.principal.type === "api_key";
+    authContext.principal.type === "service_account" &&
+    authContext.workload_identity !== undefined;
+  const isApiKey =
+    (authContext.authentication.method === "api_key" &&
+      authContext.authentication.source === "api_key" &&
+      (authContext.principal.type === "api_key" ||
+        authContext.principal.type === "service_account")) ||
+    isWorkloadIdentity;
   const isOAuth =
     authContext.authentication.method === "jwt" &&
     authContext.authentication.source === "oauth" &&

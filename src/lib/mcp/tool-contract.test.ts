@@ -22,7 +22,7 @@ const DESCRIPTION_CHAR_EXCEPTIONS: Record<string, number> = {
 };
 
 // The whole tools/list payload, including input schemas, with every toolset enabled.
-const MAX_TOOLS_LIST_CHARS = 230_000;
+const MAX_TOOLS_LIST_CHARS = 231_000;
 
 async function listAllTools() {
   const mcp = await connectTestMcp((server) => {

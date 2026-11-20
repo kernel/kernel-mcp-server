@@ -855,6 +855,85 @@ describe("vault observation and deletion", () => {
     }
   });
 
+  test("finds deleted event targets and forwards include_deleted=false", async () => {
+    const fixture = await connectVaultTest([
+      Response.json([]),
+      Response.json([]),
+    ]);
+    try {
+      const { tools } = await fixture.client.listTools();
+      const properties = tools.find(({ name }) => name === "manage_vault_items")
+        ?.inputSchema.properties;
+      const includeDeleted = properties?.include_deleted as
+        | { description?: string }
+        | undefined;
+      const key = properties?.key as { description?: string } | undefined;
+      expect(includeDeleted?.description).toContain(
+        "deleted vaults by id only",
+      );
+      expect(includeDeleted?.description).toContain("takes precedence");
+      expect(includeDeleted?.description).toContain("wait is ignored");
+      expect(key?.description).toContain("an item id is also accepted");
+
+      const result = toolResultJSON(
+        await fixture.call("manage_vault_items", {
+          action: "events",
+          vault: "vlt_deleted",
+          key: "vi_deleted",
+          include_deleted: false,
+          wait: 0,
+        }),
+      );
+      expect(result.events).toEqual([]);
+      expect(fixture.requests[0].path).toBe(
+        "/vaults/vlt_deleted/items/vi_deleted/events?wait=0&include_deleted=false",
+      );
+
+      const deleted = toolResultJSON(
+        await fixture.call("manage_vault_items", {
+          action: "events",
+          vault: "vlt_deleted",
+          key: "vi_deleted",
+          include_deleted: true,
+          wait: 60,
+        }),
+      );
+      expect(deleted.guidance).toContain(
+        "include_deleted may resolve an item id",
+      );
+      expect(deleted.hints.observation).toEqual([
+        {
+          tool: "manage_vault_items",
+          arguments: {
+            project: "proj_test",
+            vault: "vlt_deleted",
+            key: "vi_deleted",
+            action: "events",
+            wait: 0,
+            include_deleted: true,
+          },
+        },
+      ]);
+      expect(fixture.requests[1].path).toBe(
+        "/vaults/vlt_deleted/items/vi_deleted/events?wait=60&include_deleted=true",
+      );
+
+      const invalid = await fixture.call("manage_vault_items", {
+        action: "get",
+        vault: "checkout",
+        key: "order-1",
+        include_deleted: true,
+      });
+      expect(invalid.isError).toBe(true);
+      expect(JSON.stringify(invalid)).toContain(
+        "include_deleted is only supported for events",
+      );
+      expect(fixture.requests).toHaveLength(2);
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test("passes bounded timeout headroom, disables retries, and propagates cancellation", async () => {
     const options: Array<{
       timeout: number;
@@ -1056,7 +1135,6 @@ describe("Link checkout authorize and fill", () => {
   );
 
   test.each([
-    { inputs: { browser_id: checkout.browser_id }, message: "(browser_id)" },
     { inputs: { page_url: checkout.page_url }, message: "(browser_id)" },
     {
       inputs: { ...checkout, page_url: "http://shop.example/checkout" },
@@ -1081,7 +1159,7 @@ describe("Link checkout authorize and fill", () => {
         expect(result.isError).toBe(true);
         expect(text).toContain(message);
         expect(text).toContain(
-          "expected {} or { browser_id, page_url }: pass browser_id and the https page_url of the final checkout page together, or neither.",
+          "expected {} or { browser_id } or { browser_id, page_url }",
         );
         expect(fixture.requests).toHaveLength(0);
       } finally {
@@ -1089,6 +1167,26 @@ describe("Link checkout authorize and fill", () => {
       }
     },
   );
+
+  test("rejects browser_id alone after identifying a Link item", async () => {
+    const fixture = await connectVaultTest([Response.json(item)]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        ...target,
+        action: "invoke",
+        operation: "authorize",
+        inputs: { browser_id: checkout.browser_id },
+      });
+      const text = (result.content as Array<{ text: string }>)[0].text;
+      expect(result.isError).toBe(true);
+      expect(text).toContain(
+        "link cards and payment requests require browser_id and page_url together",
+      );
+      expect(fixture.requests.map(({ method }) => method)).toEqual(["GET"]);
+    } finally {
+      await fixture.close();
+    }
+  });
 
   test.each([
     {

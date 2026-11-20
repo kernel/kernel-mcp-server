@@ -22,6 +22,8 @@ export const KERNEL_MCP_TOOL_NAMES = [
   "manage_projects",
   "manage_proxies",
   "manage_replays",
+  "manage_tasks",
+  "manage_workload_identity",
   "web_search",
   "manage_vault_cards",
   "manage_vault_credentials",

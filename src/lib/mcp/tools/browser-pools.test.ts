@@ -61,6 +61,7 @@ function pool() {
     extension_ids: ["extension_resolved"],
     browser_pool_config: {
       size: 3,
+      captcha_solver: { enabled: false },
       start_replay: true,
       profile: { name: "configured-profile-name" },
       extensions: [{ name: "configured-extension-name" }],
@@ -98,6 +99,10 @@ describe("browser-pool contract parity", () => {
       expect(schema.memory.safeParse(memory).success).toBe(true);
     expect(schema.memory.safeParse("6GiB").success).toBe(false);
     expect(schema.expected_network.safeParse({}).success).toBe(true);
+    expect(
+      schema.captcha_solver.safeParse({ enabled: false }).success,
+    ).toBe(true);
+    expect(schema.captcha_solver.safeParse({}).success).toBe(false);
     expect(schema.id_or_name.safeParse("").success).toBe(false);
     expect(schema.name.safeParse("").success).toBe(false);
   });
@@ -122,10 +127,50 @@ describe("browser-pool contract parity", () => {
     expect(response.browser_pool.config).toMatchObject({
       profile_id: "profile_resolved",
       extension_ids: ["extension_resolved"],
+      captcha_solver: { enabled: false },
       start_replay: true,
     });
     expect(response.browser_pool.config).not.toHaveProperty("profile");
     expect(response.browser_pool.config).not.toHaveProperty("extensions");
+  });
+
+  test("rejects stealth with captcha solving explicitly disabled", async () => {
+    let calls = 0;
+    kernelClientMock.factory = () => ({
+      browserPools: {
+        create: async () => {
+          calls++;
+          return pool();
+        },
+        update: async () => {
+          calls++;
+          return pool();
+        },
+      },
+    });
+    const { handler } = captureBrowserPoolTool();
+
+    for (const params of [
+      {
+        action: "create",
+        size: 1,
+        stealth: true,
+        captcha_solver: { enabled: false },
+      },
+      {
+        action: "update",
+        id_or_name: "pool_1",
+        stealth: true,
+        captcha_solver: { enabled: false },
+      },
+    ]) {
+      const result = await handler(params, auth);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(
+        "stealth=true cannot be combined",
+      );
+    }
+    expect(calls).toBe(0);
   });
 
   test("rejects an update with no fields", async () => {
@@ -264,6 +309,7 @@ describe("browser-pool contract parity", () => {
         action: "create",
         size: 1,
         headless: true,
+        captcha_solver: { enabled: false },
         memory: "4GiB",
         region: "ap-southeast",
         fill_rate_per_minute: 0,
@@ -282,6 +328,7 @@ describe("browser-pool contract parity", () => {
         action: "update",
         id_or_name: "pool_1",
         headless: false,
+        captcha_solver: { enabled: true },
         memory: "1GiB",
         expected_network: {},
         discard_all_idle: false,
@@ -298,6 +345,7 @@ describe("browser-pool contract parity", () => {
       {
         size: 1,
         headless: true,
+        captcha_solver: { enabled: false },
         memory: "4GiB",
         region: "ap-southeast",
         fill_rate_per_minute: 0,
@@ -315,6 +363,7 @@ describe("browser-pool contract parity", () => {
         "pool_1",
         {
           headless: false,
+          captcha_solver: { enabled: true },
           memory: "1GiB",
           expected_network: {},
           discard_all_idle: false,
@@ -440,6 +489,8 @@ describe("browser-pool contract parity", () => {
             },
             network,
             memory: "2GiB",
+            captcha_solver: { enabled: true },
+            fingerprint: { os: "linux" },
             location,
           };
         },
@@ -482,6 +533,8 @@ describe("browser-pool contract parity", () => {
       leased_at: "2026-08-08T12:34:56Z",
       network,
       memory: "2GiB",
+      captcha_solver: { enabled: true },
+      fingerprint: { os: "linux" },
       location,
       replay: {
         replay_id: "rpl_1",

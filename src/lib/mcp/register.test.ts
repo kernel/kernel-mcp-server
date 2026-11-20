@@ -6,10 +6,12 @@ import { KERNEL_MCP_TOOL_NAMES } from "@/lib/mcp/tool-names";
 
 const NON_AUTH_TOOLSETS = [
   "profiles",
+  "tasks",
   "docs",
   "browsers",
   "projects",
   "api_keys",
+  "workload_identity",
   "browser_pools",
   "config_registry",
   "browser_curl",
@@ -90,6 +92,7 @@ const EXPECTED_ANNOTATIONS: Record<string, [boolean, boolean, boolean]> = {
   manage_browsers: [false, true, false],
   manage_projects: [false, true, false],
   manage_api_keys: [false, true, false],
+  manage_workload_identity: [false, true, true],
   manage_browser_pools: [false, true, false],
   manage_browser_files: [false, true, false],
   manage_config_registry: [false, true, true],
@@ -104,6 +107,7 @@ const EXPECTED_ANNOTATIONS: Record<string, [boolean, boolean, boolean]> = {
   browser_repl: [false, true, true],
   webmcp: [false, true, true],
   manage_replays: [false, true, false],
+  manage_tasks: [false, false, false],
   manage_auth_connections: [false, true, true],
   open_auth_login: [false, false, true],
   begin_auth_login: [false, false, true],
@@ -280,6 +284,7 @@ describe("MCP toolset allowlist", () => {
 describe("project selection registration", () => {
   const projectScopedTools = [
     "manage_profiles",
+    "manage_tasks",
     "manage_config_registry",
     "manage_browsers",
     "manage_browser_pools",
@@ -329,5 +334,12 @@ describe("project selection registration", () => {
       expect(registration.schemas.get(name)).not.toHaveProperty("project");
       expect(registration.schemas.get(name)).not.toHaveProperty("project_id");
     }
+
+    expect(
+      registration.schemas.get("manage_workload_identity"),
+    ).not.toHaveProperty("project");
+    expect(registration.schemas.get("manage_workload_identity")).toHaveProperty(
+      "project_id",
+    );
   });
 });

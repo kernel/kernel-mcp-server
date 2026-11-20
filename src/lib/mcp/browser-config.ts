@@ -30,6 +30,14 @@ export const browserExtensionSchema = z
 
 export const browserExtensionsSchema = z.array(browserExtensionSchema);
 
+export const browserCaptchaSolverSchema = z
+  .object({
+    enabled: z
+      .boolean()
+      .describe("whether automatic captcha handling is enabled."),
+  })
+  .strict();
+
 export type BrowserExtensionParams = {
   extensions?: z.infer<typeof browserExtensionsSchema>;
   extension_id?: string;

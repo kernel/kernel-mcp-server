@@ -3,6 +3,7 @@ import {
   isDisplaySafeVaultURL,
   projectVaultOutput,
   vaultItemFields,
+  vaultItemResponse,
 } from "@/lib/mcp/vault-responses";
 import { toolResultJSON } from "@/lib/mcp/mcp-test-fixtures";
 import {
@@ -22,6 +23,21 @@ const unsafeItem = {
   secret: "hidden-top-level",
   spec: {
     ...item.spec,
+    line_items: [
+      {
+        title: "Free sample",
+        quantity: 1,
+        unit_amount: 0,
+        amount: 0,
+        brand: "Example",
+        options: "Size S",
+        image_url: "https://images.example/sample.png",
+      },
+    ],
+    subtotal: 0,
+    shipping: 0,
+    tax: 0,
+    discount: 0,
     metadata: { order: "hidden-metadata" },
     authorization: {
       method: "oauth",
@@ -44,7 +60,8 @@ const unsafeItem = {
     authorization: {
       id: "auth_1",
       status: "approved",
-      charged_kind: "captured",
+      amount_authority: "processor",
+      charged_kind: "none",
       charged_amount_cents: 1234,
       charged_currency: "usd",
       amount_verified: false,
@@ -74,13 +91,21 @@ describe("vault public responses", () => {
     const projected = projectVaultOutput(unsafeItem, vaultItemFields);
     expect(JSON.stringify(projected)).not.toContain("hidden");
     expect(projected).toMatchObject({
+      spec: {
+        line_items: [{ unit_amount: 0, amount: 0 }],
+        subtotal: 0,
+        shipping: 0,
+        tax: 0,
+        discount: 0,
+      },
       state: {
         aliases,
         credential_type: "link_pay_token",
         authorization: {
+          amount_authority: "processor",
           amount_verified: false,
           replay_delivered: false,
-          charged_kind: "captured",
+          charged_kind: "none",
           charged_amount_cents: 1234,
         },
       },
@@ -103,6 +128,26 @@ describe("vault public responses", () => {
     expect(projected).not.toHaveProperty("expires_at");
     expect(projected).not.toHaveProperty("action.capture_token");
     expect(projected).not.toHaveProperty("state.authorization.approval_url");
+  });
+
+  test("explains agentcard amount authority and tokenization evidence", () => {
+    const result = vaultItemResponse(
+      {
+        ...unsafeItem,
+        spec: { provider: "agentcard", wallet: "wallet-1" },
+        state: {
+          ...unsafeItem.state,
+          provider: "agentcard",
+        },
+      },
+      { project: "project_1", vault: "checkout", key: "order-1" },
+    );
+    const guidance = toolResultJSON(result).guidance.join(" ");
+    expect(guidance).toContain("amount_authority processor");
+    expect(guidance).toContain("charged_kind none means tokenization");
+    expect(guidance).toContain(
+      "agent and display_only do not prove what was charged",
+    );
   });
 
   test("does not pass opaque objects through scalar leaves", () => {
@@ -168,14 +213,42 @@ describe("vault public responses", () => {
 
   test("keeps full safe action URLs and operation descriptions", () => {
     const url = "https://provider.example/approve?request=" + "x".repeat(300);
+    const connectURL = "https://provider.example/connect?state=opaque";
     expect(
       projectVaultOutput(
-        { ...item, action: { name: "spend_approval", url } },
+        {
+          ...item,
+          action: {
+            name: "1password_oauth",
+            url,
+            connect_url: connectURL,
+          },
+        },
         vaultItemFields,
       ),
     ).toMatchObject({
-      action: { url },
+      action: { url, connect_url: connectURL },
       available_operations: item.available_operations,
+    });
+  });
+
+  test("filters unsafe 1Password connect links", () => {
+    expect(
+      projectVaultOutput(
+        {
+          action: {
+            name: "1password_oauth",
+            url: "https://provider.example/oauth?state=opaque",
+            connect_url: "https://provider.example/connect?code=hidden",
+          },
+        },
+        vaultItemFields,
+      ),
+    ).toEqual({
+      action: {
+        name: "1password_oauth",
+        url: "https://provider.example/oauth?state=opaque",
+      },
     });
   });
 

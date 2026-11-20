@@ -294,6 +294,32 @@ async function handleMcpRequestWithIdentity({
   });
 }
 
+async function handleKernelCredentialRequest({
+  req,
+  token,
+  transportSessionId,
+  observeConnection,
+}: {
+  req: NextRequest;
+  token: string;
+  transportSessionId: string | null;
+  observeConnection: boolean;
+}): Promise<Response> {
+  // Kernel-native credentials (API keys and workload-identity access tokens)
+  // are authenticated by /auth/context rather than Clerk. Do not cache their
+  // context: every request must revalidate revocation, expiry, and policy.
+  return await handleMcpRequestWithIdentity({
+    req,
+    token,
+    authSubject: mcpAppsAuthSubject({ token }),
+    scopes: ["apikey"],
+    authInfoExtra: { userId: null, clerkToken: null },
+    credentialType: "api_key",
+    transportSessionId,
+    observeConnection,
+  });
+}
+
 async function handleAuthenticatedRequest(
   req: NextRequest,
   transportSessionId: string | null = null,
@@ -340,16 +366,9 @@ async function handleAuthenticatedRequest(
   }
 
   if (!isValidJwtFormat(token)) {
-    // Opaque API keys are authenticated by the Kernel API rather than Clerk.
-    // Do not cache their context: /auth/context must revalidate the credential
-    // on every request so revoked keys cannot keep using a cached scope.
-    return await handleMcpRequestWithIdentity({
+    return await handleKernelCredentialRequest({
       req,
       token,
-      authSubject: mcpAppsAuthSubject({ token }),
-      scopes: ["apikey"],
-      authInfoExtra: { userId: null, clerkToken: null },
-      credentialType: "api_key",
       transportSessionId,
       observeConnection,
     });
@@ -368,12 +387,16 @@ async function handleAuthenticatedRequest(
       );
     }
     userId = payload.sub;
-  } catch (authError) {
-    return createAuthErrorResponse(
+  } catch {
+    // Workload-identity federation can issue compact JWT access tokens. They
+    // are not Clerk sessions, so let the Kernel API authenticate them. A
+    // foreign or malformed JWT is still rejected by /auth/context.
+    return await handleKernelCredentialRequest({
       req,
-      "invalid_token",
-      `Invalid token: ${authError instanceof Error ? authError.message : "Authentication failed"}`,
-    );
+      token,
+      transportSessionId,
+      observeConnection,
+    });
   }
 
   // Capability state is keyed only after Clerk verifies the JWT, and uses

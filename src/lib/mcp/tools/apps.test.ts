@@ -113,7 +113,9 @@ describe("manage_apps invocation contract", () => {
                 created_at: "2026-08-08T00:00:00Z",
                 leased_at: "2026-08-08T00:05:00Z",
                 headless: false,
+                captcha_solver: { enabled: true },
                 stealth: true,
+                fingerprint: { os: "linux" },
                 memory: "2GiB",
                 timeout_seconds: 600,
                 region: "us-east",
@@ -157,6 +159,8 @@ describe("manage_apps invocation contract", () => {
             session_id: "brr_123",
             browser_live_view_url:
               "https://api.onkernel.com/browser/live/signed",
+            captcha_solver: { enabled: true },
+            fingerprint: { os: "linux" },
             leased_at: "2026-08-08T00:05:00Z",
             location: {
               timezone: "America/New_York",

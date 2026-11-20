@@ -11,7 +11,7 @@ import {
   textResponse,
   throwToolError,
 } from "@/lib/mcp/responses";
-import { paginationParams } from "@/lib/mcp/schemas";
+import { apiKeyPolicySchema, paginationParams } from "@/lib/mcp/schemas";
 
 export function registerAPIKeyCapabilities(
   server: McpServer,
@@ -24,7 +24,7 @@ export function registerAPIKeyCapabilities(
     "manage_api_keys",
     {
       description:
-        'manage KERNEL api keys. use "create" to create an org-wide, project-scoped, or policy-scoped key, "list" to discover masked keys, "get" to retrieve one masked key, "update" to rename a key, "rotate" to issue a replacement with an optional grace period, or "delete" to revoke a key. list and get include last_used_at, an approximate timestamp accurate within about 20 minutes; it is null when the key has not authenticated a request since last-use tracking began. create and rotate return the new plaintext key once; handle it as a secret and never repeat it in chat. delete asynchronously ends browser sessions attributed to the revoked key and discards unsaved profile changes; if cleanup cannot be registered, deletion is not committed. rotate with expire_in_days=0 does the same immediate browser cleanup for the old key; grace-period or natural expiry does not end existing browsers, and an immediate rotation is not committed if cleanup cannot be registered.',
+        "manage KERNEL api keys: create personal/service-account keys, list or get masked keys, update names/policies, rotate, or delete. policies deny unlisted access and may use source_ip; service-account keys require an administrator, project, and policy. create/rotate return plaintext once—keep it secret. delete/immediate rotation end attributed browsers asynchronously and discard unsaved changes; grace or natural expiry does not.",
       inputSchema: z.object({
         action: z
           .enum(["create", "list", "get", "update", "rotate", "delete"])
@@ -48,7 +48,14 @@ export function registerAPIKeyCapabilities(
           .string()
           .nullable()
           .describe(
-            "(create) project id for project-scoped keys. omit or use null for org-wide keys.",
+            '(create) project id; omit or use null for an org-wide personal key. service-account keys require a non-null project. (list) exact project id, or "org" for org-wide keys; null is not accepted.',
+          )
+          .optional(),
+        service_account_id: z
+          .string()
+          .min(1)
+          .describe(
+            "(create) active same-organization service account principal; requires an organization administrator, project_id, and policy. results separate it from created_by, the audit user. (list) exact service account filter.",
           )
           .optional(),
         days_to_expire: z
@@ -69,23 +76,9 @@ export function registerAPIKeyCapabilities(
             "(create) exact future expiry, or null for no expiry. cannot be combined with days_to_expire.",
           )
           .optional(),
-        policy: z
-          .object({
-            statements: z
-              .array(
-                z
-                  .object({
-                    action: z.string().min(1),
-                    resource: z.string().min(1),
-                  })
-                  .strict(),
-              )
-              .min(1)
-              .max(256),
-          })
-          .strict()
+        policy: apiKeyPolicySchema
           .describe(
-            "(create) allow statements for a scoped key. every action and resource not listed is denied; resources use projects/{project_id}/{kind}/{id} and may contain wildcards.",
+            "(create, update) allow statements for a scoped key; unlisted access is denied and resources use projects/{project_id}/{kind}/{id}, with wildcards allowed. update fully replaces permissions without changing the secret; omit to keep them, and do not pass null. new requests see the replacement after the authorization cache; condition mismatches return 403 and audit the client address.",
           )
           .optional(),
         expire_in_days: z
@@ -95,7 +88,7 @@ export function registerAPIKeyCapabilities(
           .max(3650)
           .nullable()
           .describe(
-            "(rotate) grace period before the old key expires. zero expires it immediately; omit for 7 days.",
+            "(rotate) grace period before the old key expires. zero expires it immediately; omit for 7 days. rotation retains its service-account principal and policy; audit records the administrator separately.",
           )
           .optional(),
         include_deleted: z
@@ -110,9 +103,20 @@ export function registerAPIKeyCapabilities(
             "(list) case-insensitive search over name, creator, and project; ids and masked keys match exactly or by prefix.",
           )
           .optional(),
+        principal_type: z
+          .enum(["user", "service_account"])
+          .describe("(list) return only keys acting as this principal type.")
+          .optional(),
+        created_by: z
+          .string()
+          .min(1)
+          .describe("(list) creator user id, matching the created_by person.")
+          .optional(),
         status: z
-          .enum(["active", "deleted", "all"])
-          .describe("(list) key status filter. defaults to active.")
+          .enum(["active", "expired", "deleted", "all"])
+          .describe(
+            "(list) status filter. active excludes deleted and expired keys (default); expired excludes deleted keys; all returns every key.",
+          )
           .optional(),
         sort_by: z
           .enum(["created_at", "name", "expires_at", "last_used_at"])
@@ -138,11 +142,48 @@ export function registerAPIKeyCapabilities(
       if (!ctx.http?.authInfo) throw new Error("authentication required");
       const client = options.createKernelClient(ctx.http.authInfo.token);
 
+      if (params.action !== "create" && params.expires_at !== undefined) {
+        return errorResponse("error: expires_at is create-only.");
+      }
       if (
         params.action !== "create" &&
-        (params.expires_at !== undefined || params.policy !== undefined)
+        params.action !== "update" &&
+        params.policy !== undefined
       ) {
-        return errorResponse("error: expires_at and policy are create-only.");
+        return errorResponse(
+          "error: policy applies only to create and update.",
+        );
+      }
+      if (
+        params.action !== "create" &&
+        params.action !== "list" &&
+        params.service_account_id !== undefined
+      ) {
+        return errorResponse(
+          "error: service_account_id applies only to create and list.",
+        );
+      }
+      if (
+        params.action !== "create" &&
+        params.action !== "list" &&
+        params.project_id !== undefined
+      ) {
+        return errorResponse(
+          "error: project_id applies only to create and list.",
+        );
+      }
+      if (params.action === "list" && params.project_id === null) {
+        return errorResponse(
+          'error: project_id cannot be null for list; use "org" for org-wide keys.',
+        );
+      }
+      if (
+        params.action !== "list" &&
+        (params.principal_type !== undefined || params.created_by !== undefined)
+      ) {
+        return errorResponse(
+          "error: principal_type and created_by are list-only.",
+        );
       }
       if (params.action !== "rotate" && params.expire_in_days !== undefined) {
         return errorResponse("error: expire_in_days is rotate-only.");
@@ -171,6 +212,16 @@ export function registerAPIKeyCapabilities(
                 "error: days_to_expire and expires_at cannot be combined.",
               );
             }
+            if (
+              params.service_account_id !== undefined &&
+              (params.project_id === undefined ||
+                params.project_id === null ||
+                params.policy === undefined)
+            ) {
+              return errorResponse(
+                "error: service_account_id requires an explicit project_id and policy.",
+              );
+            }
             const createParams: Parameters<typeof client.apiKeys.create>[0] = {
               name: params.name,
             };
@@ -186,6 +237,9 @@ export function registerAPIKeyCapabilities(
             if (params.policy !== undefined) {
               createParams.policy = params.policy;
             }
+            if (params.service_account_id !== undefined) {
+              createParams.service_account_id = params.service_account_id;
+            }
             const apiKey = await client.apiKeys.create(createParams);
             return jsonResponse(apiKey);
           }
@@ -196,6 +250,18 @@ export function registerAPIKeyCapabilities(
               }),
               ...(params.name !== undefined && { name: params.name }),
               ...(params.query !== undefined && { query: params.query }),
+              ...(params.service_account_id !== undefined && {
+                service_account_id: params.service_account_id,
+              }),
+              ...(params.principal_type !== undefined && {
+                principal_type: params.principal_type,
+              }),
+              ...(params.created_by !== undefined && {
+                created_by: params.created_by,
+              }),
+              ...(typeof params.project_id === "string" && {
+                project_id: params.project_id,
+              }),
               ...(params.status !== undefined && { status: params.status }),
               ...(params.sort_by !== undefined && { sort_by: params.sort_by }),
               ...(params.sort_direction !== undefined && {
@@ -222,11 +288,14 @@ export function registerAPIKeyCapabilities(
             if (!params.api_key_id) {
               return errorResponse("error: api_key_id is required for update.");
             }
-            if (!params.name) {
-              return errorResponse("error: name is required for update.");
+            if (params.name === undefined && params.policy === undefined) {
+              return errorResponse(
+                "error: update requires at least one of name or policy.",
+              );
             }
             const apiKey = await client.apiKeys.update(params.api_key_id, {
-              name: params.name,
+              ...(params.name !== undefined && { name: params.name }),
+              ...(params.policy !== undefined && { policy: params.policy }),
             });
             return jsonResponse(apiKey);
           }

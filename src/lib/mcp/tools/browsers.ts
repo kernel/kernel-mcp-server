@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { NotFoundError, type Kernel } from "@onkernel/sdk";
 import { z } from "zod";
 import {
+  browserCaptchaSolverSchema,
   browserExtensionsSchema,
   buildBrowserCreateConfig,
   buildBrowserUpdateConfig,
@@ -589,12 +590,12 @@ export function registerBrowserCapabilities(
           fingerprint: z
             .object({
               os: z
-                .literal("macos")
+                .enum(["linux", "macos"])
                 .describe("operating system the browser reports to websites."),
             })
             .strict()
             .describe(
-              "(create) closed beta overrides for browser attributes presented to websites. currently supports only os=macos and requires the site-compatibility setting to be true and omitted memory so the default is used; headless and gpu may be omitted (they default to false) but cannot be set to true. contact KERNEL to enable this capability for the organization; omit it to preserve default browser behavior.",
+              "(create) closed beta overrides for browser attributes presented to websites. supports os=linux or os=macos and requires captcha_solver.enabled=true with omitted memory so the default is used; headless and gpu may be omitted (they default to false) but cannot be set to true. contact KERNEL to enable this capability for the organization; omit it to preserve default browser behavior.",
             )
             .optional(),
           headless: z
@@ -620,10 +621,15 @@ export function registerBrowserCapabilities(
               "(create) non-gpu browser memory. headless browsers support 1 gib (default), 2 gib, or 4 gib; headful browsers support 8 gib (default) or 16 gib.",
             )
             .optional(),
+          captcha_solver: browserCaptchaSolverSchema
+            .describe(
+              "(create) automatic captcha handling for authorized site access. disabled by default and does not select a proxy; omitted proxy uses direct egress unless the deprecated compatibility setting is true.",
+            )
+            .optional(),
           stealth: z
             .boolean()
             .describe(
-              "(create) apply KERNEL site-compatibility browser settings. use only on sites and accounts the user is authorized to access.",
+              "deprecated site-compatibility setting. (create) use only on sites and accounts the user is authorized to access. true enables automatic captcha handling and, with no proxy, KERNEL's default compatibility proxy. equivalent to captcha_solver.enabled=true with proxy.mode=default; incompatible with captcha_solver.enabled=false.",
             )
             .optional(),
           region: z
@@ -671,7 +677,7 @@ export function registerBrowserCapabilities(
             .optional(),
           proxy: proxyConfigSchema()
             .describe(
-              "(create, update) proxy egress, set with exactly one of id, name, or mode. id or name selects that proxy. mode direct forces direct egress; mode default restores the browser's default egress. on create, omit for the browser default; on update, omit to leave unchanged. cannot be combined with proxy_id or disable_default_proxy.",
+              "(create, update) egress with exactly one of id, name, or mode. selection does not change automatic captcha handling. direct forces direct egress; default uses KERNEL's compatibility proxy when handling is enabled, otherwise direct. omit on create for direct egress unless the deprecated compatibility setting is true, and on update to keep current egress. cannot combine with proxy_id or disable_default_proxy.",
             )
             .optional(),
           proxy_id: z
@@ -917,6 +923,19 @@ export function registerBrowserCapabilities(
             "fingerprint overrides are creation-only; use a new browser to change them.",
           );
         }
+        if (params.action !== "create" && params.captcha_solver !== undefined) {
+          return errorResponse(
+            "error: captcha_solver is creation-only for a browser session.",
+          );
+        }
+        if (
+          params.stealth === true &&
+          params.captcha_solver?.enabled === false
+        ) {
+          return errorResponse(
+            "error: stealth=true cannot be combined with captcha_solver.enabled=false.",
+          );
+        }
         if (params.action !== "create" && params.start_replay !== undefined) {
           return errorResponse(
             "error: start_replay is creation-only; use manage_replays on an existing browser.",
@@ -981,13 +1000,14 @@ export function registerBrowserCapabilities(
           case "create": {
             if (
               params.fingerprint !== undefined &&
-              (params.stealth !== true ||
+              ((params.captcha_solver?.enabled !== true &&
+                params.stealth !== true) ||
                 params.headless === true ||
                 params.gpu === true ||
                 params.memory !== undefined)
             ) {
               return errorResponse(
-                "error: fingerprint requires stealth=true, headless=false and gpu=false (the defaults when omitted), and omitted memory so the default is used.",
+                "error: fingerprint requires captcha_solver.enabled=true, headless=false and gpu=false (the defaults when omitted), and omitted memory so the default is used.",
               );
             }
             const createParams: Kernel.BrowserCreateParams = {};
@@ -1010,6 +1030,8 @@ export function registerBrowserCapabilities(
             }
             if (params.memory !== undefined)
               createParams.memory = params.memory;
+            if (params.captcha_solver !== undefined)
+              createParams.captcha_solver = params.captcha_solver;
             if (params.stealth !== undefined)
               createParams.stealth = params.stealth;
             if (params.region !== undefined)

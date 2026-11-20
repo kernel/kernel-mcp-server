@@ -39,7 +39,7 @@ export const vaultWaitSchema = z
   .min(0)
   .max(60)
   .describe(
-    "(get, events) one bounded server-side observation, in seconds (0-60). not supported for invoke, list, or delete. pending state is returned as-is; this never retries an operation or guarantees readiness. for credentials, wait observes required-value readiness, not edits to an already-ready item; compare version using get without wait.",
+    "(get, events) one bounded server-side observation, in seconds (0-60). not supported for invoke, list, or delete; events ignores wait when include_deleted resolves a deleted item or vault. pending state is returned as-is; this never retries an operation or guarantees readiness. for credentials, wait observes required-value readiness, not edits to an already-ready item; compare version using get without wait.",
   )
   .optional();
 
@@ -111,10 +111,11 @@ export const fillInputsSchema = z
   .strict();
 export type FillInputs = z.infer<typeof fillInputsSchema>;
 
-// Mirrors AuthorizeVaultItemOperationRequest: Link and Shop Pay cards take
-// checkout context from the final checkout page, or none for merchant_url-based
-// authorization.
-export const authorizeInputsShape = "{} or { browser_id, page_url }";
+// Mirrors AuthorizeVaultItemOperationRequest. Link and Shop Pay take paired
+// final-checkout context; Kernel cards may take only browser_id; other providers
+// use no checkout context. Provider-specific validation happens after item lookup.
+export const authorizeInputsShape =
+  "{} or { browser_id } or { browser_id, page_url }";
 
 export const authorizeInputsSchema = z
   .object({
@@ -127,7 +128,7 @@ export const authorizeInputsSchema = z
   .strict()
   .refine(
     (value) =>
-      (value.browser_id === undefined) === (value.page_url === undefined),
+      value.page_url === undefined || value.browser_id !== undefined,
     {
       path: ["browser_id"],
     },
@@ -222,7 +223,7 @@ export function fillInputsIssueMessage(error: z.ZodError) {
 }
 
 export function authorizeInputsIssueMessage(error: z.ZodError) {
-  return `${operationInputsIssueMessage("authorize", authorizeInputsShape, error)}: pass browser_id and the https page_url of the final checkout page together, or neither.`;
+  return `${operationInputsIssueMessage("authorize", authorizeInputsShape, error)}: page_url requires browser_id. link and shop pay require both together; KERNEL cards accept browser_id without page_url; omit both for providers or flows that do not use browser context.`;
 }
 
 export function onePasswordFillInputsIssueMessage(error: z.ZodError) {
@@ -714,6 +715,36 @@ export const agentcardCheckoutOriginSchema = z.string().refine((value) => {
   }
 }, "expected a canonical https origin or localhost http origin without a path.");
 
+const agentcardLineItemSchema = z
+  .object({
+    title: z.string().min(1),
+    quantity: integer().min(1),
+    unit_amount: integer()
+      .min(0)
+      .describe("price of one in minor currency units.")
+      .optional(),
+    amount: integer()
+      .min(0)
+      .describe(
+        "line total in minor currency units; shown instead of unit_amount times quantity when both are set.",
+      )
+      .optional(),
+    brand: z.string().optional(),
+    options: z
+      .string()
+      .describe('selected options such as "Size S · Pink".')
+      .optional(),
+    image_url: z
+      .string()
+      .url()
+      .startsWith("https://")
+      .describe(
+        "https product image url; unsupported image hosts are displayed without an image.",
+      )
+      .optional(),
+  })
+  .strict();
+
 export const agentcardCardSpecSchema = z
   .object({
     provider: z.literal("agentcard").optional(),
@@ -733,8 +764,50 @@ export const agentcardCardSpecSchema = z
         "optional funding card. omit for cardholder selection at approval.",
       )
       .optional(),
+    line_items: z
+      .array(agentcardLineItemSchema)
+      .min(1)
+      .max(20)
+      .describe(
+        "display-only cart shown above the approval total for an unprepared checkout. amounts are minor units and do not change what the cardholder approves or the processor charges. card updates replace the whole spec, so send the cart again for each checkout.",
+      )
+      .optional(),
+    subtotal: integer()
+      .min(0)
+      .describe("cart subtotal in minor currency units; requires line_items.")
+      .optional(),
+    shipping: integer()
+      .min(0)
+      .describe("shipping charge in minor currency units; requires line_items.")
+      .optional(),
+    tax: integer()
+      .min(0)
+      .describe("tax in minor currency units; requires line_items.")
+      .optional(),
+    discount: integer()
+      .min(0)
+      .describe(
+        "discount as a positive number of minor currency units; requires line_items.",
+      )
+      .optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((spec, ctx) => {
+    if (
+      spec.line_items === undefined &&
+      (spec.subtotal !== undefined ||
+        spec.shipping !== undefined ||
+        spec.tax !== undefined ||
+        spec.discount !== undefined)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["line_items"],
+        message:
+          "line_items is required with subtotal, shipping, tax, or discount",
+      });
+    }
+  });
 
 export const browserVaultsSchema = z
   .array(
