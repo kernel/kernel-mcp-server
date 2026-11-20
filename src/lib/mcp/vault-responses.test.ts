@@ -78,6 +78,10 @@ const unsafeItem = {
         is_default: false,
         display: { brand: "visa", last4: "4242", number: "hidden-number" },
         capabilities: { single_use_card: { eligible: false, reasons: [] } },
+        balance: {
+          available: { amount: 0, currency: "usd", raw: "hidden-balance" },
+          raw: "hidden-balance-envelope",
+        },
         issuer_reference: "issuer-card-42",
         valid_until: "2026-10-01T13:00:00Z",
         raw: "hidden-method",
@@ -119,6 +123,7 @@ describe("vault public responses", () => {
             id: "pm_1",
             is_default: false,
             capabilities: { single_use_card: { eligible: false, reasons: [] } },
+            balance: { available: { amount: 0, currency: "usd" } },
             issuer_reference: "issuer-card-42",
             valid_until: "2026-10-01T13:00:00Z",
           },

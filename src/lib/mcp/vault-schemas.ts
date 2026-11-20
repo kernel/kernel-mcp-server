@@ -199,6 +199,31 @@ export type RemovePaymentMethodInputs = z.infer<
   typeof removePaymentMethodInputsSchema
 >;
 
+export const linkBalanceSetupInputsShape =
+  "{ desired_balance_amount?, desired_transaction_limit? }";
+export const linkBalanceSetupInputsSchema = z
+  .object({
+    desired_balance_amount: z
+      .number()
+      .int()
+      .safe()
+      .min(100)
+      .multipleOf(100)
+      .optional(),
+    desired_transaction_limit: z
+      .number()
+      .int()
+      .safe()
+      .min(100)
+      .max(50000)
+      .multipleOf(100)
+      .optional(),
+  })
+  .strict();
+export type LinkBalanceSetupInputs = z.infer<
+  typeof linkBalanceSetupInputsSchema
+>;
+
 // Names the offending top-level key, never a value or nested key, and shows the shape
 // the API accepts.
 function operationInputsIssueMessage(
@@ -279,6 +304,14 @@ export function removePaymentMethodInputsIssueMessage(error: z.ZodError) {
   return operationInputsIssueMessage(
     "remove_payment_method",
     removePaymentMethodInputsShape,
+    error,
+  );
+}
+
+export function linkBalanceSetupInputsIssueMessage(error: z.ZodError) {
+  return operationInputsIssueMessage(
+    "link_balance_setup",
+    linkBalanceSetupInputsShape,
     error,
   );
 }

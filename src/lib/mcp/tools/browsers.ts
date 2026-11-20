@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/server";
-import { NotFoundError, type Kernel } from "@onkernel/sdk";
+import { APIError, NotFoundError, type Kernel } from "@onkernel/sdk";
 import { z } from "zod";
 import {
   browserCaptchaSolverSchema,
@@ -403,6 +403,37 @@ async function readBrowserTelemetry(
   return textResponse(serializedResponse);
 }
 
+const browserCostNote =
+  'cost appears only on browser detail reads requested with include_cost=true; manage_browsers action "list" and other browser responses omit it. estimated_usage_spend_usd is a gross provisional usd browser-meter cost before credits, subscriptions, tax, or adjustments, not an invoice total; it appears only with status "provisional", including "0" for a completed zero-uptime session. status "pending" means the billing checkpoint or rate calculation is not ready, while "unavailable" means the session cannot currently be priced safely. as_of is the time of the live uptime read or durable billing checkpoint; running or recently deleted sessions may accrue additional usage.';
+
+function browserDetailWithCostNote(
+  browser: Awaited<ReturnType<KernelClient["browsers"]["retrieve"]>>,
+) {
+  return browser.cost === undefined
+    ? browser
+    : { ...browser, note: browserCostNote };
+}
+
+function browserUnsupportedFieldsNote(error: unknown) {
+  if (!(error instanceof APIError)) return undefined;
+  const parsed = z
+    .object({
+      unsupported_fields: z
+        .array(
+          z
+            .string()
+            .max(64)
+            .regex(/^[A-Za-z_][A-Za-z0-9_.-]*$/),
+        )
+        .min(1)
+        .max(32),
+    })
+    .safeParse(error.error);
+  return parsed.success
+    ? `unsupported fields: ${parsed.data.unsupported_fields.join(", ")}.`
+    : undefined;
+}
+
 function browserSessionNextActions(sessionId: string) {
   return [
     `drive the browser with webmcp, browser_repl, execute_playwright_code, or computer_action using session_id "${sessionId}", preferring the first that can carry the current step.`,
@@ -495,7 +526,10 @@ export function registerBrowserCapabilities(
         "kernel://orgs/{organizationId}/projects/{projectId}/browsers/{sessionId}",
       variableName: "sessionId",
       resourceLabel: "browser session",
-      read: (client, sessionId) => client.browsers.retrieve(sessionId),
+      read: async (client, sessionId) =>
+        browserDetailWithCostNote(
+          await client.browsers.retrieve(sessionId, { include_cost: true }),
+        ),
     },
     dependencies,
   );
@@ -505,7 +539,7 @@ export function registerBrowserCapabilities(
     "manage_browsers",
     {
       description:
-        'manage the browser sessions that every web task runs in, and their archived telemetry. once a session exists, drive it with webmcp, browser_repl, execute_playwright_code, or computer_action, preferring the first that can carry the current step. use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, "create_live_view" to mint a read or control live-view url for a headful browser, "save_profile" to snapshot a running session to a profile without ending it, and "delete" when finished. live view urls are bearer credentials that cannot be revoked before they expire. save_profile restarts the browser: cdp, playwright, and webdriver connections close and tabs reload, so call it at a stable point, such as right after a login completes. live sessions can be addressed by id or by the name given at creation or set on update; deleted sessions only by id. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
+        'manage the browser sessions that every web task runs in, and their archived telemetry. once a session exists, drive it with webmcp, browser_repl, execute_playwright_code, or computer_action, preferring the first that can carry the current step. use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details including provisional browser-session usage cost when available, "get_telemetry" to diagnose active or deleted sessions, "create_live_view" to mint a read or control live-view url for a headful browser, "save_profile" to snapshot a running session to a profile without ending it, and "delete" when finished. live view urls are bearer credentials that cannot be revoked before they expire. save_profile restarts the browser: cdp, playwright, and webdriver connections close and tabs reload, so call it at a stable point, such as right after a login completes. live sessions can be addressed by id or by the name given at creation or set on update; deleted sessions only by id. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
       inputSchema: z.strictObject(
         {
           ...projectSelectionInputSchema(),
@@ -596,6 +630,17 @@ export function registerBrowserCapabilities(
             .strict()
             .describe(
               "(create) closed beta overrides for browser attributes presented to websites. supports os=linux or os=macos and requires captcha_solver.enabled=true with omitted memory so the default is used; headless and gpu may be omitted (they default to false) but cannot be set to true. contact KERNEL to enable this capability for the organization; omit it to preserve default browser behavior.",
+            )
+            .optional(),
+          platform: z
+            .object({
+              os: z
+                .enum(["linux", "macos"])
+                .describe("operating system of the browser host."),
+            })
+            .strict()
+            .describe(
+              "(create) host os. linux is default; a reported os override does not change the host. macos currently returns platform_unavailable. it is headful and us-east-only; headless=true, memory, gpu, video_memory, profiles, location, reported browser attributes, and other regions return unsupported_configuration with unsupported_fields.",
             )
             .optional(),
           headless: z
@@ -799,6 +844,12 @@ export function registerBrowserCapabilities(
               "(get) include a soft-deleted session for audit. a deleted session must be addressed by id, not name.",
             )
             .optional(),
+          include_cost: z
+            .boolean()
+            .describe(
+              "(get) include the session's provisional usage cost. defaults to true in this tool; set false to skip the live cost read.",
+            )
+            .optional(),
           limit: paginationParams.limit.describe(
             "(list, get_telemetry) max results per page (1-100). get_telemetry defaults to 100; the list default is set by the api.",
           ),
@@ -923,6 +974,14 @@ export function registerBrowserCapabilities(
             "fingerprint overrides are creation-only; use a new browser to change them.",
           );
         }
+        if (params.action !== "create" && params.platform !== undefined) {
+          return errorResponse(
+            "error: platform is creation-only; use a new browser to change the host operating system.",
+          );
+        }
+        if (params.action !== "get" && params.include_cost !== undefined) {
+          return errorResponse("error: include_cost applies only to get.");
+        }
         if (params.action !== "create" && params.captcha_solver !== undefined) {
           return errorResponse(
             "error: captcha_solver is creation-only for a browser session.",
@@ -1015,6 +1074,8 @@ export function registerBrowserCapabilities(
               createParams.vaults = params.vaults;
             if (params.fingerprint !== undefined)
               createParams.fingerprint = params.fingerprint;
+            if (params.platform !== undefined)
+              createParams.platform = params.platform;
             if (params.headless !== undefined)
               createParams.headless = params.headless;
             if (params.gpu !== undefined) createParams.gpu = params.gpu;
@@ -1200,17 +1261,17 @@ export function registerBrowserCapabilities(
               return errorResponse(
                 "error: session_id is required for get action.",
               );
-            const browser = await client.browsers.retrieve(
-              params.session_id,
-              params.include_deleted !== undefined
-                ? { include_deleted: params.include_deleted }
-                : undefined,
-            );
+            const browser = await client.browsers.retrieve(params.session_id, {
+              include_cost: params.include_cost ?? true,
+              ...(params.include_deleted !== undefined && {
+                include_deleted: params.include_deleted,
+              }),
+            });
             if (!browser)
               return errorResponse(
                 `browser session "${params.session_id}" not found`,
               );
-            return jsonResponse(browser);
+            return jsonResponse(browserDetailWithCostNote(browser));
           }
           case "get_telemetry": {
             if (!params.session_id)
@@ -1329,11 +1390,17 @@ export function registerBrowserCapabilities(
           }
         }
       } catch (error) {
+        const note = [
+          params.action === "save_profile" ? saveProfileErrorNote : undefined,
+          browserUnsupportedFieldsNote(error),
+        ]
+          .filter((value): value is string => value !== undefined)
+          .join(" ");
         throwToolError(
           "manage_browsers",
           params.action,
           error,
-          params.action === "save_profile" ? saveProfileErrorNote : undefined,
+          note || undefined,
         );
       }
     },
