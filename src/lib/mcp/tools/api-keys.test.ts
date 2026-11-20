@@ -352,41 +352,45 @@ describe("manage_api_keys SDK parity", () => {
       calls++;
     };
 
-    const results = await callAPIKeys({ create: record, update: record }, [
-      {
-        action: "create",
-        name: "conflict",
-        days_to_expire: 30,
-        expires_at: "2030-01-01T00:00:00Z",
-      },
-      { action: "create", name: "bad-expiry", expires_at: 30 },
-      {
-        action: "create",
-        name: "missing-service-scope",
-        service_account_id: "svc_1",
-      },
-      { action: "update", api_key_id: "key_1" },
-      {
-        action: "create",
-        name: "too-many-networks",
-        policy: {
-          statements: [
-            {
-              action: "browsers:use",
-              resource: "*",
-              condition: {
-                key: "source_ip",
-                operator: "in",
-                values: Array.from(
-                  { length: 17 },
-                  (_, index) => `203.0.${index}.0/24`,
-                ),
-              },
-            },
-          ],
+    const results = await callAPIKeys(
+      { create: record, update: record, list: record },
+      [
+        { action: "list", created_by: "" },
+        {
+          action: "create",
+          name: "conflict",
+          days_to_expire: 30,
+          expires_at: "2030-01-01T00:00:00Z",
         },
-      },
-    ]);
+        { action: "create", name: "bad-expiry", expires_at: 30 },
+        {
+          action: "create",
+          name: "missing-service-scope",
+          service_account_id: "svc_1",
+        },
+        { action: "update", api_key_id: "key_1" },
+        {
+          action: "create",
+          name: "too-many-networks",
+          policy: {
+            statements: [
+              {
+                action: "browsers:use",
+                resource: "*",
+                condition: {
+                  key: "source_ip",
+                  operator: "in",
+                  values: Array.from(
+                    { length: 17 },
+                    (_, index) => `203.0.${index}.0/24`,
+                  ),
+                },
+              },
+            ],
+          },
+        },
+      ],
+    );
 
     for (const result of results) expect(result.isError).toBe(true);
     expect(calls).toBe(0);

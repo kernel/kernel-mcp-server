@@ -72,6 +72,17 @@ describe("manage_workload_identity SDK coverage", () => {
           "list_authentication_events",
         ],
       });
+      expect(JSON.stringify(tool?.inputSchema)).not.toContain('"$ref"');
+      const unprefixed = Object.entries(tool?.inputSchema.properties ?? {})
+        .filter(([name]) => name !== "action" && name !== "id")
+        .filter(
+          ([, schema]) =>
+            !String(
+              (schema as { description?: string }).description,
+            ).startsWith("("),
+        )
+        .map(([name]) => name);
+      expect(unprefixed).toEqual([]);
       expect(tool?.description).toContain("signed-in user");
       expect(tool?.description).toContain("default disabled");
       expect(tool?.description).toContain("does not enable trust");

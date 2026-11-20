@@ -13,8 +13,10 @@ import {
   errorResponse,
   jsonResponse,
   paginatedJsonResponse,
+  rejectUnusedFields,
   throwToolError,
 } from "@/lib/mcp/responses";
+import { paginationParams } from "@/lib/mcp/schemas";
 
 const taskMetadataSchema = z
   .record(z.string().min(1).max(64), z.string().max(256))
@@ -41,49 +43,6 @@ const reportDataSchema = z
     (data) => Buffer.byteLength(JSON.stringify(data), "utf8") <= 16 * 1024,
     "report_data must encode to at most 16 kb of json.",
   );
-
-const actionFields = {
-  create: [
-    "description",
-    "target_website",
-    "metadata",
-    "started_at",
-    "session_ids",
-  ],
-  list: ["session_id", "limit", "offset"],
-  get: ["task_id"],
-  link_browsers: ["task_id", "session_ids"],
-  list_report_types: ["task_id", "limit", "offset"],
-  get_report_type: ["report_type"],
-  get_report_type_version: ["report_type", "report_type_version"],
-  submit_report: [
-    "task_id",
-    "report_type",
-    "report_data",
-    "occurred_at",
-    "schema_version",
-    "session_id",
-  ],
-  list_reports: ["task_id", "report_type", "limit", "offset"],
-  get_report: ["report_id"],
-} as const;
-
-type TaskAction = keyof typeof actionFields;
-
-function unsupportedActionFields(
-  action: TaskAction,
-  params: Record<string, unknown>,
-) {
-  const allowed = new Set<string>([
-    "action",
-    "project",
-    "project_id",
-    ...actionFields[action],
-  ]);
-  return Object.entries(params)
-    .filter(([key, value]) => value !== undefined && !allowed.has(key))
-    .map(([key]) => key);
-}
 
 type TaskCreateParams = Parameters<KernelClient["tasks"]["create"]>[0];
 type ReportCreateParams = Parameters<KernelClient["reports"]["create"]>[0];
@@ -202,23 +161,12 @@ export function registerTaskCapabilities(
             "(submit_report) when the reported event happened. defaults to submission; no more than 5 minutes in the future or 30 days in the past.",
           )
           .optional(),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(100)
-          .describe(
-            "(list, list_report_types, list_reports) maximum results per page; 1-100, default 20.",
-          )
-          .optional(),
-        offset: z
-          .number()
-          .int()
-          .min(0)
-          .describe(
-            "(list, list_report_types, list_reports) pagination offset; 0 or greater, default 0.",
-          )
-          .optional(),
+        limit: paginationParams.limit.describe(
+          "(list, list_report_types, list_reports) maximum results per page; 1-100, default 20.",
+        ),
+        offset: paginationParams.offset.describe(
+          "(list, list_report_types, list_reports) pagination offset; 0 or greater, default 0.",
+        ),
       }),
       annotations: {
         title: "manage KERNEL agent tasks and reports",
@@ -230,13 +178,6 @@ export function registerTaskCapabilities(
     },
     async (params, ctx) => {
       if (!ctx.http?.authInfo) throw new Error("authentication required");
-      const unsupported = unsupportedActionFields(params.action, params);
-      if (unsupported.length > 0) {
-        return errorResponse(
-          `error: ${unsupported.join(", ")} ${unsupported.length === 1 ? "does" : "do"} not apply to ${params.action}.`,
-        );
-      }
-
       const client = dependencies.createKernelClient(
         ctx.http.authInfo.token,
         projectForOperation(ctx.http.authInfo, params),
@@ -245,6 +186,17 @@ export function registerTaskCapabilities(
       try {
         switch (params.action) {
           case "create": {
+            const unused = rejectUnusedFields("create", params, [
+              "action",
+              "project",
+              "project_id",
+              "description",
+              "target_website",
+              "metadata",
+              "started_at",
+              "session_ids",
+            ]);
+            if (unused) return unused;
             if (!params.description) {
               return errorResponse(
                 "error: description is required for create.",
@@ -268,6 +220,15 @@ export function registerTaskCapabilities(
             return jsonResponse(await client.tasks.create(body));
           }
           case "list": {
+            const unused = rejectUnusedFields("list", params, [
+              "action",
+              "project",
+              "project_id",
+              "session_id",
+              "limit",
+              "offset",
+            ]);
+            if (unused) return unused;
             const page = await client.tasks.list({
               ...(params.session_id !== undefined && {
                 session_id: params.session_id,
@@ -278,12 +239,27 @@ export function registerTaskCapabilities(
             return paginatedJsonResponse(page);
           }
           case "get": {
+            const unused = rejectUnusedFields("get", params, [
+              "action",
+              "project",
+              "project_id",
+              "task_id",
+            ]);
+            if (unused) return unused;
             if (!params.task_id) {
               return errorResponse("error: task_id is required for get.");
             }
             return jsonResponse(await client.tasks.retrieve(params.task_id));
           }
           case "link_browsers": {
+            const unused = rejectUnusedFields("link_browsers", params, [
+              "action",
+              "project",
+              "project_id",
+              "task_id",
+              "session_ids",
+            ]);
+            if (unused) return unused;
             if (!params.task_id) {
               return errorResponse(
                 "error: task_id is required for link_browsers.",
@@ -301,6 +277,15 @@ export function registerTaskCapabilities(
             );
           }
           case "list_report_types": {
+            const unused = rejectUnusedFields("list_report_types", params, [
+              "action",
+              "project",
+              "project_id",
+              "task_id",
+              "limit",
+              "offset",
+            ]);
+            if (unused) return unused;
             if (!params.task_id) {
               return errorResponse(
                 "error: task_id is required for list_report_types.",
@@ -316,6 +301,13 @@ export function registerTaskCapabilities(
             });
           }
           case "get_report_type": {
+            const unused = rejectUnusedFields("get_report_type", params, [
+              "action",
+              "project",
+              "project_id",
+              "report_type",
+            ]);
+            if (unused) return unused;
             if (!params.report_type) {
               return errorResponse(
                 "error: report_type is required for get_report_type.",
@@ -326,6 +318,18 @@ export function registerTaskCapabilities(
             );
           }
           case "get_report_type_version": {
+            const unused = rejectUnusedFields(
+              "get_report_type_version",
+              params,
+              [
+                "action",
+                "project",
+                "project_id",
+                "report_type",
+                "report_type_version",
+              ],
+            );
+            if (unused) return unused;
             if (
               !params.report_type ||
               params.report_type_version === undefined
@@ -344,6 +348,18 @@ export function registerTaskCapabilities(
             );
           }
           case "submit_report": {
+            const unused = rejectUnusedFields("submit_report", params, [
+              "action",
+              "project",
+              "project_id",
+              "task_id",
+              "report_type",
+              "report_data",
+              "occurred_at",
+              "schema_version",
+              "session_id",
+            ]);
+            if (unused) return unused;
             if (
               !params.task_id ||
               !params.report_type ||
@@ -375,6 +391,16 @@ export function registerTaskCapabilities(
             return jsonResponse(await client.reports.create(body));
           }
           case "list_reports": {
+            const unused = rejectUnusedFields("list_reports", params, [
+              "action",
+              "project",
+              "project_id",
+              "task_id",
+              "report_type",
+              "limit",
+              "offset",
+            ]);
+            if (unused) return unused;
             if (!params.task_id) {
               return errorResponse(
                 "error: task_id is required for list_reports.",
@@ -391,6 +417,13 @@ export function registerTaskCapabilities(
             return paginatedJsonResponse(page);
           }
           case "get_report": {
+            const unused = rejectUnusedFields("get_report", params, [
+              "action",
+              "project",
+              "project_id",
+              "report_id",
+            ]);
+            if (unused) return unused;
             if (!params.report_id) {
               return errorResponse(
                 "error: report_id is required for get_report.",

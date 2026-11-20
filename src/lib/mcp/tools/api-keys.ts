@@ -109,6 +109,7 @@ export function registerAPIKeyCapabilities(
           .optional(),
         created_by: z
           .string()
+          .min(1)
           .describe("(list) creator user id, matching the created_by person.")
           .optional(),
         status: z

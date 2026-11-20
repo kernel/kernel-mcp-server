@@ -246,6 +246,7 @@ describe("manage_tasks", () => {
     try {
       const { tools } = await client.listTools();
       const tool = tools.find(({ name }) => name === "manage_tasks");
+      expect(JSON.stringify(tool?.inputSchema)).not.toContain('"$ref"');
       expect(tool?.annotations).toMatchObject({
         readOnlyHint: false,
         destructiveHint: false,

@@ -9,6 +9,7 @@ import {
   errorResponse,
   jsonResponse,
   paginatedJsonResponse,
+  rejectUnusedFields,
   textResponse,
   throwToolError,
 } from "@/lib/mcp/responses";
@@ -76,13 +77,14 @@ const workloadIdentityMatchSchema = z
   .strict();
 
 const fullDateTimeSchema = z.string().datetime({ offset: true });
-const dateTimeSchema = z
-  .string()
-  .refine(
-    (value) => fullDateTimeSchema.safeParse(value).success,
-    "must be an rfc3339 date-time with an offset.",
-  )
-  .meta({ format: "date-time" });
+const dateTimeSchema = () =>
+  z
+    .string()
+    .refine(
+      (value) => fullDateTimeSchema.safeParse(value).success,
+      "must be an rfc3339 date-time with an offset.",
+    )
+    .meta({ format: "date-time" });
 
 const workloadIdentityActions = [
   "create_service_account",
@@ -104,90 +106,6 @@ const workloadIdentityActions = [
   "list_authentication_events",
 ] as const;
 
-type WorkloadIdentityAction = (typeof workloadIdentityActions)[number];
-
-const actionFields = {
-  create_service_account: ["name", "description"],
-  list_service_accounts: ["query", "status", "limit", "offset"],
-  get_service_account: ["id"],
-  update_service_account: ["id", "expected_version", "name", "description"],
-  archive_service_account: ["id"],
-  create_issuer: [
-    "name",
-    "description",
-    "enabled",
-    "issuer_url",
-    "preset_type",
-    "jwks",
-    "token_validation",
-  ],
-  list_issuers: ["enabled", "query", "status", "limit", "offset"],
-  get_issuer: ["id"],
-  update_issuer: [
-    "id",
-    "expected_version",
-    "name",
-    "description",
-    "enabled",
-    "issuer_url",
-    "preset_type",
-    "jwks",
-    "token_validation",
-  ],
-  archive_issuer: ["id"],
-  verify_issuer: ["id"],
-  create_rule: [
-    "name",
-    "description",
-    "enabled",
-    "issuer_id",
-    "match",
-    "expected_audience",
-    "service_account_id",
-    "project_id",
-    "policy",
-    "token_audience",
-    "max_token_ttl_seconds",
-  ],
-  list_rules: [
-    "issuer_id",
-    "service_account_id",
-    "project_id",
-    "query",
-    "status",
-    "limit",
-    "offset",
-  ],
-  get_rule: ["id"],
-  update_rule: [
-    "id",
-    "expected_version",
-    "name",
-    "description",
-    "enabled",
-    "issuer_id",
-    "match",
-    "expected_audience",
-    "service_account_id",
-    "project_id",
-    "policy",
-    "token_audience",
-    "max_token_ttl_seconds",
-  ],
-  archive_rule: ["id"],
-  list_authentication_events: [
-    "issuer_id",
-    "federation_rule_id",
-    "service_account_id",
-    "project_id",
-    "outcome",
-    "start_time",
-    "end_time",
-    "limit",
-    "offset",
-  ],
-} as const satisfies Record<WorkloadIdentityAction, readonly string[]>;
-
 const workloadIdentityInputSchema = z.object({
   action: z.enum(workloadIdentityActions).describe("operation to perform."),
   id: z
@@ -204,7 +122,13 @@ const workloadIdentityInputSchema = z.object({
       "(create, update) 1-128 alphanumeric or hyphen characters, starting alphanumeric.",
     )
     .optional(),
-  description: z.string().max(4096).optional(),
+  description: z
+    .string()
+    .max(4096)
+    .describe(
+      "(create/update account, issuer, rule) empty string clears on update.",
+    )
+    .optional(),
   expected_version: z
     .number()
     .int()
@@ -232,7 +156,12 @@ const workloadIdentityInputSchema = z.object({
       "(list_service_accounts, list_issuers, list_rules) status; default active.",
     )
     .optional(),
-  ...paginationParams,
+  limit: paginationParams.limit.describe(
+    "(list_*) max results per page; 1-100.",
+  ),
+  offset: paginationParams.offset.describe(
+    "(list_*) pagination offset; 0 or greater.",
+  ),
   issuer_url: z
     .string()
     .url()
@@ -267,7 +196,12 @@ const workloadIdentityInputSchema = z.object({
       "(create_rule, update_rule) provider match. up to 32 exact rfc 6901 claim conditions must all match; repository is display-only, while immutable ids define its identity.",
     )
     .optional(),
-  expected_audience: z.string().min(1).max(2048).optional(),
+  expected_audience: z
+    .string()
+    .min(1)
+    .max(2048)
+    .describe("(create_rule, update_rule) required incoming audience.")
+    .optional(),
   service_account_id: z
     .string()
     .min(1)
@@ -287,7 +221,12 @@ const workloadIdentityInputSchema = z.object({
       "(create_rule, update_rule) allow statements for that project in scoped api-key policy format; api-key actions and every unlisted action/resource are denied.",
     )
     .optional(),
-  token_audience: z.string().min(1).max(2048).optional(),
+  token_audience: z
+    .string()
+    .min(1)
+    .max(2048)
+    .describe("(create_rule, update_rule) issued credential audience.")
+    .optional(),
   max_token_ttl_seconds: z
     .number()
     .int()
@@ -302,20 +241,17 @@ const workloadIdentityInputSchema = z.object({
     .min(1)
     .describe("(list_authentication_events) federation rule filter.")
     .optional(),
-  outcome: z.enum(["success", "failure"]).optional(),
-  start_time: dateTimeSchema.optional(),
-  end_time: dateTimeSchema.optional(),
+  outcome: z
+    .enum(["success", "failure"])
+    .describe("(list_authentication_events) filter.")
+    .optional(),
+  start_time: dateTimeSchema()
+    .describe("(list_authentication_events) events at or after this time.")
+    .optional(),
+  end_time: dateTimeSchema()
+    .describe("(list_authentication_events) events at or before this time.")
+    .optional(),
 });
-
-function unsupportedActionFields(
-  action: WorkloadIdentityAction,
-  params: Record<string, unknown>,
-) {
-  const allowed = new Set<string>(["action", ...actionFields[action]]);
-  return Object.entries(params)
-    .filter(([key, value]) => value !== undefined && !allowed.has(key))
-    .map(([key]) => key);
-}
 
 type ServiceAccountCreateParams = Parameters<
   KernelClient["serviceAccounts"]["create"]
@@ -363,18 +299,17 @@ export function registerWorkloadIdentityCapabilities(
         );
       }
 
-      const unsupported = unsupportedActionFields(params.action, params);
-      if (unsupported.length > 0) {
-        return errorResponse(
-          `error: ${unsupported.join(", ")} ${unsupported.length === 1 ? "does" : "do"} not apply to ${params.action}.`,
-        );
-      }
-
       const client = dependencies.createKernelClient(ctx.http.authInfo.token);
 
       try {
         switch (params.action) {
           case "create_service_account": {
+            const unused = rejectUnusedFields(
+              "create_service_account",
+              params,
+              ["action", "name", "description"],
+            );
+            if (unused) return unused;
             if (!params.name) {
               return errorResponse(
                 "error: name is required for create_service_account.",
@@ -389,6 +324,14 @@ export function registerWorkloadIdentityCapabilities(
             return jsonResponse(await client.serviceAccounts.create(body));
           }
           case "list_service_accounts": {
+            const unused = rejectUnusedFields("list_service_accounts", params, [
+              "action",
+              "query",
+              "status",
+              "limit",
+              "offset",
+            ]);
+            if (unused) return unused;
             const page = await client.serviceAccounts.list({
               ...(params.query !== undefined && { query: params.query }),
               ...(params.status !== undefined && { status: params.status }),
@@ -398,6 +341,11 @@ export function registerWorkloadIdentityCapabilities(
             return paginatedJsonResponse(page);
           }
           case "get_service_account": {
+            const unused = rejectUnusedFields("get_service_account", params, [
+              "action",
+              "id",
+            ]);
+            if (unused) return unused;
             if (!params.id) {
               return errorResponse(
                 "error: id is required for get_service_account.",
@@ -408,6 +356,12 @@ export function registerWorkloadIdentityCapabilities(
             );
           }
           case "update_service_account": {
+            const unused = rejectUnusedFields(
+              "update_service_account",
+              params,
+              ["action", "id", "expected_version", "name", "description"],
+            );
+            if (unused) return unused;
             if (!params.id || params.expected_version === undefined) {
               return errorResponse(
                 "error: id and expected_version are required for update_service_account.",
@@ -425,6 +379,12 @@ export function registerWorkloadIdentityCapabilities(
             );
           }
           case "archive_service_account": {
+            const unused = rejectUnusedFields(
+              "archive_service_account",
+              params,
+              ["action", "id"],
+            );
+            if (unused) return unused;
             if (!params.id) {
               return errorResponse(
                 "error: id is required for archive_service_account.",
@@ -434,6 +394,17 @@ export function registerWorkloadIdentityCapabilities(
             return textResponse("service account archived successfully");
           }
           case "create_issuer": {
+            const unused = rejectUnusedFields("create_issuer", params, [
+              "action",
+              "name",
+              "description",
+              "enabled",
+              "issuer_url",
+              "preset_type",
+              "jwks",
+              "token_validation",
+            ]);
+            if (unused) return unused;
             if (!params.name) {
               return errorResponse(
                 "error: name is required for create_issuer.",
@@ -461,6 +432,15 @@ export function registerWorkloadIdentityCapabilities(
             );
           }
           case "list_issuers": {
+            const unused = rejectUnusedFields("list_issuers", params, [
+              "action",
+              "enabled",
+              "query",
+              "status",
+              "limit",
+              "offset",
+            ]);
+            if (unused) return unused;
             const page = await client.workloadIdentityIssuers.list({
               ...(params.enabled !== undefined && { enabled: params.enabled }),
               ...(params.query !== undefined && { query: params.query }),
@@ -471,6 +451,11 @@ export function registerWorkloadIdentityCapabilities(
             return paginatedJsonResponse(page);
           }
           case "get_issuer": {
+            const unused = rejectUnusedFields("get_issuer", params, [
+              "action",
+              "id",
+            ]);
+            if (unused) return unused;
             if (!params.id) {
               return errorResponse("error: id is required for get_issuer.");
             }
@@ -479,6 +464,19 @@ export function registerWorkloadIdentityCapabilities(
             );
           }
           case "update_issuer": {
+            const unused = rejectUnusedFields("update_issuer", params, [
+              "action",
+              "id",
+              "expected_version",
+              "name",
+              "description",
+              "enabled",
+              "issuer_url",
+              "preset_type",
+              "jwks",
+              "token_validation",
+            ]);
+            if (unused) return unused;
             if (!params.id || params.expected_version === undefined) {
               return errorResponse(
                 "error: id and expected_version are required for update_issuer.",
@@ -507,6 +505,11 @@ export function registerWorkloadIdentityCapabilities(
             );
           }
           case "archive_issuer": {
+            const unused = rejectUnusedFields("archive_issuer", params, [
+              "action",
+              "id",
+            ]);
+            if (unused) return unused;
             if (!params.id) {
               return errorResponse("error: id is required for archive_issuer.");
             }
@@ -516,6 +519,11 @@ export function registerWorkloadIdentityCapabilities(
             );
           }
           case "verify_issuer": {
+            const unused = rejectUnusedFields("verify_issuer", params, [
+              "action",
+              "id",
+            ]);
+            if (unused) return unused;
             if (!params.id) {
               return errorResponse("error: id is required for verify_issuer.");
             }
@@ -524,6 +532,21 @@ export function registerWorkloadIdentityCapabilities(
             );
           }
           case "create_rule": {
+            const unused = rejectUnusedFields("create_rule", params, [
+              "action",
+              "name",
+              "description",
+              "enabled",
+              "issuer_id",
+              "match",
+              "expected_audience",
+              "service_account_id",
+              "project_id",
+              "policy",
+              "token_audience",
+              "max_token_ttl_seconds",
+            ]);
+            if (unused) return unused;
             if (
               !params.name ||
               !params.issuer_id ||
@@ -565,6 +588,17 @@ export function registerWorkloadIdentityCapabilities(
             );
           }
           case "list_rules": {
+            const unused = rejectUnusedFields("list_rules", params, [
+              "action",
+              "issuer_id",
+              "service_account_id",
+              "project_id",
+              "query",
+              "status",
+              "limit",
+              "offset",
+            ]);
+            if (unused) return unused;
             const page = await client.workloadIdentityFederationRules.list({
               ...(params.issuer_id !== undefined && {
                 issuer_id: params.issuer_id,
@@ -583,6 +617,11 @@ export function registerWorkloadIdentityCapabilities(
             return paginatedJsonResponse(page);
           }
           case "get_rule": {
+            const unused = rejectUnusedFields("get_rule", params, [
+              "action",
+              "id",
+            ]);
+            if (unused) return unused;
             if (!params.id) {
               return errorResponse("error: id is required for get_rule.");
             }
@@ -591,6 +630,23 @@ export function registerWorkloadIdentityCapabilities(
             );
           }
           case "update_rule": {
+            const unused = rejectUnusedFields("update_rule", params, [
+              "action",
+              "id",
+              "expected_version",
+              "name",
+              "description",
+              "enabled",
+              "issuer_id",
+              "match",
+              "expected_audience",
+              "service_account_id",
+              "project_id",
+              "policy",
+              "token_audience",
+              "max_token_ttl_seconds",
+            ]);
+            if (unused) return unused;
             if (!params.id || params.expected_version === undefined) {
               return errorResponse(
                 "error: id and expected_version are required for update_rule.",
@@ -651,6 +707,11 @@ export function registerWorkloadIdentityCapabilities(
             );
           }
           case "archive_rule": {
+            const unused = rejectUnusedFields("archive_rule", params, [
+              "action",
+              "id",
+            ]);
+            if (unused) return unused;
             if (!params.id) {
               return errorResponse("error: id is required for archive_rule.");
             }
@@ -660,6 +721,23 @@ export function registerWorkloadIdentityCapabilities(
             );
           }
           case "list_authentication_events": {
+            const unused = rejectUnusedFields(
+              "list_authentication_events",
+              params,
+              [
+                "action",
+                "issuer_id",
+                "federation_rule_id",
+                "service_account_id",
+                "project_id",
+                "outcome",
+                "start_time",
+                "end_time",
+                "limit",
+                "offset",
+              ],
+            );
+            if (unused) return unused;
             const page = await client.workloadIdentityAuthenticationEvents.list(
               {
                 ...(params.issuer_id !== undefined && {
