@@ -1,61 +1,99 @@
-import type { McpServer } from '@modelcontextprotocol/server';
-import { z } from 'zod';
-import { defaultMcpDependencies, type McpDependencies } from '@/lib/mcp/dependencies';
-import type { KernelClient } from '@/lib/mcp/kernel-client';
-import { projectForOperation, projectSelectionInputSchema } from '@/lib/mcp/project-selection';
-import { errorResponse, jsonResponse, paginatedJsonResponse, throwToolError } from '@/lib/mcp/responses';
+import type { McpServer } from "@modelcontextprotocol/server";
+import { z } from "zod";
+import {
+  defaultMcpDependencies,
+  type McpDependencies,
+} from "@/lib/mcp/dependencies";
+import type { KernelClient } from "@/lib/mcp/kernel-client";
+import {
+  projectForOperation,
+  projectSelectionInputSchema,
+} from "@/lib/mcp/project-selection";
+import {
+  errorResponse,
+  jsonResponse,
+  paginatedJsonResponse,
+  throwToolError,
+} from "@/lib/mcp/responses";
 
 const taskMetadataSchema = z
   .record(z.string().min(1).max(64), z.string().max(256))
-  .refine((metadata) => Object.keys(metadata).length <= 20, 'metadata must have at most 20 keys.')
+  .refine(
+    (metadata) => Object.keys(metadata).length <= 20,
+    "metadata must have at most 20 keys.",
+  )
   .refine(
     (metadata) =>
       Object.entries(metadata).reduce(
-        (bytes, [key, value]) => bytes + Buffer.byteLength(key, 'utf8') + Buffer.byteLength(value, 'utf8'),
+        (bytes, [key, value]) =>
+          bytes +
+          Buffer.byteLength(key, "utf8") +
+          Buffer.byteLength(value, "utf8"),
         0,
       ) <= 4096,
-    'metadata keys and values together must be at most 4 kb.',
+    "metadata keys and values together must be at most 4 kb.",
   )
   .meta({ maxProperties: 20 });
 
 const reportDataSchema = z
   .record(z.string(), z.unknown())
   .refine(
-    (data) => Buffer.byteLength(JSON.stringify(data), 'utf8') <= 16 * 1024,
-    'report_data must encode to at most 16 kb of json.',
+    (data) => Buffer.byteLength(JSON.stringify(data), "utf8") <= 16 * 1024,
+    "report_data must encode to at most 16 kb of json.",
   );
 
 const actionFields = {
-  create: ['description', 'target_website', 'metadata', 'started_at', 'session_ids'],
-  list: ['session_id', 'limit', 'offset'],
-  get: ['task_id'],
-  link_browsers: ['task_id', 'session_ids'],
-  list_report_types: ['task_id', 'limit', 'offset'],
-  get_report_type: ['report_type'],
-  get_report_type_version: ['report_type', 'report_type_version'],
-  submit_report: ['task_id', 'report_type', 'report_data', 'occurred_at', 'schema_version', 'session_id'],
-  list_reports: ['task_id', 'report_type', 'limit', 'offset'],
-  get_report: ['report_id'],
+  create: [
+    "description",
+    "target_website",
+    "metadata",
+    "started_at",
+    "session_ids",
+  ],
+  list: ["session_id", "limit", "offset"],
+  get: ["task_id"],
+  link_browsers: ["task_id", "session_ids"],
+  list_report_types: ["task_id", "limit", "offset"],
+  get_report_type: ["report_type"],
+  get_report_type_version: ["report_type", "report_type_version"],
+  submit_report: [
+    "task_id",
+    "report_type",
+    "report_data",
+    "occurred_at",
+    "schema_version",
+    "session_id",
+  ],
+  list_reports: ["task_id", "report_type", "limit", "offset"],
+  get_report: ["report_id"],
 } as const;
 
 type TaskAction = keyof typeof actionFields;
 
-function unsupportedActionFields(action: TaskAction, params: Record<string, unknown>) {
-  const allowed = new Set<string>(['action', 'project', 'project_id', ...actionFields[action]]);
+function unsupportedActionFields(
+  action: TaskAction,
+  params: Record<string, unknown>,
+) {
+  const allowed = new Set<string>([
+    "action",
+    "project",
+    "project_id",
+    ...actionFields[action],
+  ]);
   return Object.entries(params)
     .filter(([key, value]) => value !== undefined && !allowed.has(key))
     .map(([key]) => key);
 }
 
-type TaskCreateParams = Parameters<KernelClient['tasks']['create']>[0];
-type ReportCreateParams = Parameters<KernelClient['reports']['create']>[0];
+type TaskCreateParams = Parameters<KernelClient["tasks"]["create"]>[0];
+type ReportCreateParams = Parameters<KernelClient["reports"]["create"]>[0];
 
 export function registerTaskCapabilities(
   server: McpServer,
   dependencies: McpDependencies = defaultMcpDependencies,
 ) {
   server.registerTool(
-    'manage_tasks',
+    "manage_tasks",
     {
       description:
         'manage agent tasks (only browser links can be added) and immutable typed reports. "create" defines a task; "list" returns project tasks newest first; "get" reads one and its linked browsers; "link_browsers" safely adds links. discover schemas with "list_report_types", "get_report_type", or "get_report_type_version"; use "submit_report", "list_reports" (oldest first), or "get_report" for reports. automatic sdk retries are idempotent; repeating the tool call is a new create or submission.',
@@ -63,69 +101,77 @@ export function registerTaskCapabilities(
         ...projectSelectionInputSchema(),
         action: z
           .enum([
-            'create',
-            'list',
-            'get',
-            'link_browsers',
-            'list_report_types',
-            'get_report_type',
-            'get_report_type_version',
-            'submit_report',
-            'list_reports',
-            'get_report',
+            "create",
+            "list",
+            "get",
+            "link_browsers",
+            "list_report_types",
+            "get_report_type",
+            "get_report_type_version",
+            "submit_report",
+            "list_reports",
+            "get_report",
           ])
-          .describe('operation to perform.'),
+          .describe("operation to perform."),
         task_id: z
           .string()
           .min(1)
           .describe(
-            '(get, link_browsers, list_report_types, submit_report, list_reports) task id. each task accepts at most 500 reports.',
+            "(get, link_browsers, list_report_types, submit_report, list_reports) task id. each task accepts at most 500 reports.",
           )
           .optional(),
-        report_id: z.string().min(1).describe('(get_report) report id.').optional(),
+        report_id: z
+          .string()
+          .min(1)
+          .describe("(get_report) report id.")
+          .optional(),
         description: z
           .string()
           .min(1)
           .max(4096)
-          .describe('(create) what the task is meant to accomplish, at most 4 kb.')
+          .describe(
+            "(create) what the task is meant to accomplish, at most 4 kb.",
+          )
           .optional(),
         target_website: z
           .string()
           .min(1)
           .max(253)
-          .describe('(create) hostname of the target website, without a scheme or path.')
+          .describe(
+            "(create) hostname of the target website, without a scheme or path.",
+          )
           .optional(),
         metadata: taskMetadataSchema
           .describe(
-            '(create) string key-value pairs for grouping and filtering. at most 20 keys; keys are 1-64 characters, values at most 256 characters, and keys plus values at most 4 kb.',
+            "(create) string key-value pairs for grouping and filtering. at most 20 keys; keys are 1-64 characters, values at most 256 characters, and keys plus values at most 4 kb.",
           )
           .optional(),
         started_at: z
           .string()
           .datetime({ offset: true })
           .describe(
-            '(create) when work started. defaults to task creation; no more than 5 minutes in the future or 30 days in the past.',
+            "(create) when work started. defaults to task creation; no more than 5 minutes in the future or 30 days in the past.",
           )
           .optional(),
         session_ids: z
           .array(z.string().min(1))
           .max(100)
           .describe(
-            '(create) browser ids to link; deleted browsers are accepted. (link_browsers) 1-100 browser ids to add; existing links are ignored and a task can have at most 100 linked browsers.',
+            "(create) browser ids to link; deleted browsers are accepted. (link_browsers) 1-100 browser ids to add; existing links are ignored and a task can have at most 100 linked browsers.",
           )
           .optional(),
         session_id: z
           .string()
           .min(1)
           .describe(
-            '(list) only tasks linked to this browser id. (submit_report) browser where the event was observed; it must belong to the task project, deleted browsers are accepted, and it is linked to the task if needed.',
+            "(list) only tasks linked to this browser id. (submit_report) browser where the event was observed; it must belong to the task project, deleted browsers are accepted, and it is linked to the task if needed.",
           )
           .optional(),
         report_type: z
           .string()
           .min(1)
           .describe(
-            '(get_report_type, get_report_type_version, submit_report) report type name, such as task.result; submit names are at most 128 characters. get_report_type returns every version and the latest draft 2020-12 schema, or null when all versions are retired. (list_reports) exact type filter.',
+            "(get_report_type, get_report_type_version, submit_report) report type name, such as task.result; submit names are at most 128 characters. get_report_type returns every version and the latest draft 2020-12 schema, or null when all versions are retired. (list_reports) exact type filter.",
           )
           .optional(),
         report_type_version: z
@@ -133,7 +179,7 @@ export function registerTaskCapabilities(
           .int()
           .min(1)
           .describe(
-            '(get_report_type_version) schema version number, starting at 1; retired versions can still be retrieved.',
+            "(get_report_type_version) schema version number, starting at 1; retired versions can still be retrieved.",
           )
           .optional(),
         report_data: reportDataSchema
@@ -146,14 +192,14 @@ export function registerTaskCapabilities(
           .int()
           .min(1)
           .describe(
-            '(submit_report) schema version to validate against. defaults to the latest non-retired version, which the response returns.',
+            "(submit_report) schema version to validate against. defaults to the latest non-retired version, which the response returns.",
           )
           .optional(),
         occurred_at: z
           .string()
           .datetime({ offset: true })
           .describe(
-            '(submit_report) when the reported event happened. defaults to submission; no more than 5 minutes in the future or 30 days in the past.',
+            "(submit_report) when the reported event happened. defaults to submission; no more than 5 minutes in the future or 30 days in the past.",
           )
           .optional(),
         limit: z
@@ -161,17 +207,21 @@ export function registerTaskCapabilities(
           .int()
           .min(1)
           .max(100)
-          .describe('(list, list_report_types, list_reports) maximum results per page; 1-100, default 20.')
+          .describe(
+            "(list, list_report_types, list_reports) maximum results per page; 1-100, default 20.",
+          )
           .optional(),
         offset: z
           .number()
           .int()
           .min(0)
-          .describe('(list, list_report_types, list_reports) pagination offset; 0 or greater, default 0.')
+          .describe(
+            "(list, list_report_types, list_reports) pagination offset; 0 or greater, default 0.",
+          )
           .optional(),
       }),
       annotations: {
-        title: 'manage KERNEL agent tasks and reports',
+        title: "manage KERNEL agent tasks and reports",
         readOnlyHint: false,
         destructiveHint: false,
         idempotentHint: false,
@@ -179,11 +229,11 @@ export function registerTaskCapabilities(
       },
     },
     async (params, ctx) => {
-      if (!ctx.http?.authInfo) throw new Error('authentication required');
+      if (!ctx.http?.authInfo) throw new Error("authentication required");
       const unsupported = unsupportedActionFields(params.action, params);
       if (unsupported.length > 0) {
         return errorResponse(
-          `error: ${unsupported.join(', ')} ${unsupported.length === 1 ? 'does' : 'do'} not apply to ${params.action}.`,
+          `error: ${unsupported.join(", ")} ${unsupported.length === 1 ? "does" : "do"} not apply to ${params.action}.`,
         );
       }
 
@@ -194,9 +244,11 @@ export function registerTaskCapabilities(
 
       try {
         switch (params.action) {
-          case 'create': {
+          case "create": {
             if (!params.description) {
-              return errorResponse('error: description is required for create.');
+              return errorResponse(
+                "error: description is required for create.",
+              );
             }
             const body: TaskCreateParams = {
               description: params.description,
@@ -215,7 +267,7 @@ export function registerTaskCapabilities(
             };
             return jsonResponse(await client.tasks.create(body));
           }
-          case 'list': {
+          case "list": {
             const page = await client.tasks.list({
               ...(params.session_id !== undefined && {
                 session_id: params.session_id,
@@ -225,18 +277,22 @@ export function registerTaskCapabilities(
             });
             return paginatedJsonResponse(page);
           }
-          case 'get': {
+          case "get": {
             if (!params.task_id) {
-              return errorResponse('error: task_id is required for get.');
+              return errorResponse("error: task_id is required for get.");
             }
             return jsonResponse(await client.tasks.retrieve(params.task_id));
           }
-          case 'link_browsers': {
+          case "link_browsers": {
             if (!params.task_id) {
-              return errorResponse('error: task_id is required for link_browsers.');
+              return errorResponse(
+                "error: task_id is required for link_browsers.",
+              );
             }
             if (!params.session_ids || params.session_ids.length === 0) {
-              return errorResponse('error: session_ids is required for link_browsers.');
+              return errorResponse(
+                "error: session_ids is required for link_browsers.",
+              );
             }
             return jsonResponse(
               await client.tasks.linkBrowsers(params.task_id, {
@@ -244,9 +300,11 @@ export function registerTaskCapabilities(
               }),
             );
           }
-          case 'list_report_types': {
+          case "list_report_types": {
             if (!params.task_id) {
-              return errorResponse('error: task_id is required for list_report_types.');
+              return errorResponse(
+                "error: task_id is required for list_report_types.",
+              );
             }
             const page = await client.reportTypes.list({
               task_id: params.task_id,
@@ -254,36 +312,50 @@ export function registerTaskCapabilities(
               ...(params.offset !== undefined && { offset: params.offset }),
             });
             return paginatedJsonResponse(page, {
-              note: 'use get_report_type to read the latest json schema before submitting data; latest_version is 0 when every version is retired.',
+              note: "use get_report_type to read the latest json schema before submitting data; latest_version is 0 when every version is retired.",
             });
           }
-          case 'get_report_type': {
+          case "get_report_type": {
             if (!params.report_type) {
-              return errorResponse('error: report_type is required for get_report_type.');
-            }
-            return jsonResponse(await client.reportTypes.retrieve(params.report_type));
-          }
-          case 'get_report_type_version': {
-            if (!params.report_type || params.report_type_version === undefined) {
               return errorResponse(
-                'error: report_type and report_type_version are required for get_report_type_version.',
+                "error: report_type is required for get_report_type.",
               );
             }
             return jsonResponse(
-              await client.reportTypes.versions.retrieve(params.report_type_version, {
-                type: params.report_type,
-              }),
+              await client.reportTypes.retrieve(params.report_type),
             );
           }
-          case 'submit_report': {
-            if (!params.task_id || !params.report_type || params.report_data === undefined) {
+          case "get_report_type_version": {
+            if (
+              !params.report_type ||
+              params.report_type_version === undefined
+            ) {
               return errorResponse(
-                'error: task_id, report_type, and report_data are required for submit_report.',
+                "error: report_type and report_type_version are required for get_report_type_version.",
+              );
+            }
+            return jsonResponse(
+              await client.reportTypes.versions.retrieve(
+                params.report_type_version,
+                {
+                  type: params.report_type,
+                },
+              ),
+            );
+          }
+          case "submit_report": {
+            if (
+              !params.task_id ||
+              !params.report_type ||
+              params.report_data === undefined
+            ) {
+              return errorResponse(
+                "error: task_id, report_type, and report_data are required for submit_report.",
               );
             }
             if (params.report_type.length > 128) {
               return errorResponse(
-                'error: report_type must be at most 128 characters for submit_report.',
+                "error: report_type must be at most 128 characters for submit_report.",
               );
             }
             const body: ReportCreateParams = {
@@ -302,9 +374,11 @@ export function registerTaskCapabilities(
             };
             return jsonResponse(await client.reports.create(body));
           }
-          case 'list_reports': {
+          case "list_reports": {
             if (!params.task_id) {
-              return errorResponse('error: task_id is required for list_reports.');
+              return errorResponse(
+                "error: task_id is required for list_reports.",
+              );
             }
             const page = await client.reports.list({
               task_id: params.task_id,
@@ -316,15 +390,19 @@ export function registerTaskCapabilities(
             });
             return paginatedJsonResponse(page);
           }
-          case 'get_report': {
+          case "get_report": {
             if (!params.report_id) {
-              return errorResponse('error: report_id is required for get_report.');
+              return errorResponse(
+                "error: report_id is required for get_report.",
+              );
             }
-            return jsonResponse(await client.reports.retrieve(params.report_id));
+            return jsonResponse(
+              await client.reports.retrieve(params.report_id),
+            );
           }
         }
       } catch (error) {
-        throwToolError('manage_tasks', params.action, error);
+        throwToolError("manage_tasks", params.action, error);
       }
     },
   );

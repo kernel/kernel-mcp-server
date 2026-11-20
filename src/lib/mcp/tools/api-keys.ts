@@ -11,10 +11,7 @@ import {
   textResponse,
   throwToolError,
 } from "@/lib/mcp/responses";
-import {
-  apiKeyPolicySchema,
-  paginationParams,
-} from "@/lib/mcp/schemas";
+import { apiKeyPolicySchema, paginationParams } from "@/lib/mcp/schemas";
 
 export function registerAPIKeyCapabilities(
   server: McpServer,
@@ -27,7 +24,7 @@ export function registerAPIKeyCapabilities(
     "manage_api_keys",
     {
       description:
-        'manage KERNEL api keys: create personal/service-account keys, list or get masked keys, update names/policies, rotate, or delete. policies deny unlisted access and may use source_ip; service-account keys require an administrator, project, and policy. create/rotate return plaintext once—keep it secret. delete/immediate rotation end attributed browsers asynchronously and discard unsaved changes; grace or natural expiry does not.',
+        "manage KERNEL api keys: create personal/service-account keys, list or get masked keys, update names/policies, rotate, or delete. policies deny unlisted access and may use source_ip; service-account keys require an administrator, project, and policy. create/rotate return plaintext once—keep it secret. delete/immediate rotation end attributed browsers asynchronously and discard unsaved changes; grace or natural expiry does not.",
       inputSchema: z.object({
         action: z
           .enum(["create", "list", "get", "update", "rotate", "delete"])
@@ -152,7 +149,9 @@ export function registerAPIKeyCapabilities(
         params.action !== "update" &&
         params.policy !== undefined
       ) {
-        return errorResponse("error: policy applies only to create and update.");
+        return errorResponse(
+          "error: policy applies only to create and update.",
+        );
       }
       if (
         params.action !== "create" &&
@@ -168,7 +167,9 @@ export function registerAPIKeyCapabilities(
         params.action !== "list" &&
         params.project_id !== undefined
       ) {
-        return errorResponse("error: project_id applies only to create and list.");
+        return errorResponse(
+          "error: project_id applies only to create and list.",
+        );
       }
       if (params.action === "list" && params.project_id === null) {
         return errorResponse(
