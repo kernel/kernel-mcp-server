@@ -403,6 +403,17 @@ async function readBrowserTelemetry(
   return textResponse(serializedResponse);
 }
 
+const browserCostNote =
+  'cost is returned only by browser detail reads; manage_browsers action "list" and other browser responses omit it. estimated_usage_spend_usd is a gross provisional usd browser-meter cost before credits, subscriptions, tax, or adjustments, not an invoice total; it appears only with status "provisional", including "0" for a completed zero-uptime session. status "pending" means the billing checkpoint or rate calculation is not ready, while "unavailable" means the session cannot currently be priced safely. as_of is the time of the live uptime read or durable billing checkpoint; running or recently deleted sessions may accrue additional usage.';
+
+function browserDetailWithCostNote(
+  browser: Awaited<ReturnType<KernelClient["browsers"]["retrieve"]>>,
+) {
+  return browser.cost === undefined
+    ? browser
+    : { ...browser, note: browserCostNote };
+}
+
 function browserSessionNextActions(sessionId: string) {
   return [
     `drive the browser with webmcp, browser_repl, execute_playwright_code, or computer_action using session_id "${sessionId}", preferring the first that can carry the current step.`,
@@ -495,7 +506,8 @@ export function registerBrowserCapabilities(
         "kernel://orgs/{organizationId}/projects/{projectId}/browsers/{sessionId}",
       variableName: "sessionId",
       resourceLabel: "browser session",
-      read: (client, sessionId) => client.browsers.retrieve(sessionId),
+      read: async (client, sessionId) =>
+        browserDetailWithCostNote(await client.browsers.retrieve(sessionId)),
     },
     dependencies,
   );
@@ -505,7 +517,7 @@ export function registerBrowserCapabilities(
     "manage_browsers",
     {
       description:
-        'manage the browser sessions that every web task runs in, and their archived telemetry. once a session exists, drive it with webmcp, browser_repl, execute_playwright_code, or computer_action, preferring the first that can carry the current step. use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details, "get_telemetry" to diagnose active or deleted sessions, "create_live_view" to mint a read or control live-view url for a headful browser, "save_profile" to snapshot a running session to a profile without ending it, and "delete" when finished. live view urls are bearer credentials that cannot be revoked before they expire. save_profile restarts the browser: cdp, playwright, and webdriver connections close and tabs reload, so call it at a stable point, such as right after a login completes. live sessions can be addressed by id or by the name given at creation or set on update; deleted sessions only by id. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
+        'manage the browser sessions that every web task runs in, and their archived telemetry. once a session exists, drive it with webmcp, browser_repl, execute_playwright_code, or computer_action, preferring the first that can carry the current step. use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details including provisional browser-session usage cost when available, "get_telemetry" to diagnose active or deleted sessions, "create_live_view" to mint a read or control live-view url for a headful browser, "save_profile" to snapshot a running session to a profile without ending it, and "delete" when finished. live view urls are bearer credentials that cannot be revoked before they expire. save_profile restarts the browser: cdp, playwright, and webdriver connections close and tabs reload, so call it at a stable point, such as right after a login completes. live sessions can be addressed by id or by the name given at creation or set on update; deleted sessions only by id. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
       inputSchema: z.strictObject(
         {
           ...projectSelectionInputSchema(),
@@ -1210,7 +1222,7 @@ export function registerBrowserCapabilities(
               return errorResponse(
                 `browser session "${params.session_id}" not found`,
               );
-            return jsonResponse(browser);
+            return jsonResponse(browserDetailWithCostNote(browser));
           }
           case "get_telemetry": {
             if (!params.session_id)
