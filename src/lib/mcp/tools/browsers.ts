@@ -1000,7 +1000,8 @@ export function registerBrowserCapabilities(
           case "create": {
             if (
               params.fingerprint !== undefined &&
-              (params.captcha_solver?.enabled !== true ||
+              ((params.captcha_solver?.enabled !== true &&
+                params.stealth !== true) ||
                 params.headless === true ||
                 params.gpu === true ||
                 params.memory !== undefined)

@@ -1330,6 +1330,16 @@ describe("manage_browsers captcha solving and fingerprint overrides", () => {
         },
       });
       expect(defaults.isError).toBeFalsy();
+      // The deprecated stealth alias enables captcha solving, so it satisfies the requirement.
+      const stealth = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "create",
+          fingerprint: { os: "macos" },
+          stealth: true,
+        },
+      });
+      expect(stealth.isError).toBeFalsy();
       expect(creates).toEqual([
         {
           fingerprint: { os: "linux" },
@@ -1340,6 +1350,10 @@ describe("manage_browsers captcha solving and fingerprint overrides", () => {
         {
           fingerprint: { os: "macos" },
           captcha_solver: { enabled: true },
+        },
+        {
+          fingerprint: { os: "macos" },
+          stealth: true,
         },
       ]);
     } finally {
@@ -1396,6 +1410,17 @@ describe("manage_browsers captcha solving and fingerprint overrides", () => {
         {
           action: "create",
           fingerprint: { os: "macos" },
+        },
+        {
+          action: "create",
+          fingerprint: { os: "macos" },
+          stealth: false,
+        },
+        {
+          action: "create",
+          fingerprint: { os: "macos" },
+          stealth: true,
+          headless: true,
         },
         {
           action: "update",
