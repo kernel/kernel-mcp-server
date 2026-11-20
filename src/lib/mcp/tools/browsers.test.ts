@@ -1501,6 +1501,73 @@ describe("manage_browsers region", () => {
   });
 });
 
+describe("manage_browsers cost details", () => {
+  test("returns detail-only provisional cost guidance and preserves zero spend", async () => {
+    const costs = {
+      brr_provisional: {
+        status: "provisional",
+        estimated_usage_spend_usd: "0",
+        as_of: "2026-11-20T12:34:56Z",
+      },
+      brr_pending: { status: "pending" },
+      brr_unavailable: { status: "unavailable" },
+    } as const;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          retrieve: async (sessionId: keyof typeof costs) => ({
+            session_id: sessionId,
+            cost: costs[sessionId],
+          }),
+        },
+      },
+    );
+
+    try {
+      const results = [];
+      for (const session_id of Object.keys(costs)) {
+        results.push(
+          toolResultJSON(
+            await client.callTool({
+              name: "manage_browsers",
+              arguments: { action: "get", session_id },
+            }),
+          ),
+        );
+      }
+
+      expect(results.map(({ cost }) => cost)).toEqual(Object.values(costs));
+      expect(results[0].cost).toEqual({
+        status: "provisional",
+        estimated_usage_spend_usd: "0",
+        as_of: "2026-11-20T12:34:56Z",
+      });
+      for (const { note } of results) {
+        expect(note).toContain("gross provisional usd browser-meter cost");
+        expect(note).toContain("not an invoice total");
+        expect(note).toContain('status "pending"');
+        expect(note).toContain('"unavailable"');
+        expect(note).toContain("may accrue additional usage");
+      }
+
+      const resource = (await client.readResource({
+        uri: "kernel://orgs/org_test/projects/proj_test/browsers/brr_provisional",
+      })) as TextResourceResult;
+      expect(JSON.parse(resource.contents[0].text)).toEqual(results[0]);
+
+      const browserTool = (await client.listTools()).tools.find(
+        ({ name }) => name === "manage_browsers",
+      );
+      expect(browserTool?.description).toContain(
+        '"get" for full details including provisional browser-session usage cost when available',
+      );
+    } finally {
+      await close();
+    }
+  });
+});
+
 describe("manage_browsers replay creation and live view", () => {
   test("forwards start_replay=false and returns replay metadata", async () => {
     const calls: unknown[] = [];
