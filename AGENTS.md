@@ -85,6 +85,12 @@ Prettier formats the following file types: `*.ts`, `*.js`, `*.json`, `*.md`
 
 Model-facing JSON (tool results and resources) is compact: use `jsonResponse` or `JSON.stringify(value)` without indentation.
 
+### Opt-in request parameters
+
+When the SDK adds a request parameter that the API defaults off because it adds work or latency (for example `include_cost` on browser get), the tool defaults it off too. Send it only when the caller passes it, and say the default is off in its `.describe()` text. Resources take no caller parameters, so they never send it. This also covers such a parameter that an unmerged coverage update already turned on.
+
+Keep existing intentional MCP defaults, such as the 24-hour expiry on control live-view URLs.
+
 ## Project Structure
 
 - `src/` - Source code directory
