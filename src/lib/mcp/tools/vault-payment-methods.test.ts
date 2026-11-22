@@ -681,6 +681,20 @@ describe("Link balance setup", () => {
       Response.json({ type: "link_balance_setup", url: balanceSetupURL }),
     ]);
     try {
+      const items = (await fixture.client.listTools()).tools.find(
+        ({ name }) => name === "manage_vault_items",
+      );
+      const inputsDescription = String(
+        (
+          items?.inputSchema.properties?.inputs as
+            | { description?: string }
+            | undefined
+        )?.description,
+      );
+      expect(inputsDescription).toContain("at least 100");
+      expect(inputsDescription).toContain("over $150 added");
+      expect(inputsDescription).toContain("at most 50000");
+
       const result = toolResultJSON(
         await fixture.call("manage_vault_items", {
           ...target,

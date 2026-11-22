@@ -1190,7 +1190,7 @@ describe("manage_browsers location, memory, and conditional allowlists", () => {
     }
   });
 
-  test("forwards false detail flags and requests cost by default", async () => {
+  test("forwards explicit detail flags and leaves opt-in cost off by default", async () => {
     const calls: unknown[] = [];
     const { client, close } = await connectTestMcp(
       registerBrowserCapabilities,
@@ -1221,9 +1221,18 @@ describe("manage_browsers location, memory, and conditional allowlists", () => {
           session_id: "brr_active",
         },
       });
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "get",
+          session_id: "brr_costed",
+          include_cost: true,
+        },
+      });
       expect(calls).toEqual([
         ["brr_deleted", { include_cost: false, include_deleted: false }],
-        ["brr_active", { include_cost: true }],
+        ["brr_active"],
+        ["brr_costed", { include_cost: true }],
       ]);
     } finally {
       await close();
@@ -1485,10 +1494,12 @@ describe("manage_browsers host platform", () => {
         | undefined;
       expect(platform?.properties?.os?.enum).toEqual(["linux", "macos"]);
       expect(platform?.description).toContain(
-        "reported os override does not change the host",
+        "reported browser os override does not change the host",
       );
+      expect(platform?.description).toContain("profile_id/profile_name");
       expect(platform?.description).toContain("platform_unavailable");
       expect(platform?.description).toContain("unsupported_configuration");
+      expect(platform?.description).toContain("unsupported_fields");
 
       const created = toolResultJSON(
         await client.callTool({
@@ -1631,11 +1642,15 @@ describe("manage_browsers cost details", () => {
       registerBrowserCapabilities,
       {
         browsers: {
-          retrieve: async (sessionId: keyof typeof costs, query: unknown) => {
-            calls.push([sessionId, query]);
+          retrieve: async (...args: unknown[]) => {
+            calls.push(args);
+            const [sessionId, query] = args as [
+              keyof typeof costs,
+              { include_cost?: boolean } | undefined,
+            ];
             return {
               session_id: sessionId,
-              cost: costs[sessionId],
+              ...(query?.include_cost && { cost: costs[sessionId] }),
             };
           },
         },
@@ -1649,7 +1664,7 @@ describe("manage_browsers cost details", () => {
           toolResultJSON(
             await client.callTool({
               name: "manage_browsers",
-              arguments: { action: "get", session_id },
+              arguments: { action: "get", session_id, include_cost: true },
             }),
           ),
         );
@@ -1672,22 +1687,24 @@ describe("manage_browsers cost details", () => {
       const resource = (await client.readResource({
         uri: "kernel://orgs/org_test/projects/proj_test/browsers/brr_provisional",
       })) as TextResourceResult;
-      expect(JSON.parse(resource.contents[0].text)).toEqual(results[0]);
+      expect(JSON.parse(resource.contents[0].text)).toEqual({
+        session_id: "brr_provisional",
+      });
       expect(calls).toEqual([
         ["brr_provisional", { include_cost: true }],
         ["brr_pending", { include_cost: true }],
         ["brr_unavailable", { include_cost: true }],
-        ["brr_provisional", { include_cost: true }],
+        ["brr_provisional"],
       ]);
 
       const browserTool = (await client.listTools()).tools.find(
         ({ name }) => name === "manage_browsers",
       );
       expect(browserTool?.description).toContain(
-        '"get" for full details including provisional browser-session usage cost when available',
+        '"get" for full details and optional provisional browser-session usage cost',
       );
       expect(browserTool?.inputSchema.properties?.include_cost).toMatchObject({
-        description: expect.stringContaining("defaults to true"),
+        description: expect.stringContaining("default is off"),
       });
     } finally {
       await close();

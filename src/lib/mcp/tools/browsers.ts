@@ -526,10 +526,7 @@ export function registerBrowserCapabilities(
         "kernel://orgs/{organizationId}/projects/{projectId}/browsers/{sessionId}",
       variableName: "sessionId",
       resourceLabel: "browser session",
-      read: async (client, sessionId) =>
-        browserDetailWithCostNote(
-          await client.browsers.retrieve(sessionId, { include_cost: true }),
-        ),
+      read: (client, sessionId) => client.browsers.retrieve(sessionId),
     },
     dependencies,
   );
@@ -539,7 +536,7 @@ export function registerBrowserCapabilities(
     "manage_browsers",
     {
       description:
-        'manage the browser sessions that every web task runs in, and their archived telemetry. once a session exists, drive it with webmcp, browser_repl, execute_playwright_code, or computer_action, preferring the first that can carry the current step. use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details including provisional browser-session usage cost when available, "get_telemetry" to diagnose active or deleted sessions, "create_live_view" to mint a read or control live-view url for a headful browser, "save_profile" to snapshot a running session to a profile without ending it, and "delete" when finished. live view urls are bearer credentials that cannot be revoked before they expire. save_profile restarts the browser: cdp, playwright, and webdriver connections close and tabs reload, so call it at a stable point, such as right after a login completes. live sessions can be addressed by id or by the name given at creation or set on update; deleted sessions only by id. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
+        'manage the browser sessions that every web task runs in, and their archived telemetry. once a session exists, drive it with webmcp, browser_repl, execute_playwright_code, or computer_action, preferring the first that can carry the current step. use "list" to choose an existing session, "create" before browser control, "update" to change supported session settings, "get" for full details and optional provisional browser-session usage cost, "get_telemetry" to diagnose active or deleted sessions, "create_live_view" to mint a read or control live-view url for a headful browser, "save_profile" to snapshot a running session to a profile without ending it, and "delete" when finished. live view urls are bearer credentials that cannot be revoked before they expire. save_profile restarts the browser: cdp, playwright, and webdriver connections close and tabs reload, so call it at a stable point, such as right after a login completes. live sessions can be addressed by id or by the name given at creation or set on update; deleted sessions only by id. get_telemetry compacts events by default; set compact=false with explicit categories and a limit of at most 5 when raw headers, request data, response bodies, or other omitted fields are needed.',
       inputSchema: z.strictObject(
         {
           ...projectSelectionInputSchema(),
@@ -640,7 +637,7 @@ export function registerBrowserCapabilities(
             })
             .strict()
             .describe(
-              "(create) host os. linux is default; a reported os override does not change the host. macos currently returns platform_unavailable. it is headful and us-east-only; headless=true, memory, gpu, video_memory, profiles, location, reported browser attributes, and other regions return unsupported_configuration with unsupported_fields.",
+              "(create) host os. omit or use linux; the reported browser os override does not change the host. macos is currently unavailable and returns platform_unavailable. macos is headful and us-east-only; headless=true, memory, gpu, video_memory, profile_id/profile_name, location, reported browser settings, or another region returns unsupported_configuration with unsupported_fields.",
             )
             .optional(),
           headless: z
@@ -847,7 +844,7 @@ export function registerBrowserCapabilities(
           include_cost: z
             .boolean()
             .describe(
-              "(get) include the session's provisional usage cost. defaults to true in this tool; set false to skip the live cost read.",
+              "(get) include provisional session usage cost. default is off; send true to calculate it.",
             )
             .optional(),
           limit: paginationParams.limit.describe(
@@ -1261,12 +1258,18 @@ export function registerBrowserCapabilities(
               return errorResponse(
                 "error: session_id is required for get action.",
               );
-            const browser = await client.browsers.retrieve(params.session_id, {
-              include_cost: params.include_cost ?? true,
-              ...(params.include_deleted !== undefined && {
-                include_deleted: params.include_deleted,
-              }),
-            });
+            const browser =
+              params.include_cost === undefined &&
+              params.include_deleted === undefined
+                ? await client.browsers.retrieve(params.session_id)
+                : await client.browsers.retrieve(params.session_id, {
+                    ...(params.include_cost !== undefined && {
+                      include_cost: params.include_cost,
+                    }),
+                    ...(params.include_deleted !== undefined && {
+                      include_deleted: params.include_deleted,
+                    }),
+                  });
             if (!browser)
               return errorResponse(
                 `browser session "${params.session_id}" not found`,
