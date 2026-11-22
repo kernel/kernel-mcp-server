@@ -6,6 +6,7 @@ import {
 } from "node:crypto";
 import {
   createRemoteJWKSet,
+  decodeJwt,
   decodeProtectedHeader,
   errors,
   jwtVerify,
@@ -111,15 +112,24 @@ const serverFault = (message: string) =>
 const reason = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
-// Matches the Kernel API's own selector: a compact JWT whose header typ is
-// at+jwt. Clerk session tokens carry typ JWT and keep their existing path.
+// Native MCP tokens are compact at+jwt access tokens whose sole audience is
+// the MCP resource. API-audience at+jwt tokens, including workload-identity
+// credentials, must go directly to the Kernel API instead of being exchanged.
+// Clerk session tokens carry typ JWT and keep their existing path.
 export function isNativeOAuthCredential(token: string): boolean {
   if (token.split(".").length !== 3) return false;
   try {
     const typ = decodeProtectedHeader(token).typ?.toLowerCase();
-    return (
-      typ === ACCESS_TOKEN_TYPE || typ === `application/${ACCESS_TOKEN_TYPE}`
-    );
+    if (
+      typ !== ACCESS_TOKEN_TYPE &&
+      typ !== `application/${ACCESS_TOKEN_TYPE}`
+    )
+      return false;
+    const audience = decodeJwt(token).aud;
+    const audiences = typeof audience === "string" ? [audience] : audience;
+    if (!audiences || audiences.length !== 1) return false;
+    const resource = new URL(audiences[0]!);
+    return resource.pathname === "/mcp" && !resource.search && !resource.hash;
   } catch {
     return false;
   }

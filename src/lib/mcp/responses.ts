@@ -67,6 +67,23 @@ export function errorResponse(text: string) {
   return { ...textResponse(text), isError: true as const };
 }
 
+// Rejects inputs the current action does not read, so a misplaced field fails
+// instead of being silently ignored. Call it from each action's branch with the
+// fields that branch forwards.
+export function rejectUnusedFields(
+  action: string,
+  params: Record<string, unknown>,
+  used: readonly string[],
+) {
+  const unused = Object.entries(params)
+    .filter(([key, value]) => value !== undefined && !used.includes(key))
+    .map(([key]) => key);
+  if (unused.length === 0) return undefined;
+  return errorResponse(
+    `error: ${unused.join(", ")} ${unused.length === 1 ? "does" : "do"} not apply to ${action}.`,
+  );
+}
+
 export function apiErrorCode(error: APIError) {
   if (
     error.error &&

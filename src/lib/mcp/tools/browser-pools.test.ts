@@ -24,23 +24,28 @@ type ToolHandler = (
 function captureBrowserPoolTool() {
   let handler: ToolHandler | undefined;
   let schema: Record<string, z.ZodType> | undefined;
+  let description: string | undefined;
   const server = {
     registerResource() {},
     registerTool(
       name: string,
-      config: { inputSchema: z.ZodObject<Record<string, z.ZodType>> },
+      config: {
+        description: string;
+        inputSchema: z.ZodObject<Record<string, z.ZodType>>;
+      },
       callback: ToolHandler,
     ) {
       if (name !== "manage_browser_pools") return;
+      description = config.description;
       schema = config.inputSchema.shape;
       handler = callback;
     },
   } as unknown as McpServer;
 
   registerBrowserPoolCapabilities(server);
-  if (!handler || !schema)
+  if (!handler || !schema || !description)
     throw new Error("manage_browser_pools was not registered");
-  return { handler, schema };
+  return { handler, schema, description };
 }
 
 const auth = projectScopedExtra();
@@ -56,6 +61,8 @@ function pool() {
     extension_ids: ["extension_resolved"],
     browser_pool_config: {
       size: 3,
+      captcha_solver: { enabled: false },
+      start_replay: true,
       profile: { name: "configured-profile-name" },
       extensions: [{ name: "configured-extension-name" }],
     },
@@ -92,6 +99,10 @@ describe("browser-pool contract parity", () => {
       expect(schema.memory.safeParse(memory).success).toBe(true);
     expect(schema.memory.safeParse("6GiB").success).toBe(false);
     expect(schema.expected_network.safeParse({}).success).toBe(true);
+    expect(
+      schema.captcha_solver.safeParse({ enabled: false }).success,
+    ).toBe(true);
+    expect(schema.captcha_solver.safeParse({}).success).toBe(false);
     expect(schema.id_or_name.safeParse("").success).toBe(false);
     expect(schema.name.safeParse("").success).toBe(false);
   });
@@ -116,9 +127,50 @@ describe("browser-pool contract parity", () => {
     expect(response.browser_pool.config).toMatchObject({
       profile_id: "profile_resolved",
       extension_ids: ["extension_resolved"],
+      captcha_solver: { enabled: false },
+      start_replay: true,
     });
     expect(response.browser_pool.config).not.toHaveProperty("profile");
     expect(response.browser_pool.config).not.toHaveProperty("extensions");
+  });
+
+  test("rejects stealth with captcha solving explicitly disabled", async () => {
+    let calls = 0;
+    kernelClientMock.factory = () => ({
+      browserPools: {
+        create: async () => {
+          calls++;
+          return pool();
+        },
+        update: async () => {
+          calls++;
+          return pool();
+        },
+      },
+    });
+    const { handler } = captureBrowserPoolTool();
+
+    for (const params of [
+      {
+        action: "create",
+        size: 1,
+        stealth: true,
+        captcha_solver: { enabled: false },
+      },
+      {
+        action: "update",
+        id_or_name: "pool_1",
+        stealth: true,
+        captcha_solver: { enabled: false },
+      },
+    ]) {
+      const result = await handler(params, auth);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(
+        "stealth=true cannot be combined",
+      );
+    }
+    expect(calls).toBe(0);
   });
 
   test("rejects an update with no fields", async () => {
@@ -257,10 +309,12 @@ describe("browser-pool contract parity", () => {
         action: "create",
         size: 1,
         headless: true,
+        captcha_solver: { enabled: false },
         memory: "4GiB",
         region: "ap-southeast",
         fill_rate_per_minute: 0,
         refresh_on_profile_update: false,
+        start_replay: false,
         extensions: [{ id: "ext_1" }, { name: "second-extension" }],
         telemetry: {
           enabled: true,
@@ -274,11 +328,13 @@ describe("browser-pool contract parity", () => {
         action: "update",
         id_or_name: "pool_1",
         headless: false,
+        captcha_solver: { enabled: true },
         memory: "1GiB",
         expected_network: {},
         discard_all_idle: false,
         fill_rate_per_minute: 0,
         refresh_on_profile_update: false,
+        start_replay: true,
         extensions: [],
         telemetry: { enabled: false },
       },
@@ -289,10 +345,12 @@ describe("browser-pool contract parity", () => {
       {
         size: 1,
         headless: true,
+        captcha_solver: { enabled: false },
         memory: "4GiB",
         region: "ap-southeast",
         fill_rate_per_minute: 0,
         refresh_on_profile_update: false,
+        start_replay: false,
         extensions: [{ id: "ext_1" }, { name: "second-extension" }],
         telemetry: {
           enabled: true,
@@ -305,11 +363,13 @@ describe("browser-pool contract parity", () => {
         "pool_1",
         {
           headless: false,
+          captcha_solver: { enabled: true },
           memory: "1GiB",
           expected_network: {},
           discard_all_idle: false,
           fill_rate_per_minute: 0,
           refresh_on_profile_update: false,
+          start_replay: true,
           extensions: [],
           telemetry: { enabled: false },
         },
@@ -406,7 +466,7 @@ describe("browser-pool contract parity", () => {
     });
   });
 
-  test("forwards acquire overrides and returns network, memory, and location", async () => {
+  test("forwards acquire overrides and returns leased time, network, memory, and location", async () => {
     const network = { allowed_hosts: ["example.com"] };
     const location = {
       timezone: "America/New_York",
@@ -421,15 +481,22 @@ describe("browser-pool contract parity", () => {
           acquireCalls.push(args);
           return {
             session_id: "brr_1",
+            leased_at: "2026-08-08T12:34:56Z",
             pool: { id: "pool_1" },
+            replay: {
+              replay_id: "rpl_1",
+              started_at: "2026-08-08T12:34:56Z",
+            },
             network,
             memory: "2GiB",
+            captcha_solver: { enabled: true },
+            fingerprint: { os: "linux" },
             location,
           };
         },
       },
     });
-    const { handler } = captureBrowserPoolTool();
+    const { handler, description } = captureBrowserPoolTool();
 
     const result = await handler(
       {
@@ -439,6 +506,7 @@ describe("browser-pool contract parity", () => {
         name: "checkout-lease",
         profile_id: "profile_1",
         save_profile_changes: false,
+        start_replay: false,
         start_url: "https://example.com",
         tags: { flow: "checkout" },
         telemetry: { browser: { network: { enabled: false } } },
@@ -446,6 +514,7 @@ describe("browser-pool contract parity", () => {
       auth,
     );
 
+    expect(description).toContain("leased_at");
     expect(acquireCalls).toEqual([
       [
         "pool_1",
@@ -453,6 +522,7 @@ describe("browser-pool contract parity", () => {
           acquire_timeout_seconds: 0,
           name: "checkout-lease",
           profile: { id: "profile_1", save_changes: false },
+          start_replay: false,
           start_url: "https://example.com",
           tags: { flow: "checkout" },
           telemetry: { browser: { network: { enabled: false } } },
@@ -460,9 +530,16 @@ describe("browser-pool contract parity", () => {
       ],
     ]);
     expect(JSON.parse(result.content[0].text).browser).toMatchObject({
+      leased_at: "2026-08-08T12:34:56Z",
       network,
       memory: "2GiB",
+      captcha_solver: { enabled: true },
+      fingerprint: { os: "linux" },
       location,
+      replay: {
+        replay_id: "rpl_1",
+        started_at: "2026-08-08T12:34:56Z",
+      },
     });
   });
 

@@ -727,9 +727,11 @@ describe("captureMcpConnectionScopeFailure", () => {
 
     captureMcpConnectionScopeFailure(
       {
+        stage: "scope",
         outcome: "rejected",
         credentialType: "api_key",
         upstreamStatusCode: 403,
+        responseStatusCode: 403,
       },
       fakePosthog,
     );
@@ -740,9 +742,11 @@ describe("captureMcpConnectionScopeFailure", () => {
         event: MCP_CONNECTION_SCOPE_FAILURE_EVENT,
         properties: {
           $process_person_profile: false,
+          connection_failure_stage: "scope",
           connection_scope_outcome: "rejected",
           connection_credential_type: "api_key",
           upstream_status_code: 403,
+          response_status_code: 403,
         },
       },
     ]);
@@ -751,7 +755,7 @@ describe("captureMcpConnectionScopeFailure", () => {
   test("is a no-op without a configured client", () => {
     expect(() =>
       captureMcpConnectionScopeFailure(
-        { outcome: "unavailable", credentialType: "oauth" },
+        { stage: "scope", outcome: "unavailable", credentialType: "oauth" },
         null,
       ),
     ).not.toThrow();

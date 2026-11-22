@@ -105,12 +105,123 @@ describe("kernel-managed payment tools", () => {
       for (const name of ["manage_vault_wallets", "manage_vault_cards"]) {
         const schema = tools.find((tool) => tool.name === name)?.inputSchema;
         expect(schema?.properties?.provider).toMatchObject({
-          enum: ["link", "agentcard", "kernel"],
+          enum: ["link", "agentcard", "kernel", "shop_pay"],
         });
         expect(schema?.properties).not.toHaveProperty("card_number");
         expect(schema?.properties).not.toHaveProperty("cvc");
       }
       expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("intentionally excludes secret single-use card creation inputs", async () => {
+    const fixture = await connectVaultTest([]);
+    try {
+      const { tools } = await fixture.client.listTools();
+      const tool = tools.find(({ name }) => name === "manage_vault_cards");
+      expect(tool?.description).toContain("single-use card details");
+      expect(tool?.description).toContain(
+        "intentionally unavailable through mcp",
+      );
+      const kernelSpec = (
+        tool?.inputSchema.properties?.spec as {
+          anyOf?: Array<{
+            properties?: Record<string, unknown>;
+          }>;
+        }
+      )?.anyOf?.find(
+        ({ properties }) =>
+          (properties?.provider as { const?: string } | undefined)?.const ===
+          "kernel",
+      );
+      expect(kernelSpec?.properties).not.toHaveProperty("single_use_card");
+      expect(kernelSpec?.properties).not.toHaveProperty("expires_at");
+
+      const result = await fixture.call("manage_vault_cards", {
+        action: "create",
+        provider: "kernel",
+        vault: "checkout",
+        key: "secret-card",
+        spec: {
+          ...card.spec,
+          single_use_card: {
+            number: "4242424242424242",
+            cvc: "123",
+            exp_month: "12",
+            exp_year: "2030",
+          },
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).not.toContain("4242424242424242");
+      expect(fixture.requests).toHaveLength(0);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("projects and guides existing API-created single-use Kernel cards", async () => {
+    const singleUseCard = {
+      ...card,
+      expires_at: "2026-11-04T18:00:00Z",
+      spec: {
+        ...card.spec,
+        expires_at: "2026-11-04T18:00:00Z",
+        single_use_card: {
+          number: "4242424242424242",
+          cvc: "123",
+          exp_month: "12",
+          exp_year: "2030",
+          name: "Private Cardholder",
+          billing_address: { postal_code: "12345" },
+          reference: "issuer-card-1",
+        },
+      },
+      state: {
+        provider: "kernel",
+        source: "single_use_card",
+        status: "ready",
+        domains: ["shop.example"],
+      },
+      action: undefined,
+      available_operations: [
+        { type: "fill", description: "Fill the supplied card." },
+      ],
+    };
+    const fixture = await connectVaultTest([Response.json(singleUseCard)]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "get",
+        vault: "checkout",
+        key: "order-1",
+      });
+      expect(result.isError).toBeUndefined();
+      const body = toolResultJSON(result);
+      expect(body.item.spec.single_use_card).toEqual({
+        reference: "issuer-card-1",
+      });
+      expect(body.item.state).toMatchObject({
+        source: "single_use_card",
+        status: "ready",
+        domains: ["shop.example"],
+      });
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain("4242424242424242");
+      expect(serialized).not.toContain("Private Cardholder");
+      expect(serialized).not.toContain("12345");
+      const guidance = body.guidance.join(" ");
+      expect(guidance).toContain("supports only advertised fill");
+      expect(guidance).toContain("registrable domain");
+      expect(guidance).toContain("no more than 24 hours");
+      expect(guidance).toContain("mcp intentionally cannot create one");
+      expect(
+        body.hints.invocation.map(
+          (hint: { arguments: { operation: string } }) =>
+            hint.arguments.operation,
+        ),
+      ).toEqual(["fill"]);
     } finally {
       await fixture.close();
     }
@@ -581,16 +692,19 @@ describe("kernel-managed payment tools", () => {
     try {
       const { tools } = await fixture.client.listTools();
       for (const name of ["manage_vault_items", "manage_vault_cards"]) {
-        const description = tools.find(
-          (tool) => tool.name === name,
-        )?.description;
+        const tool = tools.find((tool) => tool.name === name);
+        // manage_vault_items keeps per-operation input detail on its inputs parameter.
+        const description = [
+          tool?.description,
+          (tool?.inputSchema.properties?.inputs as { description?: string })
+            ?.description,
+        ].join(" ");
         for (const text of [
           "confirm_transaction",
           "restart_verification",
-          "billing_*",
           "field_unavailable",
           "occurred_at",
-          ...(name === "manage_vault_items" ? ["0..1000000"] : []),
+          ...(name === "manage_vault_items" ? ["0..1000000"] : ["billing_*"]),
         ])
           expect(description).toContain(text);
       }
@@ -753,7 +867,17 @@ describe("kernel-managed payment tools", () => {
                   fields: [{ field: "number", selector: "#number" }],
                 },
               }
-            : {}),
+            : operation === "confirm_transaction"
+              ? {
+                  inputs: {
+                    status: "APPROVED",
+                    transaction_type: "PURCHASE",
+                    amount: 0,
+                    currency: "USD",
+                    occurred_at: "2026-10-01T12:00:00Z",
+                  },
+                }
+              : {}),
         });
         const text = JSON.stringify(result);
         expect(result.isError).toBe(true);
@@ -768,6 +892,70 @@ describe("kernel-managed payment tools", () => {
       }
     },
   );
+
+  test("generic authorize routes a KERNEL card through browser_id", async () => {
+    const fixture = await connectVaultTest([
+      Response.json(card),
+      Response.json(card),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "invoke",
+        operation: "authorize",
+        vault: "checkout",
+        key: "order-1",
+        inputs: { browser_id: "browser-1" },
+      });
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[1].body).toEqual({
+        type: "authorize",
+        browser_id: "browser-1",
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test.each([
+    {
+      name: "KERNEL card page_url",
+      item: card,
+      inputs: {
+        browser_id: "browser-1",
+        page_url: "https://shop.example/pay",
+      },
+      message: "kernel cards accept browser_id but not page_url",
+    },
+    {
+      name: "VGS browser context",
+      item: { ...card, spec: { ...card.spec, provider: "vgs" } },
+      inputs: { browser_id: "browser-1" },
+      message: "vgs cards do not accept browser_id or page_url",
+    },
+    {
+      name: "Link partial checkout context",
+      item: { ...card, spec: { ...card.spec, provider: "link" } },
+      inputs: { browser_id: "browser-1" },
+      message:
+        "link cards and payment requests require browser_id and page_url together",
+    },
+  ])("generic authorize rejects $name", async (example) => {
+    const fixture = await connectVaultTest([Response.json(example.item)]);
+    try {
+      const result = await fixture.call("manage_vault_items", {
+        action: "invoke",
+        operation: "authorize",
+        vault: "checkout",
+        key: "order-1",
+        inputs: example.inputs,
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain(example.message);
+      expect(fixture.requests.map(({ method }) => method)).toEqual(["GET"]);
+    } finally {
+      await fixture.close();
+    }
+  });
 
   test("generic authorize keeps validation rejection distinct from uncertainty", async () => {
     const fixture = await connectVaultTest([

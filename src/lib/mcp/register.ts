@@ -27,8 +27,10 @@ import { registerProxyTools } from "@/lib/mcp/tools/proxies";
 import { registerReplayTools } from "@/lib/mcp/tools/replays";
 import { registerSearchTools } from "@/lib/mcp/tools/search";
 import { registerShellTool } from "@/lib/mcp/tools/shell";
+import { registerTaskCapabilities } from "@/lib/mcp/tools/tasks";
 import { registerWebMcpTool } from "@/lib/mcp/tools/webmcp";
 import { registerVaultCapabilities } from "@/lib/mcp/tools/vaults";
+import { registerWorkloadIdentityCapabilities } from "@/lib/mcp/tools/workload-identity";
 type McpToolOptions = McpDependencies;
 type McpRegistrationOptions = {
   mcpApps?: boolean;
@@ -48,10 +50,12 @@ function registerManagedAuthCapabilities(server: McpServer) {
 
 const mcpToolRegistrations = [
   ["profiles", registerProfileCapabilities],
+  ["tasks", registerTaskCapabilities],
   ["docs", registerDocsTools],
   ["browsers", registerBrowserCapabilities],
   ["projects", registerProjectCapabilities],
   ["api_keys", registerAPIKeyCapabilities],
+  ["workload_identity", registerWorkloadIdentityCapabilities],
   ["browser_pools", registerBrowserPoolCapabilities],
   ["config_registry", registerConfigRegistryTools],
   ["browser_curl", registerBrowserCurlTool],

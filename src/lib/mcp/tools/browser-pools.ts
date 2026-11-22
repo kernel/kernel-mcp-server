@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
+  browserCaptchaSolverSchema,
   browserExtensionsSchema,
   buildBrowserCreateConfig,
   buildBrowserSharedConfig,
@@ -53,6 +54,7 @@ type PoolConfigParams = Omit<
   size?: number;
   name?: string;
   headless?: boolean;
+  captcha_solver?: BrowserPoolCreateParams["captcha_solver"];
   stealth?: boolean;
   timeout_seconds?: number;
   proxy_id?: string;
@@ -62,6 +64,7 @@ type PoolConfigParams = Omit<
   memory?: BrowserPoolCreateParams["memory"];
   region?: BrowserPoolCreateParams["region"];
   refresh_on_profile_update?: boolean;
+  start_replay?: boolean;
   telemetry?:
     | BrowserPoolCreateParams["telemetry"]
     | BrowserPoolUpdateParams["telemetry"];
@@ -126,6 +129,9 @@ function buildPoolCreateParams(
       size: params.size,
       ...(params.name && { name: params.name }),
       ...(params.headless !== undefined && { headless: params.headless }),
+      ...(params.captcha_solver !== undefined && {
+        captcha_solver: params.captcha_solver,
+      }),
       ...(params.stealth !== undefined && { stealth: params.stealth }),
       ...(params.timeout_seconds !== undefined && {
         timeout_seconds: params.timeout_seconds,
@@ -140,6 +146,9 @@ function buildPoolCreateParams(
       ...(params.region !== undefined && { region: params.region }),
       ...(params.refresh_on_profile_update !== undefined && {
         refresh_on_profile_update: params.refresh_on_profile_update,
+      }),
+      ...(params.start_replay !== undefined && {
+        start_replay: params.start_replay,
       }),
       ...(params.telemetry !== undefined && { telemetry: params.telemetry }),
       ...(params.network !== undefined && { network: params.network }),
@@ -207,6 +216,9 @@ function buildPoolUpdateParams(
       ...(params.size !== undefined && { size: params.size }),
       ...(params.name && { name: params.name }),
       ...(params.headless !== undefined && { headless: params.headless }),
+      ...(params.captcha_solver !== undefined && {
+        captcha_solver: params.captcha_solver,
+      }),
       ...(params.stealth !== undefined && { stealth: params.stealth }),
       ...(params.timeout_seconds !== undefined && {
         timeout_seconds: params.timeout_seconds,
@@ -222,6 +234,9 @@ function buildPoolUpdateParams(
       ...(params.memory !== undefined && { memory: params.memory }),
       ...(params.refresh_on_profile_update !== undefined && {
         refresh_on_profile_update: params.refresh_on_profile_update,
+      }),
+      ...(params.start_replay !== undefined && {
+        start_replay: params.start_replay,
       }),
       ...(params.telemetry !== undefined && { telemetry: params.telemetry }),
       ...(params.start_url !== undefined && { start_url: params.start_url }),
@@ -253,12 +268,14 @@ function summarizeBrowserPool(pool: BrowserPool) {
     },
     config: {
       headless: config.headless,
+      captcha_solver: config.captcha_solver,
       stealth: config.stealth,
       kiosk_mode: config.kiosk_mode,
       memory: config.memory,
       timeout_seconds: config.timeout_seconds,
       fill_rate_per_minute: config.fill_rate_per_minute,
       refresh_on_profile_update: config.refresh_on_profile_update,
+      start_replay: config.start_replay,
       start_url: config.start_url,
       profile_id: pool.profile_id,
       proxy_id: config.proxy_id,
@@ -282,16 +299,20 @@ function poolNextActions(pool: BrowserPool) {
 function summarizeAcquiredBrowser(browser: BrowserPoolAcquireResponse) {
   return {
     session_id: browser.session_id,
+    leased_at: browser.leased_at,
     browser_live_view_url: browser.browser_live_view_url,
     base_url: browser.base_url,
     headless: browser.headless,
+    captcha_solver: browser.captcha_solver,
     stealth: browser.stealth,
+    fingerprint: browser.fingerprint,
     timeout_seconds: browser.timeout_seconds,
     memory: browser.memory,
     location: browser.location,
     pool: browser.pool,
     profile: browser.profile,
     proxy_id: browser.proxy_id,
+    replay: browser.replay,
     network: browser.network,
     start_url: browser.start_url,
     viewport: browser.viewport,
@@ -327,7 +348,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
     "manage_browser_pools",
     {
       description:
-        'manage pre-warmed browser pools when an agent needs fast browser acquisition or reusable session capacity. use "list" for a compact pool inventory, "get" for full details, "acquire" before controlling a pooled browser, and "release" when the browser should return to the pool.',
+        'manage pre-warmed browser pools when an agent needs fast browser acquisition or reusable session capacity. use "list" for a compact pool inventory, "get" for full details, "acquire" before controlling a pooled browser, and "release" when the browser should return to the pool. start_replay can set the pool default or override one acquire; acquire returns replay metadata when recording starts and leased_at showing when the pooled session was last leased.',
       inputSchema: z.object({
         ...projectSelectionInputSchema(),
         action: z
@@ -387,10 +408,15 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           .boolean()
           .describe("(create, update) headless mode for pool browsers.")
           .optional(),
+        captcha_solver: browserCaptchaSolverSchema
+          .describe(
+            "(create, update) automatic captcha handling for authorized site access. disabled by default and does not select egress; without proxy_id, direct egress remains unless the deprecated compatibility setting is true.",
+          )
+          .optional(),
         stealth: z
           .boolean()
           .describe(
-            "(create, update) apply site-compatibility settings to pool browsers.",
+            "deprecated site-compatibility setting. use only on sites and accounts the user is authorized to access. true enables automatic captcha handling and, without proxy_id, KERNEL's compatibility proxy; on update it moves direct egress there. incompatible with captcha_solver.enabled=false.",
           )
           .optional(),
         timeout_seconds: browserPoolTimeoutSchema
@@ -461,6 +487,12 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
             "(create, update) flush idle browsers when the attached profile changes so newly acquired browsers use the latest profile. requires a profile; defaults to true when a profile is first attached.",
           )
           .optional(),
+        start_replay: z
+          .boolean()
+          .describe(
+            "(create, update) set whether replay recording starts automatically for future acquired browsers. (acquire) lease-only override; omit to inherit the pool setting. acquired responses include replay metadata when recording starts.",
+          )
+          .optional(),
         network: z
           .object({
             private_hosts: privateHostsSchema().optional(),
@@ -517,7 +549,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           .int()
           .min(1)
           .describe(
-            "(create, update) window width in pixels. must pair with viewport_height.",
+            "(create, update) window width in pixels. any positive integer is accepted, but headful browsers require at least 64. must pair with viewport_height.",
           )
           .optional(),
         viewport_height: z
@@ -525,7 +557,7 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
           .int()
           .min(1)
           .describe(
-            "(create, update) window height in pixels. must pair with viewport_width.",
+            "(create, update) window height in pixels. any positive integer is accepted, but headful browsers require at least 64. must pair with viewport_width.",
           )
           .optional(),
         viewport_refresh_rate: z
@@ -588,6 +620,14 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
       );
 
       try {
+        if (
+          params.stealth === true &&
+          params.captcha_solver?.enabled === false
+        ) {
+          return errorResponse(
+            "error: stealth=true cannot be combined with captcha_solver.enabled=false.",
+          );
+        }
         switch (params.action) {
           case "create": {
             const createParams = buildPoolCreateParams(params);
@@ -709,6 +749,9 @@ export function registerBrowserPoolCapabilities(server: McpServer) {
                       save_changes: params.save_profile_changes,
                     }),
                   },
+                }),
+                ...(params.start_replay !== undefined && {
+                  start_replay: params.start_replay,
                 }),
                 ...(params.start_url !== undefined && {
                   start_url: params.start_url,

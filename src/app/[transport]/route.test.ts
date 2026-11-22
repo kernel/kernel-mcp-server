@@ -36,7 +36,9 @@ const analytics = await import("@/lib/mcp/analytics");
 const captureMcpConnectionScopeFailure =
   analytics.captureMcpConnectionScopeFailure;
 const instrumentMcpAnalytics = analytics.instrumentMcpAnalytics;
+const isMcpAnalyticsEnabled = analytics.isMcpAnalyticsEnabled;
 let analyticsClient: unknown = null;
+let forceAnalyticsEnabled = false;
 mock.module("@/lib/mcp/analytics", () => ({
   ...analytics,
   instrumentMcpAnalytics: (
@@ -46,6 +48,7 @@ mock.module("@/lib/mcp/analytics", () => ({
       server,
       (analyticsClient as typeof client) ?? client,
     ),
+  isMcpAnalyticsEnabled: () => forceAnalyticsEnabled || isMcpAnalyticsEnabled(),
   captureMcpConnectionScopeFailure: (
     ...args: Parameters<typeof analytics.captureMcpConnectionScopeFailure>
   ) => {
@@ -90,8 +93,8 @@ mock.module("@/lib/mcp-apps-request", () => ({
 const originalCreateKernelClient = defaultMcpDependencies.createKernelClient;
 const { GET, POST, connectionScopeFailureResponse } = await import("./route");
 
-function initializeRequest(token = "sk_opaque_key") {
-  return new Request("https://mcp.example.test/sse", {
+function initializeRequest(token = "sk_opaque_key", path = "/sse") {
+  return new Request(`https://mcp.example.test${path}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -197,6 +200,7 @@ describe("native OAuth credentials", () => {
   afterEach(() => {
     appMarkers = null;
     analyticsClient = null;
+    forceAnalyticsEnabled = false;
     fetchSpy.mockRestore();
     for (const key of envKeys)
       if (savedEnv[key] === undefined) delete process.env[key];
@@ -327,6 +331,31 @@ describe("native OAuth credentials", () => {
     ).toBe(1);
   });
 
+  test("report connections as native OAuth in analytics", async () => {
+    forceAnalyticsEnabled = true;
+    const events: { event: string; properties: Record<string, unknown> }[] = [];
+    analyticsClient = {
+      capture: (event: {
+        event: string;
+        properties: Record<string, unknown>;
+      }) => events.push(event),
+    };
+    const response = await POST(
+      mcpRequest(await issuer.parent(), "initialize", {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "test-client", version: "1.0.0" },
+      }),
+    );
+    expect(response.status).toBe(200);
+    await response.text();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const initialize = events.find(
+      (event) => event.event === "$mcp_initialize",
+    );
+    expect(initialize?.properties.$mcp_auth_method).toBe("native_oauth");
+  });
+
   test("reuse one exchange per MCP token and re-resolve auth context each request", async () => {
     const parent = await issuer.parent();
     for (let n = 0; n < 3; n++) {
@@ -387,6 +416,16 @@ describe("native OAuth credentials", () => {
       error: "invalid_token",
       error_description: "Invalid or expired access token",
     });
+    expect(captured).toEqual([
+      {
+        stage: "authentication",
+        outcome: "rejected",
+        credentialType: "native_oauth",
+        upstreamStatusCode: undefined,
+        responseStatusCode: 401,
+      },
+    ]);
+    captured.length = 0;
 
     fetchSpy.mockImplementation((async (input: string | URL | Request) =>
       String(input).endsWith("/token")
@@ -401,6 +440,15 @@ describe("native OAuth credentials", () => {
       "This credential's scope does not cover this request",
     );
     expect(kernelTokens).toEqual([]);
+    expect(captured).toEqual([
+      {
+        stage: "authentication",
+        outcome: "rejected",
+        credentialType: "native_oauth",
+        upstreamStatusCode: undefined,
+        responseStatusCode: 403,
+      },
+    ]);
   });
 
   test("issuer outages are retryable 503s", async () => {
@@ -411,6 +459,15 @@ describe("native OAuth credentials", () => {
     expect(response.status).toBe(503);
     expect(response.headers.get("Retry-After")).toBe("1");
     expect(kernelTokens).toEqual([]);
+    expect(captured).toEqual([
+      {
+        stage: "authentication",
+        outcome: "unavailable",
+        credentialType: "native_oauth",
+        upstreamStatusCode: undefined,
+        responseStatusCode: 503,
+      },
+    ]);
   });
 
   test("post-authentication bugs propagate as server errors", async () => {
@@ -494,6 +551,69 @@ describe("native OAuth credentials", () => {
       );
     });
   });
+});
+
+describe("workload-identity credentials", () => {
+  test(
+    "sends an API-audience JWT to the Kernel API instead of Clerk",
+    async () => {
+      const kernelTokens: string[] = [];
+      defaultMcpDependencies.createKernelClient = (token) => {
+        kernelTokens.push(token);
+        return {
+          auth: {
+            context: {
+              retrieve: async () => ({
+                authentication: {
+                  method: "jwt",
+                  source: "api_key",
+                  credential_id: null,
+                },
+                principal: { type: "service_account", id: "svc_123" },
+                organization: { id: "org_123" },
+                authorization: {
+                  credential_scope: { project_id: "proj_123" },
+                  effective_scope: { project_id: "proj_123" },
+                  effective_policy: {
+                    statements: [
+                      {
+                        action: "browsers:use",
+                        resource: "projects/proj_123/browsers/*",
+                      },
+                    ],
+                  },
+                },
+                workload_identity: {
+                  issuer_id: "wii_123",
+                  federation_rule_id: "wifr_123",
+                  external_subject_digest: "sha256:subject-digest",
+                },
+              }),
+            },
+          },
+        } as never;
+      };
+      const token = [
+        Buffer.from(JSON.stringify({ alg: "HS256", typ: "at+jwt" })).toString(
+          "base64url",
+        ),
+        Buffer.from(
+          JSON.stringify({
+            sub: "svc_123",
+            aud: ["https://api.onkernel.com"],
+          }),
+        ).toString("base64url"),
+        Buffer.from("not-a-real-signature").toString("base64url"),
+      ].join(".");
+
+      const response = await POST(initializeRequest(token, "/mcp"));
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain('"result"');
+      expect(kernelTokens).toEqual([token]);
+    },
+    10_000,
+  );
 });
 
 describe("unauthenticated discovery", () => {
@@ -580,9 +700,11 @@ describe("connection scope failures through the handler", () => {
     });
     expect(captured).toEqual([
       {
+        stage: "scope",
         outcome: "rejected",
         credentialType: "api_key",
         upstreamStatusCode: 401,
+        responseStatusCode: 401,
       },
     ]);
   });
@@ -597,6 +719,7 @@ describe("connection scope failures through the handler", () => {
     expect(response.status).toBe(403);
     expect((await response.json()).error).toBe("insufficient_scope");
     expect(captured[0]?.upstreamStatusCode).toBe(403);
+    expect(captured[0]?.responseStatusCode).toBe(403);
   });
 
   test("answers an upstream outage with a retryable 503", async () => {
@@ -610,9 +733,11 @@ describe("connection scope failures through the handler", () => {
     expect(response.headers.get("Retry-After")).toBe("1");
     expect(captured).toEqual([
       {
+        stage: "scope",
         outcome: "unavailable",
         credentialType: "api_key",
         upstreamStatusCode: 502,
+        responseStatusCode: 503,
       },
     ]);
   });
@@ -625,9 +750,9 @@ describe("connection scope failures through the handler", () => {
     );
     expect(captured).toEqual([
       {
+        stage: "scope",
         outcome: "invalid",
         credentialType: "api_key",
-        upstreamStatusCode: undefined,
       },
     ]);
   });

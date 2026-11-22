@@ -6,6 +6,7 @@ import {
   throwKernelVaultError,
   linkCheckoutRecovery,
   throwLinkAuthorizeError,
+  throwShopPayAuthorizeError,
   throwVaultError,
   vaultItemResponse,
 } from "@/lib/mcp/vault-responses";
@@ -16,6 +17,7 @@ import {
   authorizeInputsSchema,
   linkCardSpecSchema,
   kernelCardSpecSchema,
+  shopPayCardSpecSchema,
   vaultItemSchema,
   vaultKeySchema,
   vaultProviderSchema,
@@ -31,9 +33,9 @@ export function registerVaultCardTools(
     "manage_vault_cards",
     {
       description:
-        'configure payment card requests in a per-end-user vault, not merchant payments. link cards pay at a checkout in this order: reach the final checkout page in a browser created with this vault attached and gather the amount, currency, merchant name and url, and a payment_method_id from the wallet\'s payment_methods expansion; "create" the card (this does not contact link: the card is requested and advertises authorize); after explicit user approval, "authorize" with browser_id (browser session id) and page_url (the exact current top-level checkout url). KERNEL inspects the checkout, chooses whether to deliver a link pay token or a virtual card, limits fill to that checkout\'s origin, and sends the user an approval request: share the approval url from the item\'s action, then get the item with manage_vault_items until fill is advertised; re-check with "authorize" without browser_id and page_url. then fill as the item\'s advertised fill description says and submit the checkout yourself; fill never submits payment. read the item\'s available_operations descriptions for inputs and recovery steps. "update" can change a link card until it is authorized at a checkout; after that it returns 409: delete the card and create a new one. authorize errors such as page_not_found or ambiguous_page happen before any payment request: ' +
+        'configure card requests in a per-end-user vault; this tool does not submit merchant payments. link checkout order: reach the final checkout page in a browser with this vault attached; "create" the card; after explicit approval, "authorize" with browser_id (browser session id) and page_url; share the approval url, then get the item until fill is advertised; fill as advertised and submit the checkout yourself. read available_operations descriptions for exact inputs and recovery. "update" can change a link card until it is authorized at a checkout; after that it returns 409: delete the card and create a new one. checkout inspection errors occur before a payment request: ' +
         linkCheckoutRecovery +
-        ' declined or expired: delete the card and create a new one. recovery_required means the card is unusable; reads may reconcile a known request, otherwise with user confirmation delete it, create a new card, and tell the user to approve only the new request. all link cards are limited to 50000 minor units. recurring terms make amount the per-period limit; keep the same card for merchant-scheduled charges, and remember that deleting it revokes future link charges but does not cancel the merchant subscription. if the payment result is unclear, check the merchant\'s order confirmation or order history before paying again. KERNEL cards use a connected KERNEL wallet, amount in minor units, https merchant_url and optional iso merchant_country (required by visa), actual merchant_category and four-digit merchant_category_code (not 0000); omit categories rather than invent them. for KERNEL cards, "authorize" after explicit user approval invokes the currently advertised authorize operation with no browser_id or page_url, returning a spend_approval action for visa approval or fresh security-code collection when required, or an immediately ready card when no hosted approval is needed. give action urls only to the intended user privately; do not open them or include them in logs/traces. KERNEL cards cannot be updated; after user confirmation delete only if the api permits it and create a new item under a new key for a new purchase. authorize is equivalent to manage_vault_items invoke authorize. use advertised fill only when ready: number, expiration (format "MM/YY" or "MM/YYYY"), cvc, exp_month, exp_year. fill delivers details for a few minutes, so submit promptly; repeated fill is safe and never submits checkout. alias-mode cards also expire at their temporary security-code deadline. billing_* fields fail with 400 field_unavailable before any write; enter billing name/zip on the merchant page. after the user submits checkout and the merchant outcome is observed, use manage_vault_items invoke confirm_transaction only when advertised with status, transaction_type, amount, matching approved uppercase currency, occurred_at. "PENDING" means an explicitly accepted pending merchant transaction; "ERROR" means an explicit merchant transaction error, not transport loss or ambiguous processing. unknown outcomes: ask the user to check merchant orders, email or statement, then report the confirmed outcome even after expiry. on a lost report response re-get and send the identical report once more only if freshly advertised; never repeat checkout. only if a recovery_required KERNEL card advertises restart_verification, invoke it with no inputs after user approval each time and give the new spend_approval url privately to the cardholder; they must verify and approve spending again. if the result is unclear re-get; share a new action if present or invoke once more only if still advertised with renewed user approval. otherwise do not retry the payment operation. with user confirmation, delete only to abandon eligible issuance recovery and create a separately approved purchase; recovery while reporting a merchant transaction cannot be deleted and requires "support@kernel.sh" with project, vault, key, status_reason and event timestamps. deletion never proves no payment occurred; never include card data, api keys or capability urls. card enrollment is hosted; never accept card numbers, cvc, or expiration data in tool inputs or credential items. mode is determined by the wallet credentials, not a per-item test flag; never assume a test transaction. "create" creates or retrieves an identical card request by immutable key. "update" replaces requested-card specs. pending issuance updates preserve omitted optional fields and clear explicit empty lists, only for provider-supported edits allowed by the api. wallet/provider binding cannot change after authorization starts. uncertain updates enter recovery_required; do not retry the update. delete the card and create a new one rather than attempting the update again. neither implicitly authorizes a card. for agentcard, optional checkout_origin is a caller-declared canonical https origin (or localhost http origin) that KERNEL forwards for eligible autopilot rule matching on non-prepared checkout authorizations. KERNEL does not compare it with the browser page; it does not enable autopilot or ensure payment success. omitting it retains the existing approval flow, and autopilot may fall back to user approval. prepared checkout uses preparation.merchant_origin. eligible unused agentcard cards advertise a checkout-preparation operation for supported tokenization checkout; invoke it through manage_vault_items with the api-required checkout inputs. keep the returned approval page open, poll until ready_to_submit, and submit native pay before preparation.expires_at. preparations are single-use, even after failure or expiry. amounts are integer minor currency units. no card data, oauth tokens, provider secrets, or domain configuration. never reconfigure a card to retry a failed, timed-out, rejected, or indeterminate payment. requests are not automatically retried.',
+        ' declined, expired, or recovery_required cards need state reconciliation or a separately approved replacement; never repeat an unclear payment without checking merchant orders. shop pay follows the same create/authorize/fill/submit order; the card\'s guidance covers billing fill and confirm_transaction. KERNEL cards here are wallet-funded. creating KERNEL cards from caller-supplied single-use card details is intentionally unavailable through mcp; existing single-use cards use manage_vault_items. payment_method_id may explicitly select a method from the wallet\'s payment_methods expansion; omission uses only the legacy default. KERNEL authorize may take browser_id without page_url to name the attached browser that will pay; call it before opening the payment step, then retrieve until fill is advertised. billing_* fields may return field_unavailable before any write. after an observed merchant outcome, invoke advertised confirm_transaction once with status, transaction_type, amount, matching currency, and occurred_at. only an advertised restart_verification may be invoked, with fresh user approval, for recovery_required. do not retry uncertain payment operations; deletion never proves no payment occurred. action urls go only to the intended user and must not be opened or logged. never accept card numbers, cvc, expiration, api keys, or capability urls in inputs. mode is determined by the wallet credentials, not a per-item test flag. "create" is idempotent by immutable key; "update" replaces the requested spec but never authorizes. pending issuance updates preserve omitted optional fields and clear explicit empty lists where the provider permits edits; uncertain updates enter recovery_required and must not be retried. agentcard reusable cards support optional display-only line_items and totals; they do not change the approved or charged amount. optional checkout_origin is forwarded for eligible autopilot matching; KERNEL does not compare it with the browser page, and prepared checkout uses preparation.merchant_origin. vgs cards are provisioned only through a trusted backend api/sdk; existing cards authorize without browser inputs and mcp never returns aliases. requests are not automatically retried.',
       inputSchema: vaultToolInput({
         ...vaultItemSchema,
         key: vaultKeySchema(),
@@ -43,13 +45,13 @@ export function registerVaultCardTools(
           .string()
           .min(1)
           .describe(
-            "(authorize, link) browser session id of a browser with this vault attached, open on the final checkout page. pass with page_url, or omit both.",
+            "(authorize) browser session id of a browser with this vault attached. link/shop_pay require it with page_url while final checkout is open. KERNEL accepts it without page_url to name the browser that will pay; authorize before that browser opens the payment step.",
           )
           .optional(),
         page_url: z
           .string()
           .describe(
-            "(authorize, link) exact current top-level https url of the final checkout page open in browser_id. pass with browser_id, or omit both.",
+            "(authorize, link/shop_pay) exact current top-level https url of the final checkout page open in browser_id. pass with browser_id, or omit both.",
           )
           .optional(),
         spec: z
@@ -57,9 +59,10 @@ export function registerVaultCardTools(
             linkCardSpecSchema,
             agentcardCardSpecSchema,
             kernelCardSpecSchema,
+            shopPayCardSpecSchema,
           ])
           .describe(
-            "(create/update) full provider specification object, not a {type, spec} envelope. embedded provider must match provider. link supports optional recurring {interval, interval_count?}; amount is capped at 50000 and is the per-period limit when recurring. KERNEL requires wallet, amount, currency, merchant_name, https merchant_url, and merchant_country for visa. no defaults or normalization are applied.",
+            "(create/update) complete provider spec; embedded provider must match. link supports recurring terms and max amount 50000. agentcard supports 1-20 display-only line_items and optional nonnegative totals; updates replace the cart. KERNEL accepts wallet-funded cards, not single_use_card secrets. shop pay requires usd, amount at most 1000000, shopper context, and exactly one positive total no greater than amount. no normalization is applied.",
           )
           .optional(),
       }),
@@ -85,7 +88,7 @@ export function registerVaultCardTools(
         (params.spec !== undefined || params.provider === "agentcard")
       )
         return errorResponse(
-          "authorize is only for link and kernel cards and takes no spec; provider may be omitted.",
+          "authorize is only for link, kernel, shop_pay, and existing api-created vgs cards and takes no spec; provider may be omitted.",
         );
       if (
         params.action !== "authorize" &&
@@ -119,10 +122,15 @@ export function registerVaultCardTools(
                     ...spec,
                     provider: "agentcard" as const,
                   }))
-                : kernelCardSpecSchema.transform((spec) => ({
-                    ...spec,
-                    provider: "kernel" as const,
-                  }))
+                : params.provider === "kernel"
+                  ? kernelCardSpecSchema.transform((spec) => ({
+                      ...spec,
+                      provider: "kernel" as const,
+                    }))
+                  : shopPayCardSpecSchema.transform((spec) => ({
+                      ...spec,
+                      provider: "shop_pay" as const,
+                    }))
             ).safeParse(params.spec);
       if (parsed && !parsed.success)
         return errorResponse(
@@ -130,7 +138,10 @@ export function registerVaultCardTools(
         );
       const spec = parsed?.success ? parsed.data : undefined;
       let authorizationSubmitted = false;
-      let linkCard = params.provider === "link";
+      let checkoutProvider =
+        params.provider === "link" || params.provider === "shop_pay"
+          ? params.provider
+          : undefined;
       try {
         if (params.action === "authorize") {
           const current = await client.vaults.items.retrieve(
@@ -139,17 +150,39 @@ export function registerVaultCardTools(
             options,
           );
           const provider = current.type === "card" && current.spec.provider;
-          linkCard = provider === "link";
+          checkoutProvider =
+            provider === "link" || provider === "shop_pay"
+              ? provider
+              : undefined;
           if (
-            (provider !== "kernel" && provider !== "link") ||
+            (provider !== "kernel" &&
+              provider !== "link" &&
+              provider !== "shop_pay" &&
+              provider !== "vgs") ||
             (params.provider !== undefined && params.provider !== provider)
           )
             return errorResponse(
-              "authorize is only for link and kernel cards; the item is not a card from the given provider.",
+              "authorize is only for link, kernel, shop_pay, and existing api-created vgs cards; the item is not a card from the given provider.",
             );
-          if (provider === "kernel" && checkout.data.browser_id !== undefined)
+          if (
+            (provider === "link" || provider === "shop_pay") &&
+            (checkout.data.browser_id === undefined) !==
+              (checkout.data.page_url === undefined)
+          )
             return errorResponse(
-              "kernel cards do not accept browser_id or page_url; authorize without them.",
+              `${provider} cards require browser_id and page_url together, or neither.`,
+            );
+          if (provider === "kernel" && checkout.data.page_url !== undefined)
+            return errorResponse(
+              "kernel cards accept browser_id but not page_url; authorize before that browser opens the payment step.",
+            );
+          if (
+            provider === "vgs" &&
+            (checkout.data.browser_id !== undefined ||
+              checkout.data.page_url !== undefined)
+          )
+            return errorResponse(
+              "vgs cards do not accept browser_id or page_url; authorize without them.",
             );
           if (
             !current.available_operations.some((op) => op.type === "authorize")
@@ -180,14 +213,25 @@ export function registerVaultCardTools(
               );
         return vaultItemResponse(item, target);
       } catch (error) {
-        if (linkCard && params.action === "authorize")
+        if (checkoutProvider === "link" && params.action === "authorize")
           throwLinkAuthorizeError(
             "manage_vault_cards",
             params.action,
             error,
             authorizationSubmitted,
           );
-        if (params.provider === "kernel" || params.action === "authorize")
+        if (checkoutProvider === "shop_pay" && params.action === "authorize")
+          throwShopPayAuthorizeError(
+            "manage_vault_cards",
+            params.action,
+            error,
+            authorizationSubmitted,
+          );
+        if (
+          params.provider === "kernel" ||
+          params.provider === "shop_pay" ||
+          params.action === "authorize"
+        )
           throwKernelVaultError(
             "manage_vault_cards",
             params.action,

@@ -21,6 +21,7 @@ describe("vault SDK request contracts", () => {
         "manage_vault_cards",
         "manage_vault_credentials",
         "manage_vault_items",
+        "manage_vault_payment_requests",
         "manage_vault_provider_configs",
         "manage_vault_wallets",
         "manage_vaults",
@@ -39,6 +40,9 @@ describe("vault SDK request contracts", () => {
         });
       }
       const cards = tools.find((tool) => tool.name === "manage_vault_cards");
+      const paymentRequests = tools.find(
+        (tool) => tool.name === "manage_vault_payment_requests",
+      );
       expect(cards?.description).toContain(
         "mode is determined by the wallet credentials",
       );
@@ -52,6 +56,10 @@ describe("vault SDK request contracts", () => {
       );
       expect(cards?.description).toContain(
         "prepared checkout uses preparation.merchant_origin",
+      );
+      expect(paymentRequests?.description).toContain("payment_request item");
+      expect(paymentRequests?.description).toContain(
+        "agentcard reusable cards remain card items",
       );
       expect(fixture.requests).toHaveLength(0);
     } finally {
@@ -116,6 +124,7 @@ describe("vault SDK request contracts", () => {
         toolResultJSON(
           await fixture.call("manage_vaults", {
             action: "list",
+            query: "check",
             limit: 20,
             offset: 20,
           }),
@@ -135,7 +144,11 @@ describe("vault SDK request contracts", () => {
       ).toEqual([
         { method: "POST", path: "/vaults", body: { name: "checkout" } },
         { method: "GET", path: "/vaults/vlt_123", body: undefined },
-        { method: "GET", path: "/vaults?limit=20&offset=20", body: undefined },
+        {
+          method: "GET",
+          path: "/vaults?query=check&limit=20&offset=20",
+          body: undefined,
+        },
         { method: "GET", path: "/vaults?offset=40", body: undefined },
       ]);
       for (const request of fixture.requests) {
@@ -227,6 +240,21 @@ describe("vault SDK request contracts", () => {
               provider,
               card_id: "vc_chosen",
               amount: Number.MAX_SAFE_INTEGER,
+              line_items: [
+                {
+                  title: "Free sample",
+                  quantity: 1,
+                  unit_amount: 0,
+                  amount: 0,
+                  brand: "Example",
+                  options: "Size S",
+                  image_url: "https://images.example/sample.png",
+                },
+              ],
+              subtotal: 0,
+              shipping: 0,
+              tax: 0,
+              discount: 0,
             };
       const replacement = provider === "link" ? linkSpec : agentcardSpec;
       const fixture = await connectVaultTest([
@@ -463,6 +491,23 @@ describe("vault scopes and input validation", () => {
         key: "order-1",
         provider: "agentcard",
         spec: agentcardSpec,
+      },
+    ],
+    [
+      "manage_vault_payment_requests",
+      {
+        action: "create",
+        vault: "checkout",
+        key: "order-1",
+        provider: "kernel",
+        spec: {
+          wallet: "wallet-1",
+          payment_method_id: "pm_1",
+          amount: 1234,
+          currency: "USD",
+          merchant_name: "Example Shop",
+          merchant_url: "https://shop.example/checkout",
+        },
       },
     ],
     [
@@ -756,7 +801,6 @@ describe("Link checkout through manage_vault_cards", () => {
   });
 
   test.each<{ args: Record<string, unknown> }>([
-    { args: { action: "authorize", browser_id: checkout.browser_id } },
     { args: { action: "authorize", page_url: checkout.page_url } },
     {
       args: {
@@ -788,7 +832,51 @@ describe("Link checkout through manage_vault_cards", () => {
     }
   });
 
-  test("does not send checkout context for a KERNEL card", async () => {
+  test("rejects partial checkout context after identifying a Link card", async () => {
+    const fixture = await connectVaultTest([Response.json(item)]);
+    try {
+      const result = await fixture.call("manage_vault_cards", {
+        ...target,
+        action: "authorize",
+        browser_id: checkout.browser_id,
+      });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain(
+        "link cards require browser_id and page_url together",
+      );
+      expect(fixture.requests.map(({ method }) => method)).toEqual(["GET"]);
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("routes a KERNEL card through browser_id without page_url", async () => {
+    const kernelCard = {
+      ...item,
+      spec: { provider: "kernel", wallet: "wallet-1" },
+      state: { provider: "kernel", status: "requested" },
+    };
+    const fixture = await connectVaultTest([
+      Response.json(kernelCard),
+      Response.json(kernelCard),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_cards", {
+        ...target,
+        action: "authorize",
+        browser_id: checkout.browser_id,
+      });
+      expect(result.isError).toBeUndefined();
+      expect(fixture.requests[1].body).toEqual({
+        type: "authorize",
+        browser_id: checkout.browser_id,
+      });
+    } finally {
+      await fixture.close();
+    }
+  });
+
+  test("rejects page_url for a KERNEL card", async () => {
     const fixture = await connectVaultTest([
       Response.json({
         ...item,
@@ -804,7 +892,7 @@ describe("Link checkout through manage_vault_cards", () => {
       });
       expect(result.isError).toBe(true);
       expect(JSON.stringify(result)).toContain(
-        "kernel cards do not accept browser_id or page_url",
+        "kernel cards accept browser_id but not page_url",
       );
       expect(fixture.requests.map(({ method }) => method)).toEqual(["GET"]);
     } finally {

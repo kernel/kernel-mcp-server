@@ -129,7 +129,7 @@ describe("kernel payment recovery", () => {
         merchant_url: "https://shop.example",
         context: "x".repeat(100),
       },
-      key: "payment_method_id",
+      key: "context",
     },
     {
       tool: "manage_vault_wallets",

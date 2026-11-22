@@ -74,7 +74,7 @@ afterEach(() => {
 });
 
 describe("native credential detection", () => {
-  test("selects only at+jwt tokens, as the Kernel API does", async () => {
+  test("selects only MCP-audience at+jwt tokens", async () => {
     expect(isNativeOAuthCredential(await issuer.parent())).toBe(true);
     expect(
       isNativeOAuthCredential(
@@ -83,6 +83,19 @@ describe("native credential detection", () => {
         }),
       ),
     ).toBe(true);
+    // API-audience access tokens, including workload identity credentials,
+    // go directly to the Kernel API instead of through native token exchange.
+    expect(
+      isNativeOAuthCredential(
+        await issuer.sign(
+          {
+            ...issuer.parentClaims(),
+            aud: [issuer.config.apiAudience],
+          },
+          { typ: "at+jwt" },
+        ),
+      ),
+    ).toBe(false);
     // Clerk session tokens, opaque API keys and malformed values keep their path.
     expect(
       isNativeOAuthCredential(

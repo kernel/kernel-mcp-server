@@ -25,7 +25,7 @@ function response({
 }: {
   method?: "api_key" | "jwt";
   source?: "api_key" | "oauth" | "dashboard";
-  principalType?: "api_key" | "user";
+  principalType?: "api_key" | "service_account" | "user";
   principalId?: string;
   credentialProjectId?: string | null;
   effectiveProjectId?: string | null;
@@ -97,7 +97,7 @@ describe("resolveMcpConnectionContext", () => {
       projectId: null,
       source: "credential",
     });
-    const analytics = connectionAnalyticsFromContext(context);
+    const analytics = connectionAnalyticsFromContext(context, "api_key");
     expect(analytics).toEqual({
       authMethod: "api_key",
       credentialScope: "organization",
@@ -128,9 +128,69 @@ describe("resolveMcpConnectionContext", () => {
       projectId: "project_123",
       source: "credential",
     });
-    expect(connectionAnalyticsFromContext(context)?.credentialScope).toBe(
-      "project",
+    expect(
+      connectionAnalyticsFromContext(context, "api_key")?.credentialScope,
+    ).toBe("project");
+  });
+
+  test("treats service-account principals as API-key authentication", async () => {
+    const context = expectResolved(
+      await resolveMcpConnectionContext({
+        token: "sk_service_secret",
+        dependencies: dependencies(
+          response({
+            principalType: "service_account",
+            principalId: "svc_123",
+            credentialProjectId: "project_123",
+            effectiveProjectId: "project_123",
+          }),
+        ),
+      }),
     );
+
+    expect(connectionAnalyticsFromContext(context, "api_key")).toEqual({
+      authMethod: "api_key",
+      credentialScope: "project",
+      connectionScope: "project",
+      scopeSource: "credential",
+      organizationId: "org_123",
+      userId: null,
+    });
+  });
+
+  test("treats workload-identity access tokens as Kernel-native authentication", async () => {
+    const context = expectResolved(
+      await resolveMcpConnectionContext({
+        token: "header.payload.signature",
+        dependencies: dependencies({
+          authentication: {
+            method: "jwt",
+            source: "api_key",
+            credential_id: null,
+          },
+          principal: { type: "service_account", id: "svc_123" },
+          organization: { id: "org_123" },
+          authorization: {
+            credential_scope: { project_id: "project_123" },
+            effective_scope: { project_id: "project_123" },
+          },
+          workload_identity: {
+            issuer_id: "wii_123",
+            federation_rule_id: "wifr_123",
+            external_subject_digest: "sha256:subject-digest",
+          },
+        }),
+      }),
+    );
+
+    expect(connectionAnalyticsFromContext(context, "api_key")).toEqual({
+      authMethod: "api_key",
+      credentialScope: "project",
+      connectionScope: "project",
+      scopeSource: "credential",
+      organizationId: "org_123",
+      userId: null,
+    });
   });
 
   test("uses the canonical OAuth user principal for analytics", async () => {
@@ -148,10 +208,68 @@ describe("resolveMcpConnectionContext", () => {
       }),
     );
 
-    expect(connectionAnalyticsFromContext(context)?.authMethod).toBe("oauth");
-    expect(connectionAnalyticsFromContext(context)?.userId).toBe(
+    expect(connectionAnalyticsFromContext(context, "oauth")?.authMethod).toBe(
+      "oauth",
+    );
+    expect(
+      connectionAnalyticsFromContext(context, "native_oauth")?.authMethod,
+    ).toBe("native_oauth");
+    expect(connectionAnalyticsFromContext(context, "oauth")?.userId).toBe(
       "user_kernel_123",
     );
+  });
+
+  test("reports nothing when the credential type and auth context disagree", async () => {
+    const oauthContext = expectResolved(
+      await resolveMcpConnectionContext({
+        token: "jwt.secret.value",
+        dependencies: dependencies(
+          response({
+            method: "jwt",
+            source: "oauth",
+            principalType: "user",
+            principalId: "user_kernel_123",
+          }),
+        ),
+      }),
+    );
+    const apiKeyContext = expectResolved(
+      await resolveMcpConnectionContext({
+        token: "sk_secret",
+        dependencies: dependencies(response({})),
+      }),
+    );
+    const mismatchedWorkloadContext = expectResolved(
+      await resolveMcpConnectionContext({
+        token: "header.payload.signature",
+        dependencies: dependencies({
+          authentication: {
+            method: "jwt",
+            source: "oauth",
+            credential_id: null,
+          },
+          principal: { type: "service_account", id: "svc_123" },
+          organization: { id: "org_123" },
+          authorization: {
+            credential_scope: { project_id: "project_123" },
+            effective_scope: { project_id: "project_123" },
+          },
+          workload_identity: {
+            issuer_id: "wii_123",
+            federation_rule_id: "wifr_123",
+            external_subject_digest: "sha256:subject-digest",
+          },
+        }),
+      }),
+    );
+
+    expect(connectionAnalyticsFromContext(oauthContext, "api_key")).toBeNull();
+    expect(
+      connectionAnalyticsFromContext(apiKeyContext, "native_oauth"),
+    ).toBeNull();
+    expect(
+      connectionAnalyticsFromContext(mismatchedWorkloadContext, "api_key"),
+    ).toBeNull();
   });
 
   test("normalizes KERNEL_PROJECT as a server pin", () => {

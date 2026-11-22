@@ -17,11 +17,13 @@ import {
   flushMcpAnalytics,
   instrumentMcpAnalytics,
   isMcpAnalyticsEnabled,
+  type McpConnectionScopeFailureAnalytics,
 } from "@/lib/mcp/analytics";
 import {
   connectionAnalyticsFromContext,
   resolveMcpConnectionContext,
   type McpConnectionContextFailure,
+  type McpCredentialType,
 } from "@/lib/mcp/auth-context";
 import { mcpAppsAuthSubject } from "@/lib/mcp-apps-marker";
 import { requestUsesMcpApps } from "@/lib/mcp-apps-request";
@@ -54,6 +56,7 @@ const ENTITLEMENT_GATED_TOOLS = new Set([
   "manage_vaults",
   "manage_vault_wallets",
   "manage_vault_cards",
+  "manage_vault_payment_requests",
   "manage_vault_credentials",
   "manage_vault_items",
   "manage_vault_provider_configs",
@@ -195,6 +198,33 @@ type AuthInfoExtra = {
   projects?: string[];
 };
 
+// A refused connection never reaches the instrumented server, so this
+// capture is its only analytics record.
+function refuseConnection(
+  req: Request,
+  stage: McpConnectionScopeFailureAnalytics["stage"],
+  credentialType: McpCredentialType,
+  failure: McpConnectionContextFailure,
+): Response {
+  if (failure.status === "invalid") {
+    captureMcpConnectionScopeFailure({
+      stage,
+      outcome: failure.status,
+      credentialType,
+    });
+    throw new Error("Unable to resolve Kernel connection scope");
+  }
+  const response = connectionScopeFailureResponse(req, failure);
+  captureMcpConnectionScopeFailure({
+    stage,
+    outcome: failure.status,
+    credentialType,
+    upstreamStatusCode: stage === "scope" ? failure.statusCode : undefined,
+    responseStatusCode: response.status,
+  });
+  return response;
+}
+
 async function handleMcpRequestWithIdentity({
   req,
   token,
@@ -212,7 +242,7 @@ async function handleMcpRequestWithIdentity({
   authSubject: string;
   scopes: string[];
   authInfoExtra: AuthInfoExtra;
-  credentialType: "api_key" | "oauth";
+  credentialType: McpCredentialType;
   transportSessionId: string | null;
   connectionContextCacheIdentity?: string;
   entitlementsCacheCredential?: string;
@@ -230,18 +260,8 @@ async function handleMcpRequestWithIdentity({
       cacheIdentity: connectionContextCacheIdentity,
     }),
   ]);
-  if (connection.status !== "ok") {
-    captureMcpConnectionScopeFailure({
-      outcome: connection.status,
-      credentialType,
-      upstreamStatusCode:
-        connection.status === "invalid" ? undefined : connection.statusCode,
-    });
-    if (connection.status === "invalid") {
-      throw new Error("Unable to resolve Kernel connection scope");
-    }
-    return connectionScopeFailureResponse(req, connection);
-  }
+  if (connection.status !== "ok")
+    return refuseConnection(req, "scope", credentialType, connection);
   // Resolve entitlements only for tool discovery and gated tool calls.
   const entitlements = (await requestRequiresMcpEntitlements(req))
     ? await resolveMcpEntitlements({
@@ -260,7 +280,7 @@ async function handleMcpRequestWithIdentity({
   const connectionContext = connection.context;
   const connectionAnalytics =
     observeConnection && isMcpAnalyticsEnabled()
-      ? connectionAnalyticsFromContext(connectionContext)
+      ? connectionAnalyticsFromContext(connectionContext, credentialType)
       : null;
   return handler.fetch(req, {
     authInfo: {
@@ -276,6 +296,32 @@ async function handleMcpRequestWithIdentity({
         connectionAnalytics,
       },
     },
+  });
+}
+
+async function handleKernelCredentialRequest({
+  req,
+  token,
+  transportSessionId,
+  observeConnection,
+}: {
+  req: NextRequest;
+  token: string;
+  transportSessionId: string | null;
+  observeConnection: boolean;
+}): Promise<Response> {
+  // Kernel-native credentials (API keys and workload-identity access tokens)
+  // are authenticated by /auth/context rather than Clerk. Do not cache their
+  // context: every request must revalidate revocation, expiry, and policy.
+  return await handleMcpRequestWithIdentity({
+    req,
+    token,
+    authSubject: mcpAppsAuthSubject({ token }),
+    scopes: ["apikey"],
+    authInfoExtra: { userId: null, clerkToken: null },
+    credentialType: "api_key",
+    transportSessionId,
+    observeConnection,
   });
 }
 
@@ -299,7 +345,7 @@ async function handleAuthenticatedRequest(
   if (isNativeOAuthCredential(token)) {
     const native = await authenticateNativeOAuth(token);
     if (native.status !== "ok")
-      return connectionScopeFailureResponse(req, native);
+      return refuseConnection(req, "authentication", "native_oauth", native);
     const { credential } = native;
     // Action scopes name a resource kind and a verb; identity scopes do not.
     // A token that names no action holds its whole grant, which it does not
@@ -326,7 +372,7 @@ async function handleAuthenticatedRequest(
         permissions: actions.length > 0 ? actions : undefined,
         projects: credential.projects,
       },
-      credentialType: "oauth",
+      credentialType: "native_oauth",
       transportSessionId,
       entitlementsCacheCredential: credential.grantId,
       observeConnection,
@@ -334,16 +380,9 @@ async function handleAuthenticatedRequest(
   }
 
   if (!isValidJwtFormat(token)) {
-    // Opaque API keys are authenticated by the Kernel API rather than Clerk.
-    // Do not cache their context: /auth/context must revalidate the credential
-    // on every request so revoked keys cannot keep using a cached scope.
-    return await handleMcpRequestWithIdentity({
+    return await handleKernelCredentialRequest({
       req,
       token,
-      authSubject: mcpAppsAuthSubject({ token }),
-      scopes: ["apikey"],
-      authInfoExtra: { userId: null, clerkToken: null },
-      credentialType: "api_key",
       transportSessionId,
       observeConnection,
     });
@@ -362,12 +401,16 @@ async function handleAuthenticatedRequest(
       );
     }
     userId = payload.sub;
-  } catch (authError) {
-    return createAuthErrorResponse(
+  } catch {
+    // Workload-identity federation can issue compact JWT access tokens. They
+    // are not Clerk sessions, so let the Kernel API authenticate them. A
+    // foreign or malformed JWT is still rejected by /auth/context.
+    return await handleKernelCredentialRequest({
       req,
-      "invalid_token",
-      `Invalid token: ${authError instanceof Error ? authError.message : "Authentication failed"}`,
-    );
+      token,
+      transportSessionId,
+      observeConnection,
+    });
   }
 
   // Capability state is keyed only after Clerk verifies the JWT, and uses
