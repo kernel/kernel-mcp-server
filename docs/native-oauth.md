@@ -68,6 +68,13 @@ On every request the server:
   left out of the tool list and `get_connection_context` reports them under
   `granted`. A token that names no action lists every toolset. Either way the
   API authorizes each call.
+  - API key and workload identity tools are never listed for a token that
+    names actions: a sign-in cannot hold those permissions.
+  - The vault and search tools also depend on the organization's entitlements,
+    which the server reads with the connection's own token. Without
+    `organizations:read` (on the consent page, "view plan entitlements and
+    limits") that read is refused and both toolsets are left out, whatever
+    else was granted.
 
 ## Configuration
 

@@ -80,39 +80,42 @@ type McpToolset = (typeof mcpToolRegistrations)[number][0];
 
 // The resource kinds whose actions each toolset calls. A toolset is useful
 // when the credential holds any action on one of them; the API still
-// authorizes every call. Toolsets without an entry need no permission.
-const mcpToolsetResourceKinds: Partial<Record<McpToolset, readonly string[]>> =
-  {
-    profiles: ["profiles"],
-    browsers: ["browsers"],
-    projects: ["projects"],
-    api_keys: ["api_keys"],
-    browser_pools: ["browser_pools"],
-    config_registry: ["config_registry"],
-    browser_curl: ["browsers"],
-    browser_files: ["browsers"],
-    proxies: ["proxies"],
-    extensions: ["extensions"],
-    apps: ["deployments", "invocations"],
-    computer: ["browsers"],
-    shell: ["browsers"],
-    playwright: ["browsers"],
-    repl: ["browsers"],
-    webmcp: ["browsers"],
-    replays: ["browsers"],
-    auth_connections: ["auth_connections"],
-    credentials: ["credentials"],
-    credential_providers: ["credential_providers"],
-    vaults: ["vaults", "vault_provider_configs"],
-    search: ["searches"],
-  };
+// authorizes every call. Null marks a toolset that calls no KERNEL resource,
+// and an empty list one that no listed action can use.
+const mcpToolsetResourceKinds: Record<McpToolset, readonly string[] | null> = {
+  profiles: ["profiles"],
+  tasks: ["tasks"],
+  docs: null,
+  browsers: ["browsers"],
+  projects: ["projects"],
+  api_keys: ["api_keys"],
+  workload_identity: [],
+  browser_pools: ["browser_pools"],
+  config_registry: ["config_registry"],
+  browser_curl: ["browsers"],
+  browser_files: ["browsers"],
+  proxies: ["proxies"],
+  extensions: ["extensions"],
+  apps: ["deployments", "invocations"],
+  computer: ["browsers"],
+  shell: ["browsers"],
+  playwright: ["browsers"],
+  repl: ["browsers"],
+  webmcp: ["browsers"],
+  replays: ["browsers"],
+  auth_connections: ["auth_connections"],
+  credentials: ["credentials"],
+  credential_providers: ["credential_providers"],
+  vaults: ["vaults", "vault_provider_configs"],
+  search: ["searches"],
+};
 
 function toolsetPermitted(
   permissions: readonly string[] | undefined,
   toolset: McpToolset,
 ) {
   const kinds = mcpToolsetResourceKinds[toolset];
-  if (permissions === undefined || kinds === undefined) return true;
+  if (permissions === undefined || kinds === null) return true;
   return permissions.some((action) => kinds.includes(action.split(":")[0]));
 }
 

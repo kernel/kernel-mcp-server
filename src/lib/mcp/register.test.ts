@@ -303,6 +303,8 @@ describe("MCP toolsets by granted permission", () => {
       expect.arrayContaining([
         "manage_browsers",
         "manage_api_keys",
+        "manage_workload_identity",
+        "manage_tasks",
         "manage_proxies",
         "manage_vaults",
         "web_search",
@@ -331,6 +333,8 @@ describe("MCP toolsets by granted permission", () => {
     );
     for (const hidden of [
       "manage_api_keys",
+      "manage_workload_identity",
+      "manage_tasks",
       "manage_proxies",
       "manage_vaults",
       "manage_credentials",
@@ -339,6 +343,10 @@ describe("MCP toolsets by granted permission", () => {
       "web_search",
     ])
       expect(tools).not.toContain(hidden);
+  });
+
+  test("lists the task tools for a task action", async () => {
+    expect(await toolsFor(["tasks:read"])).toContain("manage_tasks");
   });
 
   test("an entitled toolset still needs a granted action", async () => {
