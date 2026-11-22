@@ -147,6 +147,7 @@ describe("native OAuth credentials", () => {
   let kernelTokens: string[];
   let kernelPaths: string[];
   let browsersRequested: () => void;
+  let credentialProjectId: string | null;
   let fetchSpy: ReturnType<typeof spyOn<typeof globalThis, "fetch">>;
 
   beforeEach(async () => {
@@ -156,6 +157,7 @@ describe("native OAuth credentials", () => {
     kernelTokens = [];
     kernelPaths = [];
     browsersRequested = () => {};
+    credentialProjectId = "proj_123";
     defaultMcpDependencies.createKernelClient = (token) => {
       kernelTokens.push(token);
       return new Kernel({
@@ -184,7 +186,7 @@ describe("native OAuth credentials", () => {
             principal: { type: "user", id: "user_123" },
             organization: { id: "org_123" },
             authorization: {
-              credential_scope: { project_id: "proj_123" },
+              credential_scope: { project_id: credentialProjectId },
               effective_scope: { project_id: "proj_123" },
             },
           });
@@ -430,11 +432,38 @@ describe("native OAuth credentials", () => {
     ]);
   });
 
-  test("post-authentication bugs propagate as server errors", async () => {
-    failingAuthContext(new Error("unaccountable"));
-    await expect(POST(mcpRequest(await issuer.parent()))).rejects.toThrow(
-      "Unable to resolve Kernel connection scope",
+  // A grant limited to one non-default project names no credential project;
+  // the API runs its requests in that project.
+  test("fix a grant's implicit project as the connection scope", async () => {
+    credentialProjectId = null;
+    const response = await POST(
+      mcpRequest(await issuer.parent(), "tools/call", {
+        name: "get_connection_context",
+        arguments: {},
+      }),
     );
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    const event = text.split("\n").find((line) => line.startsWith("data: "));
+    const result = JSON.parse(event ? event.slice(6) : text).result;
+    expect(result.isError).not.toBe(true);
+    expect(JSON.parse(result.content[0].text).connection_scope).toEqual({
+      kind: "project",
+      organization_id: "org_123",
+      project_id: "proj_123",
+      source: "credential",
+      project_id_required: false,
+    });
+  });
+
+  test("answer post-authentication bugs with a JSON server error", async () => {
+    failingAuthContext(new Error("unaccountable"));
+    const response = await POST(mcpRequest(await issuer.parent()));
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({
+      error: "server_error",
+      error_description: "Unable to resolve Kernel connection scope",
+    });
   });
 
   describe("end with the exchanged token", () => {
@@ -705,16 +734,56 @@ describe("connection scope failures through the handler", () => {
   test("still surfaces an unaccountable failure as a server error", async () => {
     failingAuthContext(new TypeError("cannot read properties of undefined"));
 
-    await expect(POST(initializeRequest())).rejects.toThrow(
-      "Unable to resolve Kernel connection scope",
-    );
+    const response = await POST(initializeRequest());
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(await response.json()).toEqual({
+      error: "server_error",
+      error_description: "Unable to resolve Kernel connection scope",
+    });
     expect(captured).toEqual([
       {
         stage: "scope",
         outcome: "invalid",
         credentialType: "api_key",
+        upstreamStatusCode: undefined,
+        responseStatusCode: 500,
       },
     ]);
+  });
+
+  test("answers an inconsistent connection scope with a server error", async () => {
+    defaultMcpDependencies.createKernelClient = () =>
+      ({
+        auth: {
+          context: {
+            retrieve: async () => ({
+              authentication: {
+                method: "api_key",
+                source: "api_key",
+                credential_id: "key_123",
+              },
+              principal: { type: "api_key", id: "key_123" },
+              organization: { id: "org_123" },
+              authorization: {
+                credential_scope: { project_id: "proj_1" },
+                effective_scope: { project_id: "proj_2" },
+              },
+            }),
+          },
+        },
+      }) as never;
+
+    const response = await POST(initializeRequest());
+
+    expect(response.status).toBe(500);
+    expect((await response.json()).error).toBe("server_error");
+    expect(captured[0]).toMatchObject({
+      stage: "scope",
+      outcome: "invalid",
+      responseStatusCode: 500,
+    });
   });
 });
 

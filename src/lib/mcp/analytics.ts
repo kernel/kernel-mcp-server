@@ -96,7 +96,7 @@ export type McpConnectionScopeFailureAnalytics = {
   credentialType: McpCredentialType;
   // Status the Kernel API returned from /auth/context. Only set for "scope".
   upstreamStatusCode?: number;
-  // Status this server answered with. Unset for "invalid", which throws.
+  // Status this server answered with.
   responseStatusCode?: number;
 };
 
