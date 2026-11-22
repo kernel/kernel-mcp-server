@@ -261,6 +261,15 @@ describe("native OAuth credentials", () => {
     expect(issuer.requests).toHaveLength(2);
   });
 
+  // The JSON a get_connection_context call returned.
+  async function connectionContext(response: Response) {
+    expect(response.status).toBe(200);
+    const text = await response.text();
+    const event = text.split("\n").find((line) => line.startsWith("data: "));
+    const message = JSON.parse(event ? event.slice(6) : text);
+    return JSON.parse(message.result.content[0].text);
+  }
+
   test("list only the toolsets the token's actions can use", async () => {
     issuer.respondWith({ projects: ["proj_a", "proj_b"] });
     const limited = await issuer.parent({
@@ -284,14 +293,10 @@ describe("native OAuth credentials", () => {
         arguments: {},
       }),
     );
-    expect(await response.text()).toContain(
-      JSON.stringify(
-        JSON.stringify({
-          permissions: ["browsers:use", "profiles:read"],
-          projects: ["proj_a", "proj_b"],
-        }),
-      ).slice(1, -1),
-    );
+    expect((await connectionContext(response)).granted).toEqual({
+      permissions: ["browsers:use", "profiles:read"],
+      projects: ["proj_a", "proj_b"],
+    });
 
     // A token that names no action holds its whole grant; nothing is hidden.
     issuer.respondWith({});
@@ -299,6 +304,19 @@ describe("native OAuth credentials", () => {
     const everything = await response.text();
     expect(everything).toContain('"name":"manage_proxies"');
     expect(everything).toContain('"name":"manage_api_keys"');
+  });
+
+  test("report granted projects for a token that names no action", async () => {
+    issuer.respondWith({ projects: ["proj_a"] });
+    const response = await POST(
+      mcpRequest(await refreshed(), "tools/call", {
+        name: "get_connection_context",
+        arguments: {},
+      }),
+    );
+    expect((await connectionContext(response)).granted).toEqual({
+      projects: ["proj_a"],
+    });
   });
 
   test("reuse the entitlements snapshot across rotated tokens", async () => {

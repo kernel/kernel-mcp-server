@@ -27,7 +27,7 @@ const ACCESS_TOKEN_URN = "urn:ietf:params:oauth:token-type:access_token";
 const JWKS_PATH = "/.well-known/jwks.json";
 const EXCHANGE_TIMEOUT_MS = 5_000;
 const CACHE_READ_TIMEOUT_MS = 500;
-const CACHE_KEY_INFO = "kernel-mcp native exchange cache v1";
+const CACHE_KEY_INFO = "kernel-mcp native exchange cache v2";
 
 // An exchanged token is reused only while at least this much of its lifetime
 // remains, so every request gets a usable window and clock skew is covered.

@@ -78,18 +78,41 @@ const mcpToolRegistrations = [
 
 type McpToolset = (typeof mcpToolRegistrations)[number][0];
 
-// The resource kinds whose actions each toolset calls. A toolset is useful
-// when the credential holds any action on one of them; the API still
-// authorizes every call. Null marks a toolset that calls no KERNEL resource,
-// and an empty list one that no listed action can use.
-const mcpToolsetResourceKinds: Record<McpToolset, readonly string[] | null> = {
+// The KERNEL API resource kinds the toolsets act on; an action is named
+// "<kind>:<verb>".
+type McpResourceKind =
+  | "auth_connections"
+  | "browser_pools"
+  | "browsers"
+  | "config_registry"
+  | "credential_providers"
+  | "credentials"
+  | "deployments"
+  | "extensions"
+  | "invocations"
+  | "profiles"
+  | "projects"
+  | "proxies"
+  | "searches"
+  | "tasks"
+  | "vault_provider_configs"
+  | "vaults";
+
+// What a credential that names its actions needs for each toolset to be
+// listed: any action on one of the listed resource kinds, nothing ("any"), or
+// a permission no such credential can hold ("never"). The API still
+// authorizes every call.
+const mcpToolsetRequirements: Record<
+  McpToolset,
+  readonly McpResourceKind[] | "any" | "never"
+> = {
   profiles: ["profiles"],
   tasks: ["tasks"],
-  docs: null,
+  docs: "any",
   browsers: ["browsers"],
   projects: ["projects"],
-  api_keys: ["api_keys"],
-  workload_identity: [],
+  api_keys: "never",
+  workload_identity: "never",
   browser_pools: ["browser_pools"],
   config_registry: ["config_registry"],
   browser_curl: ["browsers"],
@@ -114,8 +137,10 @@ function toolsetPermitted(
   permissions: readonly string[] | undefined,
   toolset: McpToolset,
 ) {
-  const kinds = mcpToolsetResourceKinds[toolset];
-  if (permissions === undefined || kinds === null) return true;
+  const required = mcpToolsetRequirements[toolset];
+  if (permissions === undefined || required === "any") return true;
+  if (required === "never") return false;
+  const kinds: readonly string[] = required;
   return permissions.some((action) => kinds.includes(action.split(":")[0]));
 }
 

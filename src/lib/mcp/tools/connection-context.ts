@@ -8,7 +8,7 @@ export function registerConnectionContextTool(server: McpServer) {
     "get_connection_context",
     {
       description:
-        "inspect the authenticated KERNEL principal, organization, credential and effective scope, and current effective policy before an operation. service-account principals may also include sanitized workload_identity provenance; no credential secrets or original identity-provider claims are returned. connection_scope.kind=organization may omit project for organization-wide reads and default-project creates, or pass a project name or id. connection_scope.kind=project is fixed to connection_scope.project_id. when the person who connected chose what this connection may do, granted.permissions lists the allowed actions and granted.projects the only projects it may use (absent means every project); with one granted project, omit project to use it.",
+        "inspect the authenticated KERNEL principal, organization, credential and effective scope, and current effective policy before an operation. service-account principals may also include sanitized workload_identity provenance; no credential secrets or original identity-provider claims are returned. connection_scope.kind=organization may omit project for organization-wide reads and default-project creates, or pass a project name or id. connection_scope.kind=project is fixed to connection_scope.project_id. when the person who connected chose what this connection may do, granted.permissions lists the allowed actions and granted.projects the only projects it may use (absent means every project); with one granted project, omit project to use it: KERNEL runs a request that names no project in that project.",
       inputSchema: z.object({}),
       annotations: {
         title: "get KERNEL connection context",
@@ -26,7 +26,7 @@ export function registerConnectionContextTool(server: McpServer) {
       const { permissions, projects } = ctx.http.authInfo.extra ?? {};
       return jsonResponse({
         ...authContext,
-        ...(permissions !== undefined && {
+        ...((permissions !== undefined || projects !== undefined) && {
           granted: { permissions, projects },
         }),
         connection_scope: {
