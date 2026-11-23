@@ -637,7 +637,7 @@ export function registerBrowserCapabilities(
             })
             .strict()
             .describe(
-              "(create) host os. omit or use linux; the reported browser os override does not change the host. macos is currently unavailable and returns platform_unavailable. macos is headful and us-east-only; headless=true, memory, gpu, video_memory, profile_id/profile_name, location, reported browser settings, or another region returns unsupported_configuration with unsupported_fields.",
+              "(create) host os; linux is default and may be omitted from responses. the reported browser os override changes only what sites see. macos is unavailable (platform_unavailable), headful, and us-east-only; headless=true, memory, gpu, video_memory, profile_id/profile_name, location, reported browser settings, or another region returns unsupported_configuration with unsupported_fields.",
             )
             .optional(),
           headless: z
@@ -844,7 +844,7 @@ export function registerBrowserCapabilities(
           include_cost: z
             .boolean()
             .describe(
-              "(get) include provisional session usage cost. default is off; send true to calculate it.",
+              "(get) include provisional usage cost; default is off. true adds calculation work.",
             )
             .optional(),
           limit: paginationParams.limit.describe(

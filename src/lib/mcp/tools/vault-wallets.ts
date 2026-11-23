@@ -32,7 +32,7 @@ export function registerVaultWalletTools(
     "manage_vault_wallets",
     {
       description:
-        'connect payment wallets without exposing secrets. "create" upserts by immutable key; duplicate create does not replace grants, bindings, or token_refresh. shop pay creation returns shop_pay_oauth to be shared unchanged. "payment_methods" reads the advertised live methods. "link_balance_setup" gets a link balance page for the user to complete when advertised. KERNEL creation sometimes returns an empty connected wallet; "add_payment_method" starts card enrollment and "remove_payment_method" removes one selected card after explicit user confirmation; scoped api keys need vaults:write plus vaults:use. share oauth, enrollment, and setup urls only with the intended user; never open or log them. embedded card-capture tokens are intentionally omitted. manage_vault_items get reads advertised live link expansions. a connected link wallet returns item.description with the checkout flow; follow it and select payment_method_id explicitly before creating and authorizing a card. customer-managed link grants come from a trusted backend, never chat; mcp cannot replace or reauthorize them, so use a fresh key and retain unresolved payments. vgs wallets are provisioned only by a trusted backend through the direct api/sdk. never provide card data or oauth codes. requests are not automatically retried.',
+        'connect payment wallets without exposing secrets. "create" upserts by immutable key; duplicates cannot replace grants, bindings, or token_refresh; shop pay returns shop_pay_oauth to be shared unchanged. "payment_methods" reads live methods. "link_balance_setup" gets an eligible connected link wallet\'s user-completed balance page. KERNEL create may return an empty wallet; "add_payment_method" starts enrollment and "remove_payment_method" removes a selected card after explicit confirmation; scoped keys need vaults:write plus vaults:use. share oauth, enrollment, and setup urls privately with the intended user; never open or log them; capture tokens are omitted. call manage_vault_items action "get" for link expansions. a connected link wallet returns item.description with the checkout flow. trusted backends, never chat, supply customer-managed grants and vgs; mcp cannot replace grants, so use a fresh key and retain unresolved payments. never provide card data or oauth codes; calls are not retried automatically.',
       inputSchema: vaultToolInput({
         ...vaultItemSchema,
         key: vaultKeySchema(),
@@ -67,7 +67,7 @@ export function registerVaultWalletTools(
           .min(100)
           .multipleOf(100)
           .describe(
-            "(link_balance_setup) target balance in cents, minimum 100 and a multiple of 100. link prefills only the amount needed to reach it, skips funding when already covered, and refuses a required addition over $150.",
+            "(link_balance_setup) target balance in cents; minimum 100, whole-dollar multiples. link prefills the needed addition, skips it if covered, and refuses adding over $150.",
           )
           .optional(),
         desired_transaction_limit: z
@@ -78,7 +78,7 @@ export function registerVaultWalletTools(
           .max(50000)
           .multipleOf(100)
           .describe(
-            "(link_balance_setup) threshold in cents, 100-50000 and a multiple of 100. supplying it shows the threshold step; omission skips it. KERNEL cards still require approval.",
+            "(link_balance_setup) approval threshold in cents; 100-50000, whole-dollar multiples. present shows the step; omitted skips it. KERNEL cards still need approval.",
           )
           .optional(),
         spec: z
@@ -230,7 +230,7 @@ export function registerVaultWalletTools(
               )
             )
               return errorResponse(
-                "link_balance_setup is not advertised in available_operations. inspect the wallet and its link_user_info expansion before taking further action.",
+                'link_balance_setup is not advertised in available_operations. call manage_vault_items action "get" with expand ["link_user_info"]; link_user_info.eligible_for_balance depends on both the user and this wallet\'s link client.',
               );
             operationSubmitted = true;
             const result = await client.vaults.items.performOperation(

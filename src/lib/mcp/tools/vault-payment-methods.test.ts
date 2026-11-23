@@ -93,11 +93,12 @@ describe("Kernel wallet payment methods", () => {
           "remove_payment_method",
         ],
       });
-      expect(wallets?.description).toContain(
-        "returns an empty connected wallet",
-      );
+      expect(wallets?.description).toContain("may return an empty wallet");
       expect(wallets?.description).toContain('"link_balance_setup"');
       expect(wallets?.description).toContain("vaults:write plus vaults:use");
+      expect(wallets?.description).toContain(
+        'manage_vault_items action "get"',
+      );
       expect(wallets?.inputSchema.properties?.enrollment).toMatchObject({
         enum: ["hosted", "server"],
       });
@@ -599,6 +600,12 @@ describe("Link balance setup", () => {
         "payment_methods is live provider data",
       );
       expect(result.guidance.join(" ")).toContain("never stores the balance");
+      expect(result.guidance.join(" ")).toContain(
+        'manage_vault_wallets action "link_balance_setup"',
+      );
+      expect(result.guidance.join(" ")).toContain(
+        'manage_vault_items action "invoke" with operation "link_balance_setup"',
+      );
     } finally {
       await fixture.close();
     }
@@ -668,6 +675,9 @@ describe("Link balance setup", () => {
       expect(result.guidance).toContain("only the user can complete");
       expect(result.guidance).toContain("does not expire");
       expect(result.guidance).toContain("balance.available");
+      expect(result.guidance).toContain(
+        'manage_vault_wallets action "payment_methods"',
+      );
       expect(result.guidance).toContain("still require the user's approval");
       expect(JSON.stringify(result)).not.toContain("provider_private");
     } finally {
@@ -713,6 +723,28 @@ describe("Link balance setup", () => {
     }
   });
 
+  test("explains Link balance eligibility when setup is not advertised", async () => {
+    const fixture = await connectVaultTest([
+      Response.json({ ...linkWallet, available_operations: [] }),
+    ]);
+    try {
+      const result = await fixture.call("manage_vault_wallets", {
+        ...target,
+        action: "link_balance_setup",
+      });
+      expect(result.isError).toBe(true);
+      expect(toolResultText(result)).toContain(
+        'manage_vault_items action "get" with expand ["link_user_info"]',
+      );
+      expect(toolResultText(result)).toContain(
+        "eligible_for_balance depends on both the user and this wallet's link client",
+      );
+      expect(fixture.requests).toHaveLength(1);
+    } finally {
+      await fixture.close();
+    }
+  });
+
   test("rejects an unsafe setup response without echoing its secret", async () => {
     const fixture = await connectVaultTest([
       Response.json(linkWallet),
@@ -729,6 +761,9 @@ describe("Link balance setup", () => {
       expect(result.isError).toBe(true);
       expect(toolResultText(result)).toContain(
         "unrecognized Link balance setup response",
+      );
+      expect(toolResultText(result)).toContain(
+        'manage_vault_wallets action "payment_methods"',
       );
       expect(toolResultText(result)).not.toContain("hidden-capability");
     } finally {

@@ -1494,12 +1494,15 @@ describe("manage_browsers host platform", () => {
         | undefined;
       expect(platform?.properties?.os?.enum).toEqual(["linux", "macos"]);
       expect(platform?.description).toContain(
-        "reported browser os override does not change the host",
+        "reported browser os override changes only what sites see",
       );
       expect(platform?.description).toContain("profile_id/profile_name");
       expect(platform?.description).toContain("platform_unavailable");
       expect(platform?.description).toContain("unsupported_configuration");
       expect(platform?.description).toContain("unsupported_fields");
+      expect(platform?.description).toContain(
+        "linux is default and may be omitted from responses",
+      );
 
       const created = toolResultJSON(
         await client.callTool({
