@@ -722,6 +722,50 @@ export function paymentMethodOperationResponse(result: unknown) {
   });
 }
 
+const onePasswordFillCodeGuidance: Record<string, string> = {
+  autosubmitFailed:
+    "autosubmitFailed: 1password filled the form, saw no new page and no removed fields for 10 seconds, and cleared what it filled. the approval is still valid: do not request access again. check the page. if it shows a verification step or the signed-in site, continue (a login with a one-time password the site did not ask for can still sign in). if the form is still showing, 1password cannot sign in to this site: do not fill again; ask the owner or use another sign-in method.",
+  noActiveGrant:
+    "noActiveGrant: the owner's approval expired or was revoked. KERNEL returned the credential to pending_authorization: invoke 1pw_create_access_request on it and have the owner approve; do not recreate the credential.",
+  credentialNotFound:
+    "credentialNotFound: the approved login was deleted or moved. KERNEL returned the credential to pending_authorization: invoke 1pw_create_access_request on it so the owner can pick another login.",
+  noExistingCredentials:
+    "noExistingCredentials: the owner's 1password has no usable login for this page. tell the owner instead of retrying.",
+  websiteMismatch:
+    "websiteMismatch: the page is not on the login's website. navigate to the login page, then fill again.",
+  fillFailed:
+    "fillFailed: 1password could not complete the fill, and the form may already have been filled or submitted. check the page before filling again; if it was not on a finished-loading page with the username or password field, fix that and fill again once.",
+  rateLimitExceeded:
+    "rateLimitExceeded: wait at least a minute before filling again.",
+  serviceUnavailable: "serviceUnavailable: fill again with backoff.",
+  networkError: "networkError: fill again with backoff.",
+  invalidToken:
+    "invalidToken: 1password rejected the access token. for a credential linked to a 1password account, KERNEL already refreshed the token and filled once more; if the credential_account is now reconnect_required, ask the owner to link it again with manage_vault_credentials connect_account on the same key. for a credential with a stored token, the integrating developer replaces the token through the KERNEL api, which mcp does not offer: tell the owner and do not fill again.",
+  integrationKeyInvalid:
+    "integrationKeyInvalid: the owner's 1password connection was removed or is out of date, so it must be linked again. tell the owner; disconnecting stops every fill that uses this account. only with their explicit approval, invoke 1pw_disconnect on the credential_account item when it advertises it, then link it again with manage_vault_credentials connect_account on the same key.",
+  extensionUnavailable:
+    "extensionUnavailable: the 1password extension failed to start in this browser. create a new browser with this vault attached and fill there.",
+  internal:
+    "internal: an unexpected 1password error that may have happened after the fill. inspect the page before doing anything else.",
+};
+
+// onePasswordFillGuidance explains a 1pw_fill result, including what its
+// extension error code means for the agent's next step.
+export function onePasswordFillGuidance(result: unknown): string {
+  const base =
+    "fill_submitted means the 1password extension reported submitting the form, not that login succeeded: check the page before continuing.";
+  const code =
+    result && typeof result === "object" && "error_code" in result
+      ? result.error_code
+      : undefined;
+  if (typeof code === "string") {
+    const specific = onePasswordFillCodeGuidance[code];
+    if (specific) return `${base} ${specific}`;
+    return `${base} 1password returned ${code}, which KERNEL does not recognize; the form may have been filled or submitted. inspect the page, then tell the owner; do not request access again or retry unchanged.`;
+  }
+  return `${base} fill_unknown means the form may have been filled or submitted: inspect the page to see the result of the fill.`;
+}
+
 const linkBalanceSetupOperationResultSchema = z.object({
   type: z.literal("link_balance_setup"),
   url: z.string().url().refine(isDisplaySafeVaultURL),
@@ -737,7 +781,7 @@ export function linkBalanceSetupOperationResponse(result: unknown) {
   return jsonResponse({
     result: parsed.data,
     guidance:
-      'share result.url only with the intended user in a private surface; only the user can complete the Link page. the url does not expire and is the same for first-time setup, adding money, and changing the threshold. requested amounts are suggestions the page prefills, so do not assume the user accepted them or finished. call manage_vault_wallets action "payment_methods" again and look for a method with type balance and balance.available. available.amount is in the currency\'s smallest unit and available.currency is a lowercase iso 4217 code; the value is read live from Link, never stored by KERNEL, and may be absent when Link did not report it. KERNEL cards still require the user\'s approval because KERNEL does not yet create spend requests under Link\'s threshold policy.',
+      "share result.url only with the intended user in a private surface; only the user can complete the Link page. the url does not expire and is the same for first-time setup, adding money, and changing the threshold. requested amounts are suggestions the page prefills, so do not assume the user accepted them or finished. call manage_vault_wallets action \"payment_methods\" again and look for a method with type balance and balance.available. available.amount is in the currency's smallest unit and available.currency is a lowercase iso 4217 code; the value is read live from Link, never stored by KERNEL, and may be absent when Link did not report it. KERNEL cards still require the user's approval because KERNEL does not yet create spend requests under Link's threshold policy.",
   });
 }
 
@@ -848,7 +892,7 @@ const onePasswordCredentialGuidance = [
   'operations use manage_vault_items with action: "invoke", operation set to the advertised 1pw_* type, and inputs for that operation. 1password credentials hold no values in KERNEL; spec.requests.entries lists the 1-5 requested logins and their websites. only logins in the owner\'s own non-shared 1password vault are supported, not shared-vault items or passkeys. after explicit user approval, invoke operation: "1pw_create_access_request" with an optional goal (reason and keywords only for a single-login request); it needs no browser and the approval link exists only after this request.',
   'approval is a human action in the account owner\'s 1password app. when action.name is 1password_access_approval with a url, give that onepassword:// link unmodified only to the account owner, in a private surface outside the agent-controlled browser, to open on a device with the 1password app; they choose the login and approve or deny there. the link grants nothing until they approve, but it identifies the request: never open it in a browser, decode it, post it where others can see it, or approve on their behalf. without a url, mcp received no native link: tell the owner the approval link is unavailable and do not request again while pending. invoke operation: "1pw_access_request_status" to observe the decision; it needs no browser, only reads status, and needs no user approval. KERNEL paces fresh checks from the first status call (immediate, then every 2 seconds, slowing to 10 and 20 seconds); a call may wait up to 20 seconds for its first scheduled check and 1password rate limits return retry-after. after 3 minutes the approval prompt has closed: ask whether the owner approved and check once more, or create a new request only when advertised. mcp intentionally omits access_request_reference because it carries the same sensitive request capability as the native url; mobile apps that need it must use the direct api/sdk and keep it out of logs. do not issue a second request while an approval action or 1pw_access_request_status is present.',
   "declined means the owner denied the request: do not request again unless they ask, and offer KERNEL-hosted collection instead. expired returns the item to pending_authorization so access may be requested again; unknown is treated as failed. if the item is pending_authorization with no action and 1pw_create_access_request is advertised again, the earlier request finished without a usable login or its 3-minute status window passed: tell the owner the status_reason and, with their approval, request access once more. failed is a confirmed failure: read status_reason, then ask the end-user before deleting and recreating this credential for at most one new request, or offer KERNEL-hosted collection. if the item stays pending_authorization with no action and no advertised operations, first check that the credential_account named by spec.account is connected; if it is, a request may already have reached 1password: stop, tell the owner to check 1password, and do not delete or recreate the item on your own to retry. whatever the status, when the end-user asks for a new request, for example because they missed the approval prompt, delete and recreate this credential for one new request.",
-  'when ready, create a browser with this vault attached (KERNEL loads the 1password extension into it on demand) and invoke operation: "1pw_fill" with inputs {browser_id, page_url}, where page_url is the exact current top-level url. the 1password extension decides whether an approved login matches the page and refuses pages that do not. when several entries are approved and the page origin does not identify exactly one, ask the owner which one to use and add entry_id from state.access_request entries; never guess. if several open pages have the same page_url, also pass target_id from execute_playwright_code tab.target_id; KERNEL verifies that page still has page_url and brings it to the front before filling. the extension selects fields and submits; you cannot supply selectors or values. fill_submitted means the form was submitted, not that login succeeded: check the page. fill_failed with `noExistingCredentials` means the owner\'s 1password has no usable login for the page: tell the owner instead of retrying. fill_unknown means the form may have been filled or submitted: inspect the page to see the result of the fill.',
+  'when ready, create a browser with this vault attached (KERNEL loads the 1password extension into it on demand) and invoke operation: "1pw_fill" with inputs {browser_id, page_url}, where page_url is the exact current top-level url. the 1password extension decides whether an approved login matches the page and refuses pages that do not. when several entries are approved and the page origin does not identify exactly one, ask the owner which one to use and add entry_id from state.access_request entries; never guess. if several open pages have the same page_url, also pass target_id from execute_playwright_code tab.target_id; KERNEL verifies that page still has page_url and brings it to the front before filling. the extension selects fields and submits; you cannot supply selectors or values. fill_submitted means the form was submitted, not that login succeeded: check the page. fill_failed and fill_unknown carry the extension\'s error_code, and the operation response explains it. autosubmitFailed means 1password saw no progress and cleared the fields: the approval is still valid, so never request access again to retry; check the page and, if the form is still showing, ask the owner or use another sign-in method. request access again only for noActiveGrant or credentialNotFound. fill_unknown without error_code means the form may have been filled or submitted: inspect the page to see the result of the fill.',
 ];
 
 const onePasswordStoredTokenGuidance =

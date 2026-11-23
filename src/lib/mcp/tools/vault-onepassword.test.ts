@@ -799,12 +799,57 @@ describe("1Password vault credentials", () => {
   });
 
   test.each([
-    { status: "fill_submitted", isError: undefined },
-    { status: "fill_failed", error_code: "fillFailed", isError: true },
-    { status: "fill_unknown", isError: true },
+    { status: "fill_submitted", isError: undefined, advice: "check the page" },
+    {
+      status: "fill_failed",
+      error_code: "fillFailed",
+      isError: true,
+      advice: "check the page before filling again",
+    },
+    {
+      status: "fill_unknown",
+      error_code: "autosubmitFailed",
+      isError: true,
+      advice: "do not request access again",
+    },
+    {
+      status: "fill_failed",
+      error_code: "noActiveGrant",
+      isError: true,
+      advice: "invoke 1pw_create_access_request on it",
+    },
+    {
+      status: "fill_failed",
+      error_code: "invalidToken",
+      isError: true,
+      advice: "KERNEL already refreshed the token",
+    },
+    {
+      status: "fill_failed",
+      error_code: "integrationKeyInvalid",
+      isError: true,
+      advice: "only with their explicit approval, invoke 1pw_disconnect",
+    },
+    {
+      status: "fill_failed",
+      error_code: "extensionUnavailable",
+      isError: true,
+      advice: "create a new browser with this vault attached",
+    },
+    {
+      status: "fill_unknown",
+      error_code: "someFutureCode",
+      isError: true,
+      advice: "the form may have been filled or submitted",
+    },
+    {
+      status: "fill_unknown",
+      isError: true,
+      advice: "inspect the page to see the result",
+    },
   ])(
-    "reports 1pw_fill $status without treating it as login success",
-    async ({ status, error_code, isError }) => {
+    "reports 1pw_fill $status $error_code without treating it as login success",
+    async ({ status, error_code, isError, advice }) => {
       const fixture = await connectVaultTest([
         Response.json(readyCredential),
         Response.json({
@@ -832,6 +877,7 @@ describe("1Password vault credentials", () => {
           ...(error_code && { error_code }),
         });
         expect(body.guidance).toContain("not that login succeeded");
+        expect(body.guidance).toContain(advice);
         expectNoReferences(result);
       } finally {
         await fixture.close();

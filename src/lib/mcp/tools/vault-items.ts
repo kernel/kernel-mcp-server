@@ -9,6 +9,7 @@ import { errorResponse, jsonResponse } from "@/lib/mcp/responses";
 import {
   linkBalanceSetupOperationResponse,
   linkCheckoutRecovery,
+  onePasswordFillGuidance,
   paymentMethodOperationResponse,
   projectVaultOutput,
   throwKernelVaultError,
@@ -487,7 +488,7 @@ export function registerVaultItemTools(
                 result: projected,
                 guidance:
                   projected.type === "1pw_fill"
-                    ? "fill_submitted means the 1password extension reported submitting the form, not that login succeeded: check the page before continuing. fill_unknown means the form may have been filled or submitted: inspect the page to see the result of the fill."
+                    ? onePasswordFillGuidance(projected)
                     : projected.type === "fill"
                       ? "completed means the credential was supplied to the page (fields were written, or a link pay token was delivered), not that the form was submitted or accepted. fill never submits, so it is safe to retry after a failed or unknown outcome."
                       : "inspect item state and events for the outcome. do not automatically retry an uncertain operation.",
