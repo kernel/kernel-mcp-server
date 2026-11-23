@@ -36,6 +36,10 @@ type McpRegistrationOptions = {
   mcpApps?: boolean;
   vaults?: boolean;
   search?: boolean;
+  // The actions a Kernel-issued credential names. Toolsets it cannot use at
+  // all are left out. Undefined means the credential names none (an API key,
+  // or a token that holds its whole grant), and every toolset is listed.
+  permissions?: readonly string[];
   dependencies?: McpDependencies;
 };
 type RegisterMcpToolset = (server: McpServer, options: McpToolOptions) => void;
@@ -73,6 +77,72 @@ const mcpToolRegistrations = [
 ] as const satisfies readonly (readonly [string, RegisterMcpToolset])[];
 
 type McpToolset = (typeof mcpToolRegistrations)[number][0];
+
+// The KERNEL API resource kinds the toolsets act on; an action is named
+// "<kind>:<verb>".
+type McpResourceKind =
+  | "auth_connections"
+  | "browser_pools"
+  | "browsers"
+  | "config_registry"
+  | "credential_providers"
+  | "credentials"
+  | "deployments"
+  | "extensions"
+  | "invocations"
+  | "profiles"
+  | "projects"
+  | "proxies"
+  | "searches"
+  | "tasks"
+  | "vault_provider_configs"
+  | "vaults";
+
+// What a credential that names its actions needs for each toolset to be
+// listed: any action on one of the listed resource kinds, nothing ("any"), or
+// a permission no such credential can hold ("never"). The API still
+// authorizes every call.
+const mcpToolsetRequirements: Record<
+  McpToolset,
+  readonly McpResourceKind[] | "any" | "never"
+> = {
+  profiles: ["profiles"],
+  tasks: ["tasks"],
+  docs: "any",
+  browsers: ["browsers"],
+  projects: ["projects"],
+  api_keys: "never",
+  workload_identity: "never",
+  browser_pools: ["browser_pools"],
+  config_registry: ["config_registry"],
+  browser_curl: ["browsers"],
+  browser_files: ["browsers"],
+  proxies: ["proxies"],
+  extensions: ["extensions"],
+  apps: ["deployments", "invocations"],
+  computer: ["browsers"],
+  shell: ["browsers"],
+  playwright: ["browsers"],
+  repl: ["browsers"],
+  webmcp: ["browsers"],
+  replays: ["browsers"],
+  auth_connections: ["auth_connections"],
+  credentials: ["credentials"],
+  credential_providers: ["credential_providers"],
+  vaults: ["vaults", "vault_provider_configs"],
+  search: ["searches"],
+};
+
+function toolsetPermitted(
+  permissions: readonly string[] | undefined,
+  toolset: McpToolset,
+) {
+  const required = mcpToolsetRequirements[toolset];
+  if (permissions === undefined || required === "any") return true;
+  if (required === "never") return false;
+  const kinds: readonly string[] = required;
+  return permissions.some((action) => kinds.includes(action.split(":")[0]));
+}
 
 const mcpToolsets = mcpToolRegistrations.map(([toolset]) => toolset);
 const mcpToolsetSet: ReadonlySet<string> = new Set(mcpToolsets);
@@ -200,6 +270,7 @@ export function registerMcpCapabilities(
     mcpApps = false,
     vaults = false,
     search = false,
+    permissions,
     dependencies = defaultMcpDependencies,
   }: McpRegistrationOptions = {},
 ) {
@@ -215,7 +286,8 @@ export function registerMcpCapabilities(
     if (
       (toolset !== "vaults" || vaults) &&
       (toolset !== "search" || search) &&
-      toolsetEnabled(enabledToolsets, disabledToolsets, toolset)
+      toolsetEnabled(enabledToolsets, disabledToolsets, toolset) &&
+      toolsetPermitted(permissions, toolset)
     ) {
       registerToolset(server, dependencies);
     }
@@ -226,7 +298,8 @@ export function registerMcpCapabilities(
   // resource) without replacing or narrowing manage_auth_connections.
   if (
     mcpApps &&
-    toolsetEnabled(enabledToolsets, disabledToolsets, "auth_connections")
+    toolsetEnabled(enabledToolsets, disabledToolsets, "auth_connections") &&
+    toolsetPermitted(permissions, "auth_connections")
   ) {
     registerAuthLoginApp(server);
   }

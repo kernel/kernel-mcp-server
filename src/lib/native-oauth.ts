@@ -27,7 +27,7 @@ const ACCESS_TOKEN_URN = "urn:ietf:params:oauth:token-type:access_token";
 const JWKS_PATH = "/.well-known/jwks.json";
 const EXCHANGE_TIMEOUT_MS = 5_000;
 const CACHE_READ_TIMEOUT_MS = 500;
-const CACHE_KEY_INFO = "kernel-mcp native exchange cache v1";
+const CACHE_KEY_INFO = "kernel-mcp native exchange cache v2";
 
 // An exchanged token is reused only while at least this much of its lifetime
 // remains, so every request gets a usable window and clock skew is covered.
@@ -56,11 +56,13 @@ const exchangeSchema = z.object({
   issued_token_type: z.literal(ACCESS_TOKEN_URN),
   expires_in: z.number().int().nonnegative(),
   scope: z.string().min(1),
+  projects: z.array(z.string()).optional(),
 });
 
 const cachedExchangeSchema = z.object({
   token: z.string().min(1).max(MAX_TOKEN_BYTES),
   expiresAt: z.number(),
+  projects: z.array(z.string()).optional(),
 });
 
 export type NativeCredential = {
@@ -69,6 +71,8 @@ export type NativeCredential = {
   subject: string;
   grantId: string;
   scopes: string[];
+  // The projects the grant is limited to; absent when it covers every project.
+  projects?: string[];
   // When the exchanged token stops being valid, in local time.
   expiresAt: number;
 };
@@ -400,7 +404,12 @@ async function exchange(
   const exchanged = exchangeSchema.safeParse(body);
   if (!exchanged.success)
     throw serverFault("native exchange response is not RFC 8693");
-  const { access_token: derivedToken, expires_in, scope } = exchanged.data;
+  const {
+    access_token: derivedToken,
+    expires_in,
+    scope,
+    projects,
+  } = exchanged.data;
   const derived = await verifyExchangedToken(derivedToken, parent, config);
   if (derived.scope !== scope)
     throw serverFault("exchanged token lineage mismatch: scope");
@@ -418,6 +427,7 @@ async function exchange(
     subject: parent.sub,
     grantId: parent.grant_id,
     scopes: scope.split(" "),
+    projects,
     expiresAt,
   };
 }
@@ -454,6 +464,7 @@ function sealExchange(
   const plaintext = JSON.stringify({
     token: credential.token,
     expiresAt: credential.expiresAt,
+    projects: credential.projects,
   });
   const sealed = Buffer.concat([
     iv,
@@ -515,6 +526,7 @@ async function cachedExchange(
       subject: parent.sub,
       grantId: parent.grant_id,
       scopes: derived.scope.split(" "),
+      projects: cached.projects,
       expiresAt: Math.min(cached.expiresAt, derived.exp * 1000),
     };
   } catch (error) {
