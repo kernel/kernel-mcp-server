@@ -36,7 +36,7 @@ const workloadIdentityKeySourceSchema = z
 
 const workloadIdentityTokenValidationSchema = z
   .object({
-    max_lifetime_seconds: z.number().int().min(1).max(86400).optional(),
+    max_lifetime_seconds: z.number().int().min(1).max(172800).optional(),
     replay_protection: z.enum(["single_use", "allow_reuse"]).optional(),
   })
   .strict();
@@ -182,7 +182,7 @@ const workloadIdentityInputSchema = z.object({
     .optional(),
   token_validation: workloadIdentityTokenValidationSchema
     .describe(
-      "(create/update issuer) incoming exp minus iat is capped at 1-86400 seconds independently of issued token ttl. replay defaults: single_use for github_actions/aws/entra/custom, allow_reuse for kubernetes; google_cloud always reuses. entra/custom may reuse, kubernetes may use single use, and github_actions/aws cannot reuse.",
+      "(create/update issuer) max_lifetime_seconds accepts 1-172800 seconds (48 hours) for incoming exp minus iat, independently of issued token ttl; the max covers azure managed identity tokens slightly over 24 hours. replay defaults: single_use for github_actions/aws/entra/custom, allow_reuse for kubernetes; google_cloud always reuses. entra/custom may reuse, kubernetes may use single_use, and github_actions/aws cannot reuse.",
     )
     .optional(),
   issuer_id: z

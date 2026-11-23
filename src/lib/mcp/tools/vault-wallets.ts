@@ -6,6 +6,7 @@ import { projectForOperation } from "@/lib/mcp/project-selection";
 import { longOperationOptions } from "@/lib/mcp/request-options";
 import { errorResponse } from "@/lib/mcp/responses";
 import {
+  linkBalanceSetupOperationResponse,
   paymentMethodOperationResponse,
   throwKernelVaultError,
   throwVaultError,
@@ -31,13 +32,14 @@ export function registerVaultWalletTools(
     "manage_vault_wallets",
     {
       description:
-        'connect payment wallets without exposing secrets. "create" creates or retrieves an identical wallet by immutable key; spec describes each provider. KERNEL creation returns an empty connected wallet where add_payment_method is enabled, otherwise a hosted card_enrollment action; shop pay creation returns a shop_pay_oauth action whose url must be shared unchanged with the shopper. share oauth and enrollment urls only with the intended user in a private surface; never open, alter, or log them. embedded card-capture tokens are bearer secrets and are intentionally not returned by mcp. a valid imported link grant creates a connected wallet. "payment_methods" requests the advertised live payment_methods expansion. on a KERNEL wallet that advertises them, "add_payment_method" starts one card enrollment and "remove_payment_method" removes one card after explicit user confirmation; neither takes card details, and both need vaults:write plus vaults:use for scoped api keys. manage_vault_items get can request any advertised expansion, including live link_user_info and link_shipping_addresses data that KERNEL does not store; unavailable expansions return an api error. select link payment_method_id explicitly; never automatically choose a default. KERNEL card items that omit payment_method_id use only the legacy default card; KERNEL payment_request items always require one. a connected link wallet returns item.description with the checkout flow; follow it. pay with link in this order: reach the final checkout page, choose a payment_method_id with "payment_methods", create the card with manage_vault_cards, then authorize it with browser_id and page_url from that checkout; read the card\'s available_operations descriptions for each next step. agentcard card_id may be omitted for cardholder selection at checkout approval. capabilities are advisory; absent means unknown. customer-managed link wallets need write-only tokens from a trusted backend, never chat; config credentials do not authorize a user, and token replacement is unavailable through mcp. duplicate create never replaces a grant; bindings and token_refresh cannot change. no in-place imported reauthorization: obtain a fresh grant under a new wallet key for new payments only; retain unresolved old payments for reconciliation. vgs wallets are provisioned only by a trusted backend through the direct api/sdk. never provide card data or oauth codes. requests are not automatically retried.',
+        'connect payment wallets without exposing secrets. "create" upserts by immutable key; duplicates cannot replace grants, bindings, or token_refresh; shop pay returns shop_pay_oauth to be shared unchanged. "payment_methods" reads live methods. "link_balance_setup" gets an eligible connected link wallet\'s user-completed balance page. KERNEL create may return an empty wallet; "add_payment_method" starts enrollment and "remove_payment_method" removes a selected card after explicit confirmation; scoped keys need vaults:write plus vaults:use. share oauth, enrollment, and setup urls privately with the intended user; never open or log them; capture tokens are omitted. call manage_vault_items action "get" for link expansions. a connected link wallet returns item.description with the checkout flow. trusted backends, never chat, supply customer-managed grants and vgs; mcp cannot replace grants, so use a fresh key and retain unresolved payments. never provide card data or oauth codes; calls are not retried automatically.',
       inputSchema: vaultToolInput({
         ...vaultItemSchema,
         key: vaultKeySchema(),
         action: z.enum([
           "create",
           "payment_methods",
+          "link_balance_setup",
           "add_payment_method",
           "remove_payment_method",
         ]),
@@ -56,6 +58,27 @@ export function registerVaultWalletTools(
           .enum(["hosted", "server"])
           .describe(
             "(add_payment_method) hosted (default) returns a single-use 30-minute card_enrollment link for the cardholder. server returns a single-use 5-minute card_ingest url for the issuer's backend and requires organization card-ingest configuration. failed or expired enrollment does not affect other methods.",
+          )
+          .optional(),
+        desired_balance_amount: z
+          .number()
+          .int()
+          .safe()
+          .min(100)
+          .multipleOf(100)
+          .describe(
+            "(link_balance_setup) target balance in cents; minimum 100, whole-dollar multiples. link prefills the needed addition, skips it if covered, and refuses adding over $150.",
+          )
+          .optional(),
+        desired_transaction_limit: z
+          .number()
+          .int()
+          .safe()
+          .min(100)
+          .max(50000)
+          .multipleOf(100)
+          .describe(
+            "(link_balance_setup) approval threshold in cents; 100-50000, whole-dollar multiples. present shows the step; omitted skips it. KERNEL cards still need approval.",
           )
           .optional(),
         spec: z
@@ -114,6 +137,14 @@ export function registerVaultWalletTools(
       )
         return errorResponse(
           "payment_method_id is required for remove_payment_method.",
+        );
+      if (
+        params.action !== "link_balance_setup" &&
+        (params.desired_balance_amount !== undefined ||
+          params.desired_transaction_limit !== undefined)
+      )
+        return errorResponse(
+          "desired_balance_amount and desired_transaction_limit are only supported for link_balance_setup.",
         );
       let spec: ItemUpsertParams.WalletVaultItemRequest["spec"] | undefined;
       if (params.action === "create") {
@@ -182,6 +213,41 @@ export function registerVaultWalletTools(
               { ...longOperationOptions(0), signal: ctx.mcpReq.signal },
             );
             return vaultItemResponse(item, target);
+          }
+          case "link_balance_setup": {
+            const wallet = await client.vaults.items.retrieve(
+              params.key,
+              { id_or_name: params.vault },
+              options,
+            );
+            if (wallet.type !== "wallet" || wallet.spec.provider !== "link")
+              return errorResponse(
+                "link_balance_setup is only available for a connected Link wallet.",
+              );
+            if (
+              !wallet.available_operations.some(
+                ({ type }) => type === "link_balance_setup",
+              )
+            )
+              return errorResponse(
+                'link_balance_setup is not advertised in available_operations. call manage_vault_items action "get" with expand ["link_user_info"]; link_user_info.eligible_for_balance depends on both the user and this wallet\'s link client.',
+              );
+            operationSubmitted = true;
+            const result = await client.vaults.items.performOperation(
+              params.key,
+              {
+                id_or_name: params.vault,
+                type: "link_balance_setup",
+                ...(params.desired_balance_amount !== undefined && {
+                  desired_balance_amount: params.desired_balance_amount,
+                }),
+                ...(params.desired_transaction_limit !== undefined && {
+                  desired_transaction_limit: params.desired_transaction_limit,
+                }),
+              },
+              options,
+            );
+            return linkBalanceSetupOperationResponse(result);
           }
           case "add_payment_method":
           case "remove_payment_method": {

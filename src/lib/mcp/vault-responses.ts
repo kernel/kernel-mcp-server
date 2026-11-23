@@ -41,6 +41,7 @@ const paymentMethodFields = {
   display: fields("label brand last4"),
   capabilities: { single_use_card: fields("eligible reasons") },
   action: fields("name url"),
+  balance: { available: fields("amount currency") },
 };
 const linkUserInfoFields = {
   ...fields(
@@ -488,6 +489,12 @@ export function vaultItemResponse(
   const singleUseKernelCard =
     kernelCardSource.success &&
     kernelCardSource.data.state.source === "single_use_card";
+  const linkWallet = z
+    .object({
+      type: z.literal("wallet"),
+      spec: z.object({ provider: z.literal("link") }),
+    })
+    .safeParse(projected);
   const importedLinkWallet = z
     .object({
       type: z.literal("wallet"),
@@ -583,6 +590,7 @@ export function vaultItemResponse(
                 !singleUseKernelCard
                   ? [kernelWalletGuidance]
                   : []),
+                ...(linkWallet.success ? [linkWalletBalanceGuidance] : []),
                 ...(importedLinkWallet.success
                   ? [
                       importedLinkWallet.data.spec.authorization
@@ -714,6 +722,25 @@ export function paymentMethodOperationResponse(result: unknown) {
   });
 }
 
+const linkBalanceSetupOperationResultSchema = z.object({
+  type: z.literal("link_balance_setup"),
+  url: z.string().url().refine(isDisplaySafeVaultURL),
+});
+
+export function linkBalanceSetupOperationResponse(result: unknown) {
+  const parsed = linkBalanceSetupOperationResultSchema.safeParse(result);
+  if (!parsed.success) {
+    return errorResponse(
+      'operation returned an unrecognized Link balance setup response. call manage_vault_wallets action "payment_methods" before acting; do not assume setup completed.',
+    );
+  }
+  return jsonResponse({
+    result: parsed.data,
+    guidance:
+      'share result.url only with the intended user in a private surface; only the user can complete the Link page. the url does not expire and is the same for first-time setup, adding money, and changing the threshold. requested amounts are suggestions the page prefills, so do not assume the user accepted them or finished. call manage_vault_wallets action "payment_methods" again and look for a method with type balance and balance.available. available.amount is in the currency\'s smallest unit and available.currency is a lowercase iso 4217 code; the value is read live from Link, never stored by KERNEL, and may be absent when Link did not report it. KERNEL cards still require the user\'s approval because KERNEL does not yet create spend requests under Link\'s threshold policy.',
+  });
+}
+
 // Checkout inspection fails before Link or Shop Pay receives a payment request,
 // so the agent can fix the browser tab and authorize again.
 export const linkCheckoutErrorCodes = [
@@ -767,6 +794,9 @@ const kernelSupportGuidance =
 
 const kernelWalletGuidance =
   "KERNEL wallet enrollment and spend approval use bearer action urls. share card_enrollment and spend_approval urls only with the intended user privately; send card_ingest urls only to the trusted card issuer backend. never open them or put them in logs or traces. a connected wallet can hold zero or more cards in payment_methods. when add_payment_method and remove_payment_method are advertised, use manage_vault_wallets to enroll or remove individual cards; add defaults to a 30-minute hosted card_enrollment link and can request a 5-minute server card_ingest url, while removing one method does not disconnect the wallet. otherwise the wallet uses one legacy default card: creation returns its card_enrollment action, pending_authorization waits for enrollment, and degraded means an uncertain enrollment requires deleting the wallet before adding another card. reconnect_required is a legacy wallet awaiting an operator upgrade; reads preserve it, but payment and deletion requests are refused until the upgrade. payment method is_default identifies only the legacy default card; wallets with payment methods enabled have no default. pending_enrollment uses its card_enrollment or card_ingest action. removal_pending refuses payments after an uncertain removal outcome; retry remove_payment_method later only when advertised. recovery_required after an uncertain enrollment may be removable, while an unreadable stored card requires private support and can refuse removal with 409; follow status_reason. payment_methods eligibility is advisory. network_token_pending, network_token_unsupported, or network_token_failed normally means do not authorize, unless the returned capability and advertised flow explicitly support checkout delivery without a network token; then fill types temporary checkout details. for network_token_pending, re-check later at most once in this attempt. if still ineligible or unknown, ask the cardholder before enrolling a different card; do not poll indefinitely or replay an uncertain purchase.";
+
+const linkWalletBalanceGuidance =
+  'payment_methods is live provider data. a stored-value method such as Link balance has type balance and may include balance.available; amount is in the currency\'s smallest unit and currency is a lowercase iso 4217 code. available is absent when the provider did not report it, and KERNEL never stores the balance. when link_balance_setup is advertised, call manage_vault_wallets action "link_balance_setup", or manage_vault_items action "invoke" with operation "link_balance_setup"; the suggested balance and threshold do not remove the approval requirement from KERNEL cards.';
 
 const kernelRefreshedLinkWalletGuidance =
   "this imported link wallet uses token_refresh kernel (the default): KERNEL owns and rotates the refresh token after import, so the customer backend must stop refreshing that grant. if the grant later becomes unusable, do not replace tokens on this wallet through mcp. obtain a fresh grant in the trusted backend and create a new wallet key for new payments only, while retaining unresolved old payments for reconciliation.";

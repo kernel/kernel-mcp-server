@@ -7,6 +7,7 @@ import { projectForOperation } from "@/lib/mcp/project-selection";
 import { longOperationOptions } from "@/lib/mcp/request-options";
 import { errorResponse, jsonResponse } from "@/lib/mcp/responses";
 import {
+  linkBalanceSetupOperationResponse,
   linkCheckoutRecovery,
   paymentMethodOperationResponse,
   projectVaultOutput,
@@ -34,6 +35,9 @@ import {
   fillInputsSchema,
   fillInputsShape,
   isPasskeyOperation,
+  linkBalanceSetupInputsIssueMessage,
+  linkBalanceSetupInputsSchema,
+  linkBalanceSetupInputsShape,
   onePasswordFillInputsIssueMessage,
   onePasswordFillInputsSchema,
   onePasswordFillInputsShape,
@@ -56,6 +60,7 @@ import {
   type AuthorizeInputs,
   type ConfirmTransactionInputs,
   type FillInputs,
+  type LinkBalanceSetupInputs,
   type OnePasswordFillInputs,
   type OnePasswordStatusInputs,
   type PasskeyInputs,
@@ -101,7 +106,7 @@ export function registerVaultItemTools(
           )
           .optional()
           .describe(
-            `(invoke) use only fields required by the advertised operation; never include type, id_or_name, or secret values. fill takes exactly ${fillInputsShape}: browser_id is a session id, page_url is the exact current https top-level url, and fields are ordered field/selector bindings. selectors must match one element across the page and nested frames; timeout_ms is deprecated and ignored. authorize takes ${authorizeInputsShape}: link and shop pay require browser_id plus page_url together; KERNEL cards may take browser_id alone before the payment step. confirm_transaction takes exactly ${confirmTransactionInputsShape}: amount is 0..1000000 minor units and no more than approved; currency must match; occurred_at is rfc3339. shop pay accepts only \`PURCHASE\`, \`AUTHORIZATION\`, and \`CAPTURE\`; approved may include order_id/order_url, while other outcomes may include failure_code and payment_declined for \`DECLINED\`. 1pw_fill takes exactly ${onePasswordFillInputsShape}; target_id selects a page, and entry_id selects a login when the page origin does not identify exactly one. 1pw_access_request_status takes exactly ${onePasswordStatusInputsShape}. 1pw_disconnect takes no inputs. arm_passkey, register_passkey, and disarm_passkey each take exactly ${passkeyInputsShape}; field selects the stored passkey for arm, field selects the empty passkey field for register, and omission disarms all for this item. add_payment_method takes exactly ${addPaymentMethodInputsShape}; remove_payment_method takes exactly ${removePaymentMethodInputsShape}. webmcp_invoke requires browser_id, tool_ref, page_url, input, bindings, and optional timeout_sec; serialized input is limited to 64 kib.`,
+            `(invoke) use only fields required by the advertised operation; never include type, id_or_name, or secret values. fill takes exactly ${fillInputsShape}: browser_id is a session id, page_url is the exact current https top-level url, and fields are ordered field/selector bindings. selectors must match one element across the page and nested frames; timeout_ms is deprecated and ignored. authorize takes ${authorizeInputsShape}: link and shop pay require browser_id plus page_url together; KERNEL cards may take browser_id alone before the payment step. confirm_transaction takes exactly ${confirmTransactionInputsShape}: amount is 0..1000000 minor units and no more than approved; currency must match; occurred_at is rfc3339. shop pay accepts only \`PURCHASE\`, \`AUTHORIZATION\`, and \`CAPTURE\`; approved may include order_id/order_url, while other outcomes may include failure_code and payment_declined for \`DECLINED\`. 1pw_fill takes exactly ${onePasswordFillInputsShape}; target_id selects a page, and entry_id selects a login when the page origin does not identify exactly one. 1pw_access_request_status takes exactly ${onePasswordStatusInputsShape}. 1pw_disconnect takes no inputs. arm_passkey, register_passkey, and disarm_passkey each take exactly ${passkeyInputsShape}; field selects the stored passkey for arm, field selects the empty passkey field for register, and omission disarms all for this item. add_payment_method takes exactly ${addPaymentMethodInputsShape}; remove_payment_method takes exactly ${removePaymentMethodInputsShape}. link_balance_setup takes ${linkBalanceSetupInputsShape}; both values are cents, at least 100, and whole-dollar multiples; desired_transaction_limit is at most 50000, and link refuses a target needing over $150 added. webmcp_invoke requires browser_id, tool_ref, page_url, input, bindings, and optional timeout_sec; serialized input is limited to 64 kib.`,
           ),
         expand: z
           .array(
@@ -212,6 +217,7 @@ export function registerVaultItemTools(
             let removePaymentMethodInputs:
               | RemovePaymentMethodInputs
               | undefined;
+            let linkBalanceSetupInputs: LinkBalanceSetupInputs | undefined;
             if (params.operation === "fill") {
               const parsed = fillInputsSchema.safeParse(params.inputs ?? {});
               if (!parsed.success)
@@ -289,6 +295,16 @@ export function registerVaultItemTools(
                   removePaymentMethodInputsIssueMessage(parsed.error),
                 );
               removePaymentMethodInputs = parsed.data;
+            }
+            if (params.operation === "link_balance_setup") {
+              const parsed = linkBalanceSetupInputsSchema.safeParse(
+                params.inputs ?? {},
+              );
+              if (!parsed.success)
+                return errorResponse(
+                  linkBalanceSetupInputsIssueMessage(parsed.error),
+                );
+              linkBalanceSetupInputs = parsed.data;
             }
             if (params.operation === "webmcp_invoke") {
               const parsed = webmcpInvokeInputsSchema.safeParse(
@@ -426,6 +442,7 @@ export function registerVaultItemTools(
                   passkeyInputs ??
                   addPaymentMethodInputs ??
                   removePaymentMethodInputs ??
+                  linkBalanceSetupInputs ??
                   params.inputs),
               } as Parameters<typeof client.vaults.items.performOperation>[1],
               onePasswordStatusInputs
@@ -450,6 +467,8 @@ export function registerVaultItemTools(
               params.operation === "remove_payment_method"
             )
               return paymentMethodOperationResponse(result);
+            if (params.operation === "link_balance_setup")
+              return linkBalanceSetupOperationResponse(result);
             const projected = projectVaultOutput(
               result,
               vaultOperationResultFields,
