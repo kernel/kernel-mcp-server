@@ -714,29 +714,29 @@ export function paymentMethodOperationResponse(result: unknown) {
   });
 }
 
-// Checkout inspection fails before Link or Shop Pay receives a payment request,
-// so the agent can fix the browser tab and authorize again.
 const onePasswordFillCodeGuidance: Record<string, string> = {
   autosubmitFailed:
     "autosubmitFailed: 1password filled the form, saw no new page and no removed fields for 10 seconds, and cleared what it filled. the approval is still valid: do not request access again. check the page. if it shows a verification step or the signed-in site, continue (a login with a one-time password the site did not ask for can still sign in). if the form is still showing, 1password cannot sign in to this site: do not fill again; ask the owner or use another sign-in method.",
   noActiveGrant:
-    "noActiveGrant: the owner's approval expired or was revoked. create a new access request and have the owner approve it.",
+    "noActiveGrant: the owner's approval expired or was revoked. KERNEL returned the credential to pending_authorization: invoke 1pw_create_access_request on it and have the owner approve; do not recreate the credential.",
   credentialNotFound:
-    "credentialNotFound: the approved login was deleted or moved. create a new access request so the owner can pick another login.",
+    "credentialNotFound: the approved login was deleted or moved. KERNEL returned the credential to pending_authorization: invoke 1pw_create_access_request on it so the owner can pick another login.",
   noExistingCredentials:
     "noExistingCredentials: the owner's 1password has no usable login for this page. tell the owner instead of retrying.",
   websiteMismatch:
     "websiteMismatch: the page is not on the login's website. navigate to the login page, then fill again.",
   fillFailed:
-    "fillFailed: 1password could not fill the page. make sure the page with the username or password field has finished loading, then fill again once.",
+    "fillFailed: 1password could not complete the fill, and the form may already have been filled or submitted. check the page before filling again; if it was not on a finished-loading page with the username or password field, fix that and fill again once.",
   rateLimitExceeded:
     "rateLimitExceeded: wait at least a minute before filling again.",
   serviceUnavailable: "serviceUnavailable: fill again with backoff.",
   networkError: "networkError: fill again with backoff.",
   invalidToken:
-    "invalidToken: the 1password access token expired or was revoked. for a credential with a stored token, the integrating developer replaces it through the KERNEL api, which mcp does not offer: tell the owner and do not fill again. for a credential linked to a 1password account, fill again once; if it repeats, ask the owner to reconnect their 1password account.",
+    "invalidToken: 1password rejected the access token. for a credential linked to a 1password account, KERNEL already refreshed the token and filled once more; if the credential_account is now reconnect_required, ask the owner to link it again with manage_vault_credentials connect_account on the same key. for a credential with a stored token, the integrating developer replaces the token through the KERNEL api, which mcp does not offer: tell the owner and do not fill again.",
   integrationKeyInvalid:
-    "integrationKeyInvalid: the owner's 1password connection was removed or is out of date. ask the owner to reconnect their 1password account.",
+    "integrationKeyInvalid: the owner's 1password connection was removed or is out of date. invoke 1pw_disconnect on the credential_account item, then ask the owner to link it again with manage_vault_credentials connect_account on the same key.",
+  extensionUnavailable:
+    "extensionUnavailable: the 1password extension failed to start in this browser. create a new browser with this vault attached and fill there.",
   internal:
     "internal: an unexpected 1password error that may have happened after the fill. inspect the page before doing anything else.",
 };
@@ -753,11 +753,13 @@ export function onePasswordFillGuidance(result: unknown): string {
   if (typeof code === "string") {
     const specific = onePasswordFillCodeGuidance[code];
     if (specific) return `${base} ${specific}`;
-    return `${base} 1password returned ${code} and did not fill or submit the login. tell the owner; do not request access again or retry unchanged.`;
+    return `${base} 1password returned ${code}, which KERNEL does not recognize; the form may have been filled or submitted. inspect the page, then tell the owner; do not request access again or retry unchanged.`;
   }
   return `${base} fill_unknown means the form may have been filled or submitted: inspect the page to see the result of the fill.`;
 }
 
+// Checkout inspection fails before Link or Shop Pay receives a payment request,
+// so the agent can fix the browser tab and authorize again.
 export const linkCheckoutErrorCodes = [
   "browser_not_found",
   "browser_unavailable",
