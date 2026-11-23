@@ -1,6 +1,7 @@
 /// <reference types="bun-types" />
 
 import { describe, expect, test } from "bun:test";
+import { APIError } from "@onkernel/sdk";
 import {
   connectTestMcp,
   toolResultJSON,
@@ -1189,7 +1190,7 @@ describe("manage_browsers location, memory, and conditional allowlists", () => {
     }
   });
 
-  test("forwards include_deleted=false on get", async () => {
+  test("forwards explicit detail flags and leaves opt-in cost off by default", async () => {
     const calls: unknown[] = [];
     const { client, close } = await connectTestMcp(
       registerBrowserCapabilities,
@@ -1197,7 +1198,7 @@ describe("manage_browsers location, memory, and conditional allowlists", () => {
         browsers: {
           retrieve: async (...args: unknown[]) => {
             calls.push(args);
-            return { session_id: "brr_deleted" };
+            return { session_id: String(args[0]) };
           },
         },
       },
@@ -1210,9 +1211,29 @@ describe("manage_browsers location, memory, and conditional allowlists", () => {
           action: "get",
           session_id: "brr_deleted",
           include_deleted: false,
+          include_cost: false,
         },
       });
-      expect(calls).toEqual([["brr_deleted", { include_deleted: false }]]);
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "get",
+          session_id: "brr_active",
+        },
+      });
+      await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "get",
+          session_id: "brr_costed",
+          include_cost: true,
+        },
+      });
+      expect(calls).toEqual([
+        ["brr_deleted", { include_cost: false, include_deleted: false }],
+        ["brr_active"],
+        ["brr_costed", { include_cost: true }],
+      ]);
     } finally {
       await close();
     }
@@ -1441,6 +1462,113 @@ describe("manage_browsers captcha solving and fingerprint overrides", () => {
   });
 });
 
+describe("manage_browsers host platform", () => {
+  test("advertises and forwards the browser host operating system", async () => {
+    const creates: unknown[] = [];
+    let updates = 0;
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async (params: unknown) => {
+            creates.push(params);
+            return { session_id: "brr_macos", platform: { os: "macos" } };
+          },
+          update: async () => {
+            updates++;
+            return { session_id: "brr_macos" };
+          },
+        },
+      },
+    );
+
+    try {
+      const tool = (await client.listTools()).tools.find(
+        ({ name }) => name === "manage_browsers",
+      );
+      const platform = tool?.inputSchema.properties?.platform as
+        | {
+            description?: string;
+            properties?: { os?: { enum?: string[] } };
+          }
+        | undefined;
+      expect(platform?.properties?.os?.enum).toEqual(["linux", "macos"]);
+      expect(platform?.description).toContain(
+        "reported browser os override changes only what sites see",
+      );
+      expect(platform?.description).toContain("profile_id/profile_name");
+      expect(platform?.description).toContain("platform_unavailable");
+      expect(platform?.description).toContain("unsupported_configuration");
+      expect(platform?.description).toContain("unsupported_fields");
+      expect(platform?.description).toContain(
+        "linux is default and may be omitted from responses",
+      );
+
+      const created = toolResultJSON(
+        await client.callTool({
+          name: "manage_browsers",
+          arguments: { action: "create", platform: { os: "macos" } },
+        }),
+      );
+      expect(creates).toEqual([{ platform: { os: "macos" } }]);
+      expect(created.browser.platform).toEqual({ os: "macos" });
+
+      const update = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "update",
+          session_id: "brr_macos",
+          platform: { os: "linux" },
+        },
+      });
+      expect(update.isError).toBe(true);
+      expect(updates).toBe(0);
+    } finally {
+      await close();
+    }
+  });
+
+  test("surfaces safe unsupported platform fields from API errors", async () => {
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          create: async () => {
+            throw APIError.generate(
+              400,
+              {
+                code: "unsupported_configuration",
+                message: "The requested platform configuration is unsupported.",
+                unsupported_fields: ["headless", "profile"],
+              },
+              undefined,
+              new Headers(),
+            );
+          },
+        },
+      },
+    );
+
+    try {
+      const result = await client.callTool({
+        name: "manage_browsers",
+        arguments: {
+          action: "create",
+          platform: { os: "macos" },
+          headless: true,
+          profile_id: "profile_1",
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(toolResultText(result)).toContain(
+        "unsupported fields: headless, profile.",
+      );
+    } finally {
+      await close();
+    }
+  });
+});
+
 describe("manage_browsers region", () => {
   test("passes region to create and list", async () => {
     const createCalls: unknown[] = [];
@@ -1495,6 +1623,92 @@ describe("manage_browsers region", () => {
           leased_at: "2026-08-08T00:05:00Z",
         },
       ]);
+    } finally {
+      await close();
+    }
+  });
+});
+
+describe("manage_browsers cost details", () => {
+  test("opts into detail cost, returns guidance, and preserves zero spend", async () => {
+    const costs = {
+      brr_provisional: {
+        status: "provisional",
+        estimated_usage_spend_usd: "0",
+        as_of: "2026-11-20T12:34:56Z",
+      },
+      brr_pending: { status: "pending" },
+      brr_unavailable: { status: "unavailable" },
+    } as const;
+    const calls: unknown[] = [];
+    const { client, close } = await connectTestMcp(
+      registerBrowserCapabilities,
+      {
+        browsers: {
+          retrieve: async (...args: unknown[]) => {
+            calls.push(args);
+            const [sessionId, query] = args as [
+              keyof typeof costs,
+              { include_cost?: boolean } | undefined,
+            ];
+            return {
+              session_id: sessionId,
+              ...(query?.include_cost && { cost: costs[sessionId] }),
+            };
+          },
+        },
+      },
+    );
+
+    try {
+      const results = [];
+      for (const session_id of Object.keys(costs)) {
+        results.push(
+          toolResultJSON(
+            await client.callTool({
+              name: "manage_browsers",
+              arguments: { action: "get", session_id, include_cost: true },
+            }),
+          ),
+        );
+      }
+
+      expect(results.map(({ cost }) => cost)).toEqual(Object.values(costs));
+      expect(results[0].cost).toEqual({
+        status: "provisional",
+        estimated_usage_spend_usd: "0",
+        as_of: "2026-11-20T12:34:56Z",
+      });
+      for (const { note } of results) {
+        expect(note).toContain("gross provisional usd browser-meter cost");
+        expect(note).toContain("not an invoice total");
+        expect(note).toContain('status "pending"');
+        expect(note).toContain('"unavailable"');
+        expect(note).toContain("may accrue additional usage");
+      }
+
+      const resource = (await client.readResource({
+        uri: "kernel://orgs/org_test/projects/proj_test/browsers/brr_provisional",
+      })) as TextResourceResult;
+      expect(JSON.parse(resource.contents[0].text)).toEqual({
+        session_id: "brr_provisional",
+      });
+      expect(calls).toEqual([
+        ["brr_provisional", { include_cost: true }],
+        ["brr_pending", { include_cost: true }],
+        ["brr_unavailable", { include_cost: true }],
+        ["brr_provisional"],
+      ]);
+
+      const browserTool = (await client.listTools()).tools.find(
+        ({ name }) => name === "manage_browsers",
+      );
+      expect(browserTool?.description).toContain(
+        '"get" for full details and optional provisional browser-session usage cost',
+      );
+      expect(browserTool?.inputSchema.properties?.include_cost).toMatchObject({
+        description: expect.stringContaining("default is off"),
+      });
     } finally {
       await close();
     }

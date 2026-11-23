@@ -284,6 +284,9 @@ export function registerAppCapabilities(
                 ...(browser.fingerprint !== undefined && {
                   fingerprint: browser.fingerprint,
                 }),
+                ...(browser.platform !== undefined && {
+                  platform: browser.platform,
+                }),
                 ...(browser.leased_at !== undefined && {
                   leased_at: browser.leased_at,
                 }),

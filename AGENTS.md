@@ -91,6 +91,10 @@ When the SDK adds a request parameter that the API defaults off because it adds 
 
 Keep existing intentional MCP defaults, such as the 24-hour expiry on control live-view URLs.
 
+### Naming calls in guidance
+
+When a description or response guidance tells the model to run an operation, give the exact call for each tool it names. Vault item operations run through `manage_vault_items` action `"invoke"` with `operation` set to the operation name; they aren't actions. For example: `manage_vault_wallets` action `"link_balance_setup"`, or `manage_vault_items` action `"invoke"` with operation `"link_balance_setup"`. This also covers guidance that an unmerged coverage update already added.
+
 ## Project Structure
 
 - `src/` - Source code directory
