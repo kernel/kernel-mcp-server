@@ -286,6 +286,39 @@ describe("resolveMcpConnectionContext", () => {
     });
   });
 
+  describe("OAuth grants", () => {
+    const grant = (effectiveProjectId: string | null) =>
+      response({
+        method: "jwt",
+        source: "oauth",
+        principalType: "user",
+        principalId: "user_123",
+        effectiveProjectId,
+      });
+
+    // The API runs a single-project grant's requests in its project, and
+    // reports a non-default one as the effective scope.
+    test("fixes a single non-default project grant to that project", () => {
+      expect(connectionScopeFromAuthContext(grant("project_granted"))).toEqual({
+        kind: "project",
+        organizationId: "org_123",
+        projectId: "project_granted",
+        source: "credential",
+      });
+    });
+
+    // The API reports neither a default-project grant nor an all-projects
+    // grant with an effective project, so both stay organization-wide.
+    test("keeps default-project and all-projects grants organization-wide", () => {
+      expect(connectionScopeFromAuthContext(grant(null))).toEqual({
+        kind: "organization",
+        organizationId: "org_123",
+        projectId: null,
+        source: "credential",
+      });
+    });
+  });
+
   test("rejects inconsistent credential, effective, and server scope", () => {
     expect(
       connectionScopeFromAuthContext(
@@ -297,12 +330,21 @@ describe("resolveMcpConnectionContext", () => {
     ).toBeNull();
     expect(
       connectionScopeFromAuthContext(
-        response({ effectiveProjectId: "project_1" }),
+        response({ credentialProjectId: "project_1" }),
       ),
     ).toBeNull();
     expect(
       connectionScopeFromAuthContext(
         response({ effectiveProjectId: "project_1" }),
+        "project_2",
+      ),
+    ).toBeNull();
+    expect(
+      connectionScopeFromAuthContext(
+        response({
+          credentialProjectId: "project_1",
+          effectiveProjectId: "project_1",
+        }),
         "project_2",
       ),
     ).toBeNull();

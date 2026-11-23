@@ -138,8 +138,15 @@ function createAuthErrorResponse(
 
 export function connectionScopeFailureResponse(
   req: Request,
-  failure: Exclude<McpConnectionContextFailure, { status: "invalid" }>,
+  failure: McpConnectionContextFailure,
 ): Response {
+  if (failure.status === "invalid") {
+    return errorResponse(
+      500,
+      "server_error",
+      "Unable to resolve Kernel connection scope",
+    );
+  }
   if (failure.status === "rejected") {
     switch (failure.statusCode) {
       case 403:
@@ -207,19 +214,17 @@ function refuseConnection(
   failure: McpConnectionContextFailure,
 ): Response {
   if (failure.status === "invalid") {
-    captureMcpConnectionScopeFailure({
-      stage,
-      outcome: failure.status,
-      credentialType,
-    });
-    throw new Error("Unable to resolve Kernel connection scope");
+    console.error(`Unable to resolve Kernel connection scope at ${stage}`);
   }
   const response = connectionScopeFailureResponse(req, failure);
   captureMcpConnectionScopeFailure({
     stage,
     outcome: failure.status,
     credentialType,
-    upstreamStatusCode: stage === "scope" ? failure.statusCode : undefined,
+    upstreamStatusCode:
+      stage === "scope" && "statusCode" in failure
+        ? failure.statusCode
+        : undefined,
     responseStatusCode: response.status,
   });
   return response;

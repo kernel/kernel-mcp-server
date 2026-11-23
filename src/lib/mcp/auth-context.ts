@@ -188,7 +188,16 @@ export function connectionScopeFromAuthContext(
     };
   }
 
-  if (effectiveProjectId) return null;
+  // A credential whose grant is limited to one project runs requests that
+  // name none in that project, so the API reports it as the effective scope.
+  if (effectiveProjectId) {
+    return {
+      kind: "project",
+      organizationId,
+      projectId: effectiveProjectId,
+      source: "credential",
+    };
+  }
   return {
     kind: "organization",
     organizationId,
