@@ -820,6 +820,12 @@ describe("1Password vault credentials", () => {
     },
     {
       status: "fill_failed",
+      error_code: "invalidToken",
+      isError: true,
+      advice: "replaces it through the KERNEL api",
+    },
+    {
+      status: "fill_failed",
       error_code: "someFutureCode",
       isError: true,
       advice: "1password returned someFutureCode",

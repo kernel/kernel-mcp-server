@@ -734,7 +734,7 @@ const onePasswordFillCodeGuidance: Record<string, string> = {
   serviceUnavailable: "serviceUnavailable: fill again with backoff.",
   networkError: "networkError: fill again with backoff.",
   invalidToken:
-    "invalidToken: the 1password access token expired or was revoked. for a credential with a stored token, update it with 1pw_update_access_token, then fill again.",
+    "invalidToken: the 1password access token expired or was revoked. for a credential with a stored token, the integrating developer replaces it through the KERNEL api, which mcp does not offer: tell the owner and do not fill again. for a credential linked to a 1password account, fill again once; if it repeats, ask the owner to reconnect their 1password account.",
   integrationKeyInvalid:
     "integrationKeyInvalid: the owner's 1password connection was removed or is out of date. ask the owner to reconnect their 1password account.",
   internal:
