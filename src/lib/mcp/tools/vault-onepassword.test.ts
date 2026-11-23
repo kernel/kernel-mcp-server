@@ -799,12 +799,39 @@ describe("1Password vault credentials", () => {
   });
 
   test.each([
-    { status: "fill_submitted", isError: undefined },
-    { status: "fill_failed", error_code: "fillFailed", isError: true },
-    { status: "fill_unknown", isError: true },
+    { status: "fill_submitted", isError: undefined, advice: "check the page" },
+    {
+      status: "fill_failed",
+      error_code: "fillFailed",
+      isError: true,
+      advice: "fill again once",
+    },
+    {
+      status: "fill_unknown",
+      error_code: "autosubmitFailed",
+      isError: true,
+      advice: "do not request access again",
+    },
+    {
+      status: "fill_failed",
+      error_code: "noActiveGrant",
+      isError: true,
+      advice: "create a new access request",
+    },
+    {
+      status: "fill_failed",
+      error_code: "someFutureCode",
+      isError: true,
+      advice: "1password returned someFutureCode",
+    },
+    {
+      status: "fill_unknown",
+      isError: true,
+      advice: "inspect the page to see the result",
+    },
   ])(
-    "reports 1pw_fill $status without treating it as login success",
-    async ({ status, error_code, isError }) => {
+    "reports 1pw_fill $status $error_code without treating it as login success",
+    async ({ status, error_code, isError, advice }) => {
       const fixture = await connectVaultTest([
         Response.json(readyCredential),
         Response.json({
@@ -832,6 +859,7 @@ describe("1Password vault credentials", () => {
           ...(error_code && { error_code }),
         });
         expect(body.guidance).toContain("not that login succeeded");
+        expect(body.guidance).toContain(advice);
         expectNoReferences(result);
       } finally {
         await fixture.close();
