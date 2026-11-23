@@ -828,7 +828,7 @@ describe("1Password vault credentials", () => {
       status: "fill_failed",
       error_code: "integrationKeyInvalid",
       isError: true,
-      advice: "invoke 1pw_disconnect on the credential_account",
+      advice: "only with their explicit approval, invoke 1pw_disconnect",
     },
     {
       status: "fill_failed",

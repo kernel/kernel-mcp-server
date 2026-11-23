@@ -734,7 +734,7 @@ const onePasswordFillCodeGuidance: Record<string, string> = {
   invalidToken:
     "invalidToken: 1password rejected the access token. for a credential linked to a 1password account, KERNEL already refreshed the token and filled once more; if the credential_account is now reconnect_required, ask the owner to link it again with manage_vault_credentials connect_account on the same key. for a credential with a stored token, the integrating developer replaces the token through the KERNEL api, which mcp does not offer: tell the owner and do not fill again.",
   integrationKeyInvalid:
-    "integrationKeyInvalid: the owner's 1password connection was removed or is out of date. invoke 1pw_disconnect on the credential_account item, then ask the owner to link it again with manage_vault_credentials connect_account on the same key.",
+    "integrationKeyInvalid: the owner's 1password connection was removed or is out of date, so it must be linked again. tell the owner; disconnecting stops every fill that uses this account. only with their explicit approval, invoke 1pw_disconnect on the credential_account item when it advertises it, then link it again with manage_vault_credentials connect_account on the same key.",
   extensionUnavailable:
     "extensionUnavailable: the 1password extension failed to start in this browser. create a new browser with this vault attached and fill there.",
   internal:
