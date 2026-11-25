@@ -14,6 +14,7 @@ import {
 } from "jose";
 import { z } from "zod";
 import { kernelDeployment, mcpServerOrigin } from "@/lib/oauth-discovery";
+import type { ScopeChallenge } from "@/lib/scope-challenge";
 import { getNativeExchange, setNativeExchange } from "@/lib/redis";
 
 // The Kernel issuer's access-token profile: at most 4 KiB, MCP-audience
@@ -79,7 +80,12 @@ export type NativeCredential = {
 
 export type NativeOAuthResult =
   | { status: "ok"; credential: NativeCredential }
-  | { status: "rejected"; statusCode: 401 | 403; description: string }
+  | {
+      status: "rejected";
+      statusCode: 401 | 403;
+      description: string;
+      challenge?: ScopeChallenge;
+    }
   | { status: "unavailable" };
 
 type NativeOAuthFailure = Exclude<NativeOAuthResult, { status: "ok" }>;
@@ -347,8 +353,9 @@ async function readExchangeResponse(response: Response): Promise<unknown> {
 }
 
 // RFC 8693 errors from the issuer: an inactive grant rejects the credential
-// and a scope it no longer covers is forbidden. Anything naming this
-// server's request or client is a server fault, logged as an error.
+// and a scope it no longer covers is forbidden, with a challenge to sign in
+// again. Anything naming this server's request or client is a server fault,
+// logged as an error.
 function exchangeFailure(status: number, body: unknown): NativeOAuthError {
   const error = z.object({ error: z.string() }).safeParse(body).data?.error;
   if (error === "invalid_grant")
@@ -359,6 +366,7 @@ function exchangeFailure(status: number, body: unknown): NativeOAuthError {
         status: "rejected",
         statusCode: 403,
         description: "This credential's scope does not cover this request",
+        challenge: {},
       },
       "native exchange: scope not granted",
     );

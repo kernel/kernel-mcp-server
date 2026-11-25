@@ -12,6 +12,8 @@ import {
   isNativeOAuthCredential,
 } from "@/lib/native-oauth";
 import { oauthResourceMetadataUrl } from "@/lib/oauth-discovery";
+import { mcpScopeChallenge } from "@/lib/scope-challenge";
+import { returnScopeChallenges } from "@/lib/mcp/scope-challenge-results";
 import {
   captureMcpConnectionScopeFailure,
   flushMcpAnalytics,
@@ -150,14 +152,21 @@ export function connectionScopeFailureResponse(
   if (failure.status === "rejected") {
     switch (failure.statusCode) {
       case 403:
+        // Only a refusal that signing in again can fix carries a challenge;
+        // any other would send the client through consent in a loop.
         return errorResponse(
           403,
           "insufficient_scope",
           failure.description ??
             "This credential is not scoped to the requested Kernel project",
-          {
-            "WWW-Authenticate": `Bearer realm="OAuth", error="insufficient_scope"`,
-          },
+          failure.challenge
+            ? {
+                "WWW-Authenticate": mcpScopeChallenge(
+                  { description: failure.description, ...failure.challenge },
+                  oauthResourceMetadataUrl(req),
+                ),
+              }
+            : {},
         );
       case 404:
         return errorResponse(
@@ -186,6 +195,7 @@ const handler = createMcpHandler(({ authInfo }) => {
     { name, version },
     { instructions: MCP_SERVER_INSTRUCTIONS },
   );
+  returnScopeChallenges(server);
   instrumentMcpAnalytics(server);
   registerMcpCapabilities(server, {
     mcpApps: authInfo?.extra?.mcpApps === true,

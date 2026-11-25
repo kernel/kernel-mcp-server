@@ -31,14 +31,31 @@ On every request the server:
 4. Calls the Kernel API, starting with `GET /auth/context`, with only the
    exchanged token. The MCP-audience token never reaches the API.
 
-| Outcome                                                                                           | Response                      |
-| ------------------------------------------------------------------------------------------------- | ----------------------------- |
-| native OAuth not configured on this server                                                        | 401 `invalid_token`           |
-| token fails local verification                                                                    | 401 `invalid_token`           |
-| issuer answers `invalid_grant` (revoked, expired)                                                 | 401 `invalid_token`           |
-| issuer answers `invalid_scope`                                                                    | 403 `insufficient_scope`      |
-| issuer keys or token endpoint unreachable, 5xx, `temporarily_unavailable`                         | 503 `temporarily_unavailable` |
-| issuer refuses this server (`invalid_target`, `invalid_client`, …) or returns an unexpected token | 503, logged as an error       |
+| Outcome                                                                                           | Response                               |
+| ------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| native OAuth not configured on this server                                                        | 401 `invalid_token`                    |
+| token fails local verification                                                                    | 401 `invalid_token`                    |
+| issuer answers `invalid_grant` (revoked, expired)                                                 | 401 `invalid_token`                    |
+| issuer answers `invalid_scope`                                                                    | 403 `insufficient_scope`, challenged   |
+| `/auth/context` answers 403 with an `insufficient_scope` challenge                                | 403 `insufficient_scope`, challenged   |
+| `/auth/context` answers any other 403                                                             | 403 `insufficient_scope`, no challenge |
+| issuer keys or token endpoint unreachable, 5xx, `temporarily_unavailable`                         | 503 `temporarily_unavailable`          |
+| issuer refuses this server (`invalid_target`, `invalid_client`, …) or returns an unexpected token | 503, logged as an error                |
+
+"Challenged" means the response carries
+`WWW-Authenticate: Bearer error="insufficient_scope", resource_metadata="<this server>/.well-known/oauth-protected-resource/mcp"`,
+plus the API's `scope` when it names one, so clients sign in again (MCP
+step-up authorization). The API challenges a sign-in only when the consent
+page could grant what it lacks, and names the token's actions plus the
+missing ones; this server forwards that scope with its own resource metadata.
+A 403 without a challenge is one signing in again would not fix, such as a
+credential scoped to another project, and gets none here either.
+
+A tool call the API refuses with a challenge has already started, so it
+cannot become this server's 403: a client retrying it could repeat work. The
+call fails as a tool error (`isError`) whose text asks the user to reconnect,
+with the challenge in `_meta["mcp/www_authenticate"]`
+(`src/lib/mcp/scope-challenge-results.ts`).
 
 ### Caching and freshness
 
