@@ -151,23 +151,29 @@ export function connectionScopeFailureResponse(
   }
   if (failure.status === "rejected") {
     switch (failure.statusCode) {
-      case 403:
+      case 403: {
         // Only a refusal that signing in again can fix carries a challenge;
         // any other would send the client through consent in a loop.
+        const description =
+          failure.challenge?.description ??
+          failure.description ??
+          (failure.challenge
+            ? "This credential lacks a permission this request needs"
+            : "This credential is not scoped to the requested Kernel project");
         return errorResponse(
           403,
           "insufficient_scope",
-          failure.description ??
-            "This credential is not scoped to the requested Kernel project",
+          description,
           failure.challenge
             ? {
                 "WWW-Authenticate": mcpScopeChallenge(
-                  { description: failure.description, ...failure.challenge },
+                  { ...failure.challenge, description },
                   oauthResourceMetadataUrl(req),
                 ),
               }
             : {},
         );
+      }
       case 404:
         return errorResponse(
           404,

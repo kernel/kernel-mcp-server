@@ -787,6 +787,10 @@ describe("connection scope failures through the handler", () => {
     expect(response.headers.get("WWW-Authenticate")).toBe(
       'Bearer error="insufficient_scope", scope="browsers:use profiles:create", resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource/mcp", error_description="Sign in again and grant profiles:create"',
     );
+    expect(await response.json()).toEqual({
+      error: "insufficient_scope",
+      error_description: "Sign in again and grant profiles:create",
+    });
     expect(captured).toEqual([
       {
         stage: "scope",

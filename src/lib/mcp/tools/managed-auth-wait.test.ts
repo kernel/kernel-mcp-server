@@ -43,6 +43,35 @@ function checkpoint(
 }
 
 describe("managed-auth wait", () => {
+  test("stops at a denial that signing in again can grant", async () => {
+    let retrieveCalls = 0;
+    const denied = Object.assign(new Error("forbidden"), {
+      status: 403,
+      headers: new Headers({
+        "WWW-Authenticate":
+          'Bearer error="insufficient_scope", scope="auth_connections:read auth_connections:use"',
+      }),
+    });
+    const client = {
+      auth: {
+        connections: {
+          retrieve: async () => {
+            retrieveCalls++;
+            throw denied;
+          },
+        },
+      },
+    } as unknown as KernelClient;
+    await expect(
+      waitForAuthConnection(
+        client,
+        { connectionId: "conn_1" },
+        { timeoutMs: 50, pollIntervalMs: 1 },
+      ),
+    ).rejects.toBe(denied);
+    expect(retrieveCalls).toBe(1);
+  });
+
   test("long-polls until an exact connection is authenticated", async () => {
     const { client, retrieveCalls } = waitClient({
       states: [
