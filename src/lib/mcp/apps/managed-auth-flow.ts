@@ -34,11 +34,14 @@ export const initialManagedAuthFlowState: ManagedAuthFlowState = {
   status: "",
 };
 
-function toolErrorText(result: WaitToolResult): string {
+function toolErrorText(
+  result: BeginResult | WaitToolResult,
+  fallback: string,
+): string {
   const text = result.content?.find(
     (item) => item.type === "text" && typeof item.text === "string",
   )?.text;
-  return text || "Secure login status could not be verified. Close and retry.";
+  return text || fallback;
 }
 
 export function managedAuthFlowReducer(
@@ -51,10 +54,14 @@ export function managedAuthFlowReducer(
     case "BEGIN_RECEIVED": {
       const connection = event.result.structuredContent?.connection;
       if (event.result.isError || !connection) {
+        const fallback =
+          "Secure login could not start. Close this panel and retry.";
         return {
           ...state,
           phase: "start_error",
-          status: "Secure login could not start. Close this panel and retry.",
+          status: event.result.isError
+            ? toolErrorText(event.result, fallback)
+            : fallback,
         };
       }
       if (event.result.structuredContent?.state === "already_authenticated") {
@@ -85,7 +92,10 @@ export function managedAuthFlowReducer(
         return {
           ...state,
           phase: "wait_error",
-          status: toolErrorText(event.result),
+          status: toolErrorText(
+            event.result,
+            "Secure login status could not be verified. Close and retry.",
+          ),
         };
       }
       const connection = event.result.structuredContent?.connection ?? null;

@@ -38,6 +38,23 @@ function beginResult(state = "embedded_ready"): BeginResult {
 }
 
 describe("managed-auth App flow reducer", () => {
+  test("shows why the begin tool refused to start", () => {
+    const text =
+      "error in begin_auth_login (new_login): managed authentication needs a permission this connection lacks. Signing in again can grant auth_connections:create: ask the user to reconnect the KERNEL MCP server and allow it.";
+    expect(
+      managedAuthFlowReducer(initialManagedAuthFlowState, {
+        type: "BEGIN_RECEIVED",
+        result: { isError: true, content: [{ type: "text", text }] },
+      }),
+    ).toMatchObject({ phase: "start_error", status: text });
+    expect(
+      managedAuthFlowReducer(initialManagedAuthFlowState, {
+        type: "BEGIN_RECEIVED",
+        result: { isError: true },
+      }).status,
+    ).toBe("Secure login could not start. Close this panel and retry.");
+  });
+
   test("moves from consent through pending to authenticated", () => {
     const starting = managedAuthFlowReducer(initialManagedAuthFlowState, {
       type: "BEGIN_REQUESTED",
