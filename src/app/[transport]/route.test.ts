@@ -454,7 +454,7 @@ describe("native OAuth credentials", () => {
     response = await POST(mcpRequest(await issuer.parent()));
     expect(response.status).toBe(403);
     expect(response.headers.get("WWW-Authenticate")).toBe(
-      'Bearer realm="OAuth", error="insufficient_scope"',
+      `Bearer error="insufficient_scope", resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource/mcp", error_description="This credential's scope does not cover this request"`,
     );
     expect((await response.json()).error_description).toBe(
       "This credential's scope does not cover this request",
@@ -764,9 +764,42 @@ describe("connection scope failures through the handler", () => {
     const response = await POST(initializeRequest());
 
     expect(response.status).toBe(403);
+    expect(response.headers.get("WWW-Authenticate")).toBeNull();
     expect((await response.json()).error).toBe("insufficient_scope");
     expect(captured[0]?.upstreamStatusCode).toBe(403);
     expect(captured[0]?.responseStatusCode).toBe(403);
+  });
+
+  test("forwards an API challenge with this server's resource metadata", async () => {
+    failingAuthContext(
+      Object.assign(new Error("missing permission"), {
+        status: 403,
+        headers: new Headers({
+          "WWW-Authenticate":
+            'Bearer error="insufficient_scope", scope="browsers:use profiles:create", resource_metadata="https://api.example.test/.well-known/oauth-protected-resource", error_description="Sign in again and grant profiles:create"',
+        }),
+      }),
+    );
+
+    const response = await POST(initializeRequest());
+
+    expect(response.status).toBe(403);
+    expect(response.headers.get("WWW-Authenticate")).toBe(
+      'Bearer error="insufficient_scope", scope="browsers:use profiles:create", resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource/mcp", error_description="Sign in again and grant profiles:create"',
+    );
+    expect(await response.json()).toEqual({
+      error: "insufficient_scope",
+      error_description: "Sign in again and grant profiles:create",
+    });
+    expect(captured).toEqual([
+      {
+        stage: "scope",
+        outcome: "rejected",
+        credentialType: "api_key",
+        upstreamStatusCode: 403,
+        responseStatusCode: 403,
+      },
+    ]);
   });
 
   test("answers an upstream outage with a retryable 503", async () => {

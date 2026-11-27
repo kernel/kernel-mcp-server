@@ -10,6 +10,7 @@ import {
 } from "@/lib/mcp/tools/managed-auth-checkpoint";
 import type { ManagedAuthBrowserTelemetry } from "@/lib/mcp/tools/managed-auth-telemetry";
 import { proxyConfigError, type ProxyConfig } from "@/lib/mcp/proxy-config";
+import { scopeChallengeOf } from "@/lib/scope-challenge";
 
 export type ManagedAuthRegion =
   | "us-east"
@@ -325,7 +326,9 @@ export async function waitForAuthConnection(
         }
       }
     } catch (error) {
-      if (error instanceof AuthLoginStartError) throw error;
+      // A permission signing in again can grant will not appear by polling.
+      if (error instanceof AuthLoginStartError || scopeChallengeOf(error))
+        throw error;
     }
 
     const remaining = deadline - Date.now();

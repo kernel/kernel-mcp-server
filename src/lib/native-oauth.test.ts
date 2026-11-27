@@ -329,6 +329,7 @@ describe("native token exchange", () => {
           status: "rejected",
           statusCode: 403,
           description: "This credential's scope does not cover this request",
+          challenge: {},
         },
       ],
       [

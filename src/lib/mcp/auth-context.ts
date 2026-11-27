@@ -6,6 +6,7 @@ import {
   defaultMcpDependencies,
   type McpDependencies,
 } from "@/lib/mcp/dependencies";
+import { scopeChallengeOf, type ScopeChallenge } from "@/lib/scope-challenge";
 
 const policyConditionSchema = z.object({
   key: z.literal("source_ip"),
@@ -92,7 +93,13 @@ type ResolveAuthContextOptions = {
 };
 
 export type McpConnectionContextFailure =
-  | { status: "rejected"; statusCode: 401 | 403 | 404; description?: string }
+  | {
+      status: "rejected";
+      statusCode: 401 | 403 | 404;
+      description?: string;
+      // Present when signing in again can grant what was refused.
+      challenge?: ScopeChallenge;
+    }
   | { status: "unavailable"; statusCode?: number }
   | { status: "invalid" };
 
@@ -115,8 +122,14 @@ function classifyAuthContextError(error: unknown): McpConnectionContextFailure {
       : undefined;
 
   if (typeof status === "number") {
-    if (status === 401 || status === 403 || status === 404) {
+    if (status === 401 || status === 404) {
       return { status: "rejected", statusCode: status };
+    }
+    if (status === 403) {
+      const challenge = scopeChallengeOf(error);
+      return challenge
+        ? { status: "rejected", statusCode: status, challenge }
+        : { status: "rejected", statusCode: status };
     }
     if (status === 408 || status === 429 || status >= 500) {
       return { status: "unavailable", statusCode: status };

@@ -107,8 +107,8 @@ function errorMessage(error: unknown) {
 // org hitting its limits (429) or a fault on our side (5xx). Status codes only; the
 // message stays out.
 class ToolCallError extends Error {
-  constructor(name: string, message: string) {
-    super(message);
+  constructor(name: string, message: string, cause: unknown) {
+    super(message, { cause });
     this.name = name;
   }
 }
@@ -147,6 +147,7 @@ export function throwToolError(
   throw new ToolCallError(
     errorName(error),
     `error in ${toolName} (${action}): ${safeMessage ?? errorMessage(error)}${note ? ` ${note}` : ""}`,
+    error,
   );
 }
 
@@ -163,5 +164,6 @@ export function throwToolErrorWithApiBody(
   throw new ToolCallError(
     errorName(error),
     `error in ${toolName} (${action}): ${detail}${note}`,
+    error,
   );
 }

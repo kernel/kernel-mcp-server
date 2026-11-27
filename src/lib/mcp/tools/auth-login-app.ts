@@ -19,7 +19,8 @@ import {
   validateAuthLoginInput,
 } from "@/lib/mcp/tools/managed-auth-state";
 import { managedAuthBrowserTelemetrySchema } from "@/lib/mcp/tools/managed-auth-telemetry";
-import { errorResponse } from "@/lib/mcp/responses";
+import { errorResponse, throwToolError } from "@/lib/mcp/responses";
+import { scopeChallengeOf } from "@/lib/scope-challenge";
 import {
   DEPRECATED_TOOL_PARAMS,
   deprecatedParamConflict,
@@ -264,6 +265,15 @@ export function registerAuthLoginApp(server: McpServer) {
           },
         };
       } catch (error) {
+        if (scopeChallengeOf(error)) {
+          throwToolError(
+            "open_auth_login",
+            input.mode,
+            error,
+            undefined,
+            "managed authentication needs a permission this connection lacks.",
+          );
+        }
         return errorResponse(
           error instanceof AuthLoginStartError
             ? error.safeMessage
@@ -358,6 +368,15 @@ export function registerAuthLoginApp(server: McpServer) {
           },
         };
       } catch (error) {
+        if (scopeChallengeOf(error)) {
+          throwToolError(
+            "begin_auth_login",
+            input.mode,
+            error,
+            undefined,
+            "managed authentication needs a permission this connection lacks.",
+          );
+        }
         return errorResponse(
           error instanceof AuthLoginStartError
             ? error.safeMessage
