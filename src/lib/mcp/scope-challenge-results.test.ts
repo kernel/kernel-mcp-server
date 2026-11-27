@@ -134,4 +134,35 @@ describe("tool calls the API refuses", () => {
       expect(JSON.stringify(result.content)).not.toContain("reconnect");
     }
   });
+
+  test("name the metadata of the host the client connected to", async () => {
+    let registered: ((...params: unknown[]) => Promise<unknown>) | undefined;
+    const server = {
+      registerTool: (_name: string, _config: unknown, callback: never) => {
+        registered = callback;
+      },
+    } as unknown as McpServer;
+    returnScopeChallenges(server);
+    server.registerTool(
+      "manage_profiles",
+      { inputSchema: z.object({}) },
+      async () => {
+        throwToolError(
+          "manage_profiles",
+          "create",
+          forbidden({ "WWW-Authenticate": API_CHALLENGE }),
+        );
+      },
+    );
+    const result = (await registered!(
+      {},
+      { http: { req: new Request("https://preview.example.test/mcp") } },
+    )) as { _meta: Record<string, string[]> };
+    expect(result._meta["mcp/www_authenticate"]).toEqual([
+      MCP_CHALLENGE.replace(
+        "https://mcp.onkernel.com/",
+        "https://preview.example.test/",
+      ),
+    ]);
+  });
 });

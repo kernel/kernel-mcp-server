@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { errorResponse } from "@/lib/mcp/responses";
+import { oauthResourceMetadataUrl } from "@/lib/oauth-discovery";
 import { mcpScopeChallenge, scopeChallengeOf } from "@/lib/scope-challenge";
 
 const WWW_AUTHENTICATE_META = "mcp/www_authenticate";
@@ -39,11 +40,22 @@ export function returnScopeChallenges(server: McpServer) {
         const challenge =
           error instanceof Error ? scopeChallengeOf(error.cause) : null;
         if (!challenge) throw error;
+        // Name the metadata of the host the client connected to, as the
+        // transport's own challenges do.
+        const req = (params.at(-1) as { http?: { req?: Request } } | undefined)
+          ?.http?.req;
         return {
           ...errorResponse(
             `${(error as Error).message} ${reconnectNote((error as Error).cause)}`,
           ),
-          _meta: { [WWW_AUTHENTICATE_META]: [mcpScopeChallenge(challenge)] },
+          _meta: {
+            [WWW_AUTHENTICATE_META]: [
+              mcpScopeChallenge(
+                challenge,
+                req ? oauthResourceMetadataUrl(req) : undefined,
+              ),
+            ],
+          },
         };
       }
     })) as McpServer["registerTool"];
