@@ -21,6 +21,7 @@ import {
   MCP_CLIENT_ELICITATION_MODE_PROPERTY,
   MCP_CLIENT_SUPPORTS_APPS_PROPERTY,
   MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY,
+  MCP_CLIENT_SUPPORTS_EVENTS_PROPERTY,
   MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY,
   MCP_CLIENT_SUPPORTS_SAMPLING_PROPERTY,
   MCP_CLIENT_SUPPORTS_SAMPLING_TOOLS_PROPERTY,
@@ -66,6 +67,7 @@ describe("clientCapabilityAnalyticsFromInitialize", () => {
       [MCP_CLIENT_SUPPORTS_TASKS_PROPERTY]: false,
       [MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY]: false,
       [MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY]: false,
+      [MCP_CLIENT_SUPPORTS_EVENTS_PROPERTY]: false,
     });
   });
 
@@ -79,6 +81,7 @@ describe("clientCapabilityAnalyticsFromInitialize", () => {
           "io.modelcontextprotocol/tasks": {},
           "io.modelcontextprotocol/oauth-client-credentials": {},
           "io.modelcontextprotocol/enterprise-managed-authorization": {},
+          "io.modelcontextprotocol/events": {},
           "com.example/private-extension": { secret: "do-not-capture" },
         },
       }),
@@ -92,6 +95,7 @@ describe("clientCapabilityAnalyticsFromInitialize", () => {
       [MCP_CLIENT_SUPPORTS_TASKS_PROPERTY]: true,
       [MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY]: true,
       [MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY]: true,
+      [MCP_CLIENT_SUPPORTS_EVENTS_PROPERTY]: true,
     });
     expect(JSON.stringify(result)).not.toContain("private-extension");
     expect(JSON.stringify(result)).not.toContain("do-not-capture");
@@ -108,6 +112,7 @@ describe("clientCapabilityAnalyticsFromInitialize", () => {
           "io.modelcontextprotocol/tasks": false,
           "io.modelcontextprotocol/oauth-client-credentials": "enabled",
           "io.modelcontextprotocol/enterprise-managed-authorization": [],
+          "io.modelcontextprotocol/events": null,
         },
       }),
     );
@@ -120,6 +125,7 @@ describe("clientCapabilityAnalyticsFromInitialize", () => {
       [MCP_CLIENT_SUPPORTS_TASKS_PROPERTY]: false,
       [MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY]: false,
       [MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY]: false,
+      [MCP_CLIENT_SUPPORTS_EVENTS_PROPERTY]: false,
     });
   });
 

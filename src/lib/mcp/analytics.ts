@@ -46,6 +46,7 @@ import {
   isRecord,
   MCP_APPS_EXTENSION,
   MCP_ENTERPRISE_MANAGED_AUTHORIZATION_EXTENSION,
+  MCP_EVENTS_EXTENSION,
   MCP_OAUTH_CLIENT_CREDENTIALS_EXTENSION,
   MCP_TASKS_EXTENSION,
   type RawClientCapabilities,
@@ -136,6 +137,8 @@ export const MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY =
   "$mcp_client_supports_oauth_client_credentials";
 export const MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY =
   "$mcp_client_supports_enterprise_auth";
+export const MCP_CLIENT_SUPPORTS_EVENTS_PROPERTY =
+  "$mcp_client_supports_events";
 
 type McpClientElicitationMode = "none" | "form" | "url" | "form_and_url";
 
@@ -147,6 +150,7 @@ type McpClientCapabilityAnalytics = {
   [MCP_CLIENT_SUPPORTS_TASKS_PROPERTY]: boolean;
   [MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY]: boolean;
   [MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY]: boolean;
+  [MCP_CLIENT_SUPPORTS_EVENTS_PROPERTY]: boolean;
 };
 
 // Official extensions listed at https://modelcontextprotocol.io/extensions.
@@ -158,6 +162,7 @@ const CLIENT_EXTENSION_PROPERTIES = {
     MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY,
   [MCP_ENTERPRISE_MANAGED_AUTHORIZATION_EXTENSION]:
     MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY,
+  [MCP_EVENTS_EXTENSION]: MCP_CLIENT_SUPPORTS_EVENTS_PROPERTY,
 } as const;
 
 // Every property this integration sends. An allow-list rather than a deny-list so a
@@ -185,6 +190,7 @@ const SENT_PROPERTIES = new Set<string>([
   MCP_CLIENT_SUPPORTS_TASKS_PROPERTY,
   MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY,
   MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY,
+  MCP_CLIENT_SUPPORTS_EVENTS_PROPERTY,
   PostHogMCPAnalyticsProperty.ClientName,
   PostHogMCPAnalyticsProperty.ClientVersion,
   PostHogMCPAnalyticsProperty.DurationMs,
@@ -321,6 +327,7 @@ function clientCapabilityAnalytics(
     [MCP_CLIENT_SUPPORTS_TASKS_PROPERTY]: isRecord(capabilities.tasks),
     [MCP_CLIENT_SUPPORTS_OAUTH_CLIENT_CREDENTIALS_PROPERTY]: false,
     [MCP_CLIENT_SUPPORTS_ENTERPRISE_AUTH_PROPERTY]: false,
+    [MCP_CLIENT_SUPPORTS_EVENTS_PROPERTY]: false,
   };
 
   for (const [extension, property] of Object.entries(
