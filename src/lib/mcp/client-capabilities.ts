@@ -7,6 +7,7 @@ export const MCP_OAUTH_CLIENT_CREDENTIALS_EXTENSION =
   "io.modelcontextprotocol/oauth-client-credentials";
 export const MCP_ENTERPRISE_MANAGED_AUTHORIZATION_EXTENSION =
   "io.modelcontextprotocol/enterprise-managed-authorization";
+export const MCP_EVENTS_EXTENSION = "io.modelcontextprotocol/events";
 
 export type RawClientCapabilities = Record<string, unknown>;
 
